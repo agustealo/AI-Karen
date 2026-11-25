@@ -102,3 +102,36 @@ describe("Agent Runtime discovery contract", () => {
     expect(source).toContain("not exposed by this discovery endpoint");
   });
 });
+
+
+describe("Agent Runtime truthful availability states", () => {
+  it("distinguishes initial loading and retrieval errors from empty execution history", () => {
+    expect(source).toContain("const [isLoadingRuns, setIsLoadingRuns] = useState(true)");
+    expect(source).toContain("Execution history is unavailable. Refresh runtime to try again.");
+    expect(source).toContain("No work is currently in progress.");
+    expect(source).toContain("No completed executions are recorded.");
+  });
+
+  it("does not present unavailable metrics as zero or an unverified approval inbox as empty", () => {
+    expect(source).toContain("const [isLoadingApprovals, setIsLoadingApprovals] = useState(true)");
+    expect(source).toContain("Loading approval requests…");
+    expect(source).toContain("Approval requests are unavailable. Refresh runtime to try again.");
+    expect(source).not.toContain("catalog?.total ?? 0");
+  });
+});
+
+
+describe("Agent Runtime execution scope isolation", () => {
+  it("defaults administrators to personal work and requires explicit tenant selection", () => {
+    expect(source).toContain('useState<"personal" | "tenant">("personal")');
+    expect(source).toContain('const effectiveScope = canAdminister ? scope : "personal"');
+    expect(source).toContain('onClick={() => setScope("tenant")}');
+    expect(source).toContain('tenantScope && isAuthenticated');
+  });
+
+  it("remounts runtime state when identity or execution scope changes", () => {
+    expect(source).toContain('user?.tenant_id, user?.user_id');
+    expect(source).toContain('<ScopedAgentsPage key={identity}');
+    expect(source).toContain('<AgentRuntimeWorkspace key={effectiveScope}');
+  });
+});

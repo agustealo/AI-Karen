@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   Activity,
   Bot,
@@ -24,7 +24,7 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 
-interface AgentRunRecord {
+export interface AgentRunRecord {
   run_id: string;
   correlation_id?: string | null;
   request_id?: string | null;
@@ -45,7 +45,7 @@ interface AgentRunRecord {
   } | null;
 }
 
-interface RuntimeApproval {
+export interface RuntimeApproval {
   approval_id: string;
   conversation_id?: string | null;
   intent: string;
@@ -55,10 +55,39 @@ interface RuntimeApproval {
   expires_at: string;
 }
 
-interface AgentRunsResponse {
+export interface AgentRunsResponse {
   runs: AgentRunRecord[];
   total: number;
   generated_at: string;
+}
+
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function nonemptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+export function isAgentRunRecord(value: unknown): value is AgentRunRecord {
+  return isObject(value) && nonemptyString(value.run_id) && nonemptyString(value.status)
+    && ["correlation_id", "request_id", "session_id", "policy_decision_id", "tenant_id", "user_id", "started_at", "completed_at", "error_type", "response_source"].every((key) => value[key] == null || typeof value[key] === "string")
+    && ["cancellable", "durable"].every((key) => value[key] === undefined || typeof value[key] === "boolean")
+    && (value.distributed_control == null || (isObject(value.distributed_control) && (value.distributed_control.supported === undefined || typeof value.distributed_control.supported === "boolean")));
+}
+
+export function isAgentRunsResponse(value: unknown): value is AgentRunsResponse {
+  return isObject(value) && Array.isArray(value.runs) && value.runs.every(isAgentRunRecord)
+    && value.total === value.runs.length && new Set(value.runs.map((run) => run.run_id)).size === value.runs.length
+    && nonemptyString(value.generated_at) && Number.isFinite(Date.parse(value.generated_at));
+}
+
+export function isRuntimeApproval(value: unknown): value is RuntimeApproval {
+  return isObject(value) && nonemptyString(value.approval_id) && nonemptyString(value.intent)
+    && nonemptyString(value.risk_level) && nonemptyString(value.status)
+    && (value.conversation_id == null || typeof value.conversation_id === "string")
+    && Array.isArray(value.reason_codes) && value.reason_codes.every((reason) => typeof reason === "string")
+    && nonemptyString(value.expires_at) && Number.isFinite(Date.parse(value.expires_at));
 }
 
 function formatTimestamp(value?: string | null): string {
@@ -77,9 +106,36 @@ function statusVariant(
   return "outline";
 }
 
-export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRun }: { onAskKaren?: () => void; onOpenConversation?: (conversationId: string) => Promise<void>; onDiscussRun?: (runId: string) => void }) {
+type AgentsPageProps = { onAskKaren?: () => void; onOpenConversation?: (conversationId: string) => Promise<void>; onDiscussRun?: (runId: string) => void };
+
+export default function AgentsPage(props: AgentsPageProps) {
+  const { user, isAuthenticated, isLoading } = useAuth();
+  const identity = JSON.stringify([isAuthenticated, user?.tenant_id, user?.user_id, user?.roles?.includes("admin") ?? false]);
+  if (isLoading) return <p role="status">Restoring your session…</p>;
+  return <ScopedAgentsPage key={identity} {...props} />;
+}
+
+function ScopedAgentsPage(props: AgentsPageProps) {
+  const { user, isAuthenticated } = useAuth();
+  const canAdminister = isAuthenticated && (user?.roles?.includes("admin") ?? false);
+  const [scope, setScope] = useState<"personal" | "tenant">("personal");
+  const effectiveScope = canAdminister ? scope : "personal";
+  return (
+    <div className="space-y-4">
+      {canAdminister && (
+        <div role="group" aria-label="Execution scope" className="flex flex-wrap items-center gap-2">
+          <Button type="button" size="sm" variant={effectiveScope === "personal" ? "default" : "outline"} aria-pressed={effectiveScope === "personal"} onClick={() => setScope("personal")}>My work</Button>
+          <Button type="button" size="sm" variant={effectiveScope === "tenant" ? "default" : "outline"} aria-pressed={effectiveScope === "tenant"} onClick={() => setScope("tenant")}>Tenant administration</Button>
+        </div>
+      )}
+      <AgentRuntimeWorkspace key={effectiveScope} {...props} tenantScope={effectiveScope === "tenant"} />
+    </div>
+  );
+}
+
+function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, tenantScope }: AgentsPageProps & { tenantScope: boolean }) {
   const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
-  const isAdmin = user?.roles?.includes("admin") ?? false;
+  const isAdmin = tenantScope && isAuthenticated && (user?.roles?.includes("admin") ?? false);
 
   const [catalog, setCatalog] = useState<AgentCatalogResponse | null>(null);
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
@@ -88,7 +144,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
   const [pendingApprovalDecision, setPendingApprovalDecision] = useState<{ approvalId: string; decision: "approved" | "rejected" } | null>(null);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
-  const [isLoadingRuns, setIsLoadingRuns] = useState(false);
+  const [isLoadingRuns, setIsLoadingRuns] = useState(true);
+  const [isLoadingApprovals, setIsLoadingApprovals] = useState(true);
   const [catalogError, setCatalogError] = useState("");
   const [runsError, setRunsError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
@@ -98,6 +155,13 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
   const [runListRevision, setRunListRevision] = useState(0);
   const [hasActiveRunPolling, setHasActiveRunPolling] = useState(false);
+  const approvalDecisionInFlightRef = useRef(false);
+  const approvalReadRevision = useRef(0);
+  const workspaceLive = useRef(false);
+  useLayoutEffect(() => {
+    workspaceLive.current = true;
+    return () => { workspaceLive.current = false; };
+  }, []);
   const runListRequestPromiseRef = useRef<Promise<void> | null>(null);
   const runListRefreshQueuedRef = useRef(false);
   const [runDetailError, setRunDetailError] = useState("");
@@ -126,10 +190,13 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
     setVerifiedRun(null);
     setRunDetailError("");
     // Even an ID from the list is treated as an untrusted lookup key.
-    apiClient.get<AgentRunRecord>(isAdmin
+    apiClient.get<unknown>(isAdmin
       ? `/api/admin/agents/runs/${encodeURIComponent(selectedRunId)}`
       : `/api/agent-runtime/my-runs/${encodeURIComponent(selectedRunId)}`)
-      .then((record) => { if (active) setVerifiedRun(record); })
+      .then((record) => {
+        if (!isAgentRunRecord(record) || record.run_id !== selectedRunId) throw new Error("Execution details do not match the requested run.");
+        if (active) setVerifiedRun(record);
+      })
       .catch((error: unknown) => {
         if (active) setRunDetailError(error instanceof Error ? error.message : "Execution details unavailable.");
       });
@@ -174,6 +241,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   }, [isAuthenticated]);
 
   const loadRuns = useCallback((priority = false): Promise<void> => {
+    if (!workspaceLive.current) return Promise.resolve();
     if (runListRequestPromiseRef.current) {
       if (priority) runListRefreshQueuedRef.current = true;
       return runListRequestPromiseRef.current;
@@ -182,6 +250,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
       setRuns([]);
       setHasActiveRunPolling(false);
       setRunsError("");
+      setIsLoadingRuns(false);
       return Promise.resolve();
     }
 
@@ -192,11 +261,13 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
           runListRefreshQueuedRef.current = false;
           setRunsError("");
           try {
-            const response = await apiClient.get<AgentRunsResponse>(
+            const response = await apiClient.get<unknown>(
               isAdmin ? "/api/admin/agents/runs?include_terminal=true" : "/api/agent-runtime/my-runs",
             );
-            setRuns(response.runs || []);
-            setHasActiveRunPolling((response.runs || []).some((run) =>
+            if (!workspaceLive.current) return;
+            if (!isAgentRunsResponse(response)) throw new Error("Execution history response does not match the runtime contract.");
+            setRuns(response.runs);
+            setHasActiveRunPolling(response.runs.some((run) =>
               ["queued", "running", "cancelling"].includes(run.status.toLowerCase()),
             ));
             setRunListRevision((revision) => revision + 1);
@@ -209,7 +280,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
               error instanceof Error ? error.message : "Failed to load tenant-scoped Medusa runs.",
             );
           }
-        } while (runListRefreshQueuedRef.current);
+        } while (workspaceLive.current && runListRefreshQueuedRef.current);
       } finally {
         setIsLoadingRuns(false);
       }
@@ -221,21 +292,25 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
   }, [isAuthenticated, isAdmin]);
 
   useEffect(() => {
-    if (!isAuthenticated || !hasActiveRunPolling) return;
+    if (!isAuthenticated) return;
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") void loadRuns();
-    }, 15000);
-    return () => window.clearInterval(timer);
+    }, hasActiveRunPolling ? 15000 : 60000);
+    const onVisibility = () => { if (document.visibilityState === "visible") void loadRuns(); };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", onVisibility); };
   }, [isAuthenticated, hasActiveRunPolling, loadRuns]);
 
   const copyVerifiedRunContext = useCallback(async (runId: string) => {
+    if (!workspaceLive.current || !isAuthenticated || isAdmin) return;
     setContextMessage("");
     try {
       const record = await apiClient.get<{
         resource_type: string; run_id: string; status: string;
         started_at?: string | null; completed_at?: string | null; error_type?: string | null;
       }>(`/api/agent-runtime/my-runs/${encodeURIComponent(runId)}/context`);
-      if (record.resource_type !== "medusa_run" || record.run_id !== runId) {
+      if (!workspaceLive.current) return;
+      if (!isObject(record) || record.resource_type !== "medusa_run" || record.run_id !== runId || !nonemptyString(record.status)) {
         throw new Error("Execution identity changed during verification.");
       }
       const prompt = `Please explain my Agent Runtime execution ${record.run_id}. Verified status: ${record.status}. Check current permissions and execution state before taking action.`;
@@ -244,39 +319,52 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
     } catch (error) {
       setContextMessage(error instanceof Error ? error.message : "Could not verify or copy this execution reference.");
     }
-  }, []);
+  }, [isAuthenticated, isAdmin]);
 
   const loadApprovals = useCallback(async () => {
+    if (!workspaceLive.current) return;
+    const revision = ++approvalReadRevision.current;
     if (!isAuthenticated) {
       setApprovals([]);
+      setApprovalsError("");
+      setIsLoadingApprovals(false);
       return;
     }
+    setIsLoadingApprovals(true);
     try {
-      const records = await apiClient.get<RuntimeApproval[]>("/api/approvals/");
+      const records = await apiClient.get<unknown>("/api/approvals/");
+      if (revision !== approvalReadRevision.current) return;
+      if (!Array.isArray(records) || !records.every(isRuntimeApproval) || new Set(records.map((record) => record.approval_id)).size !== records.length) throw new Error("Approval response does not match the runtime contract.");
       setApprovals(records);
       setApprovalsError("");
     } catch (error) {
+      if (revision !== approvalReadRevision.current) return;
       setApprovals([]);
       setApprovalsError(error instanceof Error ? error.message : "Could not load approval requests.");
+    } finally {
+      if (revision === approvalReadRevision.current) setIsLoadingApprovals(false);
     }
   }, [isAuthenticated]);
 
   const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
-    if (decidingApprovalId !== null) return;
+    if (!workspaceLive.current || !isAuthenticated || approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError) return;
     const approval = approvals.find((item) => item.approval_id === approvalId);
     if (!approval || Date.parse(approval.expires_at) <= Date.now()) {
       setApprovalsError("This approval is unavailable or expired. Refresh the list before deciding.");
       setPendingApprovalDecision(null);
       return;
     }
+    approvalDecisionInFlightRef.current = true;
     setDecidingApprovalId(approvalId);
     setPendingApprovalDecision(null);
     setApprovalsError("");
     try {
-      const result = await apiClient.post<RuntimeApproval>(
+      const result = await apiClient.post<unknown>(
         `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
         { decision },
       );
+      if (!workspaceLive.current) return;
+      if (!isRuntimeApproval(result) || result.approval_id !== approvalId) throw new Error("Approval response could not be verified. Refresh before deciding again.");
       setActionMessage(
         result.status === decision
           ? `Decision recorded: ${decision}. Karen must still revalidate and resume the original request.`
@@ -286,9 +374,10 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
     } catch (error) {
       setApprovalsError(error instanceof Error ? error.message : "Approval decision was not recorded.");
     } finally {
+      approvalDecisionInFlightRef.current = false;
       setDecidingApprovalId(null);
     }
-  }, [loadApprovals, approvals, decidingApprovalId]);
+  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError, isAuthenticated]);
 
   const refresh = useCallback(async () => {
     setActionMessage("");
@@ -302,16 +391,18 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
 
   const cancelRun = useCallback(
     async (runId: string) => {
-      if (!isAdmin || cancellationInFlightRef.current) return;
+      if (!workspaceLive.current || !isAdmin || cancellationInFlightRef.current) return;
       cancellationInFlightRef.current = true;
 
       setCancellingRunId(runId);
       setActionMessage("");
       setRunsError("");
       try {
-        const response = await apiClient.post<AgentRunRecord>(
+        const response = await apiClient.post<unknown>(
           `/api/admin/agents/runs/${encodeURIComponent(runId)}/cancel`,
         );
+        if (!workspaceLive.current) return;
+        if (!isAgentRunRecord(response) || response.run_id !== runId) throw new Error("Cancellation response could not be verified. Refresh to inspect current state.");
         setActionMessage(
           `Cancellation endpoint responded for ${runId}. Reported status: ${response.status}. Check the refreshed run details for current state.`,
         );
@@ -371,7 +462,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
       <section aria-label="Your AI work" className="space-y-4" data-testid="agent-workspace">
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border bg-card p-4">
           <div>
-            <h3 className="text-lg font-semibold">Your AI workspace</h3>
+            <h3 className="text-lg font-semibold">{isAdmin ? "Tenant execution workspace" : "Your AI workspace"}</h3>
             <p className="text-sm text-muted-foreground">Ask Karen to work on a goal, then return to review real progress and results.</p>
           </div>
           <Button type="button" onClick={onAskKaren} disabled={!onAskKaren}>
@@ -393,7 +484,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
             </div>
             <div className="grid gap-3 lg:grid-cols-[minmax(220px,1fr)_minmax(0,2fr)]">
               <div className="space-y-2" aria-label="Execution list">
-                {isLoadingRuns ? <p className="text-sm text-muted-foreground">Loading verified work…</p> :
+                {isLoadingRuns ? <p role="status" className="text-sm text-muted-foreground">Loading verified work…</p> : runsError ? <p className="text-sm text-muted-foreground">Execution history is unavailable. Refresh runtime to try again.</p> :
                   visibleRuns.length ? visibleRuns.map((run) => (
                     <button type="button" key={run.run_id}
                       className="w-full rounded-lg border border-border p-3 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring"
@@ -402,7 +493,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                       <span className="block text-sm font-medium">Execution {run.run_id.slice(0, 8)}</span>
                       <span className="text-xs text-muted-foreground">{run.status} · {formatTimestamp(run.started_at)}</span>
                     </button>
-                  )) : <p className="rounded-lg border p-4 text-sm text-muted-foreground">No verified executions match this view.</p>}
+                  )) : <div className="rounded-lg border p-4 space-y-2 text-sm text-muted-foreground"><p>{workFilter === "active" ? "No work is currently in progress." : workFilter === "completed" ? "No completed executions are recorded." : workFilter === "failed" ? "No failed or cancelled executions are recorded." : "No verified executions match this view."}</p><p>{workFilter === "all" ? "Use Ask Karen to describe an objective. Verified agent executions will appear here when recorded." : "Choose All work to review other execution states, or use Ask Karen to start a new objective."}</p></div>}
               </div>
               <div className="rounded-xl border border-border p-4" aria-label="Selected execution details">
                 {runDetailError ? <p role="alert" className="text-sm text-destructive">{runDetailError}</p> : selectedRun ? (
@@ -424,8 +515,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                       </dl>
                     </details>
                     <div className="mt-4 flex flex-wrap gap-2">
-                      {onDiscussRun && <Button type="button" size="sm" onClick={() => onDiscussRun(selectedRun.run_id)}>Discuss with Karen</Button>}
-                      <Button type="button" size="sm" variant="outline" onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>
+                      {!isAdmin && onDiscussRun && <Button type="button" size="sm" onClick={() => onDiscussRun(selectedRun.run_id)}>Discuss with Karen</Button>}
+                      {!isAdmin && <Button type="button" size="sm" variant="outline" onClick={() => void copyVerifiedRunContext(selectedRun.run_id)}>Copy verified context for Karen</Button>}
                       {onAskKaren && <Button type="button" size="sm" variant="outline" onClick={onAskKaren}>Open Karen</Button>}
                     </div>
                     {contextMessage && <p role="status" className="mt-2 text-sm">{contextMessage}</p>}
@@ -451,8 +542,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
         <h3 className="text-lg font-semibold">Needs your review</h3>
         <p className="text-sm text-muted-foreground">These requests come from Karen&apos;s authorized approval service. A decision alone does not execute an action.</p>
         {approvalsError && <p role="alert" className="text-sm text-destructive">{approvalsError}</p>}
-        {approvals.length === 0 && !approvalsError ? (
-          <p className="rounded-lg border p-4 text-sm text-muted-foreground">No actionable approval requests are available.</p>
+        {!isAuthenticated ? <p className="text-sm text-muted-foreground">Sign in to review authorized approval requests.</p> : isLoadingApprovals ? <p role="status" className="text-sm text-muted-foreground">Loading approval requests…</p> : approvalsError ? <p className="text-sm text-muted-foreground">Approval requests are unavailable. Refresh runtime to try again.</p> : approvals.length === 0 ? (
+          <p className="rounded-lg border p-4 text-sm text-muted-foreground">You’re all caught up. No actionable approval requests are available. Karen will show requests here when human review is required.</p>
         ) : approvals.map((approval) => (
           <div key={approval.approval_id} className="rounded-lg border p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
@@ -593,7 +684,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
             <p className="text-sm text-muted-foreground">
               {isAdmin
                 ? "Tenant-scoped Medusa run history and cancellation authority."
-                : "Run-level operational controls are administrator-only. Your chat still uses Medusa automatically when policy selects multi-agent execution."}
+                : "Run-level operational controls are available only in the authorized tenant administration workspace. Your chat still uses Medusa automatically when policy selects multi-agent execution."}
             </p>
           </div>
         </div>
@@ -603,7 +694,7 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
             <CardContent className="p-6 text-sm text-muted-foreground">
               Agent execution activity is surfaced directly in Chat when a
               multi-agent plan runs. Administrative run history is intentionally
-              hidden from ordinary users.
+              excluded from personal work.
             </CardContent>
           </Card>
         ) : (
@@ -619,19 +710,19 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Total visible runs</CardDescription>
-                  <CardTitle>{runs.length}</CardTitle>
+                  <CardTitle>{isLoadingRuns ? "Loading" : runsError ? "Unavailable" : runs.length}</CardTitle>
                 </CardHeader>
               </Card>
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Active runs</CardDescription>
-                  <CardTitle>{activeRuns.length}</CardTitle>
+                  <CardTitle>{isLoadingRuns ? "Loading" : runsError ? "Unavailable" : activeRuns.length}</CardTitle>
                 </CardHeader>
               </Card>
               <Card>
                 <CardHeader className="pb-2">
                   <CardDescription>Registered specialists</CardDescription>
-                  <CardTitle>{catalog?.total ?? 0}</CardTitle>
+                  <CardTitle>{isLoadingCatalog ? "Loading" : catalogError || !catalog ? "Unavailable" : catalog.total}</CardTitle>
                 </CardHeader>
               </Card>
             </div>
@@ -643,6 +734,8 @@ export default function AgentsPage({ onAskKaren, onOpenConversation, onDiscussRu
                   Loading Medusa run history…
                 </CardContent>
               </Card>
+            ) : runsError ? (
+              <p className="text-sm text-muted-foreground">Run history is unavailable. Refresh runtime to try again.</p>
             ) : runs.length ? (
               <div className="space-y-3">
                 {runs.map((run) => (
