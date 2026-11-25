@@ -158,3 +158,160 @@ async def test_same_refresh_token_concurrency_allows_one_rotation_then_revokes_f
             )
         )
     await engine.dispose()
+
+
+@pytest.mark.parametrize("winner", ["revocation", "persistence"])
+async def test_private_transcript_session_fence_serializes_revocation(winner, monkeypatch):
+    """Exercise the real auth row locks and completed-turn transaction together."""
+    from datetime import datetime
+    from sqlalchemy import text
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.auth import auth_service
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.services.database.repositories.conversation_repository import Message
+    from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
+        PostgresConversationRepository,
+    )
+
+    engine = create_async_engine(os.environ["AUTH_TEST_DATABASE_URL"], pool_pre_ping=True)
+    factory = async_sessionmaker(engine, expire_on_commit=False)
+    tables = [Tenant.__table__, AuthUser.__table__, AuthSession.__table__]
+    service = AuthService(_auth_config())
+    service._initialized = True
+    tenant, user, session, conversation = [uuid.uuid4() for _ in range(4)]
+    access = jwt.encode(
+        {"sub": str(user), "tenant_id": str(tenant), "aud": "ai-karen-users",
+         "iss": "ai-karen", "exp": int(__import__("time").time()) + 3600},
+        service.config.jwt_secret_key, algorithm=service.config.jwt_algorithm,
+    )
+    async with engine.begin() as conn:
+        await conn.run_sync(lambda sync: Base.metadata.create_all(sync, tables=tables))
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS conversations (
+                conversation_id UUID PRIMARY KEY, tenant_id UUID NOT NULL,
+                user_id UUID NOT NULL, conversation_metadata JSONB NOT NULL DEFAULT '{}'
+            )
+        """))
+        await conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS messages (
+                message_id UUID PRIMARY KEY, conversation_id UUID NOT NULL
+                    REFERENCES conversations(conversation_id),
+                role TEXT NOT NULL, content TEXT NOT NULL,
+                message_metadata JSONB, created_at TIMESTAMP
+            )
+        """))
+    try:
+        async with factory.begin() as db:
+            db.add(Tenant(id=tenant, name=str(tenant), slug=str(tenant),
+                          subscription_tier="basic", settings={}, is_active=True))
+            db.add(AuthUser(user_id=user, tenant_id=tenant, email=f"{user}@example.test",
+                            username=str(user), password_hash="test-only", roles=["admin"],
+                            preferences={}, is_active=True, is_verified=True))
+            await db.flush()
+            db.add(AuthSession(session_token=session, user_id=user, access_token=access,
+                               refresh_token=str(uuid.uuid4()), expires_in=3600, is_active=True))
+            await db.execute(text("""
+                INSERT INTO conversations (conversation_id, tenant_id, user_id)
+                VALUES (:cid, :tid, :uid)
+            """), {"cid": conversation, "tid": tenant, "uid": user})
+        principal = UserData(user_id=str(user), tenant_id=str(tenant),
+                             roles=["admin"], permissions=["data:read"])
+        context = ChatExecutionContext(
+            user_id=str(user), tenant_id=str(tenant), conversation_id=str(conversation),
+            session_id="test-session", request_id="fence-test", correlation_id="fence-test",
+            authenticated_user=principal,
+        )
+        async with factory.begin() as db:
+            service.set_db_session(db)
+            try:
+                account, witness = await service.validate_session_with_witness(access)
+            finally:
+                from ai_karen_engine.services.auth.auth_service import _db_session_ctx
+                _db_session_ctx.set(None)
+        assert account is not None and witness is not None
+        assert service.bind_issued_session_principal(witness, principal)
+        assert service.bind_issued_session_execution(witness, principal, context)
+        principal._runtime_session_witness = (principal, witness)
+        # The repository's fence is under test, not the attachment reader.
+        monkeypatch.setattr(ChatExecutionContext, "has_runtime_attachment_scope", lambda self: True)
+
+        async def get_issuer():
+            return service
+
+        monkeypatch.setattr(auth_service, "get_auth_service", get_issuer)
+        repo = PostgresConversationRepository(session_factory=factory)
+        common = {"authorized_user_id": str(user), "request_id": context.request_id,
+                  "correlation_id": context.correlation_id}
+        pair = [
+            Message(id=str(uuid.uuid4()), conversation_id=str(conversation),
+                    tenant_id=str(tenant), role=role, content=role,
+                    metadata=dict(common), created_at=datetime.utcnow())
+            for role in ("user", "assistant")
+        ]
+
+        locked = asyncio.Event()
+        release = asyncio.Event()
+        original = service.revalidate_issued_session_in_transaction
+
+        async def paused_fence(*args, **kwargs):
+            account = await original(*args, **kwargs)
+            if winner == "persistence":
+                locked.set()
+                await release.wait()
+            return account
+
+        monkeypatch.setattr(service, "revalidate_issued_session_in_transaction", paused_fence)
+
+        async def revoke():
+            async with factory.begin() as db:
+                row = (await db.execute(select(AuthSession).where(
+                    AuthSession.session_token == session
+                ).with_for_update())).scalar_one()
+                row.is_active = False
+                await db.flush()
+                if winner == "revocation":
+                    locked.set()
+                    await release.wait()
+
+        async def persist():
+            return await repo.add_completed_turn(*pair, private_execution=context)
+
+        first = asyncio.create_task(revoke() if winner == "revocation" else persist())
+        second = None
+        try:
+            await asyncio.wait_for(locked.wait(), 10)
+            second = asyncio.create_task(persist() if winner == "revocation" else revoke())
+            # A competing transaction must not finish while the winner holds its lock.
+            done, _ = await asyncio.wait({second}, timeout=0.2)
+            assert not done
+            release.set()
+            results = await asyncio.wait_for(asyncio.gather(first, second), 10)
+            receipt = results[1] if winner == "revocation" else results[0]
+            assert receipt.success is (winner == "persistence")
+            if winner == "revocation":
+                assert receipt.error == "attachment_session_denied"
+            async with factory() as db:
+                count = (await db.execute(text(
+                    "SELECT count(*) FROM messages WHERE conversation_id = :cid"
+                ), {"cid": conversation})).scalar_one()
+                active = (await db.execute(select(AuthSession.is_active).where(
+                    AuthSession.session_token == session
+                ))).scalar_one()
+            assert count == (2 if winner == "persistence" else 0)
+            assert active is False
+        finally:
+            release.set()
+            for task in (first, second):
+                if task is not None and not task.done():
+                    task.cancel()
+            await asyncio.gather(*(task for task in (first, second) if task is not None),
+                                 return_exceptions=True)
+    finally:
+        async with factory.begin() as db:
+            await db.execute(text("DELETE FROM messages WHERE conversation_id = :cid"), {"cid": conversation})
+            await db.execute(text("DELETE FROM conversations WHERE conversation_id = :cid"), {"cid": conversation})
+            from sqlalchemy import delete
+            await db.execute(delete(AuthSession).where(AuthSession.session_token == session))
+            await db.execute(delete(AuthUser).where(AuthUser.user_id == user))
+            await db.execute(delete(Tenant).where(Tenant.id == tenant))
+        await engine.dispose()
