@@ -216,6 +216,7 @@ class MemoryRuntimeManager:
         session_id: str | None = None,
         conversation_id: str | None = None,
         policy_context: Mapping[str, Any] | None = None,
+        private_execution: Any = None,
         **kwargs: Any,
     ) -> dict[str, Any]:
         """Process observations through governed formation or shadow evaluation."""
@@ -274,6 +275,7 @@ class MemoryRuntimeManager:
             session_id=session_id or kwargs.get("session_id"),
             conversation_id=conversation_id or kwargs.get("conversation_id"),
             policy_context=policy_context or kwargs.get("policy_context"),
+            **({"private_execution": private_execution} if private_execution is not None else {}),
         )
         memory_metrics.increment("signals_extracted", int(result.get("extracted") or 0))
         memory_metrics.increment("signals_admitted", int(result.get("admitted") or 0))

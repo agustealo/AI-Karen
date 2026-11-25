@@ -564,6 +564,28 @@ class PostgresNeuroVault(VaultPort):
             metadata={**receipt.metadata, "pending_commit": True},
         )
 
+    @staticmethod
+    async def _require_private_execution(context: VaultContext, session: Any) -> None:
+        execution = context.private_execution
+        if execution is None:
+            return
+        from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+        try:
+            if (
+                type(execution) is not ChatExecutionContext
+                or not execution.has_runtime_attachment_scope()
+                or execution.tenant_id != context.tenant_id
+                or execution.user_id != context.user_id
+                or execution.session_id != context.session_id
+                or execution.request_id != context.request_id
+                or execution.correlation_id != context.correlation_id
+                or execution.conversation_id != context.conversation_id
+            ):
+                raise PermissionError("attachment_session_denied")
+            await execution.revalidate_runtime_attachment_session(db_session=session)
+        except Exception:
+            raise NeuroVaultAuthorizationError("attachment_session_denied") from None
+
     async def _persist_with_session(
         self, entry: MemoryEntry, *, context: VaultContext,
         session: Any, commit: bool, historical_capability: Any = None,
@@ -575,6 +597,7 @@ class PostgresNeuroVault(VaultPort):
                 "historical execution capability is not yet enabled"
             )
         self._require_non_historical_write(entry)
+        await self._require_private_execution(context, session)
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
         metadata = entry.metadata
@@ -662,6 +685,9 @@ class PostgresNeuroVault(VaultPort):
             if not commit:
                 raise
             await session.rollback()
+            # Rollback releases authorization locks; private replay must fail closed.
+            if context.private_execution is not None:
+                raise NeuroVaultAuthorizationError("private_memory_replay_requires_new_transaction") from None
             existing = await self._find_by_idempotency(
                 session,
                 self._idempotency_key(entry, context),

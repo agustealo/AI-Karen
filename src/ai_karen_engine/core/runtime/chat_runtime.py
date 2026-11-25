@@ -3111,6 +3111,7 @@ class ChatRuntime:
                 session_id=ctx.session_id,
                 conversation_id=ctx.conversation_id,
                 policy_context=policy_context,
+                **({"private_execution": ctx} if ChatRuntime._attachment_restriction_required(request) else {}),
             )
 
             persisted = int(result.get("persisted") or 0)
