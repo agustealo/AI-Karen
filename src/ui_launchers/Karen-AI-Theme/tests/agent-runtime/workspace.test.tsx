@@ -431,7 +431,7 @@ describe("runtime projection validation", () => {
     const objective = screen.getByRole("textbox", { name: "Mission objective" }) as HTMLTextAreaElement;
     fireEvent.change(objective, { target: { value: "Prepare a verified report" } });
     fireEvent.click(screen.getByRole("button", { name: "Review objective" }));
-    expect(screen.getByRole("alert").textContent).toContain("Your text is retained");
+    expect(screen.getByText(/Karen could not prepare the objective.*Your text is retained/).getAttribute("role")).toBe("alert");
     expect(objective.value).toBe("Prepare a verified report");
     expect(mocks.post).not.toHaveBeenCalled();
   });
