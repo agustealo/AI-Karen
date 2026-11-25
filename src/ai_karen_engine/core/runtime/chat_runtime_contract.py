@@ -280,6 +280,44 @@ class ChatExecutionContext:
         if not get_rbac_manager().has_permission(principal, Permission.DATA_READ):
             raise PermissionError("runtime_attachment_read_permission_denied")
 
+    async def revalidate_runtime_attachment_session(self) -> None:
+        """Require durable account truth and current RBAC for private content."""
+        from ai_karen_engine.auth.models import UserData
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+        self.require_runtime_attachment_read_permission()
+        principal = self.require_authenticated_user()
+        grant = vars(principal).get("_runtime_session_witness")
+        if (
+            not isinstance(grant, tuple) or len(grant) != 2
+            or grant[0] is not principal or not callable(grant[1])
+        ):
+            raise PermissionError("runtime_attachment_session_required")
+        binding = self.__dict__.get("_runtime_attachment_session_binding")
+        if binding is None:
+            self.__dict__["_runtime_attachment_session_binding"] = (self, principal, grant)
+        elif binding[0] is not self or binding[1] is not principal or binding[2] is not grant:
+            raise PermissionError("runtime_attachment_session_binding_invalid")
+        account = await grant[1]()
+        if (
+            account is None
+            or str(account.id) != str(self.user_id)
+            or str(account.tenant_id) != str(self.tenant_id)
+            or getattr(account.status, "value", account.status) != "active"
+            or not account.is_verified
+        ):
+            raise PermissionError("runtime_attachment_session_revoked")
+        fresh = UserData(
+            user_id=str(account.id), tenant_id=str(account.tenant_id),
+            roles=list(account.roles or []), permissions=[],
+        )
+        if not get_rbac_manager().has_permission(fresh, Permission.DATA_READ):
+            raise PermissionError("runtime_attachment_read_permission_revoked")
+        if self.require_authenticated_user() is not principal or vars(principal).get(
+            "_runtime_session_witness"
+        ) is not grant:
+            raise PermissionError("runtime_attachment_session_binding_invalid")
+
     def bind_runtime_attachment_scope(
         self, plan: Any, meter: Any, references: list[dict[str, str]],
     ) -> None:

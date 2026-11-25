@@ -207,7 +207,7 @@ class ChatRuntime:
             documents: list[dict[str, str]] = []
             used = 0
             async with asyncio.timeout(deadline):
-                ctx.require_runtime_attachment_read_permission()
+                await ctx.revalidate_runtime_attachment_session()
                 snapshot = await self._freeze_persona_snapshot(request)
                 if snapshot.status not in {"none", "ready"} or (
                     snapshot.memory_filter_required and not snapshot.persona_id
@@ -223,7 +223,7 @@ class ChatRuntime:
                 )
                 await gateway.require_owned_conversation(ctx)
                 for reference in selected:
-                    ctx.require_runtime_attachment_read_permission()
+                    await ctx.revalidate_runtime_attachment_session()
                     if not ctx.is_runtime_model_plan_authorized(plan, meter):
                         raise AttachmentAdmissionDenied("attachment_authority_changed")
                     allowance = min(
@@ -261,6 +261,7 @@ class ChatRuntime:
                         "revision": reference["revision"],
                         "text": source.text,
                     })
+                await ctx.revalidate_runtime_attachment_session()
             if not await meter.check_duration():
                 raise AttachmentAdmissionDenied("attachment_execution_deadline")
             ctx.bind_runtime_attachment_documents(plan, meter, documents)
@@ -5113,7 +5114,21 @@ class ChatRuntime:
             intent=decision.intent,
         )
 
+        if ChatRuntime._attachment_restriction_required(request):
+            try:
+                async with asyncio.timeout((await meter.remaining_duration_ms()) / 1000):
+                    await ctx.revalidate_runtime_attachment_session()
+                if not ctx.is_runtime_model_plan_authorized(plan, meter):
+                    raise PermissionError("attachment_authority_changed")
+            except Exception:
+                raise AttachmentAdmissionDenied("attachment_session_denied") from None
         result = await gateway.generate(task)
+        if ChatRuntime._attachment_restriction_required(request):
+            try:
+                async with asyncio.timeout((await meter.remaining_duration_ms()) / 1000):
+                    await ctx.revalidate_runtime_attachment_session()
+            except Exception:
+                raise AttachmentAdmissionDenied("attachment_session_denied") from None
 
         # A provider can outlive its pre-dispatch permission snapshot.
         # Revalidate after generation before returning a successful answer.

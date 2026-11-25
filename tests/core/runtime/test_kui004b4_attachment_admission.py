@@ -95,6 +95,12 @@ async def authority(*, grant=True, bind=True, references=None):
             permissions=["data:read"] if grant else [],
         ),
     )
+    principal = context.authenticated_user
+    witness = AsyncMock(return_value=SimpleNamespace(
+        id=user_id, tenant_id=tenant_id, status="active", is_verified=True,
+        roles=["admin"] if grant else [],
+    ))
+    principal._runtime_session_witness = (principal, witness)
     policy = RuntimePolicyEnforcer()
     decision = await policy.evaluate(PolicyEvaluationRequest(
         user_id=context.user_id,
@@ -614,3 +620,26 @@ async def test_attachment_permission_revoked_during_read_prevents_publication(mo
     revoked = False
     with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
         request.context.runtime_attachment_documents()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attack", ["missing", "revoked", "copied_principal", "locked", "role_removed"])
+async def test_durable_session_denies_before_private_read(monkeypatch, attack):
+    request, plan, meter = await authority()
+    principal = request.context.authenticated_user
+    witness = vars(principal)["_runtime_session_witness"][1]
+    if attack == "missing":
+        del principal._runtime_session_witness
+    elif attack == "revoked":
+        witness.return_value = None
+    elif attack == "copied_principal":
+        request.context.authenticated_user = copy(principal)
+    elif attack == "locked":
+        witness.return_value.status = "locked"
+    else:
+        witness.return_value.roles = []
+    reader = BoundedReader({SOURCE: verified(request.context)})
+    runtime = runtime_with_reader(monkeypatch, reader)
+    with pytest.raises(AttachmentAdmissionDenied):
+        await runtime._admit_attachments(request, plan, meter)
+    assert reader.calls == []

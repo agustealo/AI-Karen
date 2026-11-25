@@ -57,7 +57,15 @@ async def get_user_context(request: Request) -> UserData:
         from ai_karen_engine.auth.auth_middleware import get_current_user as get_real_user
 
         try:
-            user_dict = await get_real_user(request)
+            route = getattr(request, "scope", {}).get("route")
+            issue_witness = getattr(getattr(route, "endpoint", None), "__name__", "") in {
+                "create_chat_response", "stream_chat_response", "stream_ag_ui_chat",
+                "resume_approved_chat",
+            }
+            user_dict = (
+                await get_real_user(request, issue_witness=True)
+                if issue_witness else await get_real_user(request)
+            )
             return _require_identity_scope(UserData.ensure(user_dict))
         except HTTPException:
             raise

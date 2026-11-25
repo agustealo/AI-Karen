@@ -481,7 +481,7 @@ class SecureAuthMiddleware:
             from ai_karen_engine.auth.models import UserData
 
             principal = UserData.from_dict(user)
-            principal._runtime_session_witness = witness
+            principal._runtime_session_witness = (principal, witness)
             principal["token_id"] = user["token_id"]
             principal["user_type"] = user["user_type"]
             return principal
