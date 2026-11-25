@@ -991,3 +991,52 @@ describe('consumer-specific reference capacity', () => {
     expect(onAttach).not.toHaveBeenCalled();
   });
 });
+
+
+describe('hierarchy-aware visual controls', () => {
+  const folder = { source_id: '55555555-5555-4555-8555-555555555555', parent_id: null,
+    kind: 'folder' as const, name: 'Reports', revision: '1', organization_revision: '1', sha256: null, size_bytes: 0 };
+  const hierarchy = { parentId: null, breadcrumbs: [], hasMoreFolders: false, nextFolderId: null };
+  const first = { ...response(FILE_A).items[0], kind: 'file' as const, size_bytes: 100 };
+  const second = { ...response(FILE_B).items[0], kind: 'file' as const, size_bytes: 5 };
+  it('preserves selection and local filter across layouts and keeps folders first when sorting', () => {
+    const onSelect = vi.fn();
+    render(<SharedFileExplorer authorized items={[folder, first, second]} hierarchy={hierarchy}
+      maxSelection={2} onSelect={onSelect} />);
+    fireEvent.change(screen.getByLabelText('Sort current page'), { target: { value: 'size-asc' } });
+    const list = screen.getByRole('list', { name: 'Files and folders' });
+    expect(Array.from(list.children).map(node => node.textContent)).toEqual([
+      expect.stringContaining('Reports'), expect.stringContaining('beta.txt'), expect.stringContaining('alpha.txt'),
+    ]);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select alpha.txt' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'beta' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
+    expect(screen.getByRole('button', { name: 'Grid view' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText(/1 selected · 1 shown/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Review selection (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove alpha.txt from selection' }));
+    expect(onSelect).toHaveBeenLastCalledWith([]);
+  });
+  it('bulk selection excludes folders and refuses overflow without truncating', () => {
+    const onSelect = vi.fn();
+    render(<SharedFileExplorer authorized items={[folder, first, second]} hierarchy={hierarchy}
+      maxSelection={1} onSelect={onSelect} />);
+    expect(screen.queryByRole('checkbox', { name: 'Select Reports' })).toBeNull();
+    const bulk = screen.getByRole('button', { name: 'Select visible files (2)' });
+    expect((bulk as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(bulk);
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'alpha' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Select visible files (1)' }));
+    expect(onSelect).toHaveBeenLastCalledWith([{ source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(onSelect).toHaveBeenLastCalledWith([]);
+  });
+  it('distinguishes a filtered page from genuinely empty inventory', () => {
+    render(<SharedFileExplorer authorized items={[first]} />);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'missing' } });
+    expect(screen.getByText('No matching references on this page.')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
+    expect(screen.getByRole('checkbox', { name: 'Select alpha.txt' })).toBeTruthy();
+  });
+});

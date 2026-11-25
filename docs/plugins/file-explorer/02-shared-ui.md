@@ -12,7 +12,7 @@ The GUI manifest is `src/ai_karen_engine/extensions/plugins/file-explorer/manife
 
 The `SharedFileExplorer` component accepts `authorized`, `items`, `loading`, `error`, `selectedSourceIds`, `multiSelect`, `onSelect`, and `onRefresh`. It renders an honest unavailable state when `authorized` is not true, and it performs no network calls or filesystem reads.
 
-The host must obtain the inventory using a trusted authenticated action, validate tenant/user/resource ACL and revision, and pass only authorized entries. The `authorized` prop is a UI display hint, **not an authorization decision**. The selectable view is restricted to 200 entries for this slice and supports up to 24 selections. A selection returns `source_id`, `revision`, `sha256`, and `kind` only.
+The host must obtain the inventory using a trusted authenticated action, validate tenant/user/resource ACL and revision, and pass only authorized entries. The `authorized` prop is a UI display hint, **not an authorization decision**. The selectable view is restricted to 200 entries for this slice and uses a consumer-specific selection ceiling. A selection returns `source_id`, `revision`, `sha256`, and `kind` only.
 
 Other plugins must reauthorize every source at the source owner when accessing bytes. The client callback cannot confer access rights, and stale references must fail.
 
@@ -22,11 +22,11 @@ Responsive file/folder listing, folder navigation, text filtering, single or mul
 
 ## Not accepted
 
-Live uploaded-file listing, pagination, standalone backend UI API, authorized preview/download, nested folder permissions, automated plugin-to-plugin mount, visual browser regression, and third-party cloud stores. They must not be advertised as working without host integration and observed acceptance.
+Live uploaded-file listing, authorized preview/download, automated plugin-to-plugin mount, observed visual browser regression, and third-party cloud stores. They must not be advertised as working without host integration and observed acceptance.
 
 ## Controlled keyset-page navigation (implemented UI contract)
 
-The existing `SharedFileExplorer` now accepts `hasMore`, `nextCursor`, `onNextPage(cursor)` and `pageKey` from the trusted authenticated host, in addition to the original controlled inventory and selection props. It never fetches data, caches cursors, or treats pagination evidence as authorization. A missing callback, absent/oversized cursor or inconsistent terminal-page evidence makes the explorer unavailable instead of silently presenting an incomplete inventory as complete. Selecting **Next page** clears local selection and filters and asks the host to retrieve the next server-authorized page. The UI remains limited to 200 entries per supplied page and 24 selections per page.
+The existing `SharedFileExplorer` now accepts `hasMore`, `nextCursor`, `onNextPage(cursor)` and `pageKey` from the trusted authenticated host, in addition to the original controlled inventory and selection props. It never fetches data, caches cursors, or treats pagination evidence as authorization. A missing callback, absent/oversized cursor or inconsistent terminal-page evidence makes the explorer unavailable instead of silently presenting an incomplete inventory as complete. Selecting **Next page** clears local selection and filters and asks the host to retrieve the next server-authorized page. The UI remains limited to 200 entries per supplied page and the supplied consumer-specific selection ceiling.
 
 The host **must** produce a new `pageKey` on every accepted page or identity/authorization-scope transition. That remounts the controlled viewer and clears local folder, filter and selection state. Host callers must also cancel or ignore stale/out-of-order responses, never combine pages from different users, tenants or authorizations, and resolve errors separately from genuinely empty inventories. `onRefresh` clears selection before the host requests a fresh authorized page. This is not an authorization boundary: consumers still revalidate source ACL, deletion status and revision at the canonical owner before bytes are accessed.
 
@@ -36,7 +36,7 @@ The host **must** produce a new `pageKey` on every accepted page or identity/aut
 
 The canonical dashboard plugin route now wraps the existing dynamically loaded `PluginHost` only when its catalog-provided plugin ID is `file-explorer`. The host is `src/ui_launchers/Karen-AI-Theme/src/components/plugins/FileExplorerInventoryHost.tsx`; the plugin component itself continues to receive only controlled presentation props through `PluginHost.componentProps`. There is **no second explorer UI, plugin route registry, file-store client, or bearer grant**.
 
-The authenticated browser API client retrieves `/api/plugins/file-explorer/inventory` from the existing plugin router. The host validates the reference-only response, displays only the currently authorized server page (maximum 200 entries), carries the exact continuation cursor to Next page, clears selection on refresh and page changes, and assigns `pageKey` from the authenticated principal and accepted page generation. It gates rendering on tenant/user/role/permission identity and ignores late responses from unmounted, previous-page, or previous-principal fetches. An unavailable or malformed response never becomes an authorized empty list; the UI visibly reports loading, errors, and retry. The browser never calls storage APIs, uploads files, or uses localStorage for inventory.
+The authenticated browser API client retrieves `/api/plugins/file-explorer/hierarchy` for hierarchy consumers, or `/api/plugins/file-explorer/inventory` for explicit flat consumers from the existing plugin router. The host validates the reference-only response, displays only the currently authorized server page (maximum 200 entries), carries the exact continuation cursor to Next page, clears selection on refresh and page changes, and assigns `pageKey` from the authenticated principal and accepted page generation. It gates rendering on tenant/user/role/permission identity and ignores late responses from unmounted, previous-page, or previous-principal fetches. An unavailable or malformed response never becomes an authorized empty list; the UI visibly reports loading, errors, and retry. The browser never calls storage APIs, uploads files, or uses localStorage for inventory.
 
 This is UI source integration, **not yet certification** of real hosted login/API/production PostgreSQL use. Before consumer-ready status, perform authenticated end-to-end browser acceptance with a real owner account and multiple pages, concurrent refresh/navigation, logout or tenant switch during pending requests, disabled plugin, removed artifact/revision, and responsive/focus behavior at 390, 768, 1024 and 1440 pixels. The source fetch uses the canonical `apiClient`, which owns authentication and token refresh; unresolved promises are ignored by generation/cleanup guards rather than granting access to old responses. Any later byte consumer must freshly revalidate owner and revision in backend runtime.
 
@@ -86,3 +86,27 @@ revocation and RLS proofs. Test Storage bytes are an in-process fixture.
 A passing run is **real PostgreSQL authorization/revision evidence**, not
 live Supabase object-store integration, a production runtime deployment,
 or authenticated browser consumer acceptance. Those remain separate gates.
+
+
+## Reconciled hierarchy presentation (KEXP-004B.6D)
+
+The same controlled component renders compact list and responsive grid layouts,
+using Lucide icons and theme tokens. Layout, filename/size sorting, and the
+displayed-page filter are local presentation state; they never request new
+inventory. Folder entries stay first and are navigation targets, not selections.
+The explicit server filename search runs before file pagination within the
+authorized location. Folder navigation remains visible independently of search.
+Folder and file pagination retain distinct controls.
+
+Bulk selection uses only currently visible files, and rejects the entire
+selection if it would exceed consumer capacity. The selection review includes
+selected files hidden by the local filter and uses the same reference callback
+for removal. Draft capacity derives from the current attachment references;
+Content Intelligence supplies its backend selection ceiling. Every byte
+consumer still reauthorizes the selected content revision.
+
+Organization controls use backend capability preflight, explicit confirmation,
+and independent organization revisions; mutations require fresh authorization
+and matching receipts. The shared component has no direct IO or local storage.
+Canonical and materialized sources remain identical. Source regression tests
+are not substitutes for authenticated browser acceptance or release certification.

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { FileText, Folder, FolderOpen, Search, LayoutGrid, List, ChevronRight } from 'lucide-react';
 
 /**
  * Reusable, controlled File Explorer extension UI.
@@ -142,6 +143,9 @@ function FileExplorerView({
   const [parentId, setParentId] = useState<string | null>(null);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
+  const [layout, setLayout] = useState<'list' | 'grid'>('list');
+  const [sort, setSort] = useState<'name-asc' | 'name-desc' | 'size-asc' | 'size-desc'>('name-asc');
+  const [reviewSelection, setReviewSelection] = useState(false);
   const [searchDraft, setSearchDraft] = useState(search);
   const searchId = useId();
   const [edit, setEdit] = useState<{ action: ExplorerMutation['action']; item?: ExplorerItem } | null>(null);
@@ -223,6 +227,7 @@ function FileExplorerView({
 
   function clearSelections() {
     setLocalSelection([]);
+    setReviewSelection(false);
     onSelect?.([]);
   }
 
@@ -267,11 +272,16 @@ function FileExplorerView({
     .filter((item) => item.parent_id === currentParent &&
       item.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()))
     .sort((a, b) => Number(a.kind === 'file') - Number(b.kind === 'file') ||
-      a.name.localeCompare(b.name) || a.source_id.localeCompare(b.source_id)),
-    [entries, currentParent, filter]);
-  const selected = (selectedSourceIds ?? localSelection).filter((id) => byId.has(id) && (!hierarchy || byId.get(id)?.kind === 'file'));
-  const limit = Number.isSafeInteger(maxSelection) && maxSelection >= 0 && maxSelection <= 200 ? maxSelection : 0;
-  const selectionSet = new Set(selected.slice(0, limit));
+      (sort === 'size-asc' ? a.size_bytes - b.size_bytes : sort === 'size-desc' ? b.size_bytes - a.size_bytes : 0) ||
+      (sort === 'name-desc' ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name)) || a.source_id.localeCompare(b.source_id)),
+    [entries, currentParent, filter, sort]);
+  const limit = Number.isSafeInteger(maxSelection) && maxSelection >= 0 && maxSelection <= 200 ? (multiSelect ? maxSelection : Math.min(1, maxSelection)) : 0;
+  const selected = Array.from(new Set(selectedSourceIds ?? localSelection)).filter(id => byId.get(id)?.kind === 'file');
+  const selectionSet = new Set(selected);
+  const canSelect = !busy && !editing && !loading && !error && authorized && pageEvidenceValid && inventory !== null;
+  const eligibleVisible = visible.filter(item => item.kind === 'file');
+  const unselectedVisible = eligibleVisible.filter(item => !selectionSet.has(item.source_id));
+  const bulkFits = selected.length + unselectedVisible.length <= limit;
 
   function navigate(id: string | null) {
     if (busy || editing) return;
@@ -282,21 +292,23 @@ function FileExplorerView({
   }
 
   function select(item: ExplorerItem) {
-    if (busy || editing || limit === 0 || (hierarchy && item.kind !== 'file') ||
-        (multiSelect && !selectionSet.has(item.source_id) && selectionSet.size >= limit)) return;
+    if (!canSelect || item.kind !== 'file' || (!selectionSet.has(item.source_id) &&
+        (limit === 0 || (multiSelect && selectionSet.size >= limit)))) return;
     const next = multiSelect
-      ? (selectionSet.has(item.source_id)
-        ? selected.filter((id) => id !== item.source_id)
-        : [...selected, item.source_id].slice(0, limit))
+      ? (selectionSet.has(item.source_id) ? selected.filter(id => id !== item.source_id) : [...selected, item.source_id])
       : [item.source_id];
+    publishSelection(next);
+  }
+
+  function publishSelection(next: string[]) {
+    if (!canSelect || next.length > limit || new Set(next).size !== next.length ||
+        next.some(id => byId.get(id)?.kind !== 'file')) return;
     if (selectedSourceIds === undefined) setLocalSelection(next);
-    const references = next.flatMap((id) => {
+    const references = next.flatMap(id => {
       const entry = byId.get(id);
       return entry ? [{
-        source_id: entry.source_id,
-        revision: entry.revision,
-        sha256: entry.sha256,
-        kind: entry.kind,
+        source_id: entry.source_id, revision: entry.revision,
+        sha256: entry.sha256, kind: entry.kind,
       }] : [];
     });
     // Selection is a presentation event, not a backend authorization receipt.
@@ -342,10 +354,10 @@ function FileExplorerView({
     </section>;
   }
 
-  return <section className="flex min-h-[320px] flex-col gap-4 rounded-lg border bg-background p-4" aria-label="Shared File Explorer">
+  return <section className="flex min-h-[320px] min-w-0 flex-col gap-4 rounded-xl border bg-background p-3 sm:p-4" aria-label="Shared File Explorer">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h2 className="text-lg font-semibold">File Explorer</h2>
+        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight"><FolderOpen aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" />File Explorer</h2>
         <p className="text-xs text-muted-foreground">
           References only. File access is checked again by the consuming service.
         </p>
@@ -399,15 +411,15 @@ function FileExplorerView({
       {edit.action === 'delete' && <p className="text-sm">Delete {edit.item?.name}? Only empty folders can be deleted, including no archived files. File contents will not be deleted.</p>}
       <div className="flex flex-wrap gap-2"><button type="submit" disabled={!canSubmit} className="rounded border px-3 py-2 text-sm">Confirm {edit.action}</button><button type="button" onClick={closeEditor} className="rounded border px-3 py-2 text-sm">Cancel</button></div>
     </form>}
-    <nav aria-label="Folder location" className="flex flex-wrap items-center gap-2 text-sm">
+    <nav aria-label="Folder location" className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-muted/40 p-2 text-sm">
       <button type="button" disabled={busy || editing} className="rounded border px-3 py-2" onClick={() => navigate(null)}>Root</button>
       {hierarchy?.breadcrumbs.map(crumb => <React.Fragment key={crumb.folder_id}>
-        <span aria-hidden="true">/</span>
+        <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
         <button type="button" className="min-w-0 truncate rounded border px-2 py-1" disabled={busy || editing} onClick={() => navigate(crumb.folder_id)}
           aria-current={crumb.folder_id === hierarchy.parentId ? 'location' : undefined}>{crumb.name}</button>
       </React.Fragment>)}
       {!hierarchy && folder && <>
-        <span aria-hidden="true">/</span>
+        <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="truncate">{folder.name}</span>
         <button type="button" className="rounded border px-3 py-2" onClick={() => {
           setParentId(folder.parent_id && byId.has(folder.parent_id) ? folder.parent_id : null);
@@ -416,37 +428,85 @@ function FileExplorerView({
       </>}
     </nav>
     {searchForm}
-    <label className="flex flex-col gap-1 text-sm">
-      Filter current folder
-      <input className="rounded border bg-background px-3 py-2" type="search" disabled={busy || editing} value={filter}
-        onChange={(event) => setFilter(event.target.value)} placeholder="Filter this page…" />
-    </label>
+    <div className="flex min-w-0 flex-wrap items-end gap-2">
+      <label className="flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm">
+        Filter current folder
+        <div className="relative min-w-0">
+          <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+          <input className="w-full min-w-0 rounded-md border bg-background py-2 pl-9 pr-3 focus-visible:ring-2 focus-visible:ring-ring"
+            type="search" disabled={busy || editing} value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter this page…" />
+        </div>
+      </label>
+      <label className="flex min-w-0 flex-col gap-1 text-sm">Sort current page
+        <select className="max-w-full rounded-md border bg-background px-2 py-2" disabled={busy || editing} value={sort} onChange={event => {
+          const value = event.target.value;
+          if (value === 'name-asc' || value === 'name-desc' || value === 'size-asc' || value === 'size-desc') setSort(value);
+        }}>
+          <option value="name-asc">Name (A–Z)</option><option value="name-desc">Name (Z–A)</option>
+          <option value="size-asc">Size (smallest)</option><option value="size-desc">Size (largest)</option>
+        </select>
+      </label>
+      <div role="group" aria-label="Explorer layout" className="inline-flex rounded-md border p-1">
+        <button type="button" aria-label="List view" aria-pressed={layout === 'list'} disabled={busy || editing} className={`rounded p-2 focus-visible:ring-2 focus-visible:ring-ring ${layout === 'list' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`} onClick={() => setLayout('list')}><List aria-hidden="true" className="h-4 w-4" /></button>
+        <button type="button" aria-label="Grid view" aria-pressed={layout === 'grid'} disabled={busy || editing} className={`rounded p-2 focus-visible:ring-2 focus-visible:ring-ring ${layout === 'grid' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`} onClick={() => setLayout('grid')}><LayoutGrid aria-hidden="true" className="h-4 w-4" /></button>
+      </div>
+    </div>
+    {filter && <button type="button" disabled={busy || editing} className="self-start rounded border px-3 py-2 text-sm" onClick={() => setFilter('')}>Clear filter</button>}
+    {multiSelect && eligibleVisible.length > 0 && <div className="flex flex-wrap items-center gap-2">
+      <button type="button" className="rounded border px-3 py-2 text-sm disabled:opacity-50"
+        disabled={!canSelect || !bulkFits || unselectedVisible.length === 0}
+        onClick={() => publishSelection([...selected, ...unselectedVisible.map(item => item.source_id)])}>Select visible files ({eligibleVisible.length})</button>
+      {!bulkFits && <p role="status" className="text-xs text-muted-foreground">Selection would exceed the limit. Narrow the filter or deselect references.</p>}
+    </div>}
+    {(hasMore || hierarchy?.hasMoreFolders) && <p className="text-xs text-muted-foreground">More entries are available on later pages. Filtering and sorting apply only to this page.</p>}
     {error && <p role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {loading ? <p role="status" className="py-8 text-center text-sm">Loading authorized file inventory…</p>
-      : visible.length === 0 ? <p role="status" className="py-8 text-center text-sm text-muted-foreground">No files or folders in this view.</p>
-      : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
-        {visible.map((item) => <li key={item.source_id} className="flex min-w-0 flex-wrap items-center gap-2 rounded border p-2">
-          {(!hierarchy || item.kind === 'file') && <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
+      : visible.length === 0 ? <div role="status" className="space-y-2 py-8 text-center text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">{filter ? "No matching references on this page." : search ? "No matching files or folders on this search page." : "No files or folders in this view."}</p>
+        {filter && <p>Clear the filter to see other references on this page.</p>}
+      </div>
+      : <ul className={layout === 'grid' ? 'grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-3' : 'flex min-w-0 flex-col gap-1'} aria-label="Files and folders">
+        {visible.map((item) => <li key={item.source_id} className={`flex min-w-0 flex-wrap items-center gap-3 rounded-lg border p-3 ${selectionSet.has(item.source_id) ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'}`}>
+          {item.kind === 'file' && <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
             aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={busy || editing || loading || Boolean(error) || limit === 0 ||
               (multiSelect && !selectionSet.has(item.source_id) && selectionSet.size >= limit)}
-            onChange={() => select(item)} />}
+            className="h-4 w-4 shrink-0 accent-primary focus-visible:ring-2 focus-visible:ring-ring" onChange={() => select(item)} />}
+          {item.kind === 'folder' ? <Folder aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" /> : <FileText aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" />}
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
                 disabled={busy || editing} onClick={() => navigate(item.source_id)} aria-label={'Open folder ' + item.name}>
-                📁 {item.name}</button>
+                {item.name}</button>
             : <div className="min-w-0 flex-1">
-                <p className="truncate text-sm" title={item.name}>📄 {item.name}</p>
+                <p className="truncate text-sm" title={item.name}>{item.name}</p>
                 <p className="text-xs text-muted-foreground">{prettyBytes(item.size_bytes)}</p>
               </div>}
-          {management && hierarchy && item.organization_revision && <div className="flex flex-wrap gap-1 text-xs">
+          {management && hierarchy && item.organization_revision && <div className="flex max-w-full flex-wrap gap-1 text-xs">
             {item.kind === 'folder' && <button type="button" disabled={busy || editing || !can('file_explorer.folder.rename')} aria-describedby={capabilityId} onClick={event => openEditor(event.currentTarget, 'rename', item)} aria-label={'Rename ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Rename</button>}
             <button type="button" disabled={busy || editing || !can(item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move')} aria-describedby={capabilityId} onClick={event => openEditor(event.currentTarget, 'move', item)} aria-label={'Move ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Move</button>
             {item.kind === 'folder' && <button type="button" disabled={busy || editing || !can('file_explorer.folder.delete')} aria-describedby={capabilityId} onClick={event => openEditor(event.currentTarget, 'delete', item)} aria-label={'Delete ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Delete</button>}
           </div>}
         </li>)}
       </ul>}
-    <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-      <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {limit} selections</span>
+    {!loading && selected.length > 0 && <div className="min-w-0 rounded-lg border p-3">
+      <button type="button" aria-expanded={reviewSelection} className="text-sm font-medium underline"
+        disabled={busy || editing} onClick={() => setReviewSelection(value => !value)}>Review selection ({selected.length})</button>
+      {reviewSelection && <ul aria-label="Selected references" className="mt-2 space-y-2">
+        {selected.map(id => {
+          const entry = byId.get(id)!;
+          return <li key={id} className="flex min-w-0 items-center justify-between gap-2 text-sm">
+            <span className="truncate" title={entry.name}>{entry.name}</span>
+            <button type="button" aria-label={'Remove ' + entry.name + ' from selection'} className="shrink-0 rounded border px-2 py-1"
+              disabled={!canSelect} onClick={() => publishSelection(selected.filter(value => value !== id))}>Remove</button>
+          </li>;
+        })}
+      </ul>}
+    </div>}
+    <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs text-muted-foreground">
+      <div className="min-w-0 space-y-1">
+        <p role="status">{selectionSet.size} selected · {visible.length} shown on this page · Maximum {limit} selections{limit === 0 ? ' · No selection capacity available.' : selectionSet.size >= limit ? ' · Selection limit reached.' : ''}</p>
+        <p>Changing pages, locations, search or refreshing clears selection.</p>
+      </div>
+      {selectionSet.size > 0 && <button type="button" disabled={busy || editing || loading} onClick={clearSelections} className="rounded border px-3 py-2 text-sm">Clear selection</button>}
       {hierarchy?.hasMoreFolders && hierarchy.nextFolderId && <button type="button" className="rounded border px-3 py-2 text-sm"
         disabled={busy || editing || loading || Boolean(error)} onClick={() => { if (!busy && !editing) { clearSelections(); onPageTransition?.(); hierarchy.onNextFolders?.(hierarchy.nextFolderId!); } }}>Next folder page</button>}
       {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"
