@@ -124,6 +124,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                 )) as provider_events:
                     async for part in provider_events:
                         if part.kind == "delta" and part.delta:
+                            await task.require_private_evidence_authorization()
                             if provider_first_delta_ms is None:
                                 provider_first_delta_ms = (
                                     time.perf_counter() - attempt_started
@@ -131,6 +132,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                             task.stream_started = True
                             await task.token_sink(part.delta)
                         elif part.kind == "complete":
+                            await task.require_private_evidence_authorization()
                             execution = part.result
                 if execution is None:
                     raise ProviderExecutionError("provider_stream_missing_terminal")

@@ -5047,6 +5047,19 @@ class ChatRuntime:
         if current is not True:
             raise RuntimeError("memory_source_revoked_or_unverifiable")
 
+    @staticmethod
+    async def _private_evidence_authorized(
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+    ) -> bool:
+        try:
+            async with asyncio.timeout((await meter.remaining_duration_ms()) / 1000):
+                await request.context.revalidate_runtime_attachment_session()
+            return request.context.is_runtime_model_plan_authorized(plan, meter)
+        except Exception:
+            return False
+
     async def _run_simple(
         self,
         request: ChatExecutionRequest,
@@ -5074,12 +5087,7 @@ class ChatRuntime:
             request, decision
         )
         async def authorize_private_evidence() -> bool:
-            try:
-                async with asyncio.timeout((await meter.remaining_duration_ms()) / 1000):
-                    await ctx.revalidate_runtime_attachment_session()
-                return ctx.is_runtime_model_plan_authorized(plan, meter)
-            except Exception:
-                return False
+            return await ChatRuntime._private_evidence_authorized(request, plan, meter)
 
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
@@ -5228,8 +5236,17 @@ class ChatRuntime:
         observed_deltas: list[str] = []
         first_delta_latency_ms: float | None = None
 
+        restricted = ChatRuntime._attachment_restriction_required(request)
+
+        async def authorize_delivery() -> None:
+            if restricted and not await ChatRuntime._private_evidence_authorized(
+                request, plan, meter
+            ):
+                raise AttachmentAdmissionDenied("attachment_session_denied")
+
         async def send_token(delta: str) -> None:
             if isinstance(delta, str) and delta:
+                await authorize_delivery()
                 await events.put(("delta", delta))
 
         async def produce() -> None:
@@ -5250,6 +5267,7 @@ class ChatRuntime:
             while True:
                 kind, payload = await events.get()
                 if kind == "delta":
+                    await authorize_delivery()
                     observed_deltas.append(payload)
                     if first_delta_latency_ms is None:
                         first_delta_latency_ms = (
@@ -5277,6 +5295,7 @@ class ChatRuntime:
                 if kind != "complete":
                     raise RuntimeError("unexpected_expression_stream_event")
 
+                await authorize_delivery()
                 text, normalized = payload
                 if observed_deltas and "".join(observed_deltas) != text:
                     # A transport/engine that emits different content than
