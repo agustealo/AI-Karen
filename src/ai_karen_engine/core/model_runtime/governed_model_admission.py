@@ -243,8 +243,8 @@ class GovernedToolModelAdmission:
                     worker.exception()  # observe a late failure without logging payloads
                 raise
 
-    async def reserve_native_generation(self, endpoint: ProviderEndpoint, *, model: str) -> None:
-        """Admit only the canonical in-process Transformers endpoint.
+    def require_native_generation(self, endpoint: ProviderEndpoint, *, model: str) -> None:
+        """Validate only the canonical in-process Transformers endpoint.
 
         Native execution has no HTTP destination. Do not relax the HTTP
         classifier for an absent URL, or allow a mislabeled remote endpoint
@@ -271,6 +271,10 @@ class GovernedToolModelAdmission:
         ):
             raise PermissionError("governed_model_identity_not_authorized")
         self._require_constraints(endpoint, model, external=False)
+
+    async def reserve_native_generation(self, endpoint: ProviderEndpoint, *, model: str) -> None:
+        """Revalidate and atomically charge the original meter at dispatch."""
+        self.require_native_generation(endpoint, model=model)
         if not await self.meter.reserve_model_execution(external=False):
             raise RuntimeError("governed_model_execution_budget_exhausted")
 

@@ -92,6 +92,13 @@ class SoftExplorationConfig:
         if not self.research_profile.strip():
             raise ValueError("research_profile must not be empty")
 
+    @property
+    def maximum_total_model_calls(self) -> int:
+        """Conservative reference, generation and verifier attempt ceiling."""
+        if self.research_profile == "paper_2025":
+            return 1 + self.initial_samples + self.max_iterations * self.batch_size + 1 + self.max_iterations
+        return 1 + 2 * (self.initial_samples + self.max_iterations)
+
     @classmethod
     def paper_2025(cls) -> "SoftExplorationConfig":
         """Strict paper-equation profile.

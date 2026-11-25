@@ -127,3 +127,5 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(
     assert activation_calls[0]["preferred_model"] == "requested-model"
     assert activation_calls[0]["plan"] is plan
     assert activation_calls[0]["decision"] is decision
+    assert activation_calls[0]["authenticated_context"] is request.context
+    assert activation_calls[0]["execution_meter"] is meter

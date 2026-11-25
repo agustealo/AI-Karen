@@ -5734,6 +5734,8 @@ class ChatRuntime:
         )
 
         objective = self._extract_user_message(request.messages)
+        if not await meter.check_duration():
+            raise RuntimeError("Execution budget exhausted: max_duration_ms")
         activation = get_runtime_reasoning_bridge().activate(
             objective=objective,
             evidence=[item.content for item in evidence if item.content],
@@ -5741,6 +5743,8 @@ class ChatRuntime:
             plan=plan,
             preferred_provider=request.preferred_provider,
             preferred_model=request.preferred_model,
+            authenticated_context=ctx,
+            execution_meter=meter,
         )
 
         canonical_request = ReasoningRequest(

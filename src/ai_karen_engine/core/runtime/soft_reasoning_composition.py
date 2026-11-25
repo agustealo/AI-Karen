@@ -8,9 +8,11 @@ provider or builds a shadow prompt registry.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Sequence
 
+from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
 from ai_karen_engine.core.model_runtime.model_manager import (
     ModelManager,
     RuntimeSelection,
@@ -105,9 +107,34 @@ class RuntimeSoftReasoningComposer:
         evidence: Sequence[str] = (),
         preferred_provider: str | None = None,
         preferred_model: str | None = None,
+        execution_admission: GovernedToolModelAdmission | None = None,
     ) -> ComposedSoftReasoning:
         selection = self._select_transformers(preferred_provider)
+        target = None
+        if execution_admission is not None:
+            # Live Runtime composition must validate the concrete native
+            # target before even resolving the cached model object.
+            endpoint = self._models._resolve_endpoint(selection.provider_id)
+            if endpoint is None:
+                raise SoftReasoningCompositionUnavailable("native endpoint unavailable")
+            target = self._models.resolve_native_target(selection)
+            execution_admission.require_native_generation(endpoint, model=target)
+            if preferred_model and preferred_model != "auto" and (
+                os.path.realpath(preferred_model) != os.path.realpath(target)
+            ):
+                raise SoftReasoningCompositionUnavailable(
+                    "the selected canonical local model does not match preferred_model"
+                )
         runtime = self._models.resolve_runtime(selection)
+        if execution_admission is not None:
+            from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
+
+            if not isinstance(runtime, TransformersRuntime) or target is None:
+                raise SoftReasoningCompositionUnavailable("native runtime identity unavailable")
+            # Never let generation_components silently load a fallback model.
+            # Owned asynchronous preparation is the next lifecycle slice.
+            if not runtime.warm(target, exact_only=True):
+                raise SoftReasoningCompositionUnavailable("authorized local model unavailable")
         if not callable(getattr(runtime, "generation_components", None)) or not callable(
             getattr(runtime, "runtime_capabilities", None)
         ):
@@ -121,7 +148,7 @@ class RuntimeSoftReasoningComposer:
             TransformersSoftReasoningConfig.paper_2025(marker.token_id),
         )
         capabilities = generation.capabilities()
-        if preferred_model and preferred_model not in {"auto", capabilities.model_id}:
+        if execution_admission is None and preferred_model and preferred_model not in {"auto", capabilities.model_id}:
             raise SoftReasoningCompositionUnavailable(
                 "the selected canonical local model does not match preferred_model"
             )
@@ -149,13 +176,7 @@ class RuntimeSoftReasoningComposer:
         )
         generation.validate_prompt_contract(prepared_prompt)
 
-        batches = 1 + config.max_iterations
-        maximum_total_model_calls = (
-            1  # greedy reference forward
-            + config.initial_samples
-            + config.max_iterations * config.batch_size
-            + batches
-        )
+        maximum_total_model_calls = config.maximum_total_model_calls
         return ComposedSoftReasoning(
             strategy=SoftReasoner(engine),
             prepared_prompt=prepared_prompt,

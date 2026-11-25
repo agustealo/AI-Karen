@@ -370,13 +370,7 @@ class ModelManager:
                     raise ProviderNotAvailable("governed_model_stream_unsupported")
                 if {"required_model", "before_generate"} & kwargs.keys():
                     raise ProviderNotAvailable("governed_model_execution_options_unsupported")
-                target = selection.model
-                if target in (None, "", "auto"):
-                    from ai_karen_engine.config.config_manager import get_default_model
-
-                    target = get_default_model("builtin_transformers")
-                if not isinstance(target, str) or not target.strip() or target.strip().lower() == "auto":
-                    raise ProviderNotAvailable("native_authorized_model_unavailable")
+                target = self.resolve_native_target(selection)
                 # Check policy against the concrete target, not an auto alias.
                 await execution_admission.reserve_native_generation(endpoint, model=target)
                 return await self._execute_admitted_native(
@@ -505,6 +499,18 @@ class ModelManager:
                 extra={"provider_id": endpoint.provider_id, "error_type": type(exc).__name__},
             )
             raise
+
+    @staticmethod
+    def resolve_native_target(selection: RuntimeSelection) -> str:
+        """Resolve the concrete local model once, before policy validation."""
+        target = selection.model
+        if target in (None, "", "auto"):
+            from ai_karen_engine.config.config_manager import get_default_model
+
+            target = get_default_model("builtin_transformers")
+        if not isinstance(target, str) or not target.strip() or target.strip().lower() == "auto":
+            raise ProviderNotAvailable("native_authorized_model_unavailable")
+        return target
 
     async def _execute_admitted_native(
         self,
