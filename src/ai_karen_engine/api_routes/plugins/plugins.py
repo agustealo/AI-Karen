@@ -142,6 +142,18 @@ class FileExplorerFolderResponse(BaseModel):
     revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
 
 
+class FileExplorerHierarchyFileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_id: UUID
+    parent_id: Optional[UUID]
+    kind: Literal["file"]
+    name: str
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    size_bytes: int = Field(ge=0)
+    organization_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
 class FileExplorerHierarchyResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
     available: bool
@@ -149,6 +161,9 @@ class FileExplorerHierarchyResponse(BaseModel):
     breadcrumbs: List[FileExplorerFolderResponse]
     has_more: bool
     next_folder_id: Optional[UUID] = None
+    files: List[FileExplorerHierarchyFileResponse]
+    files_has_more: bool
+    next_file_cursor: Optional[str] = None
     request_id: str
     correlation_id: str
 
@@ -536,6 +551,7 @@ async def list_file_explorer_hierarchy(
     limit: int = Query(100, ge=1, le=200),
     parent_folder_id: Optional[UUID] = None,
     after_folder_id: Optional[UUID] = None,
+    file_cursor: Optional[str] = None,
     current_user: Dict[str, Any] = Depends(bypass_user_context_func),
     plugin_service: PluginService = Depends(get_plugin_service),
 ) -> FileExplorerHierarchyResponse:
@@ -543,6 +559,8 @@ async def list_file_explorer_hierarchy(
         request, current_user, "file_explorer_owner_hierarchy",
     )
     try:
+        if file_cursor is not None and not 1 <= len(file_cursor) <= 768:
+            raise ValueError("file_explorer_cursor_invalid")
         page = await plugin_service.list_file_explorer_owner_page(
             user_id=user_id, tenant_id=tenant_id,
             roles=[str(role) for role in (current_user.get("roles", []) or [])],
@@ -551,6 +569,7 @@ async def list_file_explorer_hierarchy(
             limit=limit, hierarchy=True,
             parent_folder_id=str(parent_folder_id) if parent_folder_id else None,
             after_folder_id=str(after_folder_id) if after_folder_id else None,
+            file_cursor=file_cursor,
         )
         return FileExplorerHierarchyResponse.model_validate(page)
     except PermissionError:

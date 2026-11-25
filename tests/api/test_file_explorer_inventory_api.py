@@ -265,3 +265,73 @@ async def test_hierarchy_route_denies_rbac_before_service(monkeypatch):
         )
     assert error.value.status_code == 403
     service.list_file_explorer_owner_page.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_folder_scoped_files_keep_content_and_organization_revisions_separate():
+    from ai_karen_engine.extensions.owner_inventory import ArtifactSourceAdapter
+
+    folder = "55555555-5555-4555-8555-555555555555"
+
+    class ScopedRepository(Repository):
+        async def list_owner_artifacts_page(self, tenant_id, user_id, **kwargs):
+            self.calls.append((tenant_id, user_id, kwargs))
+            return SimpleNamespace(success=True, data=[SimpleNamespace(
+                id=FILE, tenant_id=TENANT, user_id=OWNER, deleted_at=None,
+                filename="report.txt", sha256=SHA, size_bytes=11,
+                folder_id=folder, organization_revision=9223372036854775806,
+            )], metadata={"has_more": False, "next_cursor": None})
+
+    repository = ScopedRepository()
+    adapter = ArtifactSourceAdapter(repository)
+    page = await adapter.list_owner_sources_page(
+        tenant_id=TENANT, user_id=OWNER, limit=10, cursor="opaque-cursor",
+        folder_scoped=True, folder_id=folder,
+    )
+    assert repository.calls == [(TENANT, OWNER, {
+        "limit": 10, "cursor": "opaque-cursor", "folder_scoped": True, "folder_id": folder,
+    })]
+    assert page["items"][0]["revision"] == SHA
+    assert page["items"][0]["organization_revision"] == "9223372036854775806"
+    assert page["items"][0]["parent_id"] == folder
+    with pytest.raises(RuntimeError, match="organization_scope_invalid"):
+        await adapter.list_owner_sources_page(
+            tenant_id=TENANT, user_id=OWNER, folder_scoped=True, folder_id=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_governed_hierarchy_projects_root_files_after_kernel(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+
+    service, kernel, policy = _service()
+
+    class RootRepository(Repository):
+        async def owner_hierarchy_available(self, tenant_id, user_id):
+            assert len(kernel.calls) == 1 and policy.evaluate.await_count == 1
+            return SimpleNamespace(success=True, data=True)
+
+        async def list_owner_folders(self, tenant_id, user_id, **kwargs):
+            return SimpleNamespace(success=True, data=[],
+                                   metadata={"has_more": False, "next_folder_id": None})
+
+        async def list_owner_artifacts_page(self, tenant_id, user_id, **kwargs):
+            assert kwargs["folder_scoped"] is True and kwargs["folder_id"] is None
+            assert len(kernel.calls) == 1
+            return SimpleNamespace(success=True, data=[SimpleNamespace(
+                id=FILE, tenant_id=tenant_id, user_id=user_id, deleted_at=None,
+                filename="report.txt", sha256=SHA, size_bytes=11,
+                folder_id=None, organization_revision=1,
+            )], metadata={"has_more": False, "next_cursor": None})
+
+    repository = RootRepository()
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    page = await service.list_file_explorer_owner_page(**_args(), hierarchy=True)
+    response = ingress.FileExplorerHierarchyResponse.model_validate(page)
+    assert response.available is True and response.files[0].revision == SHA
+    assert response.files[0].organization_revision == "1"
+    assert response.files_has_more is False and response.next_file_cursor is None

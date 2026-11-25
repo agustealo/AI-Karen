@@ -22,6 +22,8 @@ class ArtifactRepository(Protocol):
         *,
         limit: int = 100,
         cursor: str | None = None,
+        folder_scoped: bool = False,
+        folder_id: str | None = None,
     ) -> Any: ...
 
     async def get_metadata(self, artifact_id: str, tenant_id: str) -> Any: ...
@@ -96,14 +98,23 @@ class ArtifactSourceAdapter:
         user_id: str,
         limit: int = 100,
         cursor: str | None = None,
+        folder_scoped: bool = False,
+        folder_id: str | None = None,
     ) -> dict[str, Any]:
         """Return an owner-authorized metadata page, never an implicit grant."""
         tenant_id = _uuid(tenant_id, "tenant_id")
         user_id = _uuid(user_id, "user_id")
         if type(limit) is not int or not 1 <= limit <= MAX_OWNER_ARTIFACTS:
             raise ValueError("file_explorer_page_limit_invalid")
+        if type(folder_scoped) is not bool or (not folder_scoped and folder_id is not None):
+            raise ValueError("file_explorer_folder_scope_invalid")
+        if folder_id is not None and _uuid(folder_id, "folder_id") != folder_id:
+            raise ValueError("file_explorer_folder_scope_invalid")
+        options: dict[str, Any] = {"limit": limit, "cursor": cursor}
+        if folder_scoped:
+            options.update(folder_scoped=True, folder_id=folder_id)
         response = await self._repository.list_owner_artifacts_page(
-            tenant_id, user_id, limit=limit, cursor=cursor
+            tenant_id, user_id, **options
         )
         if not getattr(response, "success", False):
             raise RuntimeError("file_explorer_artifact_list_unavailable")
@@ -130,6 +141,16 @@ class ArtifactSourceAdapter:
                 # The repository promised strict owner scope. Never silently
                 # hide a cross-principal result and call the page authorized.
                 raise PermissionError("file_explorer_owner_scope_mismatch")
+            if folder_scoped:
+                # The content digest remains the selection revision. Organization
+                # revision is independent and represented losslessly for JS.
+                revision = getattr(artifact, "organization_revision", None)
+                if (getattr(artifact, "folder_id", None) != folder_id
+                    or type(revision) is not int
+                    or not 1 <= revision <= 9223372036854775806):
+                    raise RuntimeError("file_explorer_organization_scope_invalid")
+                record["parent_id"] = folder_id
+                record["organization_revision"] = str(revision)
             if record["source_id"] in seen:
                 raise RuntimeError("file_explorer_duplicate_artifact")
             seen.add(record["source_id"])
@@ -157,18 +178,21 @@ class ArtifactSourceAdapter:
     async def list_owner_hierarchy(
         self, *, tenant_id: str, user_id: str, limit: int,
         parent_folder_id: str | None, after_folder_id: str | None,
+        file_cursor: str | None = None,
     ) -> dict[str, Any]:
-        """Project verified folder metadata only; never expose storage information."""
+        """Project separate bounded folder and file pages for one location."""
         tenant_id = _uuid(tenant_id, "tenant_id")
         user_id = _uuid(user_id, "user_id")
         probe = getattr(self._repository, "owner_hierarchy_available", None)
         if not callable(probe):
             return {"available": False, "folders": [], "breadcrumbs": [],
-                    "has_more": False, "next_folder_id": None}
+                    "has_more": False, "next_folder_id": None,
+                    "files": [], "files_has_more": False, "next_file_cursor": None}
         capability = await probe(tenant_id, user_id)
         if not capability.success or capability.data is not True:
             return {"available": False, "folders": [], "breadcrumbs": [],
-                    "has_more": False, "next_folder_id": None}
+                    "has_more": False, "next_folder_id": None,
+                    "files": [], "files_has_more": False, "next_file_cursor": None}
         page = await self._repository.list_owner_folders(
             tenant_id, user_id, parent_folder_id=parent_folder_id,
             after_folder_id=after_folder_id, limit=limit,
@@ -205,8 +229,19 @@ class ArtifactSourceAdapter:
                 or any(child["parent_folder_id"] != parent["folder_id"]
                        for parent, child in zip(breadcrumbs, breadcrumbs[1:]))):
                 raise RuntimeError("file_explorer_breadcrumbs_invalid")
+        file_page = await self.list_owner_sources_page(
+            tenant_id=tenant_id, user_id=user_id, limit=limit, cursor=file_cursor,
+            folder_scoped=True, folder_id=parent_folder_id,
+        )
+        next_file_cursor = file_page["next_cursor"]
+        if file_page["has_more"] and (
+            not 1 <= len(next_file_cursor) <= 768 or next_file_cursor == file_cursor
+        ):
+            raise RuntimeError("file_explorer_file_cursor_invalid")
         return {"available": True, "folders": folders, "breadcrumbs": breadcrumbs,
-                "has_more": more, "next_folder_id": next_id}
+                "has_more": more, "next_folder_id": next_id,
+                "files": file_page["items"], "files_has_more": file_page["has_more"],
+                "next_file_cursor": next_file_cursor}
 
     async def revalidate_owner_reference(
         self,

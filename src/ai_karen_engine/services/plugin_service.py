@@ -167,6 +167,7 @@ class PluginService:
         hierarchy: bool = False,
         parent_folder_id: Optional[str] = None,
         after_folder_id: Optional[str] = None,
+        file_cursor: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Authorize a fresh read through RuntimePolicy and the canonical kernel.
 
@@ -265,6 +266,7 @@ class PluginService:
             return await host.list_owner_hierarchy(
                 context=context, plan=plan, limit=limit,
                 parent_folder_id=parent_folder_id, after_folder_id=after_folder_id,
+                file_cursor=file_cursor,
             )
         return await host.list_owner_page(
             context=context,

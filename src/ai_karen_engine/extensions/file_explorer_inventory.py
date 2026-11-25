@@ -32,6 +32,7 @@ class OwnerInventorySource(Protocol):
     async def list_owner_hierarchy(
         self, *, tenant_id: str, user_id: str, limit: int,
         parent_folder_id: str | None, after_folder_id: str | None,
+        file_cursor: str | None = None,
     ) -> dict[str, Any]: ...
 
     async def revalidate_owner_reference(
@@ -135,6 +136,7 @@ class FileExplorerInventoryHost:
     async def list_owner_hierarchy(
         self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
         limit: int, parent_folder_id: str | None, after_folder_id: str | None,
+        file_cursor: str | None = None,
     ) -> dict[str, Any]:
         self._authorize_owner(context=context, plan=plan)
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
@@ -142,10 +144,15 @@ class FileExplorerInventoryHost:
         if any(value is not None and not _canonical_uuid(value)
                for value in (parent_folder_id, after_folder_id)):
             raise ValueError("file_explorer_folder_id_invalid")
+        if file_cursor is not None and (
+            not isinstance(file_cursor, str) or not 1 <= len(file_cursor) <= MAX_CURSOR_LENGTH
+        ):
+            raise ValueError("file_explorer_cursor_invalid")
         await self._admit_kernel_before_read(context=context, plan=plan)
         page = await self._source.list_owner_hierarchy(
             tenant_id=context.tenant_id, user_id=context.user_id, limit=limit,
             parent_folder_id=parent_folder_id, after_folder_id=after_folder_id,
+            file_cursor=file_cursor,
         )
         logger.info("file_explorer_hierarchy_page", extra={
             "request_id": context.request_id, "correlation_id": context.correlation_id,
