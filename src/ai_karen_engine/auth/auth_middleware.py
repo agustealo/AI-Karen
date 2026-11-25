@@ -490,21 +490,38 @@ class SecureAuthMiddleware:
     async def authenticate_request(self, request: Request) -> Dict[str, Any]:
         return await self.get_current_user(request)
 
-    async def get_current_user(self, request: Request) -> Dict[str, Any]:
+    async def _authenticate_token_principal(
+        self, token: str, *, issue_witness: bool,
+    ) -> Dict[str, Any]:
+        """Keep witness collection local to this authenticated credential attempt."""
+        witnesses: List[Any] = []
+        result = (
+            await self.validate_token(token, _witness_sink=witnesses.append)
+            if issue_witness else await self.validate_token(token)
+        )
+        if result["status"] != TokenStatus.VALID:
+            raise AuthenticationError(
+                result.get("error") or "Session unavailable",
+                result.get("http_status", 401),
+            )
+        if issue_witness:
+            if len(witnesses) != 1 or not callable(witnesses[0]):
+                raise AuthenticationError("Session witness unavailable", 503)
+            return self._get_user_from_payload(result["payload"], witness=witnesses[0])
+        return self._get_user_from_payload(result["payload"])
+
+    async def get_current_user(
+        self, request: Request, *, issue_witness: bool = False,
+    ) -> Dict[str, Any]:
         path = request.url.path
         is_public = self.is_public_endpoint(path)
         try:
             token = self._extract_token_from_request(request)
             if token:
                 try:
-                    token_result = await self.validate_token(token)
-                    if token_result["status"] == TokenStatus.VALID:
-                        return self._get_user_from_payload(token_result["payload"])
-                    if not is_public:
-                        raise AuthenticationError(
-                            token_result.get("error") or "Session unavailable",
-                            token_result.get("http_status", 401),
-                        )
+                    return await self._authenticate_token_principal(
+                        token, issue_witness=issue_witness,
+                    )
                 except AuthenticationError as exc:
                     if not is_public:
                         logger.warning(
@@ -522,14 +539,9 @@ class SecureAuthMiddleware:
             session_token = self._extract_session_token_from_request(request)
             if session_token and session_token != token:
                 try:
-                    token_result = await self.validate_token(session_token)
-                    if token_result["status"] == TokenStatus.VALID:
-                        return self._get_user_from_payload(token_result["payload"])
-                    if not is_public:
-                        raise AuthenticationError(
-                            token_result.get("error") or "Session unavailable",
-                            token_result.get("http_status", 401),
-                        )
+                    return await self._authenticate_token_principal(
+                        session_token, issue_witness=issue_witness,
+                    )
                 except AuthenticationError:
                     if not is_public:
                         raise
@@ -573,7 +585,12 @@ def get_auth_middleware() -> SecureAuthMiddleware:
     return _auth_middleware
 
 
-async def get_current_user(request: Request) -> Dict[str, Any]:
+async def get_current_user(
+    request: Request, *, issue_witness: bool = False,
+) -> Dict[str, Any]:
+    if issue_witness:
+        # Request-state dictionaries alone cannot prove a durable session grant.
+        return await get_auth_middleware().get_current_user(request, issue_witness=True)
     state_user = getattr(request.state, "user", None)
     if isinstance(state_user, dict):
         return state_user
