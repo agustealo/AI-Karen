@@ -345,3 +345,59 @@ def test_dictionary_conversion_does_not_import_private_session_attributes():
     })
     assert "_session_witness" not in principal
     assert "_session_witness" not in vars(principal)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("execution", [False, True])
+async def test_witness_activation_is_explicit_not_endpoint_name(monkeypatch, execution):
+    from types import SimpleNamespace
+
+    from ai_karen_engine.auth import auth_middleware
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.security.auth_config import auth_config
+    from ai_karen_engine.core.services.dependencies import (
+        get_chat_execution_context,
+        get_user_context,
+    )
+
+    principal = UserData.from_dict({"user_id": "user-123", "tenant_id": "tenant-123"})
+    authenticate = AsyncMock(return_value=principal)
+    monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+    monkeypatch.setattr(auth_middleware, "get_current_user", authenticate)
+    endpoint_name = "renamed_chat_endpoint" if execution else "create_chat_response"
+    request = SimpleNamespace(
+        scope={"route": SimpleNamespace(endpoint=SimpleNamespace(__name__=endpoint_name))}
+    )
+    dependency = get_chat_execution_context if execution else get_user_context
+    assert await dependency(request) is principal
+    if execution:
+        authenticate.assert_awaited_once_with(request, issue_witness=True)
+    else:
+        authenticate.assert_awaited_once_with(request)
+
+
+def test_chat_execution_routes_declare_witness_dependency():
+    import ast
+
+    module = ast.parse(CHAT_ROUTE.read_text(encoding="utf-8"))
+    expected = {
+        "create_chat_response",
+        "stream_chat_response",
+        "stream_ag_ui_chat",
+        "resume_approved_chat",
+    }
+    actual = set()
+    for node in module.body:
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        for default in (*node.args.defaults, *node.args.kw_defaults):
+            if (
+                isinstance(default, ast.Call)
+                and isinstance(default.func, ast.Name)
+                and default.func.id == "Depends"
+                and default.args
+                and isinstance(default.args[0], ast.Name)
+                and default.args[0].id == "get_chat_execution_context"
+            ):
+                actual.add(node.name)
+    assert actual == expected

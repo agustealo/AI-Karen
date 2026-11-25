@@ -49,7 +49,10 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     runtime_response_http_status,
     serialize_runtime_response,
 )
-from ai_karen_engine.core.services.dependencies import bypass_user_context_func
+from ai_karen_engine.core.services.dependencies import (
+    bypass_user_context_func,
+    get_chat_execution_context,
+)
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.services.database.repositories.conversation_repository import (
     validate_draft_attachment_references,
@@ -524,7 +527,7 @@ async def create_chat_response(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
     http_request: Request,
-    user: Dict[str, Any] = Depends(bypass_user_context_func),
+    user: Dict[str, Any] = Depends(get_chat_execution_context),
 ):
     """Validate HTTP input and delegate all chat execution to ChatRuntime."""
     del background_tasks
@@ -672,7 +675,7 @@ async def create_chat_response(
 async def stream_chat_response(
     request: ChatStreamRequest,
     http_request: Request,
-    user: Dict[str, Any] = Depends(bypass_user_context_func),
+    user: Dict[str, Any] = Depends(get_chat_execution_context),
 ):
     """Validate SSE input and delegate streaming execution to ChatRuntime."""
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
@@ -1427,7 +1430,7 @@ async def _parse_ag_ui_request(http_request: Request) -> AGUIRunRequest:
 async def stream_ag_ui_chat(
     http_request: Request,
     request: AGUIRunRequest = Depends(_parse_ag_ui_request),
-    user: Dict[str, Any] = Depends(bypass_user_context_func),
+    user: Dict[str, Any] = Depends(get_chat_execution_context),
 ):
     """AG-UI-compatible wire adapter; never a second chat execution path."""
     if not get_runtime_settings().features.enable_ag_ui_bridge:
@@ -1765,7 +1768,7 @@ async def cancel_ag_ui_chat_run(
 async def resume_approved_chat(
     approval_id: str,
     http_request: Request,
-    user: Dict[str, Any] = Depends(bypass_user_context_func),
+    user: Dict[str, Any] = Depends(get_chat_execution_context),
 ):
     """Resume an approved request through the canonical streaming runtime."""
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))

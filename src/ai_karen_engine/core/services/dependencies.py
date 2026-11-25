@@ -43,7 +43,7 @@ def _require_identity_scope(
     return user
 
 
-async def get_user_context(request: Request) -> UserData:
+async def _resolve_user_context(request: Request, *, issue_witness: bool) -> UserData:
     try:
         from ai_karen_engine.core.security.auth_config import auth_config
 
@@ -57,11 +57,6 @@ async def get_user_context(request: Request) -> UserData:
         from ai_karen_engine.auth.auth_middleware import get_current_user as get_real_user
 
         try:
-            route = getattr(request, "scope", {}).get("route")
-            issue_witness = getattr(getattr(route, "endpoint", None), "__name__", "") in {
-                "create_chat_response", "stream_chat_response", "stream_ag_ui_chat",
-                "resume_approved_chat",
-            }
             user_dict = (
                 await get_real_user(request, issue_witness=True)
                 if issue_witness else await get_real_user(request)
@@ -77,6 +72,16 @@ async def get_user_context(request: Request) -> UserData:
     except Exception as exc:
         logger.error("Context resolution failure: %s", exc)
         raise HTTPException(status_code=401, detail="Authentication context unavailable")
+
+
+async def get_user_context(request: Request) -> UserData:
+    """Resolve ordinary API identity without requesting an execution witness."""
+    return await _resolve_user_context(request, issue_witness=False)
+
+
+async def get_chat_execution_context(request: Request) -> UserData:
+    """Resolve chat ingress identity with durable session witness issuance."""
+    return await _resolve_user_context(request, issue_witness=True)
 
 
 bypass_user_context_func = get_user_context
