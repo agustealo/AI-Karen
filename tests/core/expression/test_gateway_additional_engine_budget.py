@@ -13,7 +13,7 @@ from unittest.mock import patch
 import pytest
 
 from ai_karen_engine.core.expression.contracts import ExpressionResult, ExpressionTask
-from ai_karen_engine.core.expression.errors import EngineUnavailableError
+from ai_karen_engine.core.expression.errors import EngineUnavailableError, PrivateEvidenceAuthorizationError
 from ai_karen_engine.core.expression.gateway import ExpressionGateway
 from ai_karen_engine.core.expression.settings import EngineConfig, ExpressionSettings
 from ai_karen_engine.core.runtime.contracts import ExecutionBudget, ExecutionBudgetMeter
@@ -465,6 +465,7 @@ async def test_private_evidence_local_failure_never_attempts_cloud(admin_require
     assert await meter.consume_model_call() is True
     task = _task(meter)
     task.local_only = True
+    task.authorize_private_evidence_attempt = _allow_private_evidence
 
     async def authorize():
         pytest.fail("Private evidence must not request external approval")
@@ -487,6 +488,7 @@ async def test_private_evidence_eligible_fallback_uses_original_budget():
     assert await meter.consume_model_call() is True
     task = _task(meter)
     task.local_only = True
+    task.authorize_private_evidence_attempt = _allow_private_evidence
     visited: list[str] = []
     with patch(
         "ai_karen_engine.core.expression.gateway.get_engine",
@@ -496,3 +498,52 @@ async def test_private_evidence_eligible_fallback_uses_original_budget():
     assert visited == ["local", "alternate"]
     assert meter.model_calls == 2
     assert {"engine_id": "cloud", "reason": "private_evidence_local_only"} in result.metadata["skipped_engines"]
+
+
+async def _allow_private_evidence() -> bool:
+    return True
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("approval", [None, False, 1, "yes"])
+async def test_private_evidence_denied_before_initial_attempt(approval):
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2))
+    assert await meter.consume_model_call() is True
+    task = _task(meter)
+    task.local_only = True
+
+    async def guard():
+        return approval
+
+    task.authorize_private_evidence_attempt = guard if approval is not None else None
+    visited = []
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        with pytest.raises(PrivateEvidenceAuthorizationError, match="attachment_session_denied"):
+            await ExpressionGateway(_settings(extra_engine=True)).generate(task)
+    assert visited == []
+    assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_private_evidence_revoked_between_engine_attempts():
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=2))
+    assert await meter.consume_model_call() is True
+    task = _task(meter)
+    task.local_only = True
+    visited = []
+
+    async def guard():
+        return not visited
+
+    task.authorize_private_evidence_attempt = guard
+    with patch(
+        "ai_karen_engine.core.expression.gateway.get_engine",
+        side_effect=lambda engine_id, _: _FakeEngine(engine_id, visited),
+    ):
+        with pytest.raises(PrivateEvidenceAuthorizationError, match="attachment_session_denied"):
+            await ExpressionGateway(_settings(extra_engine=True)).generate(task)
+    assert visited == ["local"]
+    assert meter.model_calls == 1

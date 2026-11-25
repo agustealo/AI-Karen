@@ -7,7 +7,7 @@ from typing import Any
 
 from .circuit_breakers import ExpressionCircuitBreakers
 from .contracts import ExpressionResult, ExpressionTask
-from .errors import EngineUnavailableError
+from .errors import EngineUnavailableError, PrivateEvidenceAuthorizationError
 from .observability import emit_expression_event
 from .registry import get_engine
 from ai_karen_engine.core.errors.response_validation import validate_response_text
@@ -338,6 +338,18 @@ class ExpressionGateway:
                     )
                     continue
 
+            try:
+                await task.require_private_evidence_authorization()
+            except PrivateEvidenceAuthorizationError:
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="attachment_session_denied",
+                )
+                raise
+
             if attempted_model_engines and task.reserve_additional_model_call is not None:
                 try:
                     permitted = await task.reserve_additional_model_call()
@@ -532,6 +544,9 @@ class ExpressionGateway:
                 )
                 attempt_outcome = "invalid_output"
                 last_error = reason
+            except PrivateEvidenceAuthorizationError:
+                attempt_outcome = "authorization_denied"
+                raise
             except Exception as exc:
                 self.circuits.mark_failure(f"expression.engine.{engine_id}")
                 if task.stream_started:

@@ -5073,6 +5073,14 @@ class ChatRuntime:
         await ChatRuntime._authorize_selected_memory_before_generation(
             request, decision
         )
+        async def authorize_private_evidence() -> bool:
+            try:
+                async with asyncio.timeout((await meter.remaining_duration_ms()) / 1000):
+                    await ctx.revalidate_runtime_attachment_session()
+                return ctx.is_runtime_model_plan_authorized(plan, meter)
+            except Exception:
+                return False
+
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
             kind="chat",
@@ -5102,6 +5110,7 @@ class ChatRuntime:
             },
             token_sink=token_sink,
             local_only=ChatRuntime._attachment_restriction_required(request),
+            authorize_private_evidence_attempt=authorize_private_evidence,
             reserve_additional_model_call=meter.consume_model_call,
             authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
@@ -5114,21 +5123,14 @@ class ChatRuntime:
             intent=decision.intent,
         )
 
-        if ChatRuntime._attachment_restriction_required(request):
-            try:
-                async with asyncio.timeout((await meter.remaining_duration_ms()) / 1000):
-                    await ctx.revalidate_runtime_attachment_session()
-                if not ctx.is_runtime_model_plan_authorized(plan, meter):
-                    raise PermissionError("attachment_authority_changed")
-            except Exception:
-                raise AttachmentAdmissionDenied("attachment_session_denied") from None
-        result = await gateway.generate(task)
-        if ChatRuntime._attachment_restriction_required(request):
-            try:
-                async with asyncio.timeout((await meter.remaining_duration_ms()) / 1000):
-                    await ctx.revalidate_runtime_attachment_session()
-            except Exception:
-                raise AttachmentAdmissionDenied("attachment_session_denied") from None
+        from ai_karen_engine.core.expression.errors import PrivateEvidenceAuthorizationError
+
+        try:
+            await task.require_private_evidence_authorization()
+            result = await gateway.generate(task)
+            await task.require_private_evidence_authorization()
+        except PrivateEvidenceAuthorizationError:
+            raise AttachmentAdmissionDenied("attachment_session_denied") from None
 
         # A provider can outlive its pre-dispatch permission snapshot.
         # Revalidate after generation before returning a successful answer.

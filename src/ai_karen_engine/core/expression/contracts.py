@@ -2,6 +2,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Literal
 
+from .errors import PrivateEvidenceAuthorizationError
+
 @dataclass(slots=True)
 class ExpressionTask:
     task_id: str
@@ -40,6 +42,23 @@ class ExpressionTask:
     stream_started: bool = field(default=False, repr=False, compare=False)
     # Host-only restriction for private evidence; never derived from client metadata.
     local_only: bool = False
+    # Host-only live authorization; never populated from request metadata.
+    authorize_private_evidence_attempt: Callable[[], Awaitable[bool]] | None = field(
+        default=None, repr=False, compare=False,
+    )
+
+    async def require_private_evidence_authorization(self) -> None:
+        if not self.local_only:
+            return
+        try:
+            authorized = (
+                await self.authorize_private_evidence_attempt()
+                if self.authorize_private_evidence_attempt is not None else False
+            )
+        except Exception:
+            raise PrivateEvidenceAuthorizationError("attachment_session_denied") from None
+        if authorized is not True:
+            raise PrivateEvidenceAuthorizationError("attachment_session_denied")
 
 @dataclass(slots=True)
 class ExpressionResult:

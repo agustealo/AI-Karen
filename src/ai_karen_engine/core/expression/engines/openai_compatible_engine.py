@@ -7,6 +7,7 @@ from typing import Any
 
 from .base import BaseExpressionEngine
 from ..contracts import ExpressionResult, ExpressionTask
+from ..errors import PrivateEvidenceAuthorizationError
 from ...model_runtime.provider_execution import (
     execute_provider_endpoint,
     stream_provider_endpoint,
@@ -101,6 +102,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         # First provider delta is only observable for native streamed results.
         # It includes provider setup/queueing and is not an isolated load time.
         provider_first_delta_ms: float | None = None
+        await task.require_private_evidence_authorization()
         try:
             if task.token_sink is not None and endpoint.supports_streaming:
                 # The same registered/authorized provider is used for both
@@ -146,6 +148,8 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             actual_model = execution.model
             runtime_engine = execution.runtime_engine or "openai_compatible"
             provider_usage = dict(execution.usage or {})
+        except PrivateEvidenceAuthorizationError:
+            raise
         except Exception as exc:
             # An upstream exception can contain an authenticated URL,
             # credentials, or response body. Keep only its class and a
