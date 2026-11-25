@@ -661,15 +661,25 @@ def _transition_reader(rows):
 async def test_transition_reader_projects_bounded_owner_scoped_evidence():
     stamp = datetime(2026, 11, 25, tzinfo=timezone.utc)
     rows = [
-        {"transition_id": n, "from_status": "running", "to_status": "completed",
-         "event_at": stamp, "source": "runtime", "metadata": {"secret": "hidden"},
-         "worker_id": "internal", "audit_event_ref": "internal"}
+        {
+            "transition_id": n,
+            "from_status": "running",
+            "to_status": "completed",
+            "event_at": stamp,
+            "source": "runtime",
+            "metadata": {"secret": "hidden"},
+            "worker_id": "internal",
+            "audit_event_ref": "internal",
+        }
         for n in (9007199254740995, 9007199254740994, 9007199254740993)
     ]
     ledger, session = _transition_reader(rows)
     tenant = "11111111-1111-4111-8111-111111111111"
     receipt = await ledger.read_transitions(
-        run_id="run-1", tenant_id=tenant, user_id="owner", limit=2,
+        run_id="run-1",
+        tenant_id=tenant,
+        user_id="owner",
+        limit=2,
     )
     assert receipt == {
         "run_id": "run-1", "truncated": True,
