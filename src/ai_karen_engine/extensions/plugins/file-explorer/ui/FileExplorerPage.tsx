@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useMemo, useState } from 'react';
+import { FileText, Folder, FolderOpen, Search, LayoutGrid, List, ChevronRight } from 'lucide-react';
 
 /**
  * Reusable, controlled File Explorer extension UI.
@@ -89,6 +90,7 @@ function FileExplorerView({
   const [parentId, setParentId] = useState<string | null>(null);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
+  const [layout, setLayout] = useState<'list' | 'grid'>('list');
   const pageEvidenceValid = typeof hasMore === 'boolean' && (
     hasMore
       ? typeof nextCursor === 'string' && nextCursor.length > 0 &&
@@ -178,20 +180,20 @@ function FileExplorerView({
     </section>;
   }
 
-  return <section className="flex min-h-[320px] flex-col gap-4 rounded-lg border bg-background p-4" aria-label="Shared File Explorer">
+  return <section className="flex min-h-[320px] min-w-0 flex-col gap-4 rounded-xl border bg-background p-3 sm:p-4" aria-label="Shared File Explorer">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h2 className="text-lg font-semibold">File Explorer</h2>
+        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight"><FolderOpen aria-hidden="true" className="h-5 w-5 text-muted-foreground" />File Explorer</h2>
         <p className="text-xs text-muted-foreground">
           References only. File access is checked again by the consuming service.
         </p>
       </div>
       {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </header>
-    <nav aria-label="Folder location" className="flex items-center gap-3 text-sm">
+    <nav aria-label="Folder location" className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-muted/40 p-2 text-sm">
       <button type="button" className="rounded border px-3 py-2" onClick={() => { setParentId(null); setFilter(''); }}>Root</button>
       {folder && <>
-        <span aria-hidden="true">/</span>
+        <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="truncate">{folder.name}</span>
         <button type="button" className="rounded border px-3 py-2" onClick={() => {
           setParentId(folder.parent_id && byId.has(folder.parent_id) ? folder.parent_id : null);
@@ -199,11 +201,20 @@ function FileExplorerView({
         }}>Up</button>
       </>}
     </nav>
-    <label className="flex flex-col gap-1 text-sm">
+    <div className="flex flex-wrap items-end gap-2">
+    <label className="flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm">
       Filter current folder (loaded page only)
-      <input className="rounded border bg-background px-3 py-2" type="search" value={filter}
-        onChange={(event) => setFilter(event.target.value)} placeholder="Find files or folders…" />
+      <div className="relative min-w-0">
+        <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+        <input className="w-full rounded-md border bg-background py-2 pl-9 pr-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring" type="search" value={filter}
+          onChange={(event) => setFilter(event.target.value)} placeholder="Find files or folders…" />
+      </div>
     </label>
+    <div role="group" aria-label="Explorer layout" className="inline-flex rounded-md border p-1">
+      <button type="button" aria-label="List view" aria-pressed={layout === 'list'} className={`rounded p-2 focus-visible:ring-2 focus-visible:ring-ring ${layout === 'list' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`} onClick={() => setLayout('list')}><List aria-hidden="true" className="h-4 w-4" /></button>
+      <button type="button" aria-label="Grid view" aria-pressed={layout === 'grid'} className={`rounded p-2 focus-visible:ring-2 focus-visible:ring-ring ${layout === 'grid' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`} onClick={() => setLayout('grid')}><LayoutGrid aria-hidden="true" className="h-4 w-4" /></button>
+    </div>
+    </div>
     {filter && <button type="button" className="self-start rounded border px-3 py-2 text-sm" onClick={() => setFilter('')}>Clear filter</button>}
     {hasMore && <p className="text-xs text-muted-foreground">More references are available on later pages. Filtering and sorting apply only to this page.</p>}
     {error && <p role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error}</p>}
@@ -212,22 +223,23 @@ function FileExplorerView({
         <p className="font-medium text-foreground">{filter ? 'No matching references on this page.' : 'No files or folders in this view.'}</p>
         <p>{filter ? 'Clear the filter to see other references on this page.' : 'No references were supplied for this location on the current page.'}</p>
       </div>
-      : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
-        {visible.map((item) => <li key={item.source_id} className="flex min-w-0 items-center gap-2 rounded border p-2">
+      : <ul className={layout === 'grid' ? 'grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-3' : 'flex min-w-0 flex-col gap-1'} aria-label="Files and folders">
+        {visible.map((item) => <li key={item.source_id} className={`flex min-w-0 items-center gap-3 rounded-lg border p-3 ${selectionSet.has(item.source_id) ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'}`}>
           <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
             aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error) || (atLimit && !selectionSet.has(item.source_id))}
-            onChange={() => select(item)} />
+            className="h-4 w-4 shrink-0 accent-primary focus-visible:ring-2 focus-visible:ring-ring" onChange={() => select(item)} />
+          {item.kind === 'folder' ? <Folder aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" /> : <FileText aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" />}
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
                 onClick={() => { setParentId(item.source_id); setFilter(''); }} aria-label={'Open folder ' + item.name}>
-                📁 {item.name}</button>
+                {item.name}</button>
             : <div className="min-w-0 flex-1">
-                <p className="truncate text-sm" title={item.name}>📄 {item.name}</p>
+                <p className="truncate text-sm" title={item.name}>{item.name}</p>
                 <p className="text-xs text-muted-foreground">{prettyBytes(item.size_bytes)}</p>
               </div>}
         </li>)}
       </ul>}
-    <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
+    <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs text-muted-foreground">
       <div className="space-y-1">
         <p role="status" aria-live="polite">{selectionSet.size} selected · {visible.length} shown on this page · Maximum {selectionLimit} selections{atLimit ? ' · Selection limit reached. Deselect a reference to select another.' : ''}</p>
         <p>Refreshing or moving to the next page clears this selection.</p>
