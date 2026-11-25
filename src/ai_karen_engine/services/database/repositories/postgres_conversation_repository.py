@@ -823,6 +823,7 @@ class PostgresConversationRepository(ConversationRepository):
         persona_scope_id: Optional[str] = None,
         private_execution: Optional["ChatExecutionContext"] = None,
         run_lease: Optional["ChatRunLease"] = None,
+        expected_assistant_digest: Optional[str] = None,
     ) -> RepositoryResult[bool]:
         """Read back the exact transaction outcome without changing finality.
 
@@ -942,12 +943,21 @@ class PostgresConversationRepository(ConversationRepository):
                             and meta.get("persona_scope_id") == persona_scope_id
                         ):
                             return missing
-                        if role == "assistant" and run_lease is not None:
+                        if role == "assistant" and (
+                            run_lease is not None or expected_assistant_digest is not None
+                        ):
                             assistant_digest = canonical_message_digest(Message(
                                 id=message_id, conversation_id=conversation_id,
                                 tenant_id=tenant_id, role=role, content=content,
                                 metadata=meta,
                             ))
+                    if (
+                        expected_assistant_digest is not None
+                        and assistant_digest != expected_assistant_digest
+                    ):
+                        return RepositoryResult(
+                            success=False, error="committed_turn_digest_mismatch",
+                        )
                     if run_lease is not None:
                         from ai_karen_engine.persistence.repositories.chat_run_repository import (
                             SqlChatRunRepository,
@@ -984,6 +994,7 @@ class PostgresConversationRepository(ConversationRepository):
             or user_message.metadata.get("persona_scope_id") != assistant_message.metadata.get("persona_scope_id")
         ):
             return RepositoryResult(success=False, error="invalid_completed_turn")
+        commit_boundary_reached = False
         try:
             async with await self._session() as session:
                 async with session.begin():
@@ -1215,24 +1226,33 @@ class PostgresConversationRepository(ConversationRepository):
                         )
                         if finished.scalar_one_or_none() is None:
                             raise ValueError("chat_run_commit_not_authorized")
+                    # Only the transaction exit can commit this staged pair.
+                    # An exception during commit or later cleanup is uncertain;
+                    # an earlier exception cannot have committed this attempt.
+                    commit_boundary_reached = True
                 return RepositoryResult(
                     success=True, data=persisted,
                     metadata={"idempotent_replay": persisted == 0},
                 )
         except ValueError as exc:
             if (
-                len(exc.args) == 1
+                not commit_boundary_reached
+                and len(exc.args) == 1
                 and isinstance(exc.args[0], str)
                 and exc.args[0] in _ALLOWED_TURN_FAILURE_CODES
             ):
                 return RepositoryResult(success=False, error=exc.args[0])
-            return _repository_failure(
+            result = _repository_failure(
                 "add_completed_turn", exc, error_code="completed_turn_write_failed",
             )
+            result.metadata["commit_outcome_uncertain"] = commit_boundary_reached
+            return result
         except Exception as exc:
-            return _repository_failure(
+            result = _repository_failure(
                 "add_completed_turn", exc, error_code="completed_turn_write_failed",
             )
+            result.metadata["commit_outcome_uncertain"] = commit_boundary_reached
+            return result
 
     @instrument_repository(
         operation="get_messages", repository="PostgresConversationRepository"

@@ -431,3 +431,31 @@ async def test_leased_reconciliation_binds_digest_in_same_transaction(case) -> N
         0 if case == "missing_pair" else 1
     )
     assert tx.committed and not tx.rolled_back
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["before_commit", "commit_exit", "session_exit"])
+async def test_completed_turn_marks_only_commit_boundary_failures_uncertain(phase) -> None:
+    current = lease()
+
+    class FaultTransaction(FakeTransaction):
+        async def execute(self, sql, args):
+            if phase == "before_commit" and "INSERT INTO messages" in str(sql):
+                raise ConnectionError("synthetic precommit failure")
+            return await super().execute(sql, args)
+
+        async def __aexit__(self, exc_type, exc, tb):
+            depth = self._depth
+            result = await super().__aexit__(exc_type, exc, tb)
+            if exc_type is None and (
+                (phase == "commit_exit" and depth == 2)
+                or (phase == "session_exit" and depth == 1)
+            ):
+                raise ConnectionError("synthetic receipt loss")
+            return result
+
+    tx = FaultTransaction()
+    receipt = await make_repo(tx).add_completed_turn(*messages(current), run_lease=current)
+    assert not receipt.success
+    assert receipt.error == "completed_turn_write_failed"
+    assert receipt.metadata["commit_outcome_uncertain"] is (phase != "before_commit")

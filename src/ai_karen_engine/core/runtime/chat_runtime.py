@@ -2212,6 +2212,7 @@ class ChatRuntime:
         transcript_persistence_failed = transcript_result.status in {
             "failed",
             "rejected",
+            "unverified",
         }
 
         # A provider may emit text and subsequently emit a stream error.

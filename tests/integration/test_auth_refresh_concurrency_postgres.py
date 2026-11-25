@@ -545,6 +545,7 @@ async def test_private_session_fence_serializes_revocation(winner, target, inval
                 first_receipt = await persist()
                 assert first_receipt.success is False
                 assert first_receipt.error == "completed_turn_write_failed"
+                assert first_receipt.metadata["commit_outcome_uncertain"] is True
             else:
                 vault = PostgresNeuroVault(session_factory=lost_memory_receipt)
                 with pytest.raises(ConnectionError, match="synthetic post-commit receipt loss"):

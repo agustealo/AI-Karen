@@ -27,6 +27,7 @@ from ai_karen_engine.services.database.repositories import (
     RepositoryFactory,
 )
 from ai_karen_engine.services.database.repositories.conversation_repository import (
+    canonical_message_digest,
     validate_draft_attachment_references,
 )
 from ai_karen_engine.utils.chat_helpers import normalize_session_id
@@ -856,8 +857,9 @@ class ConversationRuntimeGateway:
         assistant_text: str,
         persona_scope_id: str | None = None,
         run_lease: Optional["ChatRunLease"] = None,
+        expected_assistant_digest: Optional[str] = None,
     ) -> TranscriptPersistenceResult:
-        """Verify committed transcript truth after cancellation during a write.
+        """Verify committed transcript truth after interruption or receipt loss.
 
         No replay, new conversation, storage mutation, or inference is allowed.
         A negative receipt is only returned following a successful, scoped
@@ -900,6 +902,8 @@ class ConversationRuntimeGateway:
                 **({"private_execution": context}
                    if context.has_runtime_attachment_scope() else {}),
                 **({"run_lease": run_lease} if run_lease is not None else {}),
+                **({"expected_assistant_digest": expected_assistant_digest}
+                   if expected_assistant_digest is not None else {}),
             )
             if not observed.success:
                 return TranscriptPersistenceResult(
@@ -1041,6 +1045,23 @@ class ConversationRuntimeGateway:
                     user_message, assistant_message,
                 )
             if not write_result.success:
+                if (
+                    write_result.error == "completed_turn_write_failed"
+                    and write_result.metadata.get("commit_outcome_uncertain") is True
+                ):
+                    receipt = await self.reconcile_interrupted_turn(
+                        context, user_text=user_text, assistant_text=assistant_text,
+                        persona_scope_id=persona_scope_id, run_lease=run_lease,
+                        expected_assistant_digest=canonical_message_digest(assistant_message),
+                    )
+                    if receipt.success:
+                        return receipt
+                    # A negative or unavailable observation is not proof that
+                    # an uncertain commit rolled back (e.g. concurrent erasure).
+                    return TranscriptPersistenceResult(
+                        status="unverified", conversation_id=conversation_id,
+                        reason="transcript_commit_outcome_unverified",
+                    )
                 return TranscriptPersistenceResult(
                     status="rejected" if write_result.error == "attachment_session_denied" else "failed",
                     conversation_id=conversation_id,
