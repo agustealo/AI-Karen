@@ -123,3 +123,7 @@ No silent truncation or cross-page selection is introduced. Selection review
 derives from current-page selection IDs, including references hidden by a filter,
 and removal uses the same validated reference callback as individual selection.
 The host remains authoritative for inventory and consuming-service permissions.
+
+## KEXP-003C: consumer selection capability
+
+Content Intelligence inventory requires a positive bounded integer `max_selection` from the authenticated backend. The host validates it and forwards it to the shared picker and analysis panel; oversized events are rejected in full. Mode changes invalidate page identity. Generic inventory retains its existing legacy draft ceiling and analysis ceiling pending a separate chat contract migration. No content authorization is granted by selection metadata.

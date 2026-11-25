@@ -32,6 +32,7 @@ interface ExplorerSelection {
 
 interface InventoryPage {
   items: ExplorerItem[];
+  maxSelection: number;
   has_more: boolean;
   next_cursor: string | null;
   inventory_semantics: 'owner_metadata_page_not_live_acl';
@@ -52,6 +53,7 @@ interface PageRequest {
 
 export interface FileExplorerInventoryProps extends Record<string, unknown> {
   authorized: boolean;
+  maxSelection: number;
   items: ExplorerItem[];
   loading: boolean;
   error: string | null;
@@ -75,7 +77,12 @@ const HEX_SHA256 = /^[a-f0-9]{64}$/;
 const MAX_PAGE_SIZE = 200;
 const MAX_CURSOR_LENGTH = 768;
 
-function assertInventoryPage(data: unknown): InventoryPage {
+// Legacy generic inventory has no execution capability metadata. Preserve its
+// draft-only cap; analysis remains bounded by the existing legacy panel contract.
+const LEGACY_DRAFT_LIMIT = 24;
+const LEGACY_ANALYSIS_LIMIT = 12;
+
+function assertInventoryPage(data: unknown, consumer: InventoryConsumer, mode: 'analysis' | 'selection'): InventoryPage {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new Error('Invalid file inventory response');
   }
@@ -101,6 +108,11 @@ function assertInventoryPage(data: unknown): InventoryPage {
     throw new Error('Invalid file inventory response');
   }
 
+  const maxSelection = consumer === 'content-intelligence' ? page.max_selection
+    : mode === 'analysis' ? LEGACY_ANALYSIS_LIMIT : LEGACY_DRAFT_LIMIT;
+  if (typeof maxSelection !== 'number' || !Number.isSafeInteger(maxSelection) || maxSelection < 1 || maxSelection > MAX_PAGE_SIZE) {
+    throw new Error('Invalid file inventory response');
+  }
   const seen = new Set<string>();
   const items: ExplorerItem[] = [];
   for (const raw of page.items) {
@@ -141,6 +153,7 @@ function assertInventoryPage(data: unknown): InventoryPage {
   }
   return {
     items,
+    maxSelection,
     has_more: page.has_more as boolean,
     next_cursor: page.next_cursor as string | null,
     inventory_semantics: 'owner_metadata_page_not_live_acl',
@@ -172,12 +185,13 @@ export function FileExplorerInventoryHost({
     }
     return [
       consumer,
+      mode,
       user.tenant_id,
       user.user_id,
       [...(user.roles || [])].sort().join(','),
       [...(user.permissions || [])].sort().join(','),
     ].join('|');
-  }, [isAuthenticated, user, consumer]);
+  }, [isAuthenticated, user, consumer, mode]);
 
   const [request, setRequest] = useState<PageRequest>({
     principalKey: '',
@@ -216,7 +230,7 @@ export function FileExplorerInventoryHost({
     void apiClient.get<unknown>(endpoint)
       .then((data) => {
         if (cancelled || generationRef.current !== generation) return;
-        const verified = assertInventoryPage(data);
+        const verified = assertInventoryPage(data, consumer, mode);
         setPage({ ...verified, principalKey, generation });
       })
       .catch((error: unknown) => {
@@ -241,20 +255,20 @@ export function FileExplorerInventoryHost({
       cancelled = true;
       generationRef.current += 1;
     };
-  }, [principalKey, authLoading, request, consumer]);
+  }, [principalKey, authLoading, request, consumer, mode]);
 
   const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
   const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
 
   const onSelect = useCallback((references: ExplorerSelection[]) => {
-    if (!currentPage || loading || currentError) {
+    if (!currentPage || currentPage.generation !== generationRef.current || loading || currentError) {
       setSelectedSourceIds([]);
       return;
     }
     // A plugin UI event is untrusted presentation input, not authority.
     // Never accept a remembered ID with a forged/stale revision or hash.
     // Reject the entire event rather than partially accepting mixed evidence.
-    if (!Array.isArray(references) || references.length > 24) {
+    if (!Array.isArray(references) || references.length > currentPage.maxSelection) {
       setSelectedSourceIds([]);
       return;
     }
@@ -307,6 +321,7 @@ export function FileExplorerInventoryHost({
 
   const props: FileExplorerInventoryProps = {
     authorized: Boolean(currentPage && !currentError),
+    maxSelection: currentPage?.maxSelection ?? 0,
     items: currentPage?.items || [],
     loading: Boolean(principalKey && !authLoading && (loading || (!currentPage && !currentError))),
     error: currentError,
@@ -338,6 +353,7 @@ export function FileExplorerInventoryHost({
     <ContentIntelligenceSelectionPanel
       key={selectionKey}
       sources={selectedAnalysisSources}
+      maxSelection={props.maxSelection}
       onRefreshInventory={onRefresh}
     />
   ) : null;

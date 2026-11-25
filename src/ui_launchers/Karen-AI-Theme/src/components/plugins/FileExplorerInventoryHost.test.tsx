@@ -36,6 +36,7 @@ function response(id: string, hasMore = false, cursor: string | null = null) {
     inventory_semantics: 'owner_metadata_page_not_live_acl',
     request_id: 'request-1',
     correlation_id: 'corr-1',
+    max_selection: 12,
   };
 }
 
@@ -626,9 +627,9 @@ describe('KEXP-002A shared explorer interaction feedback', () => {
     expect(mocks.get).toHaveBeenCalledTimes(1);
   });
 
-  it('disables a 25th selection, permits deselection, and clears through the host', async () => {
+  it('disables a 13th selection, permits deselection, and clears through the host', async () => {
     const page = response(FILE_A);
-    page.items = Array.from({ length: 25 }, (_, i) => ({
+    page.items = Array.from({ length: 13 }, (_, i) => ({
       ...page.items[0],
       source_id: '44444444-4444-4444-8444-' + String(i + 1).padStart(12, '0'),
       name: 'file-' + String(i + 1).padStart(2, '0') + '.txt',
@@ -637,14 +638,14 @@ describe('KEXP-002A shared explorer interaction feedback', () => {
     render(<ContentIntelligenceWorkspace />);
     await screen.findByRole('checkbox', { name: 'Select file-01.txt' });
     const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
-    expect(boxes).toHaveLength(25);
-    boxes.slice(0, 24).forEach(box => fireEvent.click(box));
-    expect(boxes[24].disabled).toBe(true);
+    expect(boxes).toHaveLength(13);
+    boxes.slice(0, 12).forEach(box => fireEvent.click(box));
+    expect(boxes[12].disabled).toBe(true);
     expect(screen.getByText(/Selection limit reached/)).toBeTruthy();
     fireEvent.click(boxes[0]);
-    expect(boxes[24].disabled).toBe(false);
-    fireEvent.click(boxes[24]);
-    expect(boxes[24].checked).toBe(true);
+    expect(boxes[12].disabled).toBe(false);
+    fireEvent.click(boxes[12]);
+    expect(boxes[12].checked).toBe(true);
     fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
     expect(boxes.every(box => !box.checked && !box.disabled)).toBe(true);
     expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
@@ -708,7 +709,7 @@ describe('KEXP-002C/D page-local sorting and selection review', () => {
 
   it('refuses bulk overflow rather than silently truncating references', async () => {
     const page = response(FILE_A);
-    page.items = Array.from({ length: 25 }, (_, i) => ({
+    page.items = Array.from({ length: 13 }, (_, i) => ({
       ...page.items[0],
       source_id: '55555555-5555-4555-8555-' + String(i + 1).padStart(12, '0'),
       name: 'file-' + String(i + 1).padStart(2, '0') + '.txt',
@@ -716,11 +717,39 @@ describe('KEXP-002C/D page-local sorting and selection review', () => {
     mocks.get.mockResolvedValue(page);
     render(<ContentIntelligenceWorkspace />);
     await screen.findByRole('checkbox', { name: 'Select file-01.txt' });
-    expect((screen.getByRole('button', { name: 'Select visible (25)' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole('button', { name: 'Select visible (13)' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText(/Selection would exceed the limit/)).toBeTruthy();
     fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'file-01' } });
     fireEvent.click(screen.getByRole('button', { name: 'Select visible (1)' }));
     expect((screen.getByRole('checkbox', { name: 'Select file-01.txt' }) as HTMLInputElement).checked).toBe(true);
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('KEXP-003C authenticated selection capability', () => {
+  it.each([undefined, null, true, '12', 0, -1, 1.5, 201])('rejects invalid capability %s', async (max_selection) => {
+    mocks.get.mockResolvedValue({ ...response(FILE_A), max_selection });
+    render(<Consumer consumer="content-intelligence" />);
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toContain('Invalid file inventory response'));
+    expect(screen.getByTestId('authorized').textContent).toBe('false');
+    expect(screen.getByTestId('selection').textContent).toBe('');
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('rejects forged oversized selection events at the host boundary', async () => {
+    const page = response(FILE_A);
+    page.max_selection = 2;
+    page.items = Array.from({ length: 3 }, (_, i) => ({
+      ...page.items[0], source_id: '44444444-4444-4444-8444-' + String(i + 1).padStart(12, '0'),
+    }));
+    mocks.get.mockResolvedValue(page);
+    render(<Consumer consumer="content-intelligence" />);
+    await waitFor(() => expect(screen.getByTestId('authorized').textContent).toBe('true'));
+    fireEvent.click(screen.getByText('Select A'));
+    expect(screen.getByTestId('selection').textContent).toBe(FILE_A);
+    fireEvent.click(screen.getByText('Select all current'));
+    expect(screen.getByTestId('selection').textContent).toBe('');
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
   });
 });

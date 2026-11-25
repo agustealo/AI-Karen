@@ -34,6 +34,8 @@ export interface FileExplorerProps {
   error?: string | null;
   selectedSourceIds?: string[];
   multiSelect?: boolean;
+  /** Host-supplied selection ceiling; zero disables selection. */
+  maxSelection?: number;
   onSelect?: (references: ExplorerSelection[]) => void;
   onRefresh?: () => void;
   /** The host owns pagination state and must reject stale/out-of-order responses. */
@@ -81,6 +83,7 @@ function FileExplorerView({
   error = null,
   selectedSourceIds,
   multiSelect = true,
+  maxSelection = MAX_SELECTION,
   onSelect,
   onRefresh,
   hasMore = false,
@@ -149,10 +152,11 @@ function FileExplorerView({
     [entries, currentParent, filter, sort]);
   const selected = Array.from(new Set(selectedSourceIds ?? localSelection)).filter((id) => byId.has(id));
   const selectionSet = new Set(selected);
-  const selectionLimit = multiSelect ? MAX_SELECTION : 1;
+  const limitValid = Number.isSafeInteger(maxSelection) && maxSelection >= 0 && maxSelection <= 200;
+  const selectionLimit = limitValid ? (multiSelect ? maxSelection : Math.min(1, maxSelection)) : 0;
   const atLimit = multiSelect && selectionSet.size >= selectionLimit;
 
-  const canSelect = authorized && !loading && !error && pageEvidenceValid && inventory !== null;
+  const canSelect = selectionLimit > 0 && authorized && !loading && !error && pageEvidenceValid && inventory !== null;
   const unselectedVisible = visible.filter((item) => !selectionSet.has(item.source_id));
   const bulkFits = selected.length + unselectedVisible.length <= selectionLimit;
 
@@ -257,7 +261,7 @@ function FileExplorerView({
       : <ul className={layout === 'grid' ? 'grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-3' : 'flex min-w-0 flex-col gap-1'} aria-label="Files and folders">
         {visible.map((item) => <li key={item.source_id} className={`flex min-w-0 items-center gap-3 rounded-lg border p-3 ${selectionSet.has(item.source_id) ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'}`}>
           <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
-            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error) || (atLimit && !selectionSet.has(item.source_id))}
+            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={!canSelect || loading || Boolean(error) || (atLimit && !selectionSet.has(item.source_id))}
             className="h-4 w-4 shrink-0 accent-primary focus-visible:ring-2 focus-visible:ring-ring" onChange={() => select(item)} />
           {item.kind === 'folder' ? <Folder aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" /> : <FileText aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" />}
           {item.kind === 'folder'
