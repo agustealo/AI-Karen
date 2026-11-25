@@ -180,6 +180,28 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const [contextMessage, setContextMessage] = useState("");
   const [workFilter, setWorkFilter] = useState<"all" | "active" | "completed" | "failed">("all");
   const [historyQuery, setHistoryQuery] = useState("");
+  const [objective, setObjective] = useState("");
+  const [objectiveError, setObjectiveError] = useState("");
+  const objectiveHandoffPending = useRef(false);
+
+  function reviewObjective() {
+    if (!workspaceLive.current || !isAuthenticated || isAdmin || objectiveHandoffPending.current || !objective.trim()) return;
+    objectiveHandoffPending.current = true;
+    try {
+      const accepted = !window.dispatchEvent(new CustomEvent("karen:inject-message", {
+        cancelable: true,
+        detail: { role: "user", content: objective.trim(), autoSubmit: false },
+      }));
+      if (!accepted) {
+        setObjectiveError("Karen could not prepare the objective. Your text is retained. Check the conversation is ready and not processing a message, then retry.");
+        return;
+      }
+      setObjective("");
+      setObjectiveError("");
+    } finally {
+      objectiveHandoffPending.current = false;
+    }
+  }
   const normalizedHistoryQuery = historyQuery.trim().toLowerCase();
 
   const activeRuns = useMemo(
@@ -513,12 +535,21 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             <div className="min-w-0 space-y-2">
               <p className="text-xs font-semibold uppercase tracking-widest text-primary">Your AI workspace</p>
               <h3 className="text-xl font-semibold tracking-tight sm:text-2xl">What are we accomplishing today?</h3>
-              <p className="max-w-xl text-sm text-muted-foreground">Describe your objective in Karen Chat. Authorized executions will appear here when the runtime records them.</p>
+              <p className="max-w-xl text-sm text-muted-foreground">Prepare an objective for review in your current Karen conversation. Existing draft text is preserved. Nothing is submitted automatically.</p>
             </div>
             <Button type="button" size="lg" className="w-full shrink-0 sm:w-auto" onClick={onAskKaren} disabled={!isAuthenticated || !onAskKaren}>
               Ask Karen <ArrowUpRight aria-hidden="true" className="ml-2 h-4 w-4" />
             </Button>
           </div>
+          {isAuthenticated && <form className="mt-5 space-y-3" onSubmit={(event) => { event.preventDefault(); reviewObjective(); }}>
+            <label htmlFor="mission-objective" className="block text-sm font-medium">Mission objective</label>
+            <textarea id="mission-objective" rows={4} value={objective} maxLength={65536} onChange={(event) => { setObjective(event.target.value); setObjectiveError(""); }} className="w-full rounded-lg border border-input bg-background p-3 text-sm focus-visible:outline focus-visible:outline-2 focus-visible:outline-ring" placeholder="Describe the outcome, deliverables and constraints…" />
+            {objectiveError && <p role="alert" className="text-sm text-destructive">{objectiveError}</p>}
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <p className="text-xs text-muted-foreground">Review in the current conversation before sending.</p>
+              <Button type="submit" disabled={!objective.trim()}>Review objective <ArrowUpRight aria-hidden="true" className="ml-2 h-4 w-4" /></Button>
+            </div>
+          </form>}
         </section>
       )}
 
