@@ -143,12 +143,16 @@ function FileExplorerView({
     [entries, currentParent, filter]);
   const selected = (selectedSourceIds ?? localSelection).filter((id) => byId.has(id));
   const selectionSet = new Set(selected);
+  const selectionLimit = multiSelect ? MAX_SELECTION : 1;
+  const atLimit = multiSelect && selectionSet.size >= selectionLimit;
 
   function select(item: ExplorerItem) {
+    if (!authorized || loading || error || !pageEvidenceValid || inventory === null) return;
+    if (atLimit && !selectionSet.has(item.source_id)) return;
     const next = multiSelect
       ? (selectionSet.has(item.source_id)
         ? selected.filter((id) => id !== item.source_id)
-        : [...selected, item.source_id].slice(0, MAX_SELECTION))
+        : [...selected, item.source_id])
       : [item.source_id];
     if (selectedSourceIds === undefined) setLocalSelection(next);
     const references = next.flatMap((id) => {
@@ -196,17 +200,22 @@ function FileExplorerView({
       </>}
     </nav>
     <label className="flex flex-col gap-1 text-sm">
-      Filter current folder
+      Filter current folder (loaded page only)
       <input className="rounded border bg-background px-3 py-2" type="search" value={filter}
         onChange={(event) => setFilter(event.target.value)} placeholder="Find files or folders…" />
     </label>
+    {filter && <button type="button" className="self-start rounded border px-3 py-2 text-sm" onClick={() => setFilter('')}>Clear filter</button>}
+    {hasMore && <p className="text-xs text-muted-foreground">More references are available on later pages. Filtering and sorting apply only to this page.</p>}
     {error && <p role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {loading ? <p role="status" className="py-8 text-center text-sm">Loading authorized file inventory…</p>
-      : visible.length === 0 ? <p role="status" className="py-8 text-center text-sm text-muted-foreground">No files or folders in this view.</p>
+      : visible.length === 0 ? <div role="status" className="space-y-2 py-8 text-center text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">{filter ? 'No matching references on this page.' : 'No files or folders in this view.'}</p>
+        <p>{filter ? 'Clear the filter to see other references on this page.' : 'No references were supplied for this location on the current page.'}</p>
+      </div>
       : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
         {visible.map((item) => <li key={item.source_id} className="flex min-w-0 items-center gap-2 rounded border p-2">
           <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
-            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error)}
+            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error) || (atLimit && !selectionSet.has(item.source_id))}
             onChange={() => select(item)} />
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
@@ -219,7 +228,11 @@ function FileExplorerView({
         </li>)}
       </ul>}
     <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-      <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {MAX_SELECTION} selections</span>
+      <div className="space-y-1">
+        <p role="status" aria-live="polite">{selectionSet.size} selected · {visible.length} shown on this page · Maximum {selectionLimit} selections{atLimit ? ' · Selection limit reached. Deselect a reference to select another.' : ''}</p>
+        <p>Refreshing or moving to the next page clears this selection.</p>
+      </div>
+      {selectionSet.size > 0 && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={clearSelections} disabled={loading}>Clear selection</button>}
       {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"
         disabled={loading || Boolean(error) || !pageEvidenceValid} onClick={nextPage}>Next page</button>}
     </footer>
