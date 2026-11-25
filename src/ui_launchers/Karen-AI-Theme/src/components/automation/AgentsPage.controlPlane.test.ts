@@ -18,7 +18,8 @@ describe("AgentsPage canonical Medusa boundary", () => {
   it("surfaces real run-level control instead of fake agent daemon controls", () => {
     expect(source).toContain('"/api/admin/agents/runs?include_terminal=true"');
     expect(source).toContain("/api/admin/agents/runs/");
-    expect(source).toContain("Cancel run");
+    expect(source).toContain("Request cancellation");
+    expect(source).not.toContain(">Cancel run<");
     expect(source).not.toContain("terminate");
     expect(source).not.toContain("Delete agent");
     expect(source).not.toContain("Create agent");
@@ -48,7 +49,8 @@ describe("Agent Runtime task-first UI contract", () => {
     expect(source).toContain("/api/agent-runtime/my-runs");
     expect(source).toContain("Only your verified Medusa runs appear here.");
     expect(source).toContain("Request cancellation");
-    expect(source).toContain("Cancellation requested for");
+    expect(source).toContain("Cancellation endpoint responded for");
+    expect(source).toContain("Cancellation outcome could not be verified.");
   });
 });
 
@@ -57,8 +59,8 @@ describe("Agent Runtime governed approvals", () => {
     expect(source).toContain('"/api/approvals/"');
     expect(source).toContain("/api/approvals/\u0024{encodeURIComponent(approvalId)}/decision");
     expect(source).toContain('data-testid="agent-runtime-approvals"');
-    expect(source).toContain("Approve");
-    expect(source).toContain("Reject");
+    expect(source).toContain("Review approval");
+    expect(source).toContain("Review rejection");
     expect(source).toContain("A decision alone does not execute an action.");
     expect(source).toContain("Karen must still revalidate and resume the original request.");
   });
