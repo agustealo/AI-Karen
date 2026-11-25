@@ -1308,3 +1308,40 @@ async def test_native_embedding_timeout_waits_for_worker_retirement(monkeypatch)
     with pytest.raises(RuntimeError, match="execution_deadline_exhausted"):
         await task
     assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_native_admission_propagates_caller_cancellation_to_worker_checkpoint():
+    admission = _scope(calls=1)
+    await admission.reserve_local_embedding(model="local-embedding-model")
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    retired = threading.Event()
+    observed_stop = threading.Event()
+    release = threading.Event()
+
+    def worker(checkpoint):
+        try:
+            loop.call_soon_threadsafe(entered.set)
+            # No native library is needed to exercise the real stop owner.
+            while not release.wait(0.01):
+                checkpoint()
+        except ProviderNotAvailable as exc:
+            if str(exc) == "governed_model_execution_cancelled":
+                observed_stop.set()
+            raise
+        finally:
+            retired.set()
+
+    task = asyncio.create_task(admission.run_admitted_blocking(worker))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+        assert observed_stop.is_set()
+        assert retired.is_set()
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+    assert admission.meter.model_calls == 1

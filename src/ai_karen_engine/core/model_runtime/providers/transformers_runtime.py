@@ -6,6 +6,7 @@ import hashlib
 import logging
 import os
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
@@ -25,6 +26,30 @@ def _lazy_import_transformers() -> bool:
         return True
     except Exception:
         return False
+
+
+# Poll only to observe cancellation while contending for an existing lock.
+# This interval is not an execution budget or a model timeout.
+_LOCK_CHECKPOINT_INTERVAL_SECONDS = 0.05
+
+
+@contextmanager
+def _checkpointed_lock(
+    lock: Any, checkpoint: Callable[[], None] | None,
+) -> Iterator[None]:
+    if checkpoint is None:
+        with lock:
+            yield
+        return
+
+    checkpoint()
+    while not lock.acquire(timeout=_LOCK_CHECKPOINT_INTERVAL_SECONDS):
+        checkpoint()
+    try:
+        checkpoint()
+        yield
+    finally:
+        lock.release()
 
 
 class TransformersRuntime(LLMProviderBase):
@@ -71,7 +96,10 @@ class TransformersRuntime(LLMProviderBase):
         name = Path(model_path).name
         return name[:-5] if name.endswith(".gguf") else name
 
-    def warm(self, model_path: Optional[str] = None, *, exact_only: bool = False) -> bool:
+    def warm(
+        self, model_path: Optional[str] = None, *, exact_only: bool = False,
+        checkpoint: Callable[[], None] | None = None,
+    ) -> bool:
         if not self._transformers_available:
             return False
 
@@ -85,7 +113,7 @@ class TransformersRuntime(LLMProviderBase):
                 logger.warning("No local builtin transformers model available")
                 return False
 
-        with self._lock:
+        with _checkpointed_lock(self._lock, checkpoint):
             if self._pipeline:
                 if exact_only:
                     if self.model_path and os.path.realpath(target_path) == os.path.realpath(self.model_path):
@@ -136,16 +164,22 @@ class TransformersRuntime(LLMProviderBase):
                 try:
                     abs_path = os.path.abspath(candidate)
                     resolved_path = abs_path if os.path.isdir(abs_path) else candidate
+                    if checkpoint is not None:
+                        checkpoint()
                     tokenizer = AutoTokenizer.from_pretrained(
                         resolved_path,
                         local_files_only=offline_mode,
                     )
+                    if checkpoint is not None:
+                        checkpoint()
                     model = AutoModelForCausalLM.from_pretrained(
                         resolved_path,
                         torch_dtype=dtype if dtype != "auto" else None,
                         low_cpu_mem_usage=True,
                         local_files_only=offline_mode,
                     )
+                    if checkpoint is not None:
+                        checkpoint()
                     prepared_pipeline = pipeline(
                         "text-generation",
                         model=model,
@@ -154,13 +188,16 @@ class TransformersRuntime(LLMProviderBase):
                     )
                     # Publish pipeline and loaded-model identity together,
                     # excluding concurrent generations while switching.
-                    with self._generation_lock:
+                    with _checkpointed_lock(self._generation_lock, checkpoint):
                         self._pipeline = prepared_pipeline
                         self.model_path = resolved_path
                         self._model_name = self._resolve_model_name(resolved_path)
                     logger.info("Transformers pipeline warmed for %s", self._model_name)
                     return True
                 except Exception as exc:
+                    # Cancellation is terminal, not a failed load candidate.
+                    if checkpoint is not None:
+                        checkpoint()
                     last_error = exc
                     logger.warning("Failed transformers candidate %s: %s", candidate, exc)
 
@@ -206,7 +243,7 @@ class TransformersRuntime(LLMProviderBase):
         if required_model is not None:
             if not required_model.strip() or required_model.strip().lower() == "auto":
                 raise ProviderNotAvailable("native_execution_model_unobserved")
-            if not self.warm(required_model, exact_only=True):
+            if not self.warm(required_model, exact_only=True, checkpoint=before_generate):
                 raise ProviderNotAvailable("native_authorized_model_unavailable")
         elif not self._pipeline and self._transformers_available:
             self.warm(self.model_path)
@@ -215,7 +252,7 @@ class TransformersRuntime(LLMProviderBase):
             try:
                 max_new_tokens = kwargs.get("max_new_tokens") or kwargs.get("max_tokens") or 128
                 temperature = float(kwargs.get("temperature", 0.7))
-                with self._generation_lock:
+                with _checkpointed_lock(self._generation_lock, before_generate):
                     active_pipeline = self._pipeline
                     active_model = str(self.model_path or "").strip()
                     if active_pipeline is None or not active_model or active_model == "auto":
@@ -224,15 +261,31 @@ class TransformersRuntime(LLMProviderBase):
                         os.path.realpath(required_model) != os.path.realpath(active_model)
                     ):
                         raise ProviderNotAvailable("native_authorized_model_identity_drift")
+                    generation_options: Dict[str, Any] = {}
                     if before_generate is not None:
                         before_generate()
+                        from transformers import StoppingCriteria, StoppingCriteriaList
+
+                        class _CancellationCriteria(StoppingCriteria):
+                            def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
+                                # Abort rather than publish a partial answer as
+                                # a successful generation when stopped.
+                                before_generate()
+                                return False
+
+                        generation_options["stopping_criteria"] = StoppingCriteriaList(
+                            [_CancellationCriteria()]
+                        )
                     result = active_pipeline(
                         prompt,
                         max_new_tokens=max_new_tokens,
                         temperature=temperature,
                         do_sample=temperature > 0,
                         pad_token_id=active_pipeline.tokenizer.eos_token_id,
+                        **generation_options,
                     )
+                    if before_generate is not None:
+                        before_generate()
                 if result and isinstance(result, list) and "generated_text" in result[0]:
                     generated = str(result[0]["generated_text"])
                     if generated.startswith(prompt):

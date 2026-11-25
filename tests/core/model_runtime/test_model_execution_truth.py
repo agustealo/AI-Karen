@@ -775,7 +775,7 @@ def test_governed_generation_never_invokes_stale_pipeline(monkeypatch, load_succ
     runtime._pipeline = lambda *args, **kwargs: pytest.fail("wrong model must not see prompt")
     calls = []
 
-    def warm(model_path, *, exact_only):
+    def warm(model_path, *, exact_only, checkpoint=None):
         calls.append((model_path, exact_only))
         return load_succeeds
 
@@ -799,3 +799,98 @@ def test_governed_generation_checks_deadline_after_loading_and_lock(monkeypatch)
         runtime.generate_text_with_model(
             "private input", required_model="selected-model", before_generate=expired,
         )
+
+
+def test_native_lock_wait_observes_cancellation_without_acquiring():
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    attempts = []
+
+    class ContendedLock:
+        def acquire(self, *, timeout):
+            attempts.append(timeout)
+            return False
+
+        def release(self):
+            pytest.fail("must not release a lock that was never acquired")
+
+    def checkpoint():
+        if attempts:
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    with pytest.raises(ProviderNotAvailable, match="execution_cancelled"):
+        with module._checkpointed_lock(ContendedLock(), checkpoint):
+            pytest.fail("cancelled worker must not enter the critical section")
+    assert len(attempts) == 1
+
+
+def test_cancelled_native_load_never_starts_next_loading_stage(monkeypatch):
+    import sys
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    stopped = threading.Event()
+    calls = []
+
+    def tokenizer(path, **kwargs):
+        calls.append(path)
+        stopped.set()
+        return object()
+
+    def checkpoint():
+        if stopped.is_set():
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False),
+    ))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoTokenizer=SimpleNamespace(from_pretrained=tokenizer),
+        AutoModelForCausalLM=SimpleNamespace(
+            from_pretrained=lambda *a, **kw: pytest.fail("cancelled load must not load model"),
+        ),
+        pipeline=lambda *a, **kw: pytest.fail("cancelled load must not create pipeline"),
+    ))
+    runtime = module.TransformersRuntime(model_path="selected-model")
+    with pytest.raises(ProviderNotAvailable, match="execution_cancelled"):
+        runtime.generate_text_with_model(
+            "private input", required_model="selected-model", before_generate=checkpoint,
+        )
+    assert calls == ["selected-model"]
+    assert runtime._pipeline is None
+
+
+def test_native_generation_stopping_criteria_uses_host_checkpoint(monkeypatch):
+    import sys
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    stopped = threading.Event()
+    tokens = []
+
+    def checkpoint():
+        if stopped.is_set():
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    class Pipeline:
+        tokenizer = SimpleNamespace(eos_token_id=0)
+
+        def __call__(self, prompt, **kwargs):
+            criteria = kwargs["stopping_criteria"]
+            assert len(criteria) == 1
+            assert criteria[0](None, None) is False
+            tokens.append("first token")
+            stopped.set()
+            criteria[0](None, None)
+            pytest.fail("stopped generation must not return a partial response")
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        StoppingCriteria=object, StoppingCriteriaList=list,
+    ))
+    runtime = module.TransformersRuntime(model_path="selected-model")
+    runtime._pipeline = Pipeline()
+    with pytest.raises(ProviderNotAvailable, match="execution_cancelled"):
+        runtime.generate_text_with_model(
+            "private input", required_model="selected-model", before_generate=checkpoint,
+        )
+    assert tokens == ["first token"]

@@ -13,7 +13,7 @@ import math
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, Iterable, Iterator, List, Mapping, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
@@ -515,17 +515,12 @@ class ModelManager:
 
         start = time.perf_counter()
         try:
-            async with admission.admitted_execution_deadline() as deadline:
-                loop = asyncio.get_running_loop()
+            async with admission.admitted_execution_deadline():
                 provider = self.resolve_runtime(selection)
                 if not isinstance(provider, TransformersRuntime):
                     raise ProviderNotAvailable("model_execution_provenance_unsupported")
 
-                def check_deadline() -> None:
-                    if loop.time() >= deadline:
-                        raise ProviderNotAvailable("governed_model_execution_deadline_exhausted")
-
-                def generate_selected() -> tuple[str, str]:
+                def generate_selected(checkpoint: Callable[[], None]) -> tuple[str, str]:
                     target = selection.model
                     if target in (None, "", "auto"):
                         from ai_karen_engine.config.config_manager import get_default_model
@@ -533,9 +528,9 @@ class ModelManager:
                         target = get_default_model("builtin_transformers")
                     if not isinstance(target, str) or not target.strip() or target.strip().lower() == "auto":
                         raise ProviderNotAvailable("native_authorized_model_unavailable")
-                    check_deadline()
+                    checkpoint()
                     text, observed = provider.generate_text_with_model(
-                        prompt, required_model=target, before_generate=check_deadline, **options,
+                        prompt, required_model=target, before_generate=checkpoint, **options,
                     )
                     if not isinstance(observed, str) or os.path.realpath(target) != os.path.realpath(observed):
                         raise ProviderNotAvailable("executed_model_registry_identity_drift")
@@ -601,9 +596,13 @@ class ModelManager:
         await execution_admission.reserve_local_embedding(
             model=self.embedding_manager.model_name,
         )
-        return await execution_admission.run_admitted_blocking(
-            self.embedding_manager.embed_authoritative, text,
-        )
+        def encode(checkpoint: Callable[[], None]) -> List[float]:
+            checkpoint()
+            vector = self.embedding_manager.embed_authoritative(text)
+            checkpoint()
+            return vector
+
+        return await execution_admission.run_admitted_blocking(encode)
 
     @classmethod
     async def invoke_provider(cls, provider: Any, prompt: str, **kwargs: Any) -> Any:

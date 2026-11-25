@@ -14,15 +14,15 @@ from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from contextvars import copy_context
 from dataclasses import dataclass
-from typing import Any, ParamSpec, TypeVar
+from typing import Any, TypeVar
 
+from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
 from ai_karen_engine.core.model_runtime.provider_execution import (
     provider_endpoint_requires_external_permission,
 )
 
 
-_P = ParamSpec("_P")
 _T = TypeVar("_T")
 
 
@@ -197,7 +197,7 @@ class GovernedToolModelAdmission:
             raise
 
     async def run_admitted_blocking(
-        self, function: Callable[_P, _T], /, *args: _P.args, **kwargs: _P.kwargs,
+        self, function: Callable[[Callable[[], None]], _T], /,
     ) -> _T:
         """Own a synchronous native call until its local worker returns.
 
@@ -210,12 +210,17 @@ class GovernedToolModelAdmission:
             context = copy_context()
             stopped = threading.Event()
 
+            def checkpoint() -> None:
+                if stopped.is_set():
+                    raise ProviderNotAvailable("governed_model_execution_cancelled")
+                if loop.time() >= deadline:
+                    raise ProviderNotAvailable("governed_model_execution_deadline_exhausted")
+
             def invoke() -> _T:
-                # An executor queue may outlive the authorized duration.
-                # Do not start fresh native work after observing expiry/stop.
-                if stopped.is_set() or loop.time() >= deadline:
-                    raise RuntimeError("governed_model_execution_deadline_exhausted")
-                return context.run(function, *args, **kwargs)
+                # A queued worker and each cooperative native stage share
+                # the same cancellation signal and original deadline.
+                checkpoint()
+                return context.run(function, checkpoint)
 
             worker = loop.run_in_executor(None, invoke)
             try:
