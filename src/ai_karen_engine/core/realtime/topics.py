@@ -17,7 +17,7 @@ _TOPIC_ID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 
 def _validate_uuid(value: str, name: str) -> uuid.UUID:
     if not isinstance(value, str) or not _TOPIC_ID_PATTERN.fullmatch(value):
-        raise ValueError(f"{name} must be a valid UUID, got {value!r}")
+        raise ValueError(f"{name} must be a valid UUID")
     return uuid.UUID(value)
 
 
@@ -81,3 +81,17 @@ class RealtimeTopicFactory:
         if kind in {"notifications", "admin"} and len(parts) == 3:
             return f"tenant:{self._validated_tenant}:{kind}"
         return None
+
+
+def is_private_topic(topic: str) -> bool:
+    """Recognize private-topic syntax; this does not grant subscription access."""
+    if not isinstance(topic, str):
+        return False
+    parts = topic.split(":")
+    if len(parts) not in (3, 4):
+        return False
+    try:
+        factory = RealtimeTopicFactory(parts[1])
+    except ValueError:
+        return False
+    return factory.resolve_topic(topic) is not None
