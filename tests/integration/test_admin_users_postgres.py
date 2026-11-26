@@ -220,3 +220,241 @@ async def test_tenant_and_admin_creation_commit_and_rollback_against_postgres(mo
                     await session.execute(delete(Tenant).where(Tenant.slug.startswith(slug)))
         finally:
             await engine.dispose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.skipif(
+    os.environ.get("KAREN_TEST_TENANT_CREATION_RLS") != "1",
+    reason="Requires explicit disposable migration-backed tenant creation proof",
+)
+async def test_tenant_creation_under_migrated_non_bypass_role(monkeypatch):
+    """Exercise actual migration-owned auth/audit policies and canonical writer."""
+    import re
+    from contextlib import asynccontextmanager
+    from pathlib import Path
+
+    import asyncpg
+    from sqlalchemy import func, select, text
+    from sqlalchemy.engine import make_url
+    from sqlalchemy.exc import DBAPIError
+    from ai_karen_engine.auth import auth_service
+    from ai_karen_engine.database import tenant_manager
+    from ai_karen_engine.database.tenant_manager import TenantConfig, TenantManager
+    from ai_karen_engine.persistence.postgres.transactions import (
+        apply_authenticated_transaction_context,
+    )
+
+    root_url = make_url(os.environ["AUTH_TEST_DATABASE_URL"])
+    assert root_url.drivername == "postgresql+asyncpg"
+    assert root_url.host in ("127.0.0.1", "localhost")
+    assert root_url.port == 5432 and root_url.database == "karen_auth_test"
+    assert not root_url.query
+    database = "karen_auth_tenant_rls_test"
+    role = "karen_auth_tenant_rls_actor"
+    url = root_url.set(database=database)
+    root = await asyncpg.connect(
+        root_url.set(drivername="postgresql").render_as_string(hide_password=False)
+    )
+    database_created = role_created = False
+    engine = None
+    operator_tenant, operator = uuid.uuid4(), uuid.uuid4()
+    suffix = uuid.uuid4().hex
+    slug = f"tenant-rls-{suffix}"
+    email = f"tenant-rls-{suffix}@example.test"
+    password = "ProofPassword1!"
+    config = AuthConfig(
+        environment=Environment.LOCAL,
+        jwt_secret_key="tenant-rls-proof-secret-at-least-32-bytes",
+        bcrypt_rounds=10,
+    )
+    auth = AuthService(config)
+    auth._initialized = True
+
+    async def get_auth():
+        return auth
+
+    monkeypatch.setattr(auth_service, "get_auth_service", get_auth)
+    try:
+        assert not await root.fetchval(
+            "SELECT 1 FROM pg_database WHERE datname=$1", database
+        ), "Refusing to reuse an existing database"
+        assert not await root.fetchval(
+            "SELECT 1 FROM pg_roles WHERE rolname=$1", role
+        ), "Refusing to reuse an existing role"
+        await root.execute(f"CREATE DATABASE {database}")
+        database_created = True
+        await root.execute(f"CREATE ROLE {role} NOLOGIN NOSUPERUSER NOBYPASSRLS")
+        role_created = True
+        db = await asyncpg.connect(
+            url.set(drivername="postgresql").render_as_string(hide_password=False)
+        )
+        try:
+            migrations = Path("supabase/migrations")
+            baseline = (migrations / "20260827010000_01_core_persona_runtime.sql").read_text()
+            finalization = (
+                migrations / "20260827050000_05_schema_security_finalization.sql"
+            ).read_text()
+            # Replay exact source DDL for these tables, not ORM-created tables
+            # or synthetic RLS. Unrelated vector/memory schema is out of scope.
+            for table in ("auth_users", "audit_log"):
+                matches = re.findall(
+                    rf"CREATE TABLE {table} \(.*?\n\);", baseline, re.S
+                )
+                assert len(matches) == 1
+                await db.execute(matches[0])
+            await db.execute((
+                migrations / "20260827020000_02_auth_profile_finalization.sql"
+            ).read_text())
+            blocks = re.findall(r"DO \$\$.*?END \$\$;", finalization, re.S)
+            for table, column in (
+                ("auth_users", "tenant_id"),
+                ("audit_log", "tenant_id"),
+                ("audit_log", "user_id"),
+            ):
+                matches = [
+                    block for block in blocks
+                    if f"ALTER TABLE {table}" in block
+                    and f"ALTER COLUMN {column} TYPE UUID" in block
+                ]
+                assert len(matches) == 1
+                await db.execute(matches[0])
+            await db.execute((
+                migrations / "20260916010000_14_auth_tenant_authority.sql"
+            ).read_text())
+            for table in ("auth_users", "audit_log"):
+                enable = f"ALTER TABLE {table} ENABLE ROW LEVEL SECURITY;"
+                assert enable in finalization
+                await db.execute(enable)
+                matches = re.findall(
+                    rf"CREATE POLICY {table}_tenant_isolation ON {table}.*?;",
+                    finalization, re.S,
+                )
+                assert len(matches) == 1
+                await db.execute(matches[0])
+            await db.execute(f"GRANT USAGE ON SCHEMA public TO {role}")
+            await db.execute(f"GRANT SELECT, INSERT ON tenants, auth_users, audit_log TO {role}")
+            await db.execute(f"GRANT USAGE ON SEQUENCE audit_log_event_id_seq TO {role}")
+            assert tuple(await db.fetchrow(
+                "SELECT rolsuper, rolbypassrls, rolcanlogin FROM pg_roles WHERE rolname=$1",
+                role,
+            )) == (False, False, False)
+            assert await db.fetchval(
+                "SELECT count(*) FROM pg_class WHERE oid IN "
+                "('public.auth_users'::regclass, 'public.audit_log'::regclass) "
+                "AND relrowsecurity"
+            ) == 2
+            await db.execute(
+                "INSERT INTO tenants(id, name, slug) VALUES($1, 'Operator', 'operator')",
+                operator_tenant,
+            )
+            await db.execute(
+                "INSERT INTO auth_users(user_id, tenant_id, email, roles) "
+                "VALUES($1, $2, 'operator@example.test', '[\"super_admin\"]'::jsonb)",
+                operator, operator_tenant,
+            )
+        finally:
+            await db.close()
+
+        engine = create_async_engine(url, pool_pre_ping=True)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+
+        @asynccontextmanager
+        async def scoped_session(tenant_id):
+            async with sessions() as session:
+                async with session.begin():
+                    await session.execute(text(f"SET LOCAL ROLE {role}"))
+                    assert await session.scalar(text("SELECT current_user")) == role
+                    assert await session.scalar(text(
+                        "SELECT row_security_active('public.auth_users'::regclass) "
+                        "AND row_security_active('public.audit_log'::regclass)"
+                    ))
+                    await apply_authenticated_transaction_context(
+                        session, tenant_id=str(tenant_id), user_id=str(operator)
+                    )
+                    yield session
+
+        class Client:
+            def get_async_session(self):
+                return scoped_session(operator_tenant)
+
+        manager = TenantManager(Client())
+
+        async def create(name, address, secret=password):
+            return await manager.create_tenant(
+                TenantConfig("Proof Tenant", name), address,
+                admin_password=secret, admin_full_name="Proof Administrator",
+                operator_id=str(operator),
+            )
+
+        tenant = await create(slug, email)
+        tenant_id = tenant.id
+        async with scoped_session(tenant_id) as session:
+            admin = (await session.execute(select(AuthUser))).scalar_one()
+            receipt = (await session.execute(select(AuditLog))).scalar_one()
+            assert admin.tenant_id == tenant_id and admin.email == email
+            assert admin.roles == ["admin", "user"]
+            assert admin.is_verified and admin.is_active
+            assert auth._verify_password(password, admin.password_hash)
+            assert receipt.user_id == str(operator)
+            assert receipt.tenant_id == str(tenant_id)
+            assert receipt.action == "admin_tenant_create"
+            assert receipt.resource_id == str(tenant_id)
+            assert receipt.details == {"initial_admin_user_id": str(admin.user_id)}
+            event_id = receipt.event_id
+
+        async with scoped_session(operator_tenant) as session:
+            assert (await session.execute(select(AuditLog))).scalars().all() == []
+            assert (await session.execute(select(AuthUser.user_id))).scalars().all() == [operator]
+        with pytest.raises(DBAPIError) as denied:
+            async with scoped_session(operator_tenant) as session:
+                session.add(AuditLog(
+                    tenant_id=str(tenant_id), user_id=str(operator), action="denied"
+                ))
+                await session.flush()
+        assert denied.value.orig.sqlstate == "42501"
+
+        # RLS hides existing accounts from the new scope; global constraints
+        # must still reject email and username collisions across tenants.
+        for name, address, secret in (
+            (slug, f"other-{suffix}@example.test", password),
+            (slug + "-email", email, password),
+            (slug + "-username", email.replace("@example.test", "@example.org"), password),
+            (slug + "-weak", f"weak-{suffix}@example.test", "weak"),
+        ):
+            with pytest.raises(ValueError):
+                await create(name, address, secret)
+
+        def invalid_receipt(**kwargs):
+            return AuditLog(**{**kwargs, "action": None})
+
+        with monkeypatch.context() as patch:
+            patch.setattr(tenant_manager, "AuditLog", invalid_receipt)
+            with pytest.raises(ValueError):
+                await create(slug + "-audit", f"audit-{suffix}@example.test")
+        # Privileged inspection is only for whole-database rollback evidence,
+        # not for exercising the protected runtime writes above.
+        async with sessions() as session:
+            assert await session.scalar(select(func.count()).select_from(Tenant)) == 2
+            assert await session.scalar(select(func.count()).select_from(AuthUser)) == 2
+            assert await session.scalar(select(func.count()).select_from(AuditLog)) == 1
+        assert not auth._user_cache
+
+        # Recreate the engine and service to rule out in-memory receipt state.
+        await engine.dispose()
+        engine = create_async_engine(url, pool_pre_ping=True)
+        sessions = async_sessionmaker(engine, expire_on_commit=False)
+        manager = TenantManager(Client())
+        assert await manager.get_tenant(tenant_id) is not None
+        async with scoped_session(tenant_id) as session:
+            receipt = await session.get(AuditLog, event_id)
+            assert receipt is not None and receipt.user_id == str(operator)
+    finally:
+        try:
+            if engine is not None:
+                await engine.dispose()
+            if database_created:
+                await root.execute(f"DROP DATABASE {database}")
+            if role_created:
+                await root.execute(f"DROP ROLE {role}")
+        finally:
+            await root.close()

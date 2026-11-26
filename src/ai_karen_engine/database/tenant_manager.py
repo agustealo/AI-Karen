@@ -149,6 +149,12 @@ class TenantManager:
                 )
                 session.add(tenant)
                 await session.flush()
+                # The platform-authorized operation owns this fresh transaction.
+                # Bind the newly staged tenant before any RLS-protected account
+                # read or insert. Global uniqueness remains database-enforced.
+                await apply_authenticated_transaction_context(
+                    session, tenant_id=str(tenant.id), user_id=str(operator),
+                )
                 user = await auth.create_user_in_transaction(
                     session,
                     email=admin_email,
@@ -161,12 +167,6 @@ class TenantManager:
                 if user.tenant_id != str(tenant.id):
                     raise RuntimeError("Initial administrator tenant assignment failed")
 
-                # Install the target tenant scope only after the authorized
-                # platform operation has staged the tenant and its account.
-                # The context helper is not an authorization grant.
-                await apply_authenticated_transaction_context(
-                    session, tenant_id=str(tenant.id), user_id=str(operator),
-                )
                 session.add(AuditLog(
                     tenant_id=str(tenant.id),
                     user_id=str(operator),
