@@ -12,6 +12,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Bell, Clock, FileText, Info, Server, AlertCircle, Workflow, Activity, ShieldAlert, BrainCircuit, RefreshCw, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ApprovalReviewPanel } from "@/components/approvals/ApprovalReviewPanel";
+import { PersonalCommunicationsInbox } from "./PersonalCommunicationsInbox";
 import { useRuntimeApprovalContext } from "@/components/approvals/RuntimeApprovalProvider";
 import { format } from 'date-fns';
 
@@ -421,6 +422,9 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat,
                     <TabsTrigger value="overview" className="min-h-10 gap-2 px-3 sm:px-4">
                         <Bell aria-hidden="true" className="h-4 w-4 shrink-0" /> Overview
                     </TabsTrigger>
+                    <TabsTrigger value="inbox" className="min-h-10 gap-2 px-3 sm:px-4">
+                        <Bell aria-hidden="true" className="h-4 w-4 shrink-0" /> Inbox
+                    </TabsTrigger>
                     <TabsTrigger value="decisions" className="min-h-10 gap-2 px-3 sm:px-4">
                         <ShieldAlert aria-hidden="true" className="h-4 w-4 shrink-0" /> Decisions
                     </TabsTrigger>
@@ -674,6 +678,15 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat,
                     <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                     <p>Agent execution history comes from the owner-verified Medusa run endpoint. Generated notes still require a separate governed backend source and are never manufactured from audit events.</p>
                 </div>
+            </TabsContent>
+
+            <TabsContent value="inbox" className="mt-6 space-y-6">
+                <PersonalCommunicationsInbox
+                    tenantId={principal ? user?.tenant_id : undefined}
+                    userId={principal ? user?.user_id : undefined}
+                    onOpenConversation={onOpenConversation}
+                    refreshRevision={refreshRevision}
+                />
             </TabsContent>
 
             <TabsContent value="decisions" className="mt-6 space-y-6">

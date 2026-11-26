@@ -81,7 +81,8 @@ describe("Communications Center's canonical visual and authority contract", () =
     expect(container.querySelector('[data-testid="comms-center"] .kari-display')).toBeTruthy();
     const nav = container.querySelector('[aria-label="Communications Center sections"]');
     expect(nav?.className).toContain("overflow-x-auto");
-    expect(nav?.querySelectorAll('svg[aria-hidden="true"]').length).toBe(6);
+    expect(nav?.querySelectorAll('svg[aria-hidden="true"]').length).toBe(7);
+    expect(screen.getByRole("tab", { name: "Inbox" })).toBeTruthy();
     expect(screen.queryByText("svgOverview")).toBeNull();
 
     await waitFor(() => {
