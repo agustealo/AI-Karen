@@ -84,3 +84,67 @@ def test_kcard_negative_local_provenance_cases_fail_closed():
             raise AssertionError(f"Unsafe origin accepted: {raw}")
 
     assert loopback_origin("http://127.0.0.1:8010") == "http://127.0.0.1:8010"
+
+
+def test_disposable_provisioning_generates_all_compose_inputs_without_real_docker(tmp_path, monkeypatch):
+    import subprocess
+    import sys
+
+    import pytest
+
+    subprocess.run(["bash", "-n", str(DEPLOY)], check=True)
+    body = DEPLOY.read_text().split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    code = compile(body, str(DEPLOY), "exec")
+    sha = "a" * 40
+    database = "kcard_" + sha[:12]
+    output = tmp_path / "output"
+    output.mkdir()
+    env_file = output / ".env.production"
+    (tmp_path / ".env").write_text("DB_HOST=localhost\nDB_PORT=54322\nDB_PASSWORD=fixture-secret\n")
+    (tmp_path / "supabase" / "migrations").mkdir(parents=True)
+    (tmp_path / "supabase" / "migrations" / "001.sql").write_text("SELECT 1;")
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setattr(sys, "argv", ["-", str(env_file), sha, database, str(output)])
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    calls = []
+    existing = False
+
+    def execute(args, **kwargs):
+        calls.append(args)
+        if args[:3] == ["docker", "context", "inspect"]:
+            stdout = '"unix:///var/run/docker.sock"'
+        elif args[:2] == ["docker", "ps"]:
+            stdout = "supabase_db_fixture\t127.0.0.1:54322->5432/tcp\n"
+        elif "SELECT 1 FROM pg_database" in args[-1]:
+            stdout = "1\n" if existing else ""
+        elif "createdb" in args or args[:3] == ["docker", "exec", "-i"]:
+            stdout = ""
+        else:
+            raise AssertionError("Unexpected Docker invocation")
+        return subprocess.CompletedProcess(args, 0, stdout, "")
+
+    monkeypatch.setattr(subprocess, "run", execute)
+    exec(code, {})
+    values = dict(line.split("=", 1) for line in env_file.read_text().splitlines())
+    for key in ("DATABASE_URL", "POSTGRES_URL", "AUTH_DATABASE_URL"):
+        assert values[key] == values["KCARD_" + key]
+        assert values[key].endswith(":54322/" + database)
+    keys = ("SECRET_KEY", "AUTH_SECRET_KEY", "AUTH_JWT_SECRET_KEY", "REDIS_PASSWORD",
+            "EXTENSION_SECRET_KEY", "EXTENSION_API_KEY", "GRAFANA_ADMIN_PASSWORD")
+    assert len({values[key] for key in keys}) == len(keys)
+    assert all(len(values[key]) == 64 for key in keys)
+    assert sum("createdb" in args for args in calls) == 1
+    assert sum(args[:3] == ["docker", "exec", "-i"] for args in calls) == 1
+
+    calls.clear()
+    existing = True
+    with pytest.raises(SystemExit, match="already exists"):
+        exec(code, {})
+    assert not any("createdb" in args or args[:3] == ["docker", "exec", "-i"] for args in calls)
+
+    calls.clear()
+    monkeypatch.setenv("DOCKER_HOST", "tcp://example.invalid:2375")
+    with pytest.raises(SystemExit, match="endpoint overrides"):
+        exec(code, {})
+    assert calls == []
