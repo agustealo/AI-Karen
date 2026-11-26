@@ -20,8 +20,13 @@ const sdk = vi.hoisted(() => ({
   runAgent: vi.fn(),
   stopAgent: vi.fn(),
   clearDraft: vi.fn(),
+  prepareRevision: vi.fn(),
+  refreshDraft: vi.fn(),
+  revisionBoundSubmission: false,
   post: vi.fn(),
   get: vi.fn(),
+  refreshHistory: vi.fn(),
+  recoveryRun: null as null | { runId: string; submissionId: string | null; status: string },
   subscribe: vi.fn(),
   unsubscribe: vi.fn(),
   lifecycle: null as null | {
@@ -76,6 +81,8 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", async (importOrig
       synced: sdk.draftSynced,
       failureStatus: sdk.draftFailureStatus,
       prepareSubmission: (...args: unknown[]) => sdk.clearDraft(...args),
+      prepareRevisionSubmission: (...args: unknown[]) => sdk.prepareRevision(...args),
+      refreshSubmittedDraft: sdk.refreshDraft,
       retry: vi.fn(),
       discardAndReload: vi.fn(),
     };
@@ -89,7 +96,10 @@ vi.mock("@/components/chat/copilotkit/KarenCopilotVerifiedHistory", () => ({
 
 vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => {
   return {
-    useKarenScopedAgent: () => ({ agent: sdk.agent, isReady: sdk.isReady }),
+    useKarenScopedAgent: () => ({
+      agent: sdk.agent, isReady: sdk.isReady, refreshVerifiedHistory: sdk.refreshHistory,
+      recoveryRun: sdk.recoveryRun, revisionBoundSubmission: sdk.revisionBoundSubmission,
+    }),
   };
 });
 
@@ -116,6 +126,11 @@ beforeEach(() => {
   sdk.runAgent.mockReset().mockResolvedValue(undefined);
   sdk.stopAgent.mockReset().mockResolvedValue(undefined);
   sdk.clearDraft.mockReset().mockResolvedValue(true);
+  sdk.prepareRevision.mockReset().mockResolvedValue("draft-v1-7");
+  sdk.refreshDraft.mockReset().mockResolvedValue(undefined);
+  sdk.revisionBoundSubmission = false;
+  sdk.refreshHistory.mockReset().mockResolvedValue(true);
+  sdk.recoveryRun = null;
   sdk.get.mockReset().mockResolvedValue({
     status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
   });
@@ -1051,6 +1066,29 @@ describe("Attachment-aware controlled composer", () => {
     expect(screen.getByText("1 / 12 file references")).toBeTruthy();
   });
 
+  it("retains attached draft text when an unresolved run rejects the SDK send", async () => {
+    sdk.initialAttachments = [{ source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) }];
+    sdk.recoveryRun = { runId: "previous-run", submissionId: "previous-turn", status: "interrupted" };
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onChange("Keep this pending draft"));
+    const writes = sdk.draftWrites.length;
+    act(() => {
+      input().onSubmitMessage("Keep this pending draft");
+      input().onChange("");
+    });
+    expect(input().value).toBe("Keep this pending draft");
+    expect(sdk.draftWrites).toHaveLength(writes);
+    expect(screen.getByText("1 / 12 file references")).toBeTruthy();
+    expect(screen.getByText("The previous run is unverified. Check its status and saved history before sending another message.")).toBeTruthy();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    await act(async () => { await Promise.resolve(); });
+    act(() => input().onChange(""));
+    expect(input().value).toBe("");
+    expect(screen.getByText("1 / 12 file references")).toBeTruthy();
+  });
+
   it("blocks inference with restored references and permits text submission after explicit removal", async () => {
     const ref = { source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) };
     sdk.initialAttachments = [ref];
@@ -1065,6 +1103,154 @@ describe("Attachment-aware controlled composer", () => {
     act(() => input().onSubmitMessage("Text only"));
     await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
   });
+});
+
+
+describe("KUI uncertain finality recovery", () => {
+  it("blocks a new send until exact terminal status and verified history are read", async () => {
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => sdk.lifecycle?.onRunStartedEvent({
+      event: { threadId: THREAD, runId: "uncertain-run" },
+    }));
+    act(() => sdk.lifecycle?.onRunFailed({
+      event: { code: "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED" },
+    }));
+    act(() => input().onSubmitMessage("new message"));
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+
+    sdk.get.mockResolvedValueOnce({
+      status: "interrupted", cancel_requested: false, cancellation_confirmed: false,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/No verified completion/)).toBeTruthy());
+    expect(sdk.refreshHistory).not.toHaveBeenCalled();
+    act(() => input().onSubmitMessage("new message"));
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+
+    sdk.get.mockResolvedValueOnce({
+      status: "completed", cancel_requested: false, cancellation_confirmed: false,
+    });
+    sdk.refreshHistory.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/saved history could not be verified/)).toBeTruthy());
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+
+    sdk.get.mockResolvedValueOnce({
+      status: "completed", cancel_requested: false, cancellation_confirmed: false,
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/Run status and saved history were checked/)).toBeTruthy());
+    expect(sdk.get).toHaveBeenCalledWith(
+      "/api/copilotkit/agent/default/runs/" + THREAD + "/uncertain-run/status",
+    );
+    expect(sdk.refreshHistory).toHaveBeenCalledTimes(2);
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    act(() => input().onSubmitMessage("new message"));
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+  });
+
+  it("does not invent a run identity or resend after a pre-start uncertainty error", async () => {
+    sdk.runAgent.mockRejectedValueOnce({ code: "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED" });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onSubmitMessage("first message"));
+    await waitFor(() => expect(screen.getByText(/No verified run identity was received/)).toBeTruthy());
+    act(() => input().onSubmitMessage("second message"));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.clearDraft).toHaveBeenCalledTimes(1);
+    expect(sdk.get).not.toHaveBeenCalled();
+  });
+});
+
+
+it("blocks draft clearance and inference for a recovered outstanding run", () => {
+  sdk.recoveryRun = { runId: "previous-run", submissionId: "previous-turn", status: "interrupted" };
+  render(<KarenCopilotControlledChat conversationId={THREAD} />);
+  act(() => input().onSubmitMessage("new message"));
+  expect(sdk.clearDraft).not.toHaveBeenCalled();
+  expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+  expect(sdk.runAgent).not.toHaveBeenCalled();
+});
+
+
+describe("KUI governed revision-bound submission", () => {
+  it("uses the saved revision as original user ID and never clears before inference", async () => {
+    sdk.revisionBoundSubmission = true;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Original governed question");
+      input().onSubmitMessage("Original governed question");
+    });
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    expect(sdk.prepareRevision).toHaveBeenCalledWith("Original governed question");
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).toHaveBeenCalledWith({
+      id: "draft-v1-7", role: "user", content: "Original governed question",
+    });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+  });
+
+  it("fails closed without an original revision and never falls back to a random ID", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.prepareRevision.mockResolvedValueOnce(null);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Unsaved question");
+      input().onSubmitMessage("Unsaved question");
+    });
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("original draft revision"));
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(input().value).toBe("Unsaved question");
+  });
+
+  it("rereads the canonical draft after an ambiguous SDK failure without clearing it", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(new Error("connection lost"));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Original governed question");
+      input().onSubmitMessage("Original governed question");
+    });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(input().value).toBe("Original governed question");
+  });
+});
+
+
+it("preserves explicit finality uncertainty when stop and SDK finalization race", async () => {
+  let finish!: (receipt: unknown) => void;
+  sdk.post.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  sdk.agent.isRunning = true;
+  render(<KarenCopilotControlledChat conversationId={THREAD} />);
+  act(() => sdk.lifecycle?.onRunStartedEvent({
+    event: { threadId: THREAD, runId: "stop-uncertain" },
+  }));
+  act(() => input().onStop());
+  act(() => sdk.lifecycle?.onRunFinalized());
+  sdk.agent.isRunning = false;
+  act(() => sdk.lifecycle?.onRunFailed({
+    event: { code: "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED" },
+  }));
+  await act(async () => finish({
+    status: "cancelling", cancel_requested: true, cancellation_confirmed: false,
+  }));
+  expect(screen.getByRole("region", { name: "Unverified run recovery" })).toBeTruthy();
+  act(() => input().onChange("New unsent text"));
+  expect(screen.getByRole("alert").textContent).toContain("final outcome");
+  act(() => input().onSubmitMessage("New unsent text"));
+  expect(sdk.runAgent).not.toHaveBeenCalled();
+  expect(sdk.clearDraft).not.toHaveBeenCalled();
+  sdk.get.mockResolvedValueOnce({
+    status: "interrupted", cancel_requested: true, cancellation_confirmed: false,
+  });
+  fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+  await waitFor(() => expect(sdk.get).toHaveBeenCalledWith(
+    "/api/copilotkit/agent/default/runs/" + THREAD + "/stop-uncertain/status",
+  ));
 });
 
 

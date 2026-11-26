@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
@@ -15,6 +16,9 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 )
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.workflow_generation import (
+    WorkflowGenerationAuthority, bind_workflow_generation,
+)
 
 logger = get_logger(__name__)
 
@@ -43,6 +47,7 @@ class WorkflowRuntime:
         plan: Optional[AuthorizedExecutionPlan] = None,
         *,
         budget_meter: ExecutionBudgetMeter | None = None,
+        trajectory_id: str | None = None,
     ) -> Tuple[str, Dict[str, Any]]:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
@@ -55,12 +60,20 @@ class WorkflowRuntime:
             return result
 
         orchestrator = await self._get_orchestrator()
-        final_state = await orchestrator.process(
-            messages=self._to_langchain(request.messages),
-            user_id=ctx.user_id,
-            session_id=conversation_id,
-            config=config,
+        authority = self._generation_authority(
+            request, decision, plan, budget_meter, trajectory_id=trajectory_id,
         )
+        try:
+            with bind_workflow_generation(authority):
+                final_state = await orchestrator.process(
+                    messages=self._to_langchain(request.messages),
+                    user_id=ctx.user_id,
+                    session_id=conversation_id,
+                    config=config,
+                )
+        finally:
+            if authority is not None:
+                authority.revoke()
         answer, metadata = self._extract_payload(final_state)
         if not isinstance(answer, str) or not answer.strip():
             # A completed graph without answer text is not successful model
@@ -79,6 +92,7 @@ class WorkflowRuntime:
         plan: Optional[AuthorizedExecutionPlan] = None,
         *,
         budget_meter: ExecutionBudgetMeter | None = None,
+        trajectory_id: str | None = None,
     ) -> AsyncIterator[_SharedChatStreamChunk]:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
@@ -113,6 +127,10 @@ class WorkflowRuntime:
                 )
                 while True:
                     if run_task.done():
+                        if not run_task.cancelled():
+                            failure = run_task.exception()
+                            if isinstance(failure, NativeRetirementUnverified):
+                                raise failure
                         # Do not race a permanently completed task against a
                         # newly scheduled queue-get. Drain observed events
                         # before reporting the terminal response.
@@ -151,7 +169,7 @@ class WorkflowRuntime:
                     correlation_id=ctx.correlation_id,
                     metadata=metadata,
                 )
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, NativeRetirementUnverified):
                 raise
             except Exception:
                 logger.exception(
@@ -168,7 +186,23 @@ class WorkflowRuntime:
             finally:
                 if not run_task.done():
                     run_task.cancel()
-                    await asyncio.gather(run_task, return_exceptions=True)
+                interrupted = False
+                # Own the child through retirement, including repeated
+                # cancellation of this forwarding generator.
+                while not run_task.done():
+                    try:
+                        await asyncio.shield(run_task)
+                    except asyncio.CancelledError:
+                        if not run_task.cancelled():
+                            interrupted = True
+                    except Exception:
+                        break
+                if not run_task.cancelled():
+                    failure = run_task.exception()
+                    if isinstance(failure, NativeRetirementUnverified):
+                        raise failure
+                if interrupted:
+                    raise asyncio.CancelledError
             return
 
         orchestrator = await self._get_orchestrator()
@@ -178,8 +212,16 @@ class WorkflowRuntime:
             session_id=conversation_id,
             config=config,
         )
+        authority = self._generation_authority(
+            request, decision, plan, budget_meter, trajectory_id=trajectory_id,
+        )
         try:
-            async for chunk in graph_stream:
+            while True:
+                try:
+                    with bind_workflow_generation(authority):
+                        chunk = await anext(graph_stream)
+                except StopAsyncIteration:
+                    break
                 for activity_chunk in self._extract_agent_activity_chunks(
                     chunk,
                     correlation_id=ctx.correlation_id,
@@ -199,7 +241,24 @@ class WorkflowRuntime:
                         metadata=meta,
                     )
         finally:
-            await graph_stream.aclose()
+            if authority is not None:
+                authority.revoke()
+            with bind_workflow_generation(authority):
+                await graph_stream.aclose()
+
+    @staticmethod
+    def _generation_authority(
+        request: ChatExecutionRequest, decision: ExecutionDecision | None,
+        plan: AuthorizedExecutionPlan | None, meter: ExecutionBudgetMeter | None,
+        *, trajectory_id: str | None = None,
+    ) -> WorkflowGenerationAuthority | None:
+        # Compatibility graph inspection can run without a model grant.
+        # The synthesis port itself denies any model execution in that case.
+        if decision is None or plan is None or meter is None:
+            return None
+        return WorkflowGenerationAuthority.create(
+            request, decision, plan, meter, trajectory_id=trajectory_id,
+        )
 
     @staticmethod
     def _project_medusa_event(

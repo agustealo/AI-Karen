@@ -12,6 +12,7 @@ on:
       - "tests/beta/**"
       - "tests/architecture/test_core_ai_machine_isolation.py"
       - "tests/architecture/test_provider_chat_authority.py"
+      - "requirements/ci/*.txt"
       - ".github/workflows/beta-real-model-proof.yml"
   pull_request:
     paths:
@@ -24,6 +25,7 @@ on:
       - "tests/beta/**"
       - "tests/architecture/test_core_ai_machine_isolation.py"
       - "tests/architecture/test_provider_chat_authority.py"
+      - "requirements/ci/*.txt"
       - ".github/workflows/beta-real-model-proof.yml"
   workflow_dispatch:
 
@@ -40,9 +42,13 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
 
       - name: Install proof dependencies
-        run: python -m pip install --upgrade pip pytest pytest-asyncio
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements/ci/runtime-contract.txt
 
       - name: Compile canonical provider spine
         env:

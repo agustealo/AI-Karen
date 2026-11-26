@@ -13,6 +13,7 @@ from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
 from ai_karen_engine.core.reasoning.soft_reasoning.exploration import (
     SoftExplorationConfig,
     SoftExplorationEngine,
+    SoftReasoningBudgetError,
     SoftReasoningUnavailable,
 )
 from ai_karen_engine.core.reasoning.soft_reasoning.optimization import (
@@ -187,7 +188,7 @@ def test_paper_2025_requires_multi_generate_batch_verifier() -> None:
         engine.explore(
             "PROMPT-V1: solve",
             objective="solve",
-            max_model_calls=5,
+            max_model_calls=7,
             max_output_tokens=16,
         )
 
@@ -208,7 +209,7 @@ def test_paper_2025_runs_k_candidate_batch_with_composite_reward() -> None:
     trace = engine.explore(
         "PROMPT-V1: solve",
         objective="solve",
-        max_model_calls=10,
+        max_model_calls=13,
         max_output_tokens=16,
         correlation_id="paper-profile",
     )
@@ -240,7 +241,7 @@ def test_paper_2025_requires_same_generator_and_verifier_model() -> None:
         engine.explore(
             "PROMPT-V1: solve",
             objective="solve",
-            max_model_calls=5,
+            max_model_calls=7,
             max_output_tokens=16,
         )
 
@@ -261,6 +262,110 @@ def test_paper_2025_refuses_runtime_without_coherence() -> None:
         engine.explore(
             "PROMPT-V1: solve",
             objective="solve",
-            max_model_calls=5,
+            max_model_calls=7,
             max_output_tokens=16,
         )
+
+
+@pytest.mark.parametrize("budget, expected_candidates, expected_verifiers", [
+    (7, 5, 1), (12, 5, 1), (13, 10, 2),
+])
+def test_paper_total_budget_reserves_reference_and_complete_verification_batches(
+    budget, expected_candidates, expected_verifiers,
+):
+    verifier = MultiGenerateVerifier()
+    attempts = []
+    engine = SoftExplorationEngine(
+        generation=PaperGenerationRuntime(),
+        verifier=PassingVerifier(),
+        batch_verifier=verifier,
+        config=replace(SoftExplorationConfig.paper_2025(), candidate_pool_size=16, max_iterations=1),
+    )
+    trace = engine.explore(
+        "PROMPT-V1: solve", objective="solve", max_model_calls=budget,
+        max_output_tokens=16, on_model_attempt=lambda: attempts.append(1),
+    )
+    assert trace.model_calls == expected_candidates
+    assert trace.verifier_calls == verifier.calls == expected_verifiers
+    assert len(attempts) == 1 + trace.model_calls + trace.verifier_calls <= budget
+
+
+def test_paper_budget_denies_incomplete_initial_batch_before_reference(monkeypatch):
+    runtime = PaperGenerationRuntime()
+    verifier = MultiGenerateVerifier()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("insufficient budget must not start reference preparation")
+
+    monkeypatch.setattr(runtime, "first_token_embedding", forbidden)
+    engine = SoftExplorationEngine(
+        generation=runtime, verifier=PassingVerifier(), batch_verifier=verifier,
+        config=SoftExplorationConfig.paper_2025(),
+    )
+    with pytest.raises(SoftReasoningBudgetError):
+        engine.explore(
+            "PROMPT-V1: solve", objective="solve", max_model_calls=6, max_output_tokens=16,
+        )
+    assert verifier.calls == 0
+
+
+def test_model_scope_follows_reservation_for_every_native_operation():
+    from contextlib import contextmanager
+
+    events = []
+    held = False
+
+    @contextmanager
+    def scope():
+        nonlocal held
+        assert not held
+        held = True
+        events.append("enter")
+        try:
+            yield
+        finally:
+            held = False
+            events.append("exit")
+
+    def reserve():
+        assert not held
+        events.append("reserve")
+
+    class ScopedGeneration(PaperGenerationRuntime):
+        def capabilities(self):
+            assert held
+            return super().capabilities()
+
+        def first_token_embedding(self, prompt):
+            assert held
+            events.append("reference")
+            return super().first_token_embedding(prompt)
+
+        def generate_with_first_token_embedding(self, *args, **kwargs):
+            assert held
+            events.append("candidate")
+            return super().generate_with_first_token_embedding(*args, **kwargs)
+
+    class ScopedVerifier(MultiGenerateVerifier):
+        def verify_batch(self, *args, **kwargs):
+            assert held
+            events.append("verify")
+            return super().verify_batch(*args, **kwargs)
+
+    engine = SoftExplorationEngine(
+        generation=ScopedGeneration(), verifier=PassingVerifier(),
+        batch_verifier=ScopedVerifier(),
+        config=replace(SoftExplorationConfig.paper_2025(), max_iterations=0),
+        model_scope=scope,
+    )
+    trace = engine.explore(
+        "prepared", objective="solve", max_model_calls=7,
+        max_output_tokens=16, on_model_attempt=reserve,
+    )
+    assert trace.model_calls == 5
+    assert trace.verifier_calls == 1
+    assert events == ["enter", "exit"] + [
+        event for stage in ["reference", *(["candidate"] * 5), "verify"]
+        for event in ["reserve", "enter", stage, "exit"]
+    ]
+    assert not held

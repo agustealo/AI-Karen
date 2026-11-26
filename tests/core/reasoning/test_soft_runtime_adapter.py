@@ -157,3 +157,118 @@ def test_prompt_contract_rejects_invalid_occurrence() -> None:
             insertion_token_id=25,
             occurrence_from_end=0,
         )
+
+
+@pytest.mark.parametrize("fails", [False, True, "cancelled"])
+def test_guided_hook_install_and_cleanup_are_inside_generation_lock(monkeypatch, fails):
+    import sys
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+
+    events = []
+    stopped = False
+
+    def checkpoint():
+        if stopped:
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    if fails == "cancelled":
+        monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+            StoppingCriteria=object, StoppingCriteriaList=list,
+        ))
+    held = False
+
+    class GenerationLock:
+        def __enter__(self):
+            nonlocal held
+            assert not held
+            held = True
+            events.append("lock")
+
+        def __exit__(self, *args):
+            nonlocal held
+            assert events[-1] == "remove"
+            held = False
+            events.append("unlock")
+
+    class Layer:
+        weight = SimpleNamespace(shape=(128, 8), device="cpu")
+
+        def register_forward_hook(self, hook):
+            assert held
+            events.append("install")
+            self.hook = hook
+            return SimpleNamespace(remove=self.remove)
+
+        def remove(self):
+            assert held
+            events.append("remove")
+
+    layer = Layer()
+
+    class Model:
+        def get_input_embeddings(self):
+            return layer
+
+        def eval(self):
+            assert held
+
+        def generate(self, **kwargs):
+            assert held
+            events.append("generate")
+            if fails == "cancelled":
+                nonlocal stopped
+                stopped = True
+                kwargs["stopping_criteria"][0](None, None)
+                pytest.fail("cancelled generation continued")
+            if fails:
+                raise RuntimeError("injected generation failure")
+            # This case deliberately omits the embedding forward call. The
+            # adapter must reject the result, but only after removing its hook.
+            return object()
+
+    class Input:
+        shape = (1, 2)
+
+        def to(self, device):
+            assert held
+            return self
+
+    runtime = FakeResolvedRuntime([1, 25])
+    model = Model()
+    lock = GenerationLock()
+    monkeypatch.setattr(runtime, "generation_components", lambda: (model, runtime.tokenizer, lock))
+    adapter = TransformersSoftGenerationAdapter(
+        runtime, TransformersSoftReasoningConfig(insertion_token_id=25),
+        checkpoint=checkpoint if fails == "cancelled" else None,
+    )
+    monkeypatch.setattr(adapter, "_torch", lambda: SimpleNamespace(no_grad=nullcontext))
+    monkeypatch.setattr(adapter, "_tokenize", lambda *a: {"input_ids": Input()})
+    monkeypatch.setattr(adapter, "_find_insertion_position", lambda _: 1)
+    monkeypatch.setattr(adapter, "_seed_scope", lambda *a: nullcontext())
+
+    error = ProviderNotAvailable if fails == "cancelled" else GenerationFailed
+    message = "cancelled" if fails == "cancelled" else (
+        "injected generation failure" if fails else "never exposed"
+    )
+    from ai_karen_engine.core.model_runtime import provider_health_monitor as health
+    from unittest.mock import Mock
+
+    monitor = Mock()
+    monkeypatch.setattr(health, "get_health_monitor", lambda: monitor)
+    sequence = health.NativeExecutionSequence()
+    with pytest.raises(error, match=message) as failure:
+        with sequence.attempt():
+            adapter.generate_with_first_token_embedding(
+                "prepared prompt", [0.1] * 8, max_tokens=1, seed=1,
+            )
+    monitor.record_native_execution.assert_not_called()
+    sequence.finish(failure.value)
+    monitor.record_native_execution.assert_called_once()
+    assert monitor.record_native_execution.call_args.kwargs["operation"] == "soft_guided"
+    assert monitor.record_native_execution.call_args.kwargs["outcome"] == (
+        "unverified_result" if not fails else "execution_failed"
+    )
+    assert events == ["lock", "install", "generate", "remove", "unlock"]
+    assert held is False

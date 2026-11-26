@@ -85,6 +85,7 @@ class DerivedProjector(Protocol):
         source_type: str,
         source_ref: str | None,
         metadata: dict[str, Any] | None = None,
+        project_episode_state: bool = False,
     ) -> dict[str, bool]: ...
 
 
@@ -137,7 +138,24 @@ class MemoryFormationService:
         session_id: str | None = None,
         conversation_id: str | None = None,
         policy_context: Mapping[str, Any] | None = None,
+        private_execution: Any = None,
     ) -> dict[str, Any]:
+        if private_execution is not None:
+            from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+            try:
+                if (
+                    type(private_execution) is not ChatExecutionContext
+                    or not private_execution.has_runtime_attachment_scope()
+                    or private_execution.tenant_id != tenant_id
+                    or private_execution.user_id != user_id
+                    or private_execution.session_id != session_id
+                    or private_execution.request_id != request_id
+                    or private_execution.correlation_id != correlation_id
+                ):
+                    raise PermissionError("attachment_session_denied")
+                await private_execution.revalidate_runtime_attachment_session()
+            except Exception:
+                return {"status": "rejected", "reason": "memory_write_not_authorized", "persisted": 0}
         evaluation = await self._evaluator.evaluate(
             text=text,
             tenant_id=tenant_id,
@@ -165,6 +183,7 @@ class MemoryFormationService:
             conversation_id=conversation_id,
             request_id=request_id,
             metadata=merged_metadata,
+            allow_state_write=private_execution is None,
         )
 
         if not evaluation.admitted:
@@ -188,6 +207,7 @@ class MemoryFormationService:
             session_id=session_id,
             conversation_id=conversation_id,
             policy_context=dict(policy_context or {}),
+            private_execution=private_execution,
         )
 
         persisted = 0
@@ -281,6 +301,11 @@ class MemoryFormationService:
                         source_type=receipt.metadata.get("source_type", source_type),
                         source_ref=receipt.metadata.get("source_ref", source_ref),
                         metadata=merged_metadata,
+                        **({"project_episode_state": True} if (
+                            private_execution is not None
+                            and session_id
+                            and not receipt.metadata.get("idempotent_replay")
+                        ) else {}),
                     )
                 except Exception as exc:
                     projection_failures += 1
@@ -384,6 +409,7 @@ class MemoryFormationService:
         conversation_id: str | None,
         request_id: str,
         metadata: dict[str, Any],
+        allow_state_write: bool = True,
     ) -> dict[str, Any]:
         result = dict(metadata)
         effective_session_id = str(session_id or "").strip()
@@ -440,7 +466,7 @@ class MemoryFormationService:
 
         decision = self._event_segmenter.decide(previous, observation)
         state_persisted: bool | None = None
-        if effective_session_id and self._episode_state_store is not None:
+        if allow_state_write and effective_session_id and self._episode_state_store is not None:
             try:
                 state_persisted = await self._episode_state_store.save(decision.frame)
             except Exception as exc:

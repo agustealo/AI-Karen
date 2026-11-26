@@ -95,3 +95,35 @@ def test_multi_generate_verifier_does_not_majority_vote(tmp_path) -> None:
     )
 
     assert [score.passed for score in result.candidate_scores] == [False, False, True]
+
+
+def test_multi_generate_verifier_propagates_native_cancellation(tmp_path):
+    import pytest
+
+    from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+
+    registry = PromptRegistry(tmp_path / "prompt-registry")
+    service = PromptRuntimeService(registry=registry)
+    stopped = False
+    attempts = []
+
+    def checkpoint():
+        if stopped:
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    class CancellingRuntime(FakeVerifierRuntime):
+        def generate_text(self, prompt, **kwargs):
+            nonlocal stopped
+            assert kwargs["before_generate"] is checkpoint
+            attempts.append("generation")
+            stopped = True
+            kwargs["before_generate"]()
+            pytest.fail("cancelled verifier continued")
+
+    verifier = RuntimeMultiGenerateVerifier(
+        runtime=CancellingRuntime(), prompt_registry=registry,
+        prompt_service=service, checkpoint=checkpoint,
+    )
+    with pytest.raises(ProviderNotAvailable, match="cancelled"):
+        verifier.verify_batch("task", ["candidate"], evidence=())
+    assert attempts == ["generation"]

@@ -40,6 +40,13 @@ class FakeSTM:
         self.values[self._key(scope, slot)] = dict(value)
         return True
 
+    async def put_episode_if_newer(self, *, scope: STMScope, value: dict[str, Any]) -> bool:
+        from ai_karen_engine.core.memory.episodic import EpisodeFrame
+        prior = self.values.get(self._key(scope, STMSlot.ACTIVE_EPISODE))
+        if prior and EpisodeFrame.from_dict(prior).updated_at >= EpisodeFrame.from_dict(value).updated_at:
+            return True
+        return await self.put_slot(scope=scope, slot=STMSlot.ACTIVE_EPISODE, value=value)
+
     async def delete_slot(self, *, scope: STMScope, slot: STMSlot) -> bool:
         return self.values.pop(self._key(scope, slot), None) is not None
 
@@ -179,3 +186,51 @@ def test_memory_entry_factory_rejects_implicit_tenant() -> None:
     entry = create_memory_entry("safe", tenant_id="tenant-a", user_id="user-a")
     assert entry.metadata is not None
     assert entry.metadata.tenant_id == "tenant-a"
+
+
+@pytest.mark.asyncio
+async def test_private_episode_projection_uses_committed_assertion_and_lineage():
+    stm = FakeSTM()
+    worker = HotStateWorker(stm)
+    event = {
+        "event_id": "event-1", "tenant_id": "tenant-a", "user_id": "user-a",
+        "session_id": "session-a", "source_type": "chat_user",
+        "source_ref": "conversation-1", "project_episode_state": True,
+        "payload": {"text": "unadmitted interaction", "metadata": {
+            "episode_group_id": "episode-1",
+            "episode_started_at": "2026-11-25T01:00:00+00:00",
+            "episode_updated_at": "2026-11-25T01:01:00+00:00",
+            "episode_turn_count": 2,
+        }},
+    }
+    assertion = {"event_id": "event-1", "assertion_id": "assertion-1", "text": "admitted fact"}
+    assert await worker.project(event, assertion)
+    scope = STMScope("tenant-a", "user-a", "session-a")
+    frame = await stm.get_slot(scope=scope, slot=STMSlot.ACTIVE_EPISODE)
+    assert frame["last_text"] == "admitted fact"
+    assert frame["event_id"] == "event-1"
+    assert frame["source_type"] == "chat_user"
+    assert frame["source_ref"] == "conversation-1"
+    assert frame["turn_count"] == 2
+    assert "unadmitted interaction" not in repr(frame)
+
+    older = {**event, "event_id": "event-old", "payload": {"metadata": {
+        **event["payload"]["metadata"], "episode_updated_at": "2026-11-25T01:00:30+00:00",
+    }}}
+    assert await worker.project(older, {**assertion, "event_id": "event-old", "text": "old fact"})
+    assert await stm.get_slot(scope=scope, slot=STMSlot.ACTIVE_EPISODE) == frame
+
+
+@pytest.mark.asyncio
+async def test_private_episode_projection_rejects_mismatched_assertion():
+    stm = FakeSTM()
+    worker = HotStateWorker(stm)
+    event = {
+        "event_id": "event-1", "tenant_id": "tenant-a", "user_id": "user-a",
+        "session_id": "session-a", "source_type": "chat_user",
+        "source_ref": "conversation-1", "project_episode_state": True,
+    }
+    assert not await worker.project(event, {"event_id": "foreign", "text": "foreign fact"})
+    assert await stm.get_slot(
+        scope=STMScope("tenant-a", "user-a", "session-a"), slot=STMSlot.ACTIVE_EPISODE,
+    ) is None

@@ -710,3 +710,94 @@ def test_whole_event_source_scrub_preserves_benign_presentation() -> None:
         },
     }
     assert ChatRunCoordinator._journal_safe_event(event) == event
+
+
+@pytest.mark.asyncio
+async def test_uncertain_commit_leaves_durable_finality_unchanged() -> None:
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "run-uncertain")
+
+    async def upstream():
+        yield content()
+        final = completed()
+        final.metadata["transcript_persistence_status"] = "unverified"
+        yield final
+
+    events = [chunk async for chunk in coordinator.stream(upstream(), lease=lease)]
+    assert [chunk.type for chunk in events] == [
+        ChatStreamEventType.CONTENT, ChatStreamEventType.ERROR,
+    ]
+    assert events[-1].metadata["error_code"] == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+    assert events[-1].metadata["requires_retry"] is False
+    assert repo.finalized == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["error", "gated", "not_persisted"])
+@pytest.mark.parametrize("cleanup_fails", [False, True])
+async def test_failure_terminal_waits_for_strict_upstream_cleanup(kind, cleanup_fails):
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "run-cleanup-before-failure")
+    observations = []
+
+    async def upstream():
+        try:
+            if kind == "error":
+                yield ChatStreamChunk(
+                    type=ChatStreamEventType.ERROR,
+                    content="Provider error",
+                    correlation_id=CORRELATION_ID,
+                )
+            else:
+                terminal = completed()
+                terminal.metadata["transcript_persistence_status"] = "not_persisted"
+                if kind == "gated":
+                    terminal.metadata["status"] = "gate"
+                yield terminal
+        finally:
+            observations.append(list(repo.finalized))
+            if cleanup_fails:
+                raise RuntimeError("upstream_cleanup_failed")
+
+    stream = coordinator.stream(upstream(), lease=lease)
+    if cleanup_fails:
+        with pytest.raises(RuntimeError, match="upstream_cleanup_failed"):
+            await anext(stream)
+        assert repo.finalized == []
+    else:
+        assert (await anext(stream)).type == ChatStreamEventType.ERROR
+        assert len(repo.finalized) == 1
+        assert repo.finalized[0][1] == "failed"
+    await stream.aclose()
+    assert observations == [[]]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_native_retirement_failure_never_resolves_chat_admission(monkeypatch, cancelled):
+    from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+
+    monkeypatch.setattr(chat_run_lifecycle, "_heartbeat_seconds", lambda: 0.002)
+    repo = MemoryLedger()
+    coordinator = ChatRunCoordinator(repo)
+    lease = await coordinator.admit(context(), "run-native-retirement")
+
+    async def upstream():
+        yield content("partial")
+        if cancelled:
+            try:
+                await asyncio.sleep(1)
+            finally:
+                raise NativeRetirementUnverified()
+        raise NativeRetirementUnverified()
+
+    stream = coordinator.stream(upstream(), lease=lease)
+    assert (await anext(stream)).content == "partial"
+    repo.cancel_intent = cancelled
+    with pytest.raises(NativeRetirementUnverified):
+        async for _ in stream:
+            pytest.fail("unexpected output after unverified retirement")
+    assert repo.finalized == []

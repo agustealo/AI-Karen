@@ -57,7 +57,7 @@ def agui_run(**changes):
     payload = {
         "threadId": "thread-1",
         "runId": "run-1",
-        "messages": [{"role": "user", "content": "Research safely"}],
+        "messages": [{"id": "original-user-turn", "role": "user", "content": "Research safely"}],
     }
     payload.update(changes)
     return chat_ingress.AGUIRunRequest(**payload)
@@ -640,7 +640,8 @@ async def test_ck07_admits_scoped_lease_before_stream_and_preserves_runtime_owne
             )
 
     class Coordinator:
-        async def admit(self, context, run_id):
+        async def admit(self, context, run_id, *, submission_id):
+            assert submission_id == "original-user-turn"
             observed.append(("admit", context.user_id, context.tenant_id, run_id))
             return SimpleNamespace(execution_id="execution-server-generated")
 
@@ -988,3 +989,10 @@ async def test_ag_ui_rejects_excessive_body_before_pydantic_validation():
     with pytest.raises(HTTPException) as exc:
         await chat_ingress._parse_ag_ui_request(request)
     assert exc.value.status_code == 413
+
+
+@pytest.mark.parametrize("value", [None, "", "with space", [], 123, "x" * 101])
+def test_durable_user_submission_identity_is_validated(value):
+    request = agui_run(messages=[{"id": value, "role": "user", "content": "hello"}])
+    with pytest.raises(ValueError, match="Invalid AG-UI user submission identity"):
+        request.latest_user_submission_id()

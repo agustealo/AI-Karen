@@ -25,11 +25,20 @@ const ATTACHMENT = { source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", revision
 function Surface({ conversationId = CONV }: { conversationId?: string } = {}) {
   const draft = useKarenPersistedDraft(conversationId);
   const [clearConfirmed, setClearConfirmed] = React.useState<boolean | null>(null);
+  const [submissionId, setSubmissionId] = React.useState<string | null>(null);
   return <div>
     <span data-testid="attachments">{JSON.stringify(draft.attachments)}</span>
     <button onClick={() => draft.updateAttachments([ATTACHMENT])}>Attach file</button>
     <button onClick={() => draft.updateAttachments([])}>Remove files</button>
     <span data-testid="clear-confirmed">{String(clearConfirmed)}</span>
+    <span data-testid="submission-id">{submissionId ?? "none"}</span>
+    <button onClick={() => void draft.prepareRevisionSubmission(draft.draft).then(setSubmissionId)}>
+      Prepare governed submission
+    </button>
+    <button onClick={() => void draft.refreshSubmittedDraft()}>Refresh submitted draft</button>
+    <button onClick={() => void draft.prepareRevisionSubmission("Retired callback text").then(setSubmissionId)}>
+      Replay stale submission callback
+    </button>
     <button onClick={() => {
       void draft.clearBeforeSubmit(draft.draft).then(setClearConfirmed);
     }}>Confirm durable clear</button>
@@ -625,4 +634,36 @@ describe("Attachment mutation concurrency", () => {
       text: "Other conversation", expected_revision: 8, attachment_references: [ATTACHMENT],
     });
   });
+});
+
+
+it("retains the exact saved draft revision until canonical retirement and readback", async () => {
+  render(<Surface />);
+  await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+  const input = screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: "Governed question" } });
+  fireEvent.click(screen.getByRole("button", { name: "Prepare governed submission" }));
+  await waitFor(() => expect(screen.getByTestId("submission-id").textContent).toBe("draft-v1-5"));
+  expect(backend.put).toHaveBeenCalledTimes(1);
+  expect(input.value).toBe("Governed question");
+  fireEvent.click(screen.getByRole("button", { name: "Prepare governed submission" }));
+  await waitFor(() => expect(screen.getByTestId("submission-id").textContent).toBe("draft-v1-5"));
+  expect(backend.put).toHaveBeenCalledTimes(1);
+  backend.get.mockResolvedValueOnce({ text: "", revision: 6, attachment_references: [] });
+  fireEvent.click(screen.getByRole("button", { name: "Refresh submitted draft" }));
+  await waitFor(() => expect(input.value).toBe(""));
+  expect(backend.put).toHaveBeenCalledTimes(1);
+});
+
+
+it("does not reconstruct a retired draft from a stale governed submit callback", async () => {
+  backend.get.mockResolvedValueOnce({ text: "", revision: 8, attachment_references: [] });
+  render(<Surface />);
+  await waitFor(() => expect(screen.getByTestId("draft-status").textContent).toBe("ready"));
+  await act(async () => fireEvent.click(screen.getByRole("button", {
+    name: "Replay stale submission callback",
+  })));
+  expect(screen.getByTestId("submission-id").textContent).toBe("none");
+  expect(backend.put).not.toHaveBeenCalled();
+  expect((screen.getByRole("textbox", { name: "Saved draft" }) as HTMLTextAreaElement).value).toBe("");
 });

@@ -225,3 +225,47 @@ async def test_real_workflow_stream_close_finalizes_orchestrator_and_graph(
     await asyncio.wait_for(stream.aclose(), timeout=5)
     assert graph_closed.is_set()
     assert session_closed.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("streaming", [False, True])
+async def test_graph_retirement_failure_survives_real_orchestration_boundary(streaming):
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.langgraph_orchestrator.langgraph_orchestrator import LangGraphOrchestrator
+    from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
+
+    failure = NativeRetirementUnverified()
+    finalized = []
+
+    class Graph:
+        async def ainvoke(self, *args, **kwargs):
+            raise failure
+
+        async def astream(self, *args, **kwargs):
+            raise failure
+            if False:
+                yield {}
+
+    async def register_session(session):
+        pass
+
+    async def finalize_session(session, duration, error):
+        finalized.append(error)
+
+    owner = SimpleNamespace(
+        graph=Graph(), _register_session=register_session,
+        _finalize_session=finalize_session,
+    )
+    with pytest.raises(NativeRetirementUnverified) as captured:
+        if streaming:
+            async for _ in LangGraphOrchestrator.stream_process(
+                owner, messages=[], user_id="user", session_id="session",
+            ):
+                pytest.fail("retirement failure cannot become a graph state")
+        else:
+            await LangGraphOrchestrator.process(
+                owner, messages=[], user_id="user", session_id="session",
+            )
+    assert captured.value is failure
+    assert finalized == ["native_device_retirement_unverified"]

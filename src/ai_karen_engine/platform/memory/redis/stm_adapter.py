@@ -80,7 +80,53 @@ class RedisSTMAdapter(STMPort):
         ttl = int(ttl_seconds or self.default_ttl_seconds)
         if ttl < 1:
             raise ValueError("STM TTL must be positive")
+        if slot is STMSlot.ACTIVE_EPISODE:
+            return await self._write_ordered_episode(scope, value, payload, ttl)
         return await self.redis.set(self._key(scope, slot), payload, ex=ttl)
+
+    async def put_episode_if_newer(
+        self, *, scope: STMScope, value: dict[str, Any],
+    ) -> bool:
+        """Order event-backed episode frames atomically in the shared store."""
+        if not all(isinstance(value.get(key), str) and value[key].strip()
+                   for key in ("event_id", "source_type", "source_ref")):
+            raise ValueError("episode projection requires committed source identity")
+        return await self.put_slot(scope=scope, slot=STMSlot.ACTIVE_EPISODE, value=value)
+
+    async def _write_ordered_episode(
+        self, scope: STMScope, value: dict[str, Any], payload: str, ttl: int,
+    ) -> bool:
+        scope.validate()
+        incoming = EpisodeFrame.from_dict(value)
+        identity = (scope.tenant_id, scope.user_id, scope.session_id)
+        if (incoming.tenant_id, incoming.user_id, incoming.session_id) != identity:
+            raise ValueError("episode projection scope mismatch")
+        provenance_fields = ("event_id", "source_type", "source_ref")
+        has_provenance = any(key in value for key in provenance_fields)
+        if has_provenance and not all(
+            isinstance(value.get(key), str) and value[key].strip()
+            for key in provenance_fields
+        ):
+            raise ValueError("episode projection requires committed source identity")
+
+        def should_replace(raw: str | None) -> bool:
+            if raw is None:
+                return True
+            prior_value = json.loads(raw)
+            previous = EpisodeFrame.from_dict(prior_value)
+            if (previous.tenant_id, previous.user_id, previous.session_id) != identity:
+                raise ValueError("stored episode scope mismatch")
+            # An ordinary observation must never strip the provenance of
+            # an existing committed frame, even with a later timestamp.
+            # Only a new committed projection or explicit clear may replace it.
+            if any(key in prior_value for key in provenance_fields) and not has_provenance:
+                return False
+            return previous.updated_at < incoming.updated_at
+
+        return await self.redis.conditional_set(
+            self._key(scope, STMSlot.ACTIVE_EPISODE), payload,
+            ex=ttl, should_replace=should_replace,
+        )
 
     async def delete_slot(self, *, scope: STMScope, slot: STMSlot) -> bool:
         return bool(await self.redis.delete(self._key(scope, slot)))

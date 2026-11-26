@@ -137,6 +137,11 @@ export async function connectKarenOwnedThread(
     return refuse("Canonical history replay failed", 502);
   }
 
+  if (governedHistory && snapshot.recovery_run !== null) {
+    // Reconnect is playback only; do not present a synthetic finish while
+    // an actual execution remains unresolved.
+    return refuse("Previous chat execution requires recovery", 409);
+  }
   const runId = "history_" + randomUUID();
   const source = "persisted_history";
   const events = [

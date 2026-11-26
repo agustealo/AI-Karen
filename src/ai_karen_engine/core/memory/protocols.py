@@ -34,6 +34,8 @@ class VaultContext:
     session_id: str | None = None
     conversation_id: str | None = None
     policy_context: Mapping[str, Any] = field(default_factory=dict)
+    # Host-only execution authority, never part of persisted policy metadata.
+    private_execution: Any = field(default=None, repr=False, compare=False)
 
     def validate(self) -> None:
         required = {

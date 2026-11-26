@@ -380,13 +380,20 @@ def test_empty_nonstream_answer_fails_before_persistence_and_success_recording()
 def test_http_chat_converts_runtime_errors_to_failure_status() -> None:
     """The HTTP ingress must not wrap runtime errors in a 200 ChatResponse."""
     import inspect
-    from ai_karen_engine.api_routes.chat.runtime import create_chat_response
+    from ai_karen_engine.api_routes.chat.runtime import (
+        _runtime_error_response, create_chat_response,
+    )
 
     source = inspect.getsource(create_chat_response)
     rejection = source.index('if result.status == ChatExecutionStatus.ERROR:')
     success = source.index('return ChatResponse(', rejection)
     assert rejection < success
-    assert 'status_code=503' in source[rejection:success]
+    assert 'return _runtime_error_response(result, correlation_id)' in source[rejection:success]
+    error_branch = inspect.getsource(_runtime_error_response)
+    assert 'status_code=409 if uncertain else 503' in error_branch
+    assert 'CHAT_TRANSCRIPT_FINALITY_UNVERIFIED' in error_branch
+    assert '"requires_retry": not uncertain' in error_branch
+    assert 'return JSONResponse(' in error_branch
 
 
 @pytest.mark.parametrize(

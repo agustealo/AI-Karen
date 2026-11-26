@@ -1130,3 +1130,19 @@ describe("CopilotKit canonical conversation hydration", () => {
     ]);
   });
 });
+
+
+it("restores an interrupted run observation and refreshes without starting inference", async () => {
+  backend.fetchConversation.mockResolvedValueOnce({
+    threadId: CONVERSATION_A, messages: [], replayEvents: [],
+    recovery_run: { runId: "old-run", submissionId: "old-turn", status: "interrupted" },
+  }).mockResolvedValueOnce({
+    threadId: CONVERSATION_A, messages: [], replayEvents: [], recovery_run: null,
+  });
+  render(guardedHistory());
+  await waitFor(() => expect(screen.getByText("Run reference: old-run")).toBeTruthy());
+  fireEvent.click(screen.getByRole("button", { name: "Refresh saved run and history" }));
+  await waitFor(() => expect(screen.queryByText("Run reference: old-run")).toBeNull());
+  expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+  expect(screen.getByTestId("agent-chat")).toBeTruthy();
+});

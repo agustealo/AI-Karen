@@ -27,8 +27,11 @@ from ai_karen_engine.core.runtime.owned_history_projection import (
     UnreplayableHistory, project_owned_history,
 )
 from ai_karen_engine.persistence.repositories.chat_run_repository import (
+    DraftSubmissionConflict,
     SqlChatRunRepository,
+    draft_revision_from_submission_id,
 )
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.chat_run_lifecycle import (
     ChatRunConflict,
     ChatRunCancellationRequested,
@@ -41,6 +44,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     SearchRetrievalOptions,
     ChatExecutionRequest,
+    ChatExecutionResult,
     ChatExecutionStatus,
     ChatStreamChunk,
     ChatStreamEventType,
@@ -49,8 +53,14 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     runtime_response_http_status,
     serialize_runtime_response,
 )
-from ai_karen_engine.core.services.dependencies import bypass_user_context_func
+from ai_karen_engine.core.services.dependencies import (
+    bypass_user_context_func,
+    get_chat_execution_context,
+)
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.services.database.repositories.conversation_repository import (
+    validate_draft_attachment_references,
+)
 from ai_karen_engine.services.approvals import (
     ApprovalNotFoundError,
     ApprovalScopeError,
@@ -98,6 +108,14 @@ class ChatRequest(BaseModel):
     """Validated non-streaming or streaming chat request."""
 
     messages: List[ChatMessage] = Field(..., min_length=1, max_length=50)
+    attachment_references: List[Dict[str, str]] = Field(default_factory=list, max_length=12)
+
+    @field_validator("attachment_references")
+    @classmethod
+    def validate_attachment_references(
+        cls, value: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        return validate_draft_attachment_references(value)
     preferred_llm_provider: Optional[str] = Field(default=None, max_length=100)
     preferred_model: Optional[str] = Field(default=None, max_length=200)
     provider: Optional[str] = Field(
@@ -169,6 +187,14 @@ class ChatStreamRequest(BaseModel):
     # Provisional same-session user turns only. Durable history still comes
     # exclusively from the conversation repository in the runtime.
     recent_user_messages: List[str] = Field(default_factory=list, max_length=12)
+    attachment_references: List[Dict[str, str]] = Field(default_factory=list, max_length=12)
+
+    @field_validator("attachment_references")
+    @classmethod
+    def validate_attachment_references(
+        cls, value: List[Dict[str, str]],
+    ) -> List[Dict[str, str]]:
+        return validate_draft_attachment_references(value)
     workspace_run_id: Optional[str] = Field(default=None, min_length=1, max_length=128)
     session_id: Optional[str] = Field(
         default=None,
@@ -238,6 +264,18 @@ class AGUIRunRequest(BaseModel):
         remain subject to the existing strict schema and authorization gate.
         """
         return {} if value is None else value
+
+    def latest_user_submission_id(self) -> str:
+        """Untrusted, retry-stable user turn identity; never authorization."""
+        last = self.messages[-1]
+        value = last.get("id")
+        if (
+            last.get("role") != "user"
+            or not isinstance(value, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", value)
+        ):
+            raise ValueError("Invalid AG-UI user submission identity")
+        return value
 
     def latest_user_message(self) -> str:
         last = self.messages[-1]
@@ -360,6 +398,7 @@ def _stream_execution_request(
         max_tokens=request.max_tokens,
         search_retrieval_options=request.search_retrieval_options.to_runtime() if request.search_retrieval_options is not None else None,
         stream=True,
+        attachment_references=list(request.attachment_references),
         metadata={
             "transport": "sse",
             "ingress_recent_user_messages": [
@@ -391,6 +430,28 @@ async def _verified_workspace_run_reference(
     )
 
 
+def _runtime_error_response(
+    result: ChatExecutionResult, correlation_id: str,
+) -> JSONResponse:
+    """Translate the canonical runtime failure without exposing answer bytes."""
+    uncertain = (
+        result.metadata.extra.get("error_code") == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+    )
+    return JSONResponse(
+        status_code=409 if uncertain else 503,
+        content={
+            "error_code": result.metadata.extra.get("error_code") or "CHAT_EXECUTION_FAILED",
+            "message": (
+                "Chat persistence is unverified. Check saved history before sending again."
+                if uncertain else "The chat runtime could not complete the response."
+            ),
+            "correlation_id": correlation_id,
+            "requires_retry": not uncertain,
+        },
+        headers={"X-Correlation-Id": correlation_id},
+    )
+
+
 async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
     """Serialize runtime events once for every authenticated chat transport.
 
@@ -407,6 +468,23 @@ async def _terminalized_chat_json_events(runtime_request: ChatExecutionRequest):
         # canonical producer cleanup deterministic, not dependent on GC.
         async with aclosing(get_chat_runtime().execute_stream(runtime_request)) as stream:
             async for chunk in stream:
+                if (
+                    chunk.type == ChatStreamEventType.COMPLETE
+                    and isinstance(chunk.metadata, dict)
+                    and chunk.metadata.get("transcript_persistence_status") == "unverified"
+                ):
+                    # A runtime COMPLETE envelope is not a durable success
+                    # receipt. All legacy wire adapters share this serializer.
+                    chunk = ChatStreamChunk(
+                        type=ChatStreamEventType.ERROR,
+                        content="Chat persistence is unverified. Check saved history before sending again.",
+                        correlation_id=correlation_id,
+                        metadata={
+                            "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                            "transcript_persistence_status": "unverified",
+                            "requires_retry": False,
+                        },
+                    )
                 encoded = json.dumps(
                     chunk.to_sse_payload(), ensure_ascii=False, allow_nan=False,
                 )
@@ -504,7 +582,7 @@ async def create_chat_response(
     request: ChatRequest,
     background_tasks: BackgroundTasks,
     http_request: Request,
-    user: Dict[str, Any] = Depends(bypass_user_context_func),
+    user: Dict[str, Any] = Depends(get_chat_execution_context),
 ):
     """Validate HTTP input and delegate all chat execution to ChatRuntime."""
     del background_tasks
@@ -535,6 +613,7 @@ async def create_chat_response(
             max_tokens=request.max_tokens,
             search_retrieval_options=request.search_retrieval_options.to_runtime() if request.search_retrieval_options is not None else None,
             stream=request.stream,
+            attachment_references=list(request.attachment_references),
             metadata={
                 "transport": "http",
                 **({"user_timezone": request.timezone} if request.timezone else {}),
@@ -584,18 +663,7 @@ async def create_chat_response(
             return JSONResponse(status_code=status_code, content=payload, headers=headers)
 
         if result.status == ChatExecutionStatus.ERROR:
-            # An unsuccessful runtime execution must not become an HTTP 200
-            # success envelope with empty assistant content.
-            return JSONResponse(
-                status_code=503,
-                content={
-                    "error_code": result.metadata.extra.get("error_code") or "CHAT_EXECUTION_FAILED",
-                    "message": "The chat runtime could not complete the response.",
-                    "correlation_id": correlation_id,
-                    "requires_retry": True,
-                },
-                headers={"X-Correlation-Id": correlation_id},
-            )
+            return _runtime_error_response(result, correlation_id)
 
         response_metadata = result.metadata.to_dict()
         actual_model = response_metadata.get("actual_model") or "unknown"
@@ -651,7 +719,7 @@ async def create_chat_response(
 async def stream_chat_response(
     request: ChatStreamRequest,
     http_request: Request,
-    user: Dict[str, Any] = Depends(bypass_user_context_func),
+    user: Dict[str, Any] = Depends(get_chat_execution_context),
 ):
     """Validate SSE input and delegate streaming execution to ChatRuntime."""
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))
@@ -791,10 +859,37 @@ async def _ag_ui_sse(
                 canonical_stream, lease=run_lease,
             )
         async for chunk in canonical_stream:
-            for event in projection.project(chunk):
+            projected = projection.project(chunk)
+            if any(
+                event.get("type") == "RUN_ERROR"
+                and event.get("code") == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+                for event in projected
+            ):
+                # This diagnostic is NOT a durable journal terminal. The
+                # existing ledger may already be completed or still running.
+                # Do not append a contradictory RUN_ERROR or assign a cursor.
+                for event in projected:
+                    yield f"data: {json.dumps(event, ensure_ascii=False, allow_nan=False)}\n\n"
+                break
+            for event in projected:
                 yield await frame(event)
             if projection.terminal:
                 break
+    except NativeRetirementUnverified:
+        # This is a diagnostic only. Do not append a terminal event to a
+        # still-unresolved run, or project an acknowledged cancellation.
+        event = {
+            "type": "RUN_ERROR",
+            "code": "CHAT_NATIVE_RETIREMENT_UNVERIFIED",
+            "message": "Native execution retirement is unverified. Check run status before retrying.",
+        }
+        projection.project(ChatStreamChunk(
+            type=ChatStreamEventType.ERROR,
+            content=event["message"],
+            correlation_id=runtime_request.context.correlation_id,
+            metadata={"error_code": event["code"]},
+        ))
+        yield f"data: {json.dumps(event, ensure_ascii=False, allow_nan=False)}\n\n"
     except ChatRunCancellationRequested:
         async for packet in error_frames(
             "CHAT_STREAM_CANCELLED", "This chat run was cancelled.",
@@ -1268,71 +1363,36 @@ async def get_ag_ui_owned_history(
         request_id=correlation_id, correlation_id=correlation_id,
     )
     from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
-        ConversationSnapshot, get_conversation_runtime_gateway,
+        get_conversation_runtime_gateway, read_owned_history_evidence,
     )
     text_mode = view == "text_continuation"
-    window_has_older = False
     try:
-        gateway = get_conversation_runtime_gateway()
-        if text_mode:
-            # A sentinel preceding the latest 500 messages proves older
-            # saved text exists without creating a partial full-rich replay.
-            recent = await gateway.get_owned_recent_snapshot(
-                context, message_limit=501,
-            )
-            window_has_older = len(recent.messages) > 500
-            snapshot = ConversationSnapshot(
-                conversation=recent.conversation,
-                messages=recent.messages[-500:],
-            )
-        else:
-            snapshot = await gateway.get_owned_snapshot(
-                context, message_limit=501,
-            )
+        evidence = await read_owned_history_evidence(
+            context,
+            gateway=get_conversation_runtime_gateway(),
+            ledger_factory=SqlChatRunRepository,
+            text_mode=text_mode,
+            include_activity=getattr(features, "enable_ag_ui_event_journal", False),
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
-    except RuntimeError as exc:
-        if str(exc) == "conversation_not_found":
+    except Exception as exc:
+        if isinstance(exc, RuntimeError) and str(exc) == "conversation_not_found":
             raise HTTPException(status_code=404, detail="Conversation unavailable") from exc
         logger.error("Governed history read failed", extra={
             "correlation_id": correlation_id, "error_type": type(exc).__name__,
         })
         raise HTTPException(status_code=503, detail="History temporarily unavailable") from exc
     try:
-        repository = SqlChatRunRepository()
-        attestations = await repository.completed_replay_attestations(
-            tenant_id=context.tenant_id,
-            user_id=context.user_id,
-            conversation_id=thread,
-        )
-        observed_activity = (
-            await repository.completed_agent_activity(
-                tenant_id=context.tenant_id,
-                user_id=context.user_id,
-                conversation_id=thread,
-            )
-            if getattr(features, "enable_ag_ui_event_journal", False)
-            else {}
-        )
-        # Observed events from older saved entries are neither replayed nor
-        # promoted into authority by a bounded recent-message window.
-        if window_has_older:
-            eligible = {
-                str(message.id) for message in snapshot.messages
-                if str(message.role) == "assistant"
-            }
-            observed_activity = {
-                identifier: activity for identifier, activity in observed_activity.items()
-                if identifier in eligible
-            }
         history = project_owned_history(
-            snapshot, attestations=attestations,
-            observed_activity=observed_activity,
+            evidence.snapshot, attestations=evidence.attestations,
+            observed_activity=evidence.observed_activity,
             text_continuation=text_mode,
         )
+        history["recovery_run"] = evidence.recovery_run
         if text_mode:
             history.update({
-                "history_window_has_older": window_has_older,
+                "history_window_has_older": evidence.window_has_older,
                 "history_window_message_limit": 500,
             })
     except UnreplayableHistory as exc:
@@ -1406,7 +1466,7 @@ async def _parse_ag_ui_request(http_request: Request) -> AGUIRunRequest:
 async def stream_ag_ui_chat(
     http_request: Request,
     request: AGUIRunRequest = Depends(_parse_ag_ui_request),
-    user: Dict[str, Any] = Depends(bypass_user_context_func),
+    user: Dict[str, Any] = Depends(get_chat_execution_context),
 ):
     """AG-UI-compatible wire adapter; never a second chat execution path."""
     if not get_runtime_settings().features.enable_ag_ui_bridge:
@@ -1416,11 +1476,13 @@ async def stream_ag_ui_chat(
     workspace_ref = request.forwardedProps.get("workspace_run_id")
     requested_provider = request.forwardedProps.get("preferred_llm_provider")
     requested_model = request.forwardedProps.get("preferred_model")
+    selected_attachments = request.forwardedProps.get("attachment_references", [])
     # Only declared request hints are accepted. ChatRuntime remains responsible
     # for provider eligibility, permissions, model routing, and fallback.
     if (
         set(request.forwardedProps) - {
-            "workspace_run_id", "preferred_llm_provider", "preferred_model"
+            "workspace_run_id", "preferred_llm_provider", "preferred_model",
+            "attachment_references"
         }
         or (workspace_ref is not None and (
             not isinstance(workspace_ref, str)
@@ -1439,6 +1501,12 @@ async def stream_ag_ui_chat(
         )
     ):
         raise HTTPException(status_code=422, detail="Unsupported AG-UI request hints")
+    try:
+        selected_attachments = validate_draft_attachment_references(selected_attachments)
+    except ValueError:
+        raise HTTPException(
+            status_code=422, detail="Invalid attachment references",
+        ) from None
     # Reject ungoverned client-provided tools, shared state and context.
     if request.tools or request.state or request.context:
         raise HTTPException(
@@ -1448,6 +1516,14 @@ async def stream_ag_ui_chat(
     try:
         user_id, _tenant_id = _require_execution_identity(user)
         current_text = request.latest_user_message()
+        durable_runs = getattr(get_runtime_settings().features, "enable_ag_ui_durable_runs", False)
+        submission_id = request.latest_user_submission_id() if durable_runs else None
+        draft_revision = draft_revision_from_submission_id(submission_id)
+        # Reserved draft identities are supported only by durable admission.
+        if not durable_runs and str(request.messages[-1].get("id", "")).startswith("draft-v1-"):
+            raise ValueError("durable_draft_submission_unavailable")
+        if draft_revision is not None and selected_attachments:
+            raise ValueError("draft_attachment_submission_unavailable")
         correlation_id = http_request.headers.get("X-Correlation-Id") or str(uuid.uuid4())
         response_id = str(uuid.uuid4())
         # Assistant-ui's canonical threadId is Karen's already-persisted
@@ -1504,14 +1580,19 @@ async def stream_ag_ui_chat(
         canonical_request = _stream_execution_request(
             request=ChatStreamRequest(
                 message=current_text,
+                attachment_references=selected_attachments,
                 session_id=session_id,
                 conversation_id=conversation_id,
-                # The validated AG-UI runId belongs to the same client run
-                # across retries; unlike response_id it is not regenerated
-                # during ingress. Runtime binds it to authenticated scope.
+                # The durable path binds planner idempotency to the original
+                # submitted user message, not a regenerated SDK run ID.
+                # Keep the historical key only for the legacy bridge.
                 planner_idempotency_key=uuid.uuid5(
                     uuid.NAMESPACE_URL,
-                    f"ag-ui-planner:{request.threadId}:{request.runId}",
+                    (
+                        f"ag-ui-submission-planner:{request.threadId}:{submission_id}"
+                        if submission_id is not None else
+                        f"ag-ui-planner:{request.threadId}:{request.runId}"
+                    ),
                 ),
                 workspace_run_id=workspace_ref,
                 preferred_llm_provider=requested_provider,
@@ -1533,12 +1614,17 @@ async def stream_ag_ui_chat(
     # The legacy bridge remains unchanged until operators enable the opt-in
     # feature following migration 43. SDK stop remains explicitly denied.
     run_lease: Optional[ChatRunLease] = None
-    if getattr(get_runtime_settings().features, "enable_ag_ui_durable_runs", False):
+    if durable_runs:
         try:
             run_lease = await get_chat_run_coordinator().admit(
-                canonical_request.context, request.runId,
+                canonical_request.context, request.runId, submission_id=submission_id,
+                **({"submitted_text": current_text} if draft_revision is not None else {}),
             )
             canonical_request.runtime_run_lease = run_lease
+        except DraftSubmissionConflict as exc:
+            raise HTTPException(
+                status_code=409, detail="Saved draft changed before execution admission",
+            ) from exc
         except ChatRunConflict as exc:
             raise HTTPException(
                 status_code=409, detail="Chat execution has already been admitted",
@@ -1735,7 +1821,7 @@ async def cancel_ag_ui_chat_run(
 async def resume_approved_chat(
     approval_id: str,
     http_request: Request,
-    user: Dict[str, Any] = Depends(bypass_user_context_func),
+    user: Dict[str, Any] = Depends(get_chat_execution_context),
 ):
     """Resume an approved request through the canonical streaming runtime."""
     correlation_id = http_request.headers.get("X-Correlation-Id", str(uuid.uuid4()))

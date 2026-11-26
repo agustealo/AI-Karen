@@ -19,8 +19,27 @@ class ArtifactStorageConfig:
     max_legacy_upload_bytes: int = 16 * 1024 * 1024
     style_use_max_document_sources: int = 16
     style_use_integrity_total_timeout_seconds: float = 25.0
+    chat_attachment_max_source_bytes: int = 32768
+    chat_attachment_max_total_bytes: int = 131072
+    chat_attachment_integrity_total_timeout_seconds: float = 15.0
 
     def __post_init__(self) -> None:
+        if (
+            type(self.chat_attachment_max_source_bytes) is not int
+            or not 1 <= self.chat_attachment_max_source_bytes <= 65536
+            or type(self.chat_attachment_max_total_bytes) is not int
+            or not self.chat_attachment_max_source_bytes
+            <= self.chat_attachment_max_total_bytes <= 12 * 65536
+        ):
+            raise ValueError("Invalid chat attachment byte limits")
+        deadline = self.chat_attachment_integrity_total_timeout_seconds
+        if (
+            isinstance(deadline, bool)
+            or not isinstance(deadline, (int, float))
+            or not math.isfinite(deadline)
+            or not 0.01 <= deadline <= 120.0
+        ):
+            raise ValueError("Invalid chat attachment integrity deadline")
         limit = self.max_legacy_upload_bytes
         if type(limit) is not int or not 1 <= limit <= 1024 * 1024 * 1024:
             raise ValueError("Invalid artifact legacy upload byte limit")
@@ -50,6 +69,9 @@ class ArtifactStorageConfig:
         raw_limit = os.getenv("KAREN_ARTIFACT_LEGACY_UPLOAD_MAX_BYTES")
         raw_sources = os.getenv("KAREN_STYLE_DELEGATED_MAX_DOCUMENT_SOURCES")
         raw_total = os.getenv("KAREN_STYLE_DELEGATED_INTEGRITY_DEADLINE_SECONDS")
+        raw_chat_source = os.getenv("KAREN_CHAT_ATTACHMENT_MAX_SOURCE_BYTES")
+        raw_chat_total = os.getenv("KAREN_CHAT_ATTACHMENT_MAX_TOTAL_BYTES")
+        raw_chat_deadline = os.getenv("KAREN_CHAT_ATTACHMENT_INTEGRITY_DEADLINE_SECONDS")
         try:
             limit = 16 * 1024 * 1024 if raw_limit is None else int(raw_limit)
         except (ValueError, TypeError, OverflowError) as exc:
@@ -66,7 +88,16 @@ class ArtifactStorageConfig:
             value = 20.0 if raw is None else float(raw)
         except (ValueError, TypeError, OverflowError) as exc:
             raise ValueError("Invalid artifact signed-range deadline") from exc
+        try:
+            chat_source = 32768 if raw_chat_source is None else int(raw_chat_source)
+            chat_total = 131072 if raw_chat_total is None else int(raw_chat_total)
+            chat_deadline = 15.0 if raw_chat_deadline is None else float(raw_chat_deadline)
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ValueError("Invalid chat attachment admission configuration") from exc
         return cls(
+            chat_attachment_max_source_bytes=chat_source,
+            chat_attachment_max_total_bytes=chat_total,
+            chat_attachment_integrity_total_timeout_seconds=chat_deadline,
             signed_range_total_timeout_seconds=value,
             max_legacy_upload_bytes=limit,
             style_use_max_document_sources=count,

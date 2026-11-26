@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import uuid
 from copy import deepcopy
 from dataclasses import dataclass, field
@@ -270,6 +271,149 @@ class ChatExecutionContext:
             )
         )
 
+
+    def require_runtime_attachment_read_permission(self) -> None:
+        """Recheck the authenticated principal through the canonical RBAC owner."""
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+        principal = self.require_authenticated_user()
+        if not get_rbac_manager().has_permission(principal, Permission.DATA_READ):
+            raise PermissionError("runtime_attachment_read_permission_denied")
+
+    async def revalidate_runtime_attachment_session(self, *, db_session: Any = None) -> None:
+        """Require durable account truth and current RBAC for private content."""
+        from ai_karen_engine.auth.models import UserData
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+        self.require_runtime_attachment_read_permission()
+        principal = self.require_authenticated_user()
+        grant = vars(principal).get("_runtime_session_witness")
+        if (
+            not isinstance(grant, tuple) or len(grant) != 2
+            or grant[0] is not principal or grant[1] is None
+        ):
+            raise PermissionError("runtime_attachment_session_required")
+        binding = self.__dict__.get("_runtime_attachment_session_binding")
+        if binding is None:
+            self.__dict__["_runtime_attachment_session_binding"] = (self, principal, grant)
+        elif binding[0] is not self or binding[1] is not principal or binding[2] is not grant:
+            raise PermissionError("runtime_attachment_session_binding_invalid")
+        from ai_karen_engine.auth.auth_service import get_auth_service
+
+        issuer = await get_auth_service()
+        if not issuer.bind_issued_session_execution(grant[1], principal, self):
+            raise PermissionError("runtime_attachment_session_binding_invalid")
+        if db_session is None:
+            account = await issuer.revalidate_issued_session_witness(grant[1])
+        else:
+            account = await issuer.revalidate_issued_session_in_transaction(
+                grant[1], principal, self, db_session,
+            )
+        if (
+            account is None
+            or str(account.id) != str(self.user_id)
+            or str(account.tenant_id) != str(self.tenant_id)
+            or getattr(account.status, "value", account.status) != "active"
+            or not account.is_verified
+        ):
+            raise PermissionError("runtime_attachment_session_revoked")
+        fresh = UserData(
+            user_id=str(account.id), tenant_id=str(account.tenant_id),
+            roles=list(account.roles or []), permissions=[],
+        )
+        if not get_rbac_manager().has_permission(fresh, Permission.DATA_READ):
+            raise PermissionError("runtime_attachment_read_permission_revoked")
+        if self.require_authenticated_user() is not principal or vars(principal).get(
+            "_runtime_session_witness"
+        ) is not grant:
+            raise PermissionError("runtime_attachment_session_binding_invalid")
+
+    def bind_runtime_attachment_scope(
+        self, plan: Any, meter: Any, references: list[dict[str, str]],
+    ) -> None:
+        """Bind selected source revisions to the original, non-copyable grant."""
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            validate_draft_attachment_references,
+        )
+
+        self.require_runtime_attachment_read_permission()
+        selected = validate_draft_attachment_references(references)
+        root = self.original_runtime_model_plan(meter)
+        if (
+            not selected or root is None or root is not plan
+            or not self.is_runtime_model_plan_authorized(plan, meter)
+            or "data:read" not in root.allowed_capabilities
+        ):
+            raise PermissionError("runtime_attachment_authority_invalid")
+        scope = tuple((item["source_id"], item["revision"]) for item in selected)
+        issued_scope = root.resource_scope.get("attachment_references", [])
+        if (
+            not isinstance(issued_scope, list)
+            or tuple(
+                (item.get("source_id"), item.get("revision"))
+                for item in issued_scope if isinstance(item, dict)
+            ) != scope
+            or len(issued_scope) != len(scope)
+        ):
+            raise PermissionError("runtime_attachment_scope_denied")
+        current = self.__dict__.get("_runtime_attachment_scope")
+        if current is not None and (
+            current[0] is not plan or current[1] is not meter or current[2] != scope
+        ):
+            raise PermissionError("runtime_attachment_authority_invalid")
+        self.__dict__["_runtime_attachment_scope"] = (plan, meter, scope)
+
+    def bind_runtime_attachment_documents(
+        self, plan: Any, meter: Any, documents: list[dict[str, str]],
+    ) -> None:
+        """Publish verified document content atomically after every source passes."""
+        self.require_runtime_attachment_read_permission()
+        current = self.__dict__.get("_runtime_attachment_scope")
+        if (
+            current is None
+            or current[0] is not plan or current[1] is not meter
+            or not self.is_runtime_model_plan_authorized(plan, meter)
+            or len(documents) != len(current[2])
+            or any(
+                not isinstance(item, dict)
+                or item.get("source_id") != source_id
+                or item.get("revision") != revision
+                or not isinstance(item.get("text"), str)
+                or hashlib.sha256(item["text"].encode("utf-8")).hexdigest() != revision
+                for item, (source_id, revision) in zip(documents, current[2])
+            )
+            or "_runtime_attachment_documents" in self.__dict__
+        ):
+            raise PermissionError("runtime_attachment_authority_invalid")
+        self.__dict__["_runtime_attachment_documents"] = tuple(
+            (item["source_id"], item["revision"], item["text"])
+            for item in documents
+        )
+
+    def has_runtime_attachment_scope(self) -> bool:
+        """Retain the attachment restriction even if request selection is cleared."""
+        return "_runtime_attachment_scope" in self.__dict__
+
+    def runtime_attachment_documents(self) -> list[dict[str, str]]:
+        """Release content only while the original policy plan/meter remain valid."""
+        self.require_runtime_attachment_read_permission()
+        current = self.__dict__.get("_runtime_attachment_scope")
+        documents = self.__dict__.get("_runtime_attachment_documents")
+        if current is None:
+            return []
+        plan, meter, scope = current
+        if (
+            documents is None
+            or not self.is_runtime_model_plan_authorized(plan, meter)
+            or tuple((source_id, revision) for source_id, revision, _ in documents)
+            != scope
+        ):
+            raise PermissionError("runtime_attachment_authority_invalid")
+        return [
+            {"source_id": source_id, "revision": revision, "text": text}
+            for source_id, revision, text in documents
+        ]
+
     def require_authenticated_user(self) -> "UserData":
         """Require the ingress principal and matching user and tenant scope."""
         from ai_karen_engine.auth.models import UserData
@@ -393,6 +537,8 @@ class ChatExecutionRequest:
     metadata: Dict[str, Any] = field(default_factory=dict)
     # Validated retrieval preferences; runtime admission remains authoritative.
     search_retrieval_options: Optional[SearchRetrievalOptions] = None
+    # Untrusted selection, not permission or stored document content.
+    attachment_references: List[Dict[str, str]] = field(default_factory=list)
     # Minted by runtime admission only; never copied from SDK metadata or prompt.
     runtime_run_lease: Optional["ChatRunLease"] = field(
         default=None, repr=False, compare=False,

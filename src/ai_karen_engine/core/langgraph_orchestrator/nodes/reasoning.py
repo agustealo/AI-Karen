@@ -6,6 +6,7 @@ import logging
 from dataclasses import asdict
 from typing import Any
 
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningBudget,
     ReasoningEvidence,
@@ -350,6 +351,8 @@ class ReasoningNode:
                 "contradiction_count": len(result_dict.get("contradictions") or []),
                 "policy_decision_id": plan.policy_decision_id,
             }
+        except NativeRetirementUnverified:
+            raise
         except Exception as exc:
             logger.error("Reasoning stage error: %s", exc)
             state.setdefault("errors", []).append(f"Reasoning stage error: {exc}")

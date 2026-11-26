@@ -100,6 +100,9 @@ jobs:
             src/ai_karen_engine/llm_orchestrator.py \
             tests/core/model_runtime/test_legacy_preload_no_inference.py
 
+      - name: Prove KUI-004B4.1 runtime attachment authority and bounded admission
+        run: pytest tests/core/runtime/test_kui004b4_attachment_admission.py -q
+
       - name: Prove real model response attribution and fail-closed generation
         run: |
           pytest -q \
@@ -110,7 +113,9 @@ jobs:
             tests/core/expression/test_expression_stream_fallback_integrity.py \
             tests/core/expression/test_gateway_fallbacks.py \
             tests/core/expression/test_gateway.py
-          pytest -q tests/core/model_runtime/test_provider_completion_integrity.py tests/core/model_runtime/test_provider_execution.py tests/core/model_runtime/test_provider_execution_stream.py tests/core/model_runtime/test_personal_model_transport_grant.py tests/core/model_runtime/test_openai_compatible_client_transport.py tests/core/model_runtime/test_openai_compatible_adapter.py tests/core/model_runtime/test_openai_compatible_client_admission.py tests/core/model_runtime/test_model_execution_truth.py tests/core/model_runtime/test_governed_core_inference_admission.py tests/core/model_runtime/test_legacy_preload_no_inference.py
+          pytest -q tests/api_routes/test_provider_health_observed_projection.py tests/core/model_runtime/test_canonical_provider_health_truth.py tests/core/model_runtime/test_provider_completion_integrity.py tests/core/model_runtime/test_provider_execution.py tests/core/model_runtime/test_provider_execution_stream.py tests/core/model_runtime/test_personal_model_transport_grant.py tests/core/model_runtime/test_openai_compatible_client_transport.py tests/core/model_runtime/test_openai_compatible_adapter.py tests/core/model_runtime/test_openai_compatible_client_admission.py tests/core/model_runtime/test_model_execution_truth.py tests/core/model_runtime/test_governed_core_inference_admission.py tests/core/model_runtime/test_legacy_preload_no_inference.py
+          pytest -q tests/services/test_runtime_search_citation_validator.py tests/core/runtime/test_search_answer_runtime_synthesis.py
+          pytest -q tests/regression/test_provider_processing_error_signature.py tests/agent_medusa/test_deepagents_shared_budget_contract.py tests/agent_medusa/test_deepagents_response_ownership.py tests/agent_medusa/test_consumer_reliability_closure.py
 
       - name: Prove native host cancellation acceptance fails closed without host evidence
         run: |
@@ -124,12 +129,37 @@ jobs:
             --output build/kchat-auth-05b2b-caller-census.json
           pytest -q tests/core/model_runtime/test_kchat_auth_05b2b_caller_census.py
 
+      - name: Inventory tracked legacy executor references
+        run: |
+          # File names only; response-source labels and test contracts remain
+          # candidates, not proof of active execution or safe deletion.
+          status=0
+          git grep -l -I -E 'ProviderRuntime|provider_runtime|get_provider_runtime' -- . \
+            > build/legacy-provider-runtime-references.txt || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          cat build/legacy-provider-runtime-references.txt
+          # Include facade aliases and exact source references. Source labels
+          # alone do not establish an executable dependency.
+          status=0
+          git grep -n -I -E 'ProviderRuntime|provider_runtime|get_provider_runtime|ResponseSynthesizer|response_synthesizer|ProviderProcessingError' -- src tests scripts \
+            > build/legacy-provider-runtime-source-lines.txt || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          status=0
+          git grep -l -I -E 'ResponseSynthesizer|response_synthesizer|ProviderProcessingError' -- . \
+            > build/legacy-response-synthesis-references.txt || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          cat build/legacy-response-synthesis-references.txt
+
       - name: Upload read-only model execution caller inventory
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kchat-auth-05b2b-caller-census
-          path: build/kchat-auth-05b2b-caller-census.json
+          path: |
+            build/kchat-auth-05b2b-caller-census.json
+            build/legacy-provider-runtime-references.txt
+            build/legacy-provider-runtime-source-lines.txt
+            build/legacy-response-synthesis-references.txt
           if-no-files-found: ignore
 
       - name: Prove runtime capabilities and available tools are observed, not invented
