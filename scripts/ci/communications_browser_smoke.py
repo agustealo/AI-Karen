@@ -5,6 +5,7 @@ import argparse
 import http.cookiejar
 import json
 import os
+import re
 from pathlib import Path
 import secrets
 import subprocess
@@ -18,6 +19,71 @@ import uuid
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "scripts/ci/communications_browser_fixture.py"
 UI = ROOT / "src/ui_launchers/Karen-AI-Theme"
+
+# Only fixed vocabulary and numeric source positions may leave the private
+# report. Never print a Playwright error, stdout, request or response body.
+_STAGE = "admission"
+_SCENARIOS = {
+    "KCOMM-02E: real signed-session recovery, lifecycle persistence and account isolation": "KCOMM-02E",
+    "KCOMM-03G: committed change delivery, cancellation and live session revocation": "KCOMM-03G",
+}
+_STATUSES = {"passed", "failed", "timedOut", "skipped", "interrupted", "expected", "unexpected", "flaky"}
+_BROWSER_STAGES = {
+    "login", "initial_projection", "broker_admission", "commit_read",
+    "hint_order", "foreign_idle", "cancel", "reopen", "revoke",
+    "revoked_signal", "cleanup",
+}
+
+
+def stage(name):
+    global _STAGE
+    _STAGE = name
+
+
+def report_failure_summary(report):
+    """Emit only fixed scenario/stage/status tokens and numeric spec locations."""
+    def safe_status(value):
+        return value if isinstance(value, str) and value in _STATUSES else "unknown"
+
+    def visit(suites):
+        for suite in suites:
+            for spec in suite.get("specs", []):
+                scenario = _SCENARIOS.get(spec.get("title"), "unknown")
+                for test in spec.get("tests", []):
+                    status = safe_status(test.get("status"))
+                    stages = [
+                        item.get("description") for item in test.get("annotations", [])
+                        if item.get("type") == "kcomm-stage"
+                        and item.get("description") in _BROWSER_STAGES
+                    ]
+                    last = stages[-1] if stages else "unknown"
+                    print(f"KCOMM_BROWSER_DIAGNOSTIC scenario={scenario} status={status} stage={last}")
+                    for result in test.get("results", []):
+                        print("KCOMM_BROWSER_RESULT status=" + safe_status(result.get("status")))
+                        positions = set()
+                        for error in result.get("errors", []):
+                            # Match the fixed spec basename, not arbitrary paths
+                            # or stack content. Never output the original string.
+                            stack = error.get("stack")
+                            if isinstance(stack, str):
+                                for line, column in re.findall(
+                                    r"comms-visual-acceptance\.spec\.ts:(\d{1,5}):(\d{1,5})", stack,
+                                ):
+                                    positions.add((int(line), int(column)))
+                            location = error.get("location")
+                            if (
+                                isinstance(location, dict)
+                                and isinstance(location.get("file"), str)
+                                and Path(location["file"]).name == "comms-visual-acceptance.spec.ts"
+                                and type(location.get("line")) is int and 1 <= location["line"] <= 99999
+                                and type(location.get("column")) is int and 1 <= location["column"] <= 99999
+                            ):
+                                positions.add((location["line"], location["column"]))
+                        for line, column in sorted(positions)[:8]:
+                            print(f"KCOMM_BROWSER_ASSERTION line={line} column={column}")
+            visit(suite.get("suites", []))
+
+    visit(report.get("suites", []))
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -105,8 +171,10 @@ def main():
             raise RuntimeError("Unexpected broker witness receipt")
         print("DISPOSABLE COMMUNICATIONS BROKER WITNESS PASSED")
         return
+    stage("fixture_accounts")
     accounts = [account(), account()]
     user_ids = fixture(args.api_container, {"mode": "accounts", "tenant_id": tenant, "accounts": accounts})["users"]
+    stage("fixture_signed_login")
     identities = []
     for acct, user_id in zip(accounts, user_ids, strict=True):
         opener = build_opener(ProxyHandler({}), NoRedirect(), HTTPCookieProcessor(http.cookiejar.CookieJar()))
@@ -116,9 +184,11 @@ def main():
             raise RuntimeError("Signed fixture principal mismatch")
         conversation = json.loads(request(opener, origin, "/api/conversations/ensure-session/" + str(uuid.uuid4()), {}))
         identities.append({"user_id": user_id, "conversation_id": str(uuid.UUID(conversation["id"]))})
+    stage("fixture_runtime_rows")
     runs = fixture(args.api_container, {"mode": "runs", "tenant_id": tenant, "identities": identities})["executions"]
     if len(runs) != 2 or runs[0] == runs[1]:
         raise RuntimeError("Distinct runtime fixture receipts required")
+    stage("web_start")
     web_container = "karen-beta-comms-web-" + uuid.uuid4().hex
     web_origin = isolated_origin("http://127.0.0.1:18010")
     try:
@@ -127,6 +197,7 @@ def main():
             "-p", "127.0.0.1:18010:8010", "-e", "WEB_PUBLIC_SCHEME=http",
             "-e", "KAREN_BACKEND_URL=http://" + args.api_container + ":8000", "ai-karen-web:beta",
         ], check=True, stdout=subprocess.DEVNULL, timeout=60)
+        stage("web_readiness")
         opener = build_opener(ProxyHandler({}), NoRedirect())
         deadline = time.monotonic() + 120
         while time.monotonic() < deadline:
@@ -157,6 +228,7 @@ def main():
                "KAREN_UX_ACCOUNT_B_INBOX_EXECUTION_ID": runs[1]}
         # Use a private ephemeral report to reject no-op/skip success, never
         # upload or print browser diagnostic bodies or fixture credentials.
+        stage("chromium_execution")
         with tempfile.TemporaryDirectory(prefix="kcomm-browser-") as directory:
             private = Path(directory)
             report_path = private / "report.json"
@@ -168,13 +240,19 @@ def main():
                     "--reporter=json", "--workers=1", "--retries=0", "--forbid-only",
                     "--grep=KCOMM-02E|KCOMM-03G", "--output=" + str(private / "artifacts"),
                 ], cwd=UI, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=420)
-            if result.returncode != 0 or not report_path.is_file():
-                raise RuntimeError("Disposable Chromium scenario failed; private diagnostics suppressed")
+            if not report_path.is_file():
+                stage("chromium_report_missing")
+                raise RuntimeError("Disposable Chromium report missing")
+            stage("chromium_report_validation")
             report = json.loads(report_path.read_text(encoding="utf-8"))
+            if result.returncode != 0:
+                report_failure_summary(report)
+                raise RuntimeError("Disposable Chromium scenario failed; private diagnostics suppressed")
             stats = report.get("stats", {})
             if report.get("errors") != [] or stats.get("expected") != 2 or any(
                 stats.get(key) != 0 for key in ("unexpected", "skipped", "flaky")
             ):
+                report_failure_summary(report)
                 raise RuntimeError("Exactly two passing browser scenarios without skips or retries required")
             observed = []
 
@@ -195,6 +273,7 @@ def main():
                 "KCOMM-03G: committed change delivery, cancellation and live session revocation",
                 "expected", "passed", "chromium", ["passed"],
             )]:
+                report_failure_summary(report)
                 raise RuntimeError("Incorrect browser acceptance inventory")
         print("DISPOSABLE COMMUNICATIONS SIGNED-SESSION LIFECYCLE PROOF PASSED: one test, zero skips or retries")
         print("DISPOSABLE COMMUNICATIONS SIGNED-SESSION INVALIDATION PROOF PASSED: one test, zero skips or retries")
@@ -208,5 +287,5 @@ if __name__ == "__main__":
         main()
     except Exception as exc:
         # Exception tracebacks can contain request/response details.
-        print("Disposable Communications proof failed: " + type(exc).__name__)
+        print("Disposable Communications proof failed: " + type(exc).__name__ + " stage=" + _STAGE)
         raise SystemExit(1) from None

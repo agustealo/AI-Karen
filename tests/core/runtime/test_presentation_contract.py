@@ -641,3 +641,31 @@ def test_kgui02_code_artifact_is_read_only_and_bounded():
     payload = deepcopy(base)
     payload["data"]["execute"] = True
     assert validate_presentation(payload) is None
+
+
+def test_generated_document_reference_has_no_storage_or_action_authority():
+    from ai_karen_engine.core.runtime.presentation_contract import CARD_TEMPLATE_COMPONENT_TYPES
+
+    artifact_id = "10000000-0000-4000-8000-000000000004"
+    receipt = {
+        "schema_version": 1,
+        "presentation_id": f"generated-text:{artifact_id}",
+        "component_type": "document.artifact",
+        "evidence_ref": artifact_id,
+        "data": {
+            "artifact_id": artifact_id, "filename": "generated.txt",
+            "mime_type": "text/plain", "size_bytes": 20, "sha256": "a" * 64,
+        },
+    }
+    assert validate_presentation(receipt) == receipt
+    assert "document.artifact" not in CARD_TEMPLATE_COMPONENT_TYPES
+    for changed in (
+        {"artifact_id": "../private"}, {"filename": "other.txt"},
+        {"mime_type": "text/html"}, {"size_bytes": True},
+        {"size_bytes": 65537}, {"sha256": "a" * 63},
+        {"url": "https://example.org"}, {"text": "unverified body"},
+        {"storage_key": "private/object"}, {"user_id": "another-user"},
+    ):
+        assert validate_presentation({**receipt, "data": {**receipt["data"], **changed}}) is None
+    assert validate_presentation({**receipt, "evidence_ref": "other"}) is None
+    assert validate_presentation({**receipt, "presentation_id": "other"}) is None

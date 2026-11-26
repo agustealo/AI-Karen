@@ -511,11 +511,14 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     return url.origin === origin && url.pathname === INBOX_PATH && req.method() === "GET"
       && url.searchParams.get("inbox_filter") === "active" && !url.searchParams.has("cursor_id");
   };
+  const mark = (description: string) => test.info().annotations.push({ type: "kcomm-stage", description });
+  mark("login");
   const aHeaders = await login(email, password, ownerA);
   const bHeaders = await login(accountB, passwordB, ownerB);
   await page.setViewportSize({ width: 1440, height: 900 });
   await signInApprovedKaren(page, accountB, passwordB, { allowLocalLoopback: true });
   await openCommunications(page);
+  mark("initial_projection");
   const initialRead = page.waitForResponse(res => inboxRequest(res.request()), { timeout: 30_000 });
   const browserWait = page.waitForRequest(waitRequest, { timeout: 30_000 });
   await root.getByRole("tab", { name: "Inbox", exact: true }).click();
@@ -542,13 +545,16 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     const hintPending = page.waitForResponse(res => res.request() === ownerRequest, { timeout: 20_000 });
     const readPending = page.waitForResponse(res => inboxRequest(res.request()), { timeout: 20_000 });
     const foreignPending = request.get(origin + waitPath, { headers: aHeaders, timeout: 25_000, maxRedirects: 0 });
+    mark("broker_admission");
     await witness([ownerA, ownerB], 1);
+    mark("commit_read");
     const patch = await request.patch(origin + INBOX_PATH + "/" + entry.entry_id, {
       headers: bHeaders, data: { operation: "read", expected_revision: entry.revision }, maxRedirects: 0,
     });
     expect(patch.status()).toBe(200);
     const read = readReceipt(await patch.json(), entry, "read");
     expect(read.changed).toBe(true);
+    mark("hint_order");
     const hint = await hintPending;
     expect(hint.status()).toBe(200);
     expect(await hint.json()).toEqual({ changed: true });
@@ -559,6 +565,7 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     expect(sequence[1]).toBe("read");
     expect(readPage(await reread.json(), "active", null).entries.find(e => e.entry_id === entry.entry_id)).toEqual(read.entry);
     await expect(inbox.getByRole("listitem").filter({ hasText: "Execution " + runB.slice(0, 8) })).toContainText("Read");
+    mark("foreign_idle");
     const foreign = await foreignPending;
     expect(foreign.status()).toBe(200);
     expect(await foreign.json()).toEqual({ changed: false });
@@ -567,6 +574,7 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     // Begin a newly observed wait after the foreign idle window; leave the
     // workspace while it is subscribed and require browser failure plus zero
     // broker subscriptions, not merely a successful navigation.
+    mark("cancel");
     const cancellable = await page.waitForRequest(waitRequest, { timeout: 30_000 });
     const failed = page.waitForEvent("requestfailed", { predicate: req => req === cancellable, timeout: 12_000 });
     await witness([ownerB], 1);
@@ -574,6 +582,7 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     await failed;
     await witness([ownerB], 0);
 
+    mark("reopen");
     const reopened = page.waitForRequest(waitRequest, { timeout: 30_000 });
     await openCommunications(page);
     await root.getByRole("tab", { name: "Inbox", exact: true }).click();
@@ -582,6 +591,7 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     await witness([ownerB], 1);
     // Revoke the browser's exact active credentials via the real logout API,
     // without resetting its UI state. Never expose tokens to the test runner.
+    mark("revoke");
     const logoutEvidence = await page.evaluate(async path => {
       const access = localStorage.getItem("access_token");
       const refresh = localStorage.getItem("refresh_token");
@@ -601,6 +611,7 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     await witness([ownerB], 1);
     // The independent signed owner session is still authorized to commit.
     // Its real post-commit signal must not be returned to the revoked waiter.
+    mark("revoked_signal");
     const ack = await request.patch(origin + INBOX_PATH + "/" + entry.entry_id, {
       headers: bHeaders, data: { operation: "acknowledge", expected_revision: read.entry.revision }, maxRedirects: 0,
     });
@@ -611,6 +622,7 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     expect(rejection.headers()["cache-control"]).toBe("no-store");
     const rejectionBody = await rejection.json();
     expect(rejectionBody).not.toHaveProperty("changed");
+    mark("cleanup");
     await witness([ownerB], 0);
   } finally {
     page.off("request", recordRequest);

@@ -11,6 +11,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from ai_karen_engine.core.cortex.routing_intents import GENERATED_TEXT_ARTIFACT_CAPABILITY
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 
@@ -27,6 +28,9 @@ def request_memory_formation(
     admit it, RuntimePolicy must authorize ``memory.write``, and NeuroVault must
     accept the scoped write before anything becomes durable.
     """
+
+    if decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY:
+        return decision
 
     user_text = _latest_user_text(request).strip()
     if not user_text:

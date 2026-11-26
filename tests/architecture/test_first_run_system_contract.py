@@ -298,3 +298,31 @@ def test_disposable_communications_invalidation_requires_real_broker_and_browser
     assert 'await witness([ownerB], 0)' in spec
     assert 'expect([401, 403]).toContain(rejection.status())' in spec
     assert 'expect(rejectionBody).not.toHaveProperty("changed")' in spec
+
+
+def test_communications_failure_diagnostics_do_not_disclose_private_report(capsys) -> None:
+    import importlib.util
+
+    path = ROOT / "scripts/ci/communications_browser_smoke.py"
+    spec = importlib.util.spec_from_file_location("communications_browser_smoke", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.report_failure_summary({"suites": [{"specs": [{
+        "title": "KCOMM-03G: committed change delivery, cancellation and live session revocation",
+        "tests": [{
+            "status": "unexpected",
+            "annotations": [{"type": "kcomm-stage", "description": "private-secret"},
+                            {"type": "kcomm-stage", "description": "revoke"}],
+            "results": [{"status": "failed", "errors": [{
+                "message": "private-secret", "stack": "private-secret /tmp/comms-visual-acceptance.spec.ts:123:45",
+                "location": {"file": "/tmp/private-secret/comms-visual-acceptance.spec.ts", "line": 124, "column": 5},
+            }]}],
+        }],
+    }]}]})
+    output = capsys.readouterr().out
+    assert "scenario=KCOMM-03G status=unexpected stage=revoke" in output
+    assert "KCOMM_BROWSER_RESULT status=failed" in output
+    assert "line=123 column=45" in output
+    assert "line=124 column=5" in output
+    assert "private-secret" not in output
