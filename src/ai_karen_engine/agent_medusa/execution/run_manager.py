@@ -49,6 +49,15 @@ class ExecutionRunStatus(str, Enum):
     CANCELLED = "cancelled"
     ORPHANED = "orphaned"
 
+    @classmethod
+    def for_response(cls, outcome_status: str) -> ExecutionRunStatus:
+        """Map a normalized response outcome to its proposed lifecycle."""
+        if outcome_status in {"success", "partial", "degraded"}:
+            return cls.COMPLETED
+        if outcome_status in {"error", "timeout"}:
+            return cls.FAILED
+        raise ValueError(f"Unsupported Medusa outcome status: {outcome_status}")
+
 
 @dataclass
 class ExecutionRun:
@@ -263,13 +272,7 @@ class MedusaRunManager:
         """Return the resolved lifecycle, not merely the proposed response."""
 
         normalized = str(outcome_status or "").strip().lower()
-        if normalized not in {"success", "partial", "degraded", "error", "timeout"}:
-            raise ValueError(f"Unsupported Medusa outcome status: {outcome_status}")
-        lifecycle = (
-            ExecutionRunStatus.COMPLETED
-            if normalized in {"success", "partial", "degraded"}
-            else ExecutionRunStatus.FAILED
-        )
+        lifecycle = ExecutionRunStatus.for_response(normalized)
         resolved = await self._mark_terminal(
             run_id,
             lifecycle,

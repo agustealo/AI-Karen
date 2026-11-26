@@ -801,3 +801,7 @@ It selects exactly the real lifecycle test with all three required flags,
 rejects any skipped or retried result, and deletes temporary private reports
 without publishing browser diagnostics. A successful dispatch is necessary
 before marking live specialist readback verified.
+
+### Signed Docker specialist readback (ARM-05C.7B)
+
+Choose `docker-specialist-participation` on the exact reviewed current main SHA. Reuse the existing approved `KAREN_DOCKER_SEARCH_ACCEPTANCE_URL` origin and signed API/web image references and config IDs in the protected environment. The existing operator-host jobs verify signed running images and public ingress before and after the hosted browser. Browser setup never runs on the host. The hosted browser uses the same specialist fixture credentials, run IDs and private one-test report gate as `specialist-participation`, with Docker fixture mode and no Vercel bypass. No host mutation, deployment, new fixture or inference is part of this trial. Before/after proof is not continuous runtime identity or fresh specialist execution. The Vercel scenario remains a separate frontend provenance and backend readiness proof.

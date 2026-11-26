@@ -114,7 +114,13 @@ async def test_policy_scope_replay_rejected_before_registration(
 async def test_distinct_correlation_id_reaches_run_ledger():
     from unittest.mock import MagicMock
 
+    from ai_karen_engine.agent_medusa.contracts.runtime_response import (
+        ResponseStatus, RuntimeResponse,
+    )
+    from ai_karen_engine.agent_medusa.execution.run_manager import ExecutionRunStatus
+
     manager = AsyncMock()
+    manager.mark_response.return_value = ExecutionRunStatus.COMPLETED
     coordinator = MedusaCoordinator(run_manager=manager)
     request = _request(
         requirements=_requirements(correlation_id="trace-42"),
@@ -127,8 +133,9 @@ async def test_distinct_correlation_id_reaches_run_ledger():
         },
     )
     request.context["execution_context"] = MagicMock(correlation_id="trace-42")
-    response = MagicMock()
-    response.status.value = "success"
+    response = RuntimeResponse(
+        request_id=request.request_id, status=ResponseStatus.SUCCESS, content="done",
+    )
     coordinator._handle_request = AsyncMock(return_value=response)
 
     await coordinator.handle_request(request)

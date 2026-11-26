@@ -346,3 +346,50 @@ async def test_agent_receipt_failure_remains_nonrecoverable_across_workflow(enab
     assert chunks[-1].metadata["error_code"] == "AGENT_RECEIPT_RECONCILIATION_REQUIRED"
     assert "private diagnostic" not in str(chunks)
     assert not any(chunk.type == ChatStreamEventType.CONTENT for chunk in chunks)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_id", ["", "other-request"])
+@pytest.mark.parametrize(
+    "status",
+    list(ResponseStatus),
+)
+async def test_agent_response_request_identity_must_match_before_publication(
+    enabled, monkeypatch, response_id, status,
+):
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    handle = AsyncMock(return_value=RuntimeResponse(
+        request_id=response_id,
+        status=status,
+        content="foreign private result",
+        metadata={"actual_provider": "foreign-private-provider"},
+    ))
+    monkeypatch.setattr(
+        "ai_karen_engine.agent_medusa.coordinator.medusa_coordinator."
+        "MedusaCoordinator.handle_request", handle,
+    )
+    runtime = WorkflowRuntime()
+    runtime._get_orchestrator = AsyncMock(
+        side_effect=AssertionError("No fallback graph is authorized")
+    )
+    with pytest.raises(OutcomeStoreError, match="response identity could not be confirmed"):
+        await runtime.run(request(), decision(), plan())
+    handle.assert_awaited_once()
+    assert handle.await_args.args[0].request_id == "req-1"
+    handle.reset_mock()
+
+    chunks = [chunk async for chunk in runtime.stream(request(), decision(), plan())]
+    handle.assert_awaited_once()
+    assert handle.await_args.args[0].request_id == "req-1"
+    runtime._get_orchestrator.assert_not_awaited()
+    assert [chunk.type for chunk in chunks] == [
+        ChatStreamEventType.STATUS, ChatStreamEventType.ERROR,
+    ]
+    assert chunks[-1].metadata["error_code"] == "AGENT_RECEIPT_RECONCILIATION_REQUIRED"
+    assert chunks[-1].metadata["recoverable"] is False
+    assert chunks[-1].metadata["reconciliation_required"] is True
+    assert all(chunk.correlation_id == "corr-1" for chunk in chunks)
+    assert "foreign private result" not in str(chunks)
+    assert "foreign-private-provider" not in str(chunks)
+    assert "other-request" not in str(chunks)

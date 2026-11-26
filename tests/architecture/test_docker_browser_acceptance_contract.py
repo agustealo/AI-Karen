@@ -45,7 +45,7 @@ def test_docker_scenario_reuses_existing_protected_acceptance_workflow() -> None
     before = _job(workflow, "docker-provenance-before")
     browser = _job(workflow, "authenticated-docker-search-replay")
     after = _job(workflow, "docker-provenance-after")
-    guard = "inputs.scenario == 'docker-search' && github.ref == 'refs/heads/main'"
+    guard = "(inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation') && github.ref == 'refs/heads/main'"
     for job in (before, browser, after):
         assert guard in job
         assert "ref: " + chr(36) + "{{ inputs.target_sha }}" in job
@@ -112,7 +112,7 @@ def test_browser_is_hosted_and_credentials_are_only_available_to_proof_step() ->
     for secret in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
         binding = secret + ": " + chr(36) + "{{ secrets." + secret + " }}"
         assert binding not in job_scope
-        assert browser.count(binding) == 1
+        assert browser.count(binding) == 2
         assert binding in proof
 
     for step in (
@@ -162,3 +162,32 @@ def test_public_deployment_and_host_provenance_are_rechecked_after_replay() -> N
     assert 'test "$current" = "$TARGET_SHA"' in browser
     assert "python scripts/ci/verify_deployment_revision.py" in browser
     assert "GH_TOKEN: " in after
+
+
+def test_signed_docker_specialist_reuses_host_chain_and_private_gate() -> None:
+    workflow = WORKFLOW.read_text()
+    assert "          - docker-specialist-participation\n" in workflow
+    before = _job(workflow, "docker-provenance-before")
+    browser = _job(workflow, "authenticated-docker-search-replay")
+    after = _job(workflow, "docker-provenance-after")
+    for job in (before, browser, after):
+        assert "vars.KAREN_DOCKER_SEARCH_ACCEPTANCE_URL" in job
+    assert "needs: docker-provenance-before" in browser
+    assert "needs: authenticated-docker-search-replay" in after
+    assert browser.count("python -m scripts.ci.verify_backend_target") == 2
+    search = browser.split("      - name: Prove real authenticated Docker search and replay", 1)[1].split("\n      - ", 1)[0]
+    assert "if: inputs.scenario == 'docker-search'" in search
+    proof = browser.split("      - name: Prove signed Docker specialist lifecycle and cross-tenant readback", 1)[1].split("\n      - ", 1)[0]
+    assert "if: inputs.scenario == 'docker-specialist-participation'" in proof
+    assert 'bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" docker' in proof
+    for flag in ("PARTICIPATION", "LIFECYCLE", "CROSS_TENANT"):
+        assert f'KAREN_SPECIALIST_{flag}_ACCEPTANCE: "true"' in proof
+    for name in ("KAREN_UX_ACCOUNT_B_EMAIL", "KAREN_UX_ACCOUNT_B_PASSWORD", "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD", "KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID", "KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID", "KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID", "KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID"):
+        assert name + ": " + chr(36) + "{{ secrets." + name + " }}" in proof
+        assert browser.count(name) == proof.count(name)
+        assert name not in before and name not in after
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in browser
+    assert "upload-artifact" not in browser
+    shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text()
+    assert '[[ -v VERCEL_AUTOMATION_BYPASS_SECRET ]]' in shell
+    assert 'export KAREN_SEARCH_ACCEPTANCE_PLATFORM="$1"' in shell

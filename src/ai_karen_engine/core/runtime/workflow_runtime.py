@@ -659,6 +659,12 @@ class WorkflowRuntime:
         if event_sink is not None:
             coordinator.attach_sink(event_sink)
         result = await coordinator.handle_request(agent_request)
+        # A coordinator result belongs only to its originating request. If
+        # the response identity is unverified, delegated effects may already
+        # have occurred; use the existing non-recoverable reconciliation
+        # boundary instead of publishing foreign content or retrying.
+        if result.request_id != agent_request.request_id:
+            raise OutcomeStoreError("Authorized Medusa response identity could not be confirmed")
         if result.status not in {ResponseStatus.SUCCESS, ResponseStatus.PARTIAL,
                                  ResponseStatus.DEGRADED}:
             if (
