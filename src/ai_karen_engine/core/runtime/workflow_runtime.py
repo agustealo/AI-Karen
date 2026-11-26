@@ -102,13 +102,22 @@ class WorkflowRuntime:
         if self._use_deepagents(request, decision, plan):
             # Subscribe to the existing per-request Medusa event emitter. This
             # is a transport projection, not another execution scheduler.
-            events: asyncio.Queue[Any] = asyncio.Queue(maxsize=256)
+            events: asyncio.Queue[_SharedChatStreamChunk] = asyncio.Queue(maxsize=256)
+            request_id = config["request_config"]["request_id"]
             dropped_event = False
 
             def receive_event(event: Any) -> None:
                 nonlocal dropped_event
+                # Validate and copy observations before the bounded queue.
+                # Foreign events cannot exhaust its capacity or be mutated
+                # into valid observations after admission.
+                chunk = self._project_medusa_event(
+                    event, correlation_id=ctx.correlation_id, request_id=request_id,
+                )
+                if chunk is None:
+                    return
                 try:
-                    events.put_nowait(event)
+                    events.put_nowait(chunk)
                 except asyncio.QueueFull:
                     dropped_event = True
 
@@ -136,12 +145,7 @@ class WorkflowRuntime:
                         # newly scheduled queue-get. Drain observed events
                         # before reporting the terminal response.
                         while not events.empty():
-                            chunk = self._project_medusa_event(
-                                events.get_nowait(),
-                                correlation_id=ctx.correlation_id,
-                            )
-                            if chunk is not None:
-                                yield chunk
+                            yield events.get_nowait()
                         break
                     next_event = asyncio.create_task(events.get())
                     try:
@@ -150,12 +154,7 @@ class WorkflowRuntime:
                             return_when=asyncio.FIRST_COMPLETED,
                         )
                         if next_event in ready:
-                            chunk = self._project_medusa_event(
-                                next_event.result(),
-                                correlation_id=ctx.correlation_id,
-                            )
-                            if chunk is not None:
-                                yield chunk
+                            yield next_event.result()
                     finally:
                         if not next_event.done():
                             next_event.cancel()
@@ -280,14 +279,18 @@ class WorkflowRuntime:
 
     @staticmethod
     def _project_medusa_event(
-        event: Any, *, correlation_id: str
+        event: Any, *, correlation_id: str, request_id: str
     ) -> Optional[_SharedChatStreamChunk]:
         """Allowlist actual Medusa events for the existing Karen UI contract.
 
         The emitter may carry internal data, including tool inputs, which must
         not cross this transport boundary. Identity mismatches are dropped.
         """
-        if getattr(event, "correlation_id", None) != correlation_id:
+        if (
+            not request_id or not correlation_id
+            or getattr(event, "request_id", None) != request_id
+            or getattr(event, "correlation_id", None) != correlation_id
+        ):
             return None
         event_type = getattr(event, "type", "")
         kind = str(getattr(event_type, "value", event_type))
@@ -359,6 +362,8 @@ class WorkflowRuntime:
             "agent_started": ("agent_step_started", "running"),
             "agent_completed": ("agent_step_completed", "completed"),
             "agent_failed": ("agent_step_failed", "failed"),
+            "agent_interrupted": ("agent_step_cancelled", "cancelled"),
+            "agent_skipped": ("agent_step_skipped", "skipped"),
         }
         if kind in status_by_type:
             event_name, status = status_by_type[kind]
@@ -654,6 +659,12 @@ class WorkflowRuntime:
         if event_sink is not None:
             coordinator.attach_sink(event_sink)
         result = await coordinator.handle_request(agent_request)
+        # A coordinator result belongs only to its originating request. If
+        # the response identity is unverified, delegated effects may already
+        # have occurred; use the existing non-recoverable reconciliation
+        # boundary instead of publishing foreign content or retrying.
+        if result.request_id != agent_request.request_id:
+            raise OutcomeStoreError("Authorized Medusa response identity could not be confirmed")
         if result.status not in {ResponseStatus.SUCCESS, ResponseStatus.PARTIAL,
                                  ResponseStatus.DEGRADED}:
             if (

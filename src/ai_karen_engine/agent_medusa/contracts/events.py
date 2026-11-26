@@ -29,3 +29,5 @@ class AgentEvent:
     timestamp: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     metadata: Dict[str, Any] = field(default_factory=dict)
     correlation_id: Optional[str] = None
+    # Explicit originating request identity for live runtime observations.
+    request_id: Optional[str] = None
