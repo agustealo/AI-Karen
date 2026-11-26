@@ -219,8 +219,16 @@ class MedusaCoordinator:
             )
             raise
         except NativeRetirementUnverified:
-            # A native worker may still be active. Do not publish terminal
-            # failure or cancellation evidence for unverified retirement.
+            # The Python task is leaving, but native retirement is unknown.
+            # Relinquish its live lease without manufacturing a task outcome.
+            try:
+                await self.run_manager.mark_retirement_unverified(request.request_id)
+            except Exception:
+                # Preserve the original non-retryable retirement exception.
+                logger.error(
+                    "medusa_retirement_transition_unavailable",
+                    extra={"run_id": request.request_id},
+                )
             logger.error(
                 "medusa_native_retirement_unverified",
                 extra={"run_id": request.request_id},
@@ -627,6 +635,7 @@ class MedusaCoordinator:
             raise
         except NativeRetirementUnverified:
             trajectory.metadata["retirement_unverified"] = True
+            trajectory.complete("orphaned")
             raise
         except Exception:
             trajectory.complete("error")

@@ -1380,3 +1380,32 @@ async def test_wave_preserves_cancellation_and_completed_sibling_receipt_failure
         assert raised.value is primary
     coordinator.assembler.assemble.assert_not_awaited()
     assert request.request_id not in coordinator.active_plans
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ledger_unavailable", [False, True])
+async def test_coordinator_relinquishes_unverified_retirement_without_retry(ledger_unavailable):
+    from ai_karen_engine.core.model_runtime.provider_contracts import (
+        NativeRetirementUnverified,
+    )
+
+    request, _, _, _ = _request()
+    primary = NativeRetirementUnverified()
+    manager = SimpleNamespace(
+        register=AsyncMock(),
+        mark_retirement_unverified=AsyncMock(
+            side_effect=RuntimeError("ledger unavailable") if ledger_unavailable else None
+        ),
+        mark_failed=AsyncMock(),
+        mark_cancelled=AsyncMock(),
+        mark_response=AsyncMock(),
+    )
+    coordinator = MedusaCoordinator(run_manager=manager)
+    coordinator._handle_request = AsyncMock(side_effect=primary)
+    with pytest.raises(NativeRetirementUnverified) as raised:
+        await coordinator.handle_request(request)
+    assert raised.value is primary
+    manager.mark_retirement_unverified.assert_awaited_once_with(request.request_id)
+    manager.mark_failed.assert_not_awaited()
+    manager.mark_cancelled.assert_not_awaited()
+    manager.mark_response.assert_not_awaited()
