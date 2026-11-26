@@ -16,6 +16,8 @@ import {
 import useAuth from "@/lib/useAuth";
 import { apiClient } from "@/lib/api";
 import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalog";
+import { GovernedToolReceiptList } from "./GovernedToolReceipts";
+import { isRunToolReceiptsResponse } from "@/lib/governed-tool-receipts";
 import { ApprovalReviewPanel } from "@/components/approvals/ApprovalReviewPanel";
 import { useRuntimeApprovalContext } from "@/components/approvals/RuntimeApprovalProvider";
 export { isRuntimeApproval, type RuntimeApproval } from "@/components/approvals/useRuntimeApprovals";
@@ -128,7 +130,7 @@ export function isRunTransitionsResponse(value: unknown): value is RunTransition
 function useRecordedRunEvidence<T extends { run_id: string }>(
   runId: string,
   revision: number,
-  resource: "transitions" | "participation",
+  resource: "transitions" | "participation" | "tool-receipts",
   validate: (value: unknown) => value is T,
 ) {
   const [result, setResult] = useState<{ runId: string; revision: number; receipt: T | null } | null>(null);
@@ -251,6 +253,25 @@ function SpecialistParticipation({ runId, revision }: { runId: string; revision:
               </li>
             ))}
           </ol>
+        </>}
+    </section>
+  );
+}
+
+function RecordedToolReceipts({ runId, revision }: { runId: string; revision: number }) {
+  const { receipt, loading } = useRecordedRunEvidence(runId, revision, "tool-receipts", isRunToolReceiptsResponse);
+  return (
+    <section aria-label="Recorded governed tool receipts" className="mt-4 space-y-2">
+      <h5 className="text-sm font-medium">Recorded governed tool receipts</h5>
+      <p className="text-xs text-muted-foreground">PostgreSQL tool-runtime acknowledgments, not independently confirmed external outcomes or proof of overall task success.</p>
+      {loading ? <p role="status" className="text-sm text-muted-foreground">Loading governed tool receipts…</p>
+        : !receipt ? <p role="status" className="text-sm text-muted-foreground">Governed tool evidence is unavailable. Refresh runtime to retry.</p>
+        : receipt.evidence_status === "empty" ? <p className="text-sm text-muted-foreground">No durable governed tool receipts were recorded for this execution.</p>
+        : <>
+          {receipt.window_limit_reached && <p role="status" className="text-xs text-muted-foreground">Receipt window limit reached; additional receipts may exist.</p>}
+          <div className="text-sm text-muted-foreground">
+            <GovernedToolReceiptList receipts={receipt.receipts} />
+          </div>
         </>}
     </section>
   );
@@ -740,6 +761,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                     {!isAdmin && <>
                       <ExecutionTimeline key={selectedRun.run_id} runId={selectedRun.run_id} revision={runListRevision} />
                       <SpecialistParticipation key={`participation:${selectedRun.run_id}`} runId={selectedRun.run_id} revision={runListRevision} />
+                      <RecordedToolReceipts key={`tools:${selectedRun.run_id}`} runId={selectedRun.run_id} revision={runListRevision} />
                     </>}
                     <section aria-label="Recorded lifecycle timestamps" className="mt-4 space-y-2">
                       <h5 className="text-sm font-medium">Recorded lifecycle timestamps</h5>
