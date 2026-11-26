@@ -226,6 +226,30 @@ describe("runtime projection validation", () => {
   });
 
 
+  it("does not disclose transport errors from approval discovery", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
+      ? Promise.reject(new Error("private transport detail")) : fallback(path));
+    render(<AgentsPage />);
+    await screen.findByText("Could not load approval requests.");
+    expect(screen.queryByText("private transport detail")).toBeNull();
+    expect(screen.queryByText(/No actionable approval requests/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review approval" })).toBeNull();
+  });
+
+  it("requires a fresh confirmation after approval discovery refresh", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
+      ? Promise.resolve([approval]) : fallback(path));
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Review approval" }));
+    expect(screen.getByRole("button", { name: "Confirm approval" })).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh runtime" }));
+    await screen.findByRole("button", { name: "Review approval" });
+    expect(screen.queryByRole("button", { name: "Confirm approval" })).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it("discovers approvals on visibility restoration even with empty run history", async () => {
     const fallback = mocks.get.getMockImplementation()!;
     let reads = 0;

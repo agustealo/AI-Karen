@@ -20,6 +20,7 @@ from ai_karen_engine.services.approvals import (
     ApprovalScopeError,
     ApprovalService,
     ApprovalStateError,
+    approval_workflow_kind,
     request_fingerprint,
 )
 
@@ -643,3 +644,79 @@ def test_plugin_lifecycle_approval_scope_rejects_invalid_identity(overrides) -> 
 
     with pytest.raises(ValueError):
         replace(_lifecycle_scope(), **overrides)
+
+
+@pytest.mark.parametrize(
+    ("intent", "kind"),
+    [
+        ("external_action", "runtime_approval"),
+        ("general_assist", "runtime_approval"),
+        ("writing_style.document_consent.issue", "document_author_consent"),
+        ("writing_style.document_consent.revoke", "unsupported_specialized"),
+        ("writing_style.document_consent.future", "unsupported_specialized"),
+        ("plugin.lifecycle.enable", "plugin_lifecycle"),
+        ("plugin.lifecycle.disable", "plugin_lifecycle"),
+        ("plugin.lifecycle.future", "unsupported_specialized"),
+        ("", "unsupported_specialized"),
+        (None, "unsupported_specialized"),
+    ],
+)
+def test_approval_workflow_kind_is_descriptive_and_fail_closed_for_specialized_actions(
+    intent, kind,
+) -> None:
+    assert approval_workflow_kind(intent) == kind
+
+
+@pytest.mark.asyncio
+async def test_approval_list_projects_workflow_from_owned_ledger_not_payload(monkeypatch) -> None:
+    from ai_karen_engine.api_routes.automation import approvals as route
+
+    repo = FakeApprovalRepository()
+    service = ApprovalService(repository=repo)
+    user = _user()
+    rows = [
+        ("external_action", "pending", "runtime_approval"),
+        ("external_action", "approved", "runtime_approval"),
+        ("writing_style.document_consent.issue", "pending", "document_author_consent"),
+        ("plugin.lifecycle.enable", "approved", "plugin_lifecycle"),
+        ("writing_style.document_consent.future", "pending", "unsupported_specialized"),
+    ]
+    for intent, status, _ in rows:
+        # Test ledger fixture only; do not create a real specialized approval
+        # through the generic service path.
+        record = await repo.create(
+            tenant_id=user.tenant_id, user_id=user.user_id,
+            conversation_id=None, request_fingerprint="test",
+            policy_decision_id="policy-test", intent=intent,
+            risk_level="high", reason_codes=[],
+            request_payload={"workflow_kind": "forged", "private": "not-public"},
+        )
+        repo.records[record["approval_id"]]["status"] = status
+    await repo.create(
+        tenant_id=user.tenant_id, user_id="22222222-2222-2222-2222-222222222222",
+        conversation_id=None, request_fingerprint="other",
+        policy_decision_id="policy-other", intent="external_action",
+        risk_level="high", reason_codes=[], request_payload={},
+    )
+    await repo.create(
+        tenant_id="bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", user_id=user.user_id,
+        conversation_id=None, request_fingerprint="other-tenant",
+        policy_decision_id="policy-other", intent="external_action",
+        risk_level="high", reason_codes=[], request_payload={},
+    )
+    monkeypatch.setattr(route, "get_approval_service", lambda: service)
+
+    result = await route.list_approvals(user=user)
+    assert [(item.intent, item.status, item.workflow_kind) for item in result] == rows
+    for item in result:
+        payload = item.model_dump()
+        assert "request_payload" not in payload
+        assert "not-public" not in str(payload)
+        assert "forged" not in str(payload)
+        assert await route.get_approval(item.approval_id, user=user) == item
+
+    # The new projection must not grant generic document decisions.
+    document = next(item for item in result if item.workflow_kind == "document_author_consent")
+    with pytest.raises(ApprovalScopeError, match="fresh bearer confirmation"):
+        await service.decide(document.approval_id, user=user, decision="approved")
+    assert repo.records[document.approval_id]["status"] == "pending"

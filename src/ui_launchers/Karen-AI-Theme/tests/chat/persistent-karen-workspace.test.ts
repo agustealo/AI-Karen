@@ -20,6 +20,12 @@ describe("persistent Karen workspace shell", () => {
     expect(source).not.toContain("chat: (\n        <PrincipalScopedSessionProvider>");
   });
 
+  it("uses the verified handoff for Mission Control conversation navigation", () => {
+    expect(source).toContain("useVerifiedConversationHandoff(openChat)");
+    expect(source).toContain("onOpenConversation={openConversation}");
+    expect(source).not.toContain("await loadSession(conversationId);");
+  });
+
   it("keeps a single conversation mounted while navigating other workspaces", () => {
     expect(source).toContain('data-testid="persistent-karen-conversation"');
     expect(source).toContain("activeMainView === \"chat\"");
