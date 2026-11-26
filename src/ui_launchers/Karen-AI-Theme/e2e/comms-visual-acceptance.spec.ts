@@ -163,7 +163,7 @@ test("KUI-COMMS: live identity-scoped evidence and five responsive viewports", a
 
     const tabs = root.getByRole("tablist");
     await expect(tabs).toBeVisible();
-    await expect(tabs.getByRole("tab")).toHaveCount(5);
+    await expect(tabs.getByRole("tab")).toHaveCount(6);
     const auditTab = tabs.getByRole("tab", { name: "Audit timeline" });
     await auditTab.focus();
     await expect(auditTab).toBeFocused();
@@ -196,6 +196,23 @@ test("KUI-COMMS: live identity-scoped evidence and five responsive viewports", a
   const refreshed = await refreshRequest;
   expect(refreshed.status()).toBe(200);
   await expect(root.locator("header [role=\"status\"]")).toContainText("Snapshot received");
+
+  // Read-only proof of the real shared approval inbox. No decision is made.
+  await root.getByRole("button", { name: "Review decisions" }).click();
+  const decisions = root.getByTestId("comms-decisions-inbox");
+  await expect(decisions).toBeVisible();
+  const approvalRead = page.waitForResponse((response) => {
+    const url = new URL(response.url());
+    return url.origin === target.origin && url.pathname === "/api/approvals/" && response.request().method() === "GET";
+  }, { timeout: 30_000 });
+  await decisions.getByRole("button", { name: "Refresh decisions" }).click();
+  const approvalResponse = await approvalRead;
+  expect(approvalResponse.status()).toBe(200);
+  const approvalRecords: unknown = await approvalResponse.json();
+  if (!Array.isArray(approvalRecords)) throw new Error("Canonical approval list is not an array");
+  await expect(decisions.getByTestId("approval-review-record")).toHaveCount(approvalRecords.length);
+  await expect(decisions.getByText("Could not load approval requests.")).toHaveCount(0);
+  await root.getByRole("tab", { name: "Overview" }).click();
 
   // Navigation only: the Communications Center must reuse the authorized
   // Agent Runtime approval workspace, without submitting any decision.

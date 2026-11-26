@@ -36,6 +36,7 @@ import AccountPage from "@/components/account/AccountPage";
 import GrowthPage from "@/components/growth/GrowthPage";
 import { SessionProvider, useSession } from "@/components/chat/SessionProvider";
 import { useVerifiedConversationHandoff } from "@/components/chat/useVerifiedConversationHandoff";
+import { RuntimeApprovalProvider } from "@/components/approvals/RuntimeApprovalProvider";
 import { CardStudioWorkspace } from "@/components/card-studio/CardStudioWorkspace";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
 
@@ -73,7 +74,7 @@ function PrincipalScopedSessionProvider({ children }: { children: React.ReactNod
       tenant_id: user.tenant_id,
       user_id: user.user_id,
     }}>
-      {children}
+      <RuntimeApprovalProvider>{children}</RuntimeApprovalProvider>
     </SessionProvider>
   );
 }
@@ -114,6 +115,18 @@ function AgentWorkspaceView({ openChat }: { openChat: () => void }) {
         onDiscussRun={(runId) => { setWorkspaceRunId(runId); openChat(); }} />
     </>
   );
+}
+
+function CommsWorkspaceView({ onOpenChat, onOpenAgents, onOpenTasks }: {
+  onOpenChat: () => void;
+  onOpenAgents: () => void;
+  onOpenTasks: () => void;
+}) {
+  const { openConversation, handoffError } = useVerifiedConversationHandoff(onOpenChat);
+  return <>
+    {handoffError && <p role="alert" className="mb-3 text-sm text-destructive">{handoffError}</p>}
+    <CommsCenterPage onOpenChat={onOpenChat} onOpenAgents={onOpenAgents} onOpenTasks={onOpenTasks} onOpenConversation={openConversation} />
+  </>;
 }
 
 const MAX_BACKEND_RETRIES = 10;
@@ -333,7 +346,7 @@ function DashboardWorkspace() {
       tasks: <TasksPage />,
       jobs: <JobsPage />,
       cronJobs: <CronJobsPage />,
-      commsCenter: <CommsCenterPage
+      commsCenter: <CommsWorkspaceView
         onOpenAgents={() => setActiveMainView("agents")}
         onOpenTasks={() => setActiveMainView("tasks")}
         onOpenChat={() => setActiveMainView("chat")}
