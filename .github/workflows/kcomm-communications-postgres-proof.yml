@@ -8,6 +8,11 @@ on:
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
       - "src/ai_karen_engine/services/privacy_compliance.py"
+      - "src/ai_karen_engine/services/communications_inbox.py"
+      - "src/ai_karen_engine/api_routes/content/communications.py"
+      - "src/ai_karen_engine/auth/rbac_middleware.py"
+      - "config_assets/permissions.json"
+      - "tests/api_routes/test_communications_inbox_contract.py"
       - ".github/workflows/kcomm-communications-postgres-proof.yml"
   push:
     branches: [main]
@@ -17,6 +22,11 @@ on:
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
       - "src/ai_karen_engine/services/privacy_compliance.py"
+      - "src/ai_karen_engine/services/communications_inbox.py"
+      - "src/ai_karen_engine/api_routes/content/communications.py"
+      - "src/ai_karen_engine/auth/rbac_middleware.py"
+      - "config_assets/permissions.json"
+      - "tests/api_routes/test_communications_inbox_contract.py"
       - ".github/workflows/kcomm-communications-postgres-proof.yml"
   workflow_dispatch:
 permissions:
@@ -97,6 +107,7 @@ jobs:
         run: |
           python -m compileall -q src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py src/ai_karen_engine/services/privacy_compliance.py tests/integration/test_communications_inbox_postgres.py
           pytest tests/integration/test_communications_inbox_postgres.py -q -rs
+          pytest tests/api_routes/test_communications_center_scope.py tests/api_routes/test_communications_inbox_contract.py -q -rs
       - name: Record evidence boundary
         if: always()
         run: |
