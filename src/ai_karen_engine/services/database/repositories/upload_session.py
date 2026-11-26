@@ -9,7 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Callable
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,6 +28,8 @@ class UploadSession:
     received_bytes: int
     artifact_id: str | None
     expected_sha256: str | None = None
+    lease_owner: str | None = None
+    lease_expires_at: datetime | None = None
 
 
 class UploadSessionConflict(ValueError):
@@ -67,6 +69,8 @@ class UploadSessionRepository:
             received_bytes=data["received_bytes"],
             artifact_id=data["artifact_id"],
             expected_sha256=data["expected_sha256"],
+            lease_owner=data["lease_owner"],
+            lease_expires_at=data["lease_expires_at"],
         )
 
     async def create_or_get(
@@ -124,7 +128,7 @@ class UploadSessionRepository:
             result = await session.execute(text("""
                 SELECT session_id, tenant_id, owner_user_id, destination_id,
                        recipe, state, manifest_sha256, expected_bytes,
-                       received_bytes, artifact_id, expected_sha256
+                       received_bytes, artifact_id, expected_sha256, lease_owner, lease_expires_at
                 FROM public.artifact_upload_sessions
                 WHERE tenant_id = :tenant_id AND owner_user_id = :owner_user_id
                   AND idempotency_key_hash = :idempotency_key_hash
@@ -146,6 +150,123 @@ class UploadSessionRepository:
             await session.commit()
             return record
 
+    async def record_staged(
+        self, *, tenant_id: str, owner_user_id: str, session_id: str,
+        observed_bytes: int, observed_sha256: str,
+    ) -> UploadSession | None:
+        """Record a trusted transfer adapter's independently measured bytes.
+
+        This is a ledger operation, not a storage read or a client endpoint.
+        A matching manifest alone does not prove that an object exists.
+        """
+        identity = self._identity(tenant_id, owner_user_id)
+        if type(observed_bytes) is not int or observed_bytes < 0:
+            raise ValueError("Invalid observed byte count")
+        if (
+            not isinstance(observed_sha256, str)
+            or len(observed_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in observed_sha256)
+        ):
+            raise ValueError("Invalid observed SHA-256")
+        params = {
+            **identity, "session_id": str(UUID(session_id)),
+            "observed_bytes": observed_bytes, "observed_sha256": observed_sha256,
+        }
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                UPDATE public.artifact_upload_sessions
+                SET state = 'staged', received_bytes = :observed_bytes,
+                    updated_at = now()
+                WHERE session_id = :session_id
+                  AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
+                  AND state = 'receiving' AND expires_at > now()
+                  AND artifact_id IS NULL
+                  AND expected_bytes = :observed_bytes
+                  AND expected_sha256 = :observed_sha256
+                RETURNING session_id, tenant_id, owner_user_id, destination_id,
+                          recipe, state, manifest_sha256, expected_bytes,
+                          received_bytes, artifact_id, expected_sha256,
+                          lease_owner, lease_expires_at
+            """), params)
+            row = result.first()
+            if row is None:
+                await session.rollback()
+                return None
+            await session.commit()
+            return self._record(row)
+
+    async def claim_commit(
+        self, *, tenant_id: str, owner_user_id: str, session_id: str,
+        lease_expires_at: datetime,
+    ) -> UploadSession | None:
+        """Claim the initial commit exactly once; never replay uncertain writes.
+
+        The authenticated runtime supplies its bounded UTC execution deadline.
+        A fresh opaque lease token is generated here, not by the client.
+        """
+        identity = self._identity(tenant_id, owner_user_id)
+        if (
+            not isinstance(lease_expires_at, datetime)
+            or lease_expires_at.tzinfo is not None
+            or lease_expires_at <= datetime.utcnow()
+        ):
+            raise ValueError("Expected future naive UTC lease deadline")
+        params = {
+            **identity, "session_id": str(UUID(session_id)),
+            "lease_owner": str(uuid4()), "lease_expires_at": lease_expires_at,
+        }
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                UPDATE public.artifact_upload_sessions
+                SET state = 'committing', lease_owner = :lease_owner,
+                    lease_expires_at = LEAST(expires_at, :lease_expires_at),
+                    updated_at = now()
+                WHERE session_id = :session_id
+                  AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
+                  AND state = 'staged' AND expires_at > now()
+                  AND :lease_expires_at > now()
+                  AND artifact_id IS NULL AND lease_owner IS NULL
+                  AND received_bytes = expected_bytes
+                  AND expected_sha256 IS NOT NULL
+                RETURNING session_id, tenant_id, owner_user_id, destination_id,
+                          recipe, state, manifest_sha256, expected_bytes,
+                          received_bytes, artifact_id, expected_sha256,
+                          lease_owner, lease_expires_at
+            """), params)
+            row = result.first()
+            if row is None:
+                await session.rollback()
+                return None
+            await session.commit()
+            return self._record(row)
+
+    async def mark_expired_commit_uncertain(
+        self, *, tenant_id: str, owner_user_id: str, session_id: str,
+    ) -> UploadSession | None:
+        """Fence an abandoned commit for read-only reconciliation, not retry."""
+        identity = self._identity(tenant_id, owner_user_id)
+        params = {**identity, "session_id": str(UUID(session_id))}
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                UPDATE public.artifact_upload_sessions
+                SET state = 'reconcile_required', lease_owner = NULL,
+                    lease_expires_at = NULL, updated_at = now()
+                WHERE session_id = :session_id
+                  AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
+                  AND state = 'committing'
+                  AND (lease_expires_at IS NULL OR lease_expires_at <= now())
+                RETURNING session_id, tenant_id, owner_user_id, destination_id,
+                          recipe, state, manifest_sha256, expected_bytes,
+                          received_bytes, artifact_id, expected_sha256,
+                          lease_owner, lease_expires_at
+            """), params)
+            row = result.first()
+            if row is None:
+                await session.rollback()
+                return None
+            await session.commit()
+            return self._record(row)
+
     async def transition(
         self,
         *,
@@ -155,15 +276,17 @@ class UploadSessionRepository:
         expected_state: str,
         next_state: str,
         artifact_id: str | None = None,
+        lease_token: str | None = None,
     ) -> UploadSession | None:
         identity = self._identity(tenant_id, owner_user_id)
         session_uuid = str(UUID(session_id))
         allowed = {
             "created": {"receiving", "cancelled"},
-            "receiving": {"staged", "failed", "cancelled"},
-            "staged": {"committing", "cancelled"},
+            "receiving": {"failed", "cancelled"},
+            "staged": {"cancelled"},
             "committing": {"committed", "reconcile_required"},
-            "reconcile_required": {"committing", "committed", "failed"},
+            # Uncertain commits require an independently verified recovery
+            # adapter. Do not allow this generic transition to replay them.
         }
         if next_state not in allowed.get(expected_state, set()):
             raise ValueError("Illegal upload state transition")
@@ -171,9 +294,16 @@ class UploadSessionRepository:
             raise ValueError("Committed upload requires artifact_id")
         if next_state != "committed" and artifact_id is not None:
             raise ValueError("Artifact binding is allowed only at commit")
+        if expected_state == "committing":
+            if not lease_token:
+                raise ValueError("Active commit lease required")
+            lease_token = str(UUID(lease_token))
+        elif lease_token is not None:
+            raise ValueError("Lease token is only valid for a committing session")
         params = {
             **identity,
             "session_id": session_uuid,
+            "lease_token": lease_token,
             "expected_state": expected_state,
             "next_state": next_state,
             "artifact_id": artifact_id,
@@ -183,12 +313,17 @@ class UploadSessionRepository:
                 UPDATE public.artifact_upload_sessions
                 SET state = :next_state,
                     artifact_id = COALESCE(:artifact_id, artifact_id),
+                    lease_owner = NULL, lease_expires_at = NULL,
                     updated_at = now()
                 WHERE session_id = :session_id
                   AND tenant_id = :tenant_id
                   AND owner_user_id = :owner_user_id
                   AND state = :expected_state
                   AND expires_at > now()
+                  AND (
+                      :expected_state <> 'committing'
+                      OR (lease_owner = :lease_token AND lease_expires_at > now())
+                  )
                   AND (
                       :next_state <> 'committed'
                       OR (
@@ -207,7 +342,7 @@ class UploadSessionRepository:
                   )
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,
-                          received_bytes, artifact_id, expected_sha256
+                          received_bytes, artifact_id, expected_sha256, lease_owner, lease_expires_at
             """), params)
             row = result.first()
             if row is None:

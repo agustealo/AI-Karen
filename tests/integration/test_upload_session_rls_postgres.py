@@ -175,6 +175,8 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
         # SQL fixtures represent a previously staged transfer; the ledger is
         # not itself a Storage reader. No object-upload success is inferred.
         # Equal byte counts must not substitute for a pinned content digest.
+        key_token = str(uuid4())
+
         async def insert_candidate(expected_digest, artifact_digest):
             item = await repo.create_or_get(
                 tenant_id=tenant, owner_user_id=owner,
@@ -200,12 +202,13 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
                 })
                 await db.execute(text(
                     "UPDATE public.artifact_upload_sessions "
-                    "SET state='committing', received_bytes=expected_bytes "
+                    "SET state='committing', received_bytes=expected_bytes, "
+                    "lease_owner=:lease, lease_expires_at=now()+interval '10 minutes' "
                     "WHERE session_id=:session AND tenant_id=CAST(:tenant AS uuid) "
                     "AND owner_user_id=CAST(:owner AS uuid)"
                 ), {
                     "session": UUID(item.session_id),
-                    "tenant": tenant, "owner": owner,
+                    "tenant": tenant, "owner": owner, "lease": key_token,
                 })
                 await db.commit()
             return item, candidate_id
@@ -219,6 +222,7 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
                 tenant_id=tenant, owner_user_id=owner,
                 session_id=item.session_id, expected_state="committing",
                 next_state="committed", artifact_id=candidate_id,
+                lease_token=key_token,
             )
             if expected_digest is not None and expected_digest == artifact_digest:
                 assert result is not None
@@ -233,5 +237,52 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
                         "WHERE session_id=:session"
                     ), {"session": UUID(item.session_id)})).one()
                     assert state == "committing" and binding is None
+        # Exercise the new staging and lease path without manually setting
+        # state. This proves SQL admission, not a real object transfer.
+        import asyncio
+
+        staged_session = await repo.create_or_get(
+            tenant_id=tenant, owner_user_id=owner, destination_id="explorer",
+            recipe="store_only", idempotency_key_hash=uuid4().hex + uuid4().hex,
+            manifest_sha256=digest, expected_bytes=42, expected_sha256=digest,
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+        )
+        scope = dict(tenant_id=tenant, owner_user_id=owner, session_id=staged_session.session_id)
+        assert await repo.transition(
+            **scope, expected_state="created", next_state="receiving",
+        ) is not None
+        assert await repo.record_staged(**scope, observed_bytes=41, observed_sha256=digest) is None
+        assert await repo.record_staged(**scope, observed_bytes=42, observed_sha256="b" * 64) is None
+        assert await repo.record_staged(
+            **{**scope, "owner_user_id": foreign_owner},
+            observed_bytes=42, observed_sha256=digest,
+        ) is None
+        staged = await repo.record_staged(**scope, observed_bytes=42, observed_sha256=digest)
+        assert staged is not None and staged.state == "staged" and staged.received_bytes == 42
+        deadline = datetime.utcnow() + timedelta(minutes=5)
+        claims = await asyncio.gather(*(
+            repo.claim_commit(**scope, lease_expires_at=deadline) for _ in range(2)
+        ))
+        winners = [claim for claim in claims if claim is not None]
+        assert len(winners) == 1 and winners[0].lease_owner
+        assert await repo.transition(
+            **scope, expected_state="committing", next_state="reconcile_required",
+            lease_token=str(uuid4()),
+        ) is None
+        assert await repo.mark_expired_commit_uncertain(**scope) is None
+        async with factory() as db:
+            await db.execute(text(
+                "UPDATE public.artifact_upload_sessions "
+                "SET lease_expires_at=now()-interval '1 second' WHERE session_id=:session"
+            ), {"session": UUID(staged_session.session_id)})
+            await db.commit()
+        assert await repo.transition(
+            **scope, expected_state="committing", next_state="reconcile_required",
+            lease_token=winners[0].lease_owner,
+        ) is None
+        uncertain = await repo.mark_expired_commit_uncertain(**scope)
+        assert uncertain is not None and uncertain.state == "reconcile_required"
+        assert uncertain.lease_owner is None
+        assert await repo.claim_commit(**scope, lease_expires_at=deadline) is None
     finally:
         await engine.dispose()

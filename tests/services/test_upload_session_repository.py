@@ -72,6 +72,8 @@ def record():
         "received_bytes": 0,
         "artifact_id": None,
         "expected_sha256": None,
+        "lease_owner": None,
+        "lease_expires_at": None,
     }
 
 
@@ -144,7 +146,7 @@ async def test_committed_transition_requires_active_owner_matched_artifact():
     await repo.transition(
         tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
         expected_state="committing", next_state="committed",
-        artifact_id=artifact_id,
+        artifact_id=artifact_id, lease_token=SESSION,
     )
     statement = db.statements[0][0]
     assert "received_bytes = expected_bytes" in statement
@@ -156,6 +158,8 @@ async def test_committed_transition_requires_active_owner_matched_artifact():
     assert "artifact.sha256 = expected_sha256" in statement
     assert "expected_sha256 IS NOT NULL" in statement
     assert "expected_sha256 IS NULL" not in statement
+    assert "lease_owner = :lease_token" in statement
+    assert "lease_expires_at > now()" in statement
 
 
 @pytest.mark.asyncio
@@ -215,3 +219,35 @@ async def test_creation_pins_content_digest_to_idempotency_manifest():
             await repo.create_or_get(**params, expected_sha256=changed)
     with pytest.raises(ValueError, match="content SHA-256"):
         await repo.create_or_get(**params, expected_sha256="not-a-digest")
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected_state,next_state", [
+    ("receiving", "staged"), ("staged", "committing"),
+    ("reconcile_required", "committing"), ("reconcile_required", "committed"),
+])
+async def test_generic_transition_cannot_bypass_staging_claim_or_recovery(
+    expected_state, next_state,
+):
+    db = FakeSession(record())
+    repo = UploadSessionRepository(lambda: db)
+    with pytest.raises(ValueError, match="Illegal upload state"):
+        await repo.transition(
+            tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+            expected_state=expected_state, next_state=next_state,
+        )
+    assert db.statements == []
+
+
+@pytest.mark.asyncio
+async def test_commit_requires_lease_before_database_access():
+    db = FakeSession(record())
+    repo = UploadSessionRepository(lambda: db)
+    with pytest.raises(ValueError, match="Active commit lease"):
+        await repo.transition(
+            tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+            expected_state="committing", next_state="committed",
+            artifact_id=str(uuid4()),
+        )
+    assert db.statements == []
