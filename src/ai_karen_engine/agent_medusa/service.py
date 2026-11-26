@@ -112,7 +112,9 @@ class AgentMedusaService:
             logger.error(f"AgentMedusaService execution error: {e}", exc_info=True)
             self.tracer.add_event(trace.trace_id, "error", str(e))
             self.tracer.end_trace(trace.trace_id, success=False)
-            return to_safe_response(e, correlation_id=correlation_id)
+            return to_safe_response(
+                e, correlation_id=correlation_id, request_id=request.request_id,
+            )
 
 _service: Optional[AgentMedusaService] = None
 

@@ -445,7 +445,11 @@ def test_medusa_safe_error_does_not_log_upstream_exception_content(caplog):
     from ai_karen_engine.agent_medusa.contracts.safe_error import to_safe_response
 
     secret = "sk-private-upstream-value"
-    response = to_safe_response(RuntimeError(secret), correlation_id="corr-a")
+    response = to_safe_response(
+        RuntimeError(secret), correlation_id="corr-a", request_id="request-a",
+    )
+    assert response.request_id == "request-a"
+    assert "corr-a" in response.content
     assert secret not in caplog.text
     assert secret not in repr(response.to_dict())
     assert "RuntimeError" in [getattr(record, "error_type", "") for record in caplog.records]
@@ -1408,4 +1412,32 @@ async def test_coordinator_relinquishes_unverified_retirement_without_retry(ledg
     manager.mark_retirement_unverified.assert_awaited_once_with(request.request_id)
     manager.mark_failed.assert_not_awaited()
     manager.mark_cancelled.assert_not_awaited()
+    manager.mark_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("receipt_uncertain", [False, True])
+async def test_medusa_safe_failure_preserves_original_request_identity(receipt_uncertain):
+    from ai_karen_engine.agent_medusa.contracts.runtime_response import ResponseStatus
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, _, _, context = _request()
+    manager = SimpleNamespace(
+        register=AsyncMock(), mark_failed=AsyncMock(), mark_response=AsyncMock(),
+    )
+    coordinator = MedusaCoordinator(run_manager=manager)
+    secret = "private failure diagnostic"
+    failure = OutcomeStoreError(secret) if receipt_uncertain else RuntimeError(secret)
+    coordinator._handle_request = AsyncMock(side_effect=failure)
+
+    response = await coordinator.handle_request(request)
+
+    assert request.request_id != context.correlation_id
+    assert response.request_id == request.request_id
+    assert response.status is ResponseStatus.ERROR
+    assert context.correlation_id in response.content
+    assert secret not in repr(response.to_dict())
+    assert response.metadata["reconciliation_required"] is receipt_uncertain
+    assert response.metadata["recoverable"] is (not receipt_uncertain)
+    manager.mark_failed.assert_awaited_once_with(request.request_id, failure)
     manager.mark_response.assert_not_awaited()

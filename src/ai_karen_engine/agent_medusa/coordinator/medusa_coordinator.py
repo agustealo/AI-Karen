@@ -256,7 +256,11 @@ class MedusaCoordinator:
                     "error_type": type(exc).__name__,
                 },
             )
-            return to_safe_response(exc, correlation_id=requirements.correlation_id)
+            return to_safe_response(
+                exc,
+                correlation_id=requirements.correlation_id,
+                request_id=request.request_id,
+            )
         else:
             resolved = await self.run_manager.mark_response(
                 request.request_id,
