@@ -28,6 +28,28 @@ function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<
     && keys.every(key => Object.prototype.hasOwnProperty.call(value, key));
 }
 
+// PostgreSQL timestamps retain microseconds; Date.parse alone truncates them.
+// Compare millisecond time and remaining fractional digits separately so the
+// full supported timestamp range stays exact without BigInt or rounding.
+function evidenceInstant(value: unknown): { millis: number; micros: number } | null {
+  if (typeof value !== "string" || value.length > 64 || value.trim() !== value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1] ||
+      Number(match[4]) > 23 || Number(match[5]) > 59 || Number(match[6]) > 59) return null;
+  const millis = Date.parse(value);
+  if (!Number.isFinite(millis)) return null;
+  return { millis, micros: Number((match[7] ?? "").padEnd(6, "0").slice(3)) };
+}
+
+function compareEvidenceTime(left: NonNullable<ReturnType<typeof evidenceInstant>>,
+  right: NonNullable<ReturnType<typeof evidenceInstant>>): number {
+  return left.millis === right.millis ? left.micros - right.micros : left.millis - right.millis;
+}
+
 // Validate the raw wire payload before casting or comparing. Never include
 // unexpected fields or their values in a diagnostic.
 export function parseParticipation(value: unknown, runId: string, expectedStatus: "recorded" | "empty" = "recorded"): ParticipationReadback {
@@ -48,7 +70,7 @@ export function parseParticipation(value: unknown, runId: string, expectedStatus
         || typeof row.specialist_id !== "string" || !row.specialist_id.trim()
         || typeof row.step_id !== "string" || !row.step_id.trim()
         || typeof row.phase !== "string" || !Object.prototype.hasOwnProperty.call(phases, row.phase)
-        || typeof row.observed_at !== "string" || !Number.isFinite(Date.parse(row.observed_at))) {
+        || evidenceInstant(row.observed_at) === null) {
       throw new Error("Invalid or unexpected participation receipt");
     }
     ids.add(row.receipt_id);
@@ -155,7 +177,7 @@ export function verifyFreshSpecialistEvidence(
   // semantic chain and unique transition identities rather than UUID sort order.
   const expectedTransitions = [[null, "created"], ["created", "running"], ["running", "completed"]] as const;
   const transitionIds: string[] = [];
-  const times: number[] = [];
+  const times: NonNullable<ReturnType<typeof evidenceInstant>>[] = [];
   for (const [from, to] of expectedTransitions) {
     const matching = lifecycle.transitions.filter(item => record(item) && item.to_status === to);
     const item: unknown = matching.length === 1 ? matching[0] : undefined;
@@ -164,8 +186,8 @@ export function verifyFreshSpecialistEvidence(
         item.from_status !== from || item.source !== "runtime" || typeof item.event_at !== "string") {
       throw new Error("Invalid durable specialist transition");
     }
-    const time = Date.parse(item.event_at);
-    if (!Number.isFinite(time) || (times.length > 0 && time < times[times.length - 1])) {
+    const time = evidenceInstant(item.event_at);
+    if (!time || (times.length > 0 && compareEvidenceTime(time, times[times.length - 1]) < 0)) {
       throw new Error("Invalid durable lifecycle time");
     }
     times.push(time);
@@ -178,11 +200,14 @@ export function verifyFreshSpecialistEvidence(
   const returned = observations.receipts.filter(row => row.phase === "completed");
   if (observations.receipts.length !== 2 || entered.length !== 1 || returned.length !== 1 ||
       entered[0].specialist_id !== approved.agent || returned[0].specialist_id !== approved.agent ||
-      entered[0].step_id !== returned[0].step_id ||
-      Date.parse(entered[0].observed_at) < startedAt ||
-      Date.parse(returned[0].observed_at) > completedAt ||
-      Date.parse(entered[0].observed_at) > Date.parse(returned[0].observed_at)) {
+      entered[0].step_id !== returned[0].step_id) {
     throw new Error("Exact completed specialist invocation unavailable");
+  }
+  const enteredAt = evidenceInstant(entered[0].observed_at);
+  const returnedAt = evidenceInstant(returned[0].observed_at);
+  if (!enteredAt || !returnedAt || compareEvidenceTime(enteredAt, startedAt) < 0 ||
+      compareEvidenceTime(returnedAt, completedAt) > 0 || compareEvidenceTime(enteredAt, returnedAt) > 0) {
+    throw new Error("Specialist invocation time contradicts durable lifecycle");
   }
   // Share the production wire validator. This trial adds stronger
   // scenario-specific requirements; it does not create another receipt schema.
@@ -194,10 +219,13 @@ export function verifyFreshSpecialistEvidence(
   const row = tools.receipts[0];
   if (row.tool_name !== approved.tool || row.agent_id !== approved.agent ||
       row.step_id !== entered[0].step_id || row.policy_decision_id !== run.policy_decision_id ||
-      row.success !== true || row.result_sha256 === null ||
-      Date.parse(row.recorded_at) < Date.parse(entered[0].observed_at) ||
-      Date.parse(row.recorded_at) > Date.parse(returned[0].observed_at)) {
+      row.success !== true || row.result_sha256 === null) {
     throw new Error("Invalid or unlinked governed tool acknowledgment");
+  }
+  const recordedAt = evidenceInstant(row.recorded_at);
+  if (!recordedAt || compareEvidenceTime(recordedAt, enteredAt) < 0 ||
+      compareEvidenceTime(recordedAt, returnedAt) > 0) {
+    throw new Error("Governed tool acknowledgment time contradicts invocation");
   }
   return {
     stepId: entered[0].step_id, toolCallId: row.tool_call_id, toolReceiptId: row.receipt_id,

@@ -63,6 +63,36 @@ describe("ordinary specialist evidence contract", () => {
       expect(() => verifyFreshSpecialistEvidence(runId, approved, changed.run, changed.lifecycle, changed.participation, changed.tools)).toThrow();
     }
   });
+  it("preserves microsecond chronology and rejects timezone-less or invalid dates", () => {
+    const { run, lifecycle, participation, tools } = fixture();
+    const instant = (fraction: string) => "2026-11-26T00:00:00." + fraction + "Z";
+    const preciseLifecycle = { ...lifecycle, transitions: lifecycle.transitions.map((row, index) =>
+      ({ ...row, event_at: instant(["123100", "123200", "123900"][index]) })) };
+    const preciseParticipation = { ...participation, receipts: participation.receipts.map((row, index) =>
+      ({ ...row, observed_at: instant(["123300", "123700"][index]) })) };
+    const withToolTime = (recorded_at: string) => ({ ...tools, receipts: [{ ...tools.receipts[0], recorded_at }] });
+    const verify = (recorded_at: string, observations = preciseParticipation, transitions = preciseLifecycle) =>
+      verifyFreshSpecialistEvidence(runId, approved, run, transitions, observations, withToolTime(recorded_at));
+    expect(verify(instant("123500")).toolCallId).toBe(callId);
+    expect(verify("2026-11-25T19:00:00.123500-05:00").toolCallId).toBe(callId);
+    expect(verify(instant("123300")).toolCallId).toBe(callId);
+    expect(verify(instant("123700")).toolCallId).toBe(callId);
+    for (const invalid of [instant("123299"), instant("123701"), "2026-11-26T00:00:00.123500",
+      "2026-02-30T00:00:00.123500Z", "2026-11-26T24:00:00Z",
+      "2026-11-26T00:00:00.1235001Z", instant("123500") + "\n"]) {
+      expect(() => verify(invalid)).toThrow();
+    }
+    expect(() => verify(instant("123500"), { ...preciseParticipation, receipts: [
+      { ...preciseParticipation.receipts[0], observed_at: instant("123199") }, preciseParticipation.receipts[1],
+    ] })).toThrow();
+    expect(() => verify(instant("123500"), { ...preciseParticipation, receipts: [
+      preciseParticipation.receipts[0], { ...preciseParticipation.receipts[1], observed_at: instant("123901") },
+    ] })).toThrow();
+    expect(() => verify(instant("123500"), preciseParticipation, { ...preciseLifecycle, transitions: [
+      preciseLifecycle.transitions[0], { ...preciseLifecycle.transitions[1], event_at: instant("123099") },
+      preciseLifecycle.transitions[2],
+    ] })).toThrow();
+  });
   it("requires approved executor identity and attested request, not generic provider text", () => {
     const receipt = { runtime_request_id: runId, actual_provider: approved.provider, actual_model: approved.model,
       runtime_engine: approved.engine, response_source: "deepagents_verified_output" };
