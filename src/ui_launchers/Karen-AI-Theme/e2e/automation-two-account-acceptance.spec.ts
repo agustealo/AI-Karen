@@ -190,26 +190,76 @@ function participationPath(runId: string): string {
   return personalRunsPath + "/" + encodeURIComponent(runId) + "/participation";
 }
 
+function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === keys.length
+    && keys.every(key => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+// Validate the raw wire payload before casting or comparing. Never include
+// unexpected fields or their values in a diagnostic.
+function parseParticipation(value: unknown, runId: string): ParticipationReadback {
+  if (!hasExactKeys(value, ["run_id", "evidence_status", "receipts", "truncated", "response_source"])
+      || value.run_id !== runId || value.response_source !== "postgres_outcome_records"
+      || value.evidence_status !== "recorded" || value.truncated !== false
+      || !Array.isArray(value.receipts) || value.receipts.length === 0 || value.receipts.length > 100) {
+    throw new Error("Invalid or unexpected participation envelope");
+  }
+  const ids = new Set<string>();
+  let terminal = false;
+  for (const row of value.receipts) {
+    if (!hasExactKeys(row, ["receipt_id", "step_id", "specialist_id", "phase", "observed_at"])
+        || typeof row.receipt_id !== "string"
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.receipt_id)
+        || ids.has(row.receipt_id)
+        || typeof row.specialist_id !== "string" || !row.specialist_id.trim()
+        || typeof row.step_id !== "string" || !row.step_id.trim()
+        || typeof row.phase !== "string" || !Object.prototype.hasOwnProperty.call(phases, row.phase)
+        || typeof row.observed_at !== "string" || !Number.isFinite(Date.parse(row.observed_at))) {
+      throw new Error("Invalid or unexpected participation receipt");
+    }
+    ids.add(row.receipt_id);
+    terminal ||= row.phase !== "started";
+  }
+  if (!terminal) throw new Error("Terminal observation fixture required");
+  return value as ParticipationReadback;
+}
+
+function sameParticipation(left: ParticipationReadback, right: ParticipationReadback): boolean {
+  return left.run_id === right.run_id && left.receipts.length === right.receipts.length
+    && left.receipts.every((row, index) => {
+      const other = right.receipts[index];
+      return row.receipt_id === other.receipt_id && row.step_id === other.step_id
+        && row.specialist_id === other.specialist_id && row.phase === other.phase
+        && row.observed_at === other.observed_at;
+    });
+}
+
 async function readParticipation(page: Page, origin: string, runId: string): Promise<ParticipationReadback> {
   const response = await page.request.get(origin + participationPath(runId), { maxRedirects: 0 });
   expect(response.status(), "Owner participation read must return 200").toBe(200);
-  const receipt = await response.json() as ParticipationReadback;
-  expect(receipt.run_id === runId).toBe(true);
-  expect(receipt.response_source).toBe("postgres_outcome_records");
-  expect(receipt.evidence_status).toBe("recorded");
-  expect(receipt.truncated, "Fixture must have complete bounded receipt inventory").toBe(false);
-  expect(Array.isArray(receipt.receipts) && receipt.receipts.length > 0 && receipt.receipts.length <= 100).toBe(true);
-  expect(new Set(receipt.receipts.map(row => row.receipt_id)).size).toBe(receipt.receipts.length);
-  for (const row of receipt.receipts) {
-    expect(typeof row.specialist_id === "string" && row.specialist_id.length > 0).toBe(true);
-    expect(typeof row.step_id === "string" && row.step_id.length > 0).toBe(true);
-    expect(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.receipt_id)).toBe(true);
-    expect(Object.prototype.hasOwnProperty.call(phases, row.phase)).toBe(true);
-    expect(Number.isFinite(Date.parse(row.observed_at))).toBe(true);
-  }
-  expect(receipt.receipts.some(row => row.phase !== "started"), "Terminal observation fixture required").toBe(true);
-  return receipt;
+  return parseParticipation(await response.json(), runId);
 }
+
+// Pure negative control: synthetic test-only values, no authenticated host.
+test("ARM-05C.5B rejects overbroad receipt projections", () => {
+  const row = {
+    receipt_id: "00000000-0000-5000-8000-000000000001",
+    step_id: "step", specialist_id: "specialist", phase: "completed",
+    observed_at: "2026-01-01T00:00:00Z",
+  };
+  const envelope = {
+    run_id: "run", evidence_status: "recorded", receipts: [row],
+    truncated: false, response_source: "postgres_outcome_records",
+  };
+  expect(parseParticipation(envelope, "run").receipts).toHaveLength(1);
+  expect(() => parseParticipation({ ...envelope, metadata: "test-only" }, "run"))
+    .toThrow("Invalid or unexpected participation envelope");
+  expect(() => parseParticipation({ ...envelope, receipts: [{ ...row, payload: "test-only" }] }, "run"))
+    .toThrow("Invalid or unexpected participation receipt");
+  expect(() => parseParticipation({ ...envelope, receipts: [row, row] }, "run"))
+    .toThrow("Invalid or unexpected participation receipt");
+});
 
 async function verifyParticipationProjection(
   page: Page, origin: string, own: string, foreign: string, expected: ParticipationReadback,
@@ -233,7 +283,8 @@ async function verifyParticipationProjection(
   const observed = await pending;
   expect(observed.status()).toBe(200);
   // Compare the actual UI request with a separate authenticated read.
-  expect(await observed.json()).toEqual(expected);
+  expect(sameParticipation(parseParticipation(await observed.json(), own), expected),
+    "UI request must match independent receipt readback").toBe(true);
   const region = root.getByRole("region", { name: "Recorded specialist participation" });
   await expect(region).toBeVisible();
   await expect(region.getByText(/do not prove inference, external actions, or overall task success/)).toBeVisible();
@@ -287,7 +338,8 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
     await verifyParticipationProjection(page, origin, own, foreign, expected);
     // Reopen after a fresh document load; selection persistence is not claimed.
     await page.goto(origin + "/dashboard");
-    expect(await readParticipation(page, origin, own)).toEqual(expected);
+    expect(sameParticipation(await readParticipation(page, origin, own), expected),
+      "Durable receipt readback must survive reload").toBe(true);
     await verifyParticipationProjection(page, origin, own, foreign, expected);
     await openAutomationWorkspace(page, "My Account", false);
     await page.getByRole("button", { name: "Sign out", exact: true }).click();

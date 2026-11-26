@@ -35,6 +35,7 @@ import CronJobsPage from "@/components/automation/CronJobsPage";
 import AccountPage from "@/components/account/AccountPage";
 import GrowthPage from "@/components/growth/GrowthPage";
 import { SessionProvider, useSession } from "@/components/chat/SessionProvider";
+import { useVerifiedConversationHandoff } from "@/components/chat/useVerifiedConversationHandoff";
 import { CardStudioWorkspace } from "@/components/card-studio/CardStudioWorkspace";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
 
@@ -102,21 +103,8 @@ type ActiveView =
 type BackendStatus = "checking" | "ready" | "failed";
 
 function AgentWorkspaceView({ openChat }: { openChat: () => void }) {
-  const { loadSession, setWorkspaceRunId } = useSession();
-  const [handoffError, setHandoffError] = useState("");
-  const { workspaceRunId } = useSession();
-
-  const openConversation = useCallback(async (conversationId: string) => {
-    setHandoffError("");
-    try {
-      // Canonical session provider fetches and authorizes the conversation.
-      // Navigate only after a successful backend-owned load.
-      await loadSession(conversationId);
-      openChat();
-    } catch {
-      setHandoffError("Unable to open that conversation. It may be unavailable or you may not have access.");
-    }
-  }, [loadSession, openChat]);
+  const { setWorkspaceRunId, workspaceRunId } = useSession();
+  const { openConversation, handoffError } = useVerifiedConversationHandoff(openChat);
 
   return (
     <>
