@@ -4,6 +4,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import useAuth from "@/lib/useAuth";
 import { AutomationListNotice } from "@/components/automation/AutomationListNotice";
+import { GovernedToolReceiptList, type GovernedToolReceipt } from "./GovernedToolReceipts";
 import { AutomationWorkflowHeader } from "@/components/automation/AutomationWorkflowHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -86,22 +87,6 @@ type Task = {
   reviewedAt?: string | null;
   reviewedBy?: string | null;
   reviewNote?: string | null;
-};
-
-type GovernedToolReceipt = {
-  receipt_id: string;
-  tool_call_id: string | null;
-  tool_name: string | null;
-  tool_version: string | null;
-  policy_decision_id: string | null;
-  agent_id: string | null;
-  step_id: string | null;
-  success: boolean;
-  error_type: string | null;
-  result_sha256: string | null;
-  recorded_at: string | null;
-  execution_scope: "tool_runtime_acknowledgment";
-  independently_verified: false;
 };
 
 type ReviewHistoryEntry = {
@@ -720,19 +705,7 @@ export default function TasksPage() {
                     {toolReceiptsLoading ? <p>Loading backend receipts...</p>
                       : toolReceiptError ? <p className="text-destructive">{toolReceiptError}</p>
                       : toolReceipts.length === 0 ? <p>No governed Medusa tool receipts are recorded for this attempt.</p>
-                      : toolReceipts.map(receipt => (
-                        <div key={receipt.receipt_id} className="border-t pt-2 space-y-1">
-                          <p className="font-medium text-foreground">
-                            {receipt.tool_name || "Unnamed tool"}: {receipt.success ? "Runtime acknowledged success" : "Runtime reported failure"}
-                          </p>
-                          <p>Tool version: {receipt.tool_version || "Not reported"} · Agent: {receipt.agent_id || "Unknown"}</p>
-                          <p className="break-all">Step: {receipt.step_id || "Unknown"} · Receipt: {receipt.receipt_id}</p>
-                          <p className="break-all">Policy decision: {receipt.policy_decision_id || "Unknown"}</p>
-                          {receipt.result_sha256 && <p className="break-all">Result digest: {receipt.result_sha256}</p>}
-                          {receipt.recorded_at && <p>{new Date(receipt.recorded_at).toLocaleString()}</p>}
-                          {receipt.error_type && <p className="text-destructive">Error: {receipt.error_type}</p>}
-                        </div>
-                      ))}
+                      : <GovernedToolReceiptList receipts={toolReceipts} />}
                   </div>
                 )}
                 {task.lastError && (
