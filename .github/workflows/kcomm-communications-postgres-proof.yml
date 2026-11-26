@@ -6,6 +6,9 @@ on:
       - "supabase/migrations/*communications_inbox*.sql"
       - "tests/integration/test_communications_inbox_postgres.py"
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
+      - "src/ai_karen_engine/persistence/repositories/chat_run_repository.py"
+      - "src/ai_karen_engine/config/runtime.py"
+      - "supabase/migrations/*communications_attention*.sql"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
       - "src/ai_karen_engine/services/privacy_compliance.py"
       - "src/ai_karen_engine/services/communications_inbox.py"
@@ -20,6 +23,9 @@ on:
       - "supabase/migrations/**"
       - "tests/integration/test_communications_inbox_postgres.py"
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
+      - "src/ai_karen_engine/persistence/repositories/chat_run_repository.py"
+      - "src/ai_karen_engine/config/runtime.py"
+      - "supabase/migrations/*communications_attention*.sql"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
       - "src/ai_karen_engine/services/privacy_compliance.py"
       - "src/ai_karen_engine/services/communications_inbox.py"
@@ -62,6 +68,15 @@ jobs:
           test "${#migrations[@]}" = 1
           test "${migrations[0]}" = "supabase/migrations/20261126144509_77_communications_inbox.sql"
           sha256sum "supabase/migrations/20261126144509_77_communications_inbox.sql"
+      - name: Verify single committed producer migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e supabase/kcomm_02c_attention_marker_candidate.sql
+          mapfile -t migrations < <(find supabase/migrations -maxdepth 1 -type f -name '*communications_attention*.sql')
+          test "${#migrations[@]}" = 1
+          test "${migrations[0]}" = "supabase/migrations/20261126150739_78_communications_attention.sql"
+          sha256sum "supabase/migrations/20261126150739_78_communications_attention.sql"
       - name: Prove full canonical migration chain without optional client roles
         shell: bash
         run: |
@@ -74,7 +89,8 @@ jobs:
             docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d ai_karen < "$migration"
           done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
           test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.communications_inbox_entries'::regclass")" = t
-          echo "Full migration chain passed with FORCE RLS and no optional client roles."
+          test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='runtime_chat_runs' AND column_name='communications_attention_eligible_at'")" = 1
+          echo "Full migration chain and producer marker passed with FORCE RLS and no optional client roles."
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -107,8 +123,8 @@ jobs:
         run: |
           python -m compileall -q src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py src/ai_karen_engine/services/privacy_compliance.py tests/integration/test_communications_inbox_postgres.py
           pytest tests/integration/test_communications_inbox_postgres.py -q -rs
-          pytest tests/api_routes/test_communications_center_scope.py tests/api_routes/test_communications_inbox_contract.py -q -rs
+          pytest tests/api_routes/test_communications_center_scope.py tests/api_routes/test_communications_inbox_contract.py tests/api_routes/test_chat_run_repository.py -q -rs
       - name: Record evidence boundary
         if: always()
         run: |
-          echo "This workflow targets the canonical migration chain, scoped DDL, repository lifecycle and conversation privacy export/erasure against disposable PostgreSQL. Consult job and test results for actual acceptance; no deployed schema or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"
+          echo "This workflow targets the canonical migration chain, scoped DDL, repository lifecycle and conversation privacy export/erasure against disposable PostgreSQL. Consult job and test results for actual acceptance; producer migration is committed; no deployed schema, activation or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"

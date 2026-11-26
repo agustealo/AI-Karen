@@ -24,7 +24,7 @@ from ai_karen_engine.persistence.repositories.communications_inbox_repository im
     InboxConflict, InboxCursor, InboxEntry, InboxFilter, InboxNotFound, InboxOperation,
 )
 from ai_karen_engine.services.communications_inbox import (
-    CommunicationsAuthorizationError, CommunicationsInboxService,
+    CommunicationsAuthorizationError, CommunicationsInboxService, CommunicationsProducerUnavailable,
 )
 from ai_karen_engine.core.services.service_registry import get_service_registry
 from ai_karen_engine.services.audit.audit_logging import AuditEventType, get_audit_logger
@@ -257,6 +257,8 @@ def get_communications_inbox_service() -> CommunicationsInboxService:
 def _inbox_error(exc: Exception, correlation_id: str) -> HTTPException:
     if isinstance(exc, CommunicationsAuthorizationError):
         return HTTPException(status_code=403, detail="Communications permission denied")
+    if isinstance(exc, CommunicationsProducerUnavailable):
+        return HTTPException(status_code=503, detail="Communications producer unavailable")
     if isinstance(exc, InboxNotFound):
         return HTTPException(status_code=404, detail="Communications entry not found")
     if isinstance(exc, InboxConflict):
@@ -317,5 +319,25 @@ async def mutate_communications_inbox(
             operation=payload.operation, expected_revision=int(payload.expected_revision),
         )
         return InboxMutationResponse(entry=_inbox_entry_response(result.entry), changed=result.changed)
+    except Exception as exc:
+        raise _inbox_error(exc, correlation_id) from None
+
+
+class InboxReconciliationResponse(BaseModel):
+    # This is only the count committed by this bounded operation, not proof
+    # that the entire queue has been drained or a notification was delivered.
+    admitted_count: int
+
+
+@router.post("/inbox/reconcile", response_model=InboxReconciliationResponse)
+async def reconcile_communications_inbox(
+    request: Request,
+    user: UserData = Depends(get_current_user),
+    service: CommunicationsInboxService = Depends(get_communications_inbox_service),
+) -> InboxReconciliationResponse:
+    correlation_id = get_request_correlation_id(request)
+    try:
+        count = await service.reconcile_owned(user=user, correlation_id=correlation_id)
+        return InboxReconciliationResponse(admitted_count=count)
     except Exception as exc:
         raise _inbox_error(exc, correlation_id) from None

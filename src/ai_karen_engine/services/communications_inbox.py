@@ -4,6 +4,7 @@ from __future__ import annotations
 import logging
 from uuid import UUID
 
+from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
 from ai_karen_engine.core.security.auth_config import auth_config
@@ -27,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 class CommunicationsAuthorizationError(PermissionError):
     """An active, verified principal with explicit inbox permission is required."""
+
+
+class CommunicationsProducerUnavailable(RuntimeError):
+    """Terminal projection has not been activated."""
 
 
 class CommunicationsInboxService:
@@ -92,3 +97,16 @@ class CommunicationsInboxService:
             "changed": result.changed,
         })
         return result
+
+    async def reconcile_owned(self, *, user: UserData, correlation_id: str) -> int:
+        """Explicit owner-scoped recovery, not arbitrary notification creation."""
+        self._authorize(user, Permission.COMMUNICATIONS_READ, correlation_id)
+        tenant_id, user_id = self._authorize(user, Permission.COMMUNICATIONS_WRITE, correlation_id)
+        if not get_runtime_settings().features.enable_communications_terminal_producer:
+            raise CommunicationsProducerUnavailable("Communications producer unavailable")
+        count = await self._repository.reconcile_pending(tenant_id=tenant_id, user_id=user_id)
+        logger.info("communications.inbox.reconciliation_committed", extra={
+            "tenant_id": tenant_id, "user_id": user_id,
+            "correlation_id": correlation_id, "admitted_count": count,
+        })
+        return count
