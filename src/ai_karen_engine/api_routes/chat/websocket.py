@@ -7,6 +7,8 @@ telemetry remain authoritative in :class:`ChatRuntime`.
 The historical ``AsyncStreamProcessor`` inference path is intentionally not
 referenced here. Legacy stream-management URLs remain as honest ``410 Gone``
 compatibility boundaries instead of silently producing simulated model output.
+Legacy collaboration diagnostics are unavailable until a live, tenant-scoped
+transport authority exists; constructing a fresh gateway cannot prove state.
 """
 
 from __future__ import annotations
@@ -37,7 +39,6 @@ from ai_karen_engine.api_routes.chat.execution_identity import (
 )
 from ai_karen_engine.auth.auth_service import get_auth_service, user_account_to_dict
 from ai_karen_engine.auth.cookie_manager import get_cookie_manager
-from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.api_routes.chat.runtime import (
     _sse,
     _terminalized_chat_json_events,
@@ -55,7 +56,6 @@ from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
 )
 from ai_karen_engine.core.security.auth_config import auth_config
 from ai_karen_engine.core.services.dependencies import bypass_user_context_func
-from ai_karen_engine.services.streaming.websocket_gateway import WebSocketGateway
 from ai_karen_engine.utils.chat_helpers import (
     normalize_session_id as normalize_chat_session_id,
 )
@@ -94,19 +94,6 @@ class WebSocketStatsResponse(BaseModel):
     typing_users: int
     online_users: int
     queue_stats: Dict[str, Any]
-
-
-def get_runtime_service():
-    return get_chat_runtime()
-
-
-async def get_websocket_gateway(
-    runtime_service=Depends(get_runtime_service),
-) -> WebSocketGateway:
-    """Resolve the existing transport gateway without creating execution authority."""
-
-    orchestrator = await runtime_service.get_orchestrator()
-    return WebSocketGateway(orchestrator)
 
 
 def _normalize_session_id(value: Optional[str]) -> str:
@@ -630,13 +617,25 @@ async def model_events_sse(
     )
 
 
+def _legacy_gateway_unavailable() -> JSONResponse:
+    """Do not project empty or cross-principal state as live telemetry."""
+    return JSONResponse(
+        status_code=503,
+        content={
+            "detail": "Legacy collaboration transport state is unavailable",
+            "error_code": "COLLABORATION_TRANSPORT_UNAVAILABLE",
+            "runtime_authority": "ChatRuntime",
+        },
+        headers={"Cache-Control": "no-store"},
+    )
+
+
 @router.get("/stats", response_model=WebSocketStatsResponse)
 async def get_websocket_stats(
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     _require_admin(user)
-    return WebSocketStatsResponse(**gateway.get_connection_stats())
+    return _legacy_gateway_unavailable()
 
 
 @router.get("/stream/metrics")
@@ -655,136 +654,79 @@ async def list_active_streams(
     return _retired_stream_control()
 
 
-@router.get("/presence/{user_id}")
-async def get_user_presence(
-    user_id: str,
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
-    user: Dict[str, Any] = Depends(bypass_user_context_func),
-):
-    _require_self_or_admin(user, user_id)
-    presence = gateway.presence_manager.get_presence(user_id)
-    return {"user_id": user_id, "presence": presence}
-
-
+# Static route must precede the dynamic user ID path.
 @router.get("/presence/online")
 async def get_online_users(
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     _require_admin(user)
-    online_users = gateway.presence_manager.get_online_users()
-    return {"online_users": online_users, "count": len(online_users)}
+    return _legacy_gateway_unavailable()
+
+
+@router.get("/presence/{user_id}")
+async def get_user_presence(
+    user_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    _require_self_or_admin(user, user_id)
+    return _legacy_gateway_unavailable()
 
 
 @router.get("/typing/{conversation_id}")
 async def get_typing_users(
     conversation_id: str,
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     require_execution_identity(user)
-    typing_users = gateway.typing_manager.get_typing_users(conversation_id)
-    return {
-        "conversation_id": conversation_id,
-        "typing_users": typing_users,
-        "count": len(typing_users),
-    }
+    # Identity alone does not authorize an arbitrary conversation. Until the
+    # canonical transport can prove ownership, no typing state is disclosed.
+    return _legacy_gateway_unavailable()
 
 
 @router.get("/queue/{user_id}")
 async def get_queued_messages(
     user_id: str,
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     _require_self_or_admin(user, user_id)
-    queued_messages = await gateway.message_queue.get_queued_messages(user_id)
-    return {
-        "user_id": user_id,
-        "queued_messages": [
-            {
-                "message_id": msg.message.message_id,
-                "type": msg.message.type.value,
-                "content": msg.message.data,
-                "queued_at": msg.queued_at.isoformat(),
-                "expires_at": msg.expires_at.isoformat() if msg.expires_at else None,
-                "delivery_attempts": msg.delivery_attempts,
-            }
-            for msg in queued_messages
-        ],
-        "count": len(queued_messages),
-    }
+    return _legacy_gateway_unavailable()
 
 
 @router.delete("/queue/{user_id}")
 async def clear_queued_messages(
     user_id: str,
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     _require_self_or_admin(user, user_id)
-    await gateway.message_queue.clear_queued_messages(user_id)
-    return {"success": True, "user_id": user_id}
+    # No authenticated durable queue owner: never claim a deletion occurred.
+    return _legacy_gateway_unavailable()
 
 
 @router.get("/connections/{user_id}")
 async def get_user_connections(
     user_id: str,
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     _require_self_or_admin(user, user_id)
-    connections = gateway.get_user_connections(user_id)
-    return {"user_id": user_id, "connections": connections, "count": len(connections)}
+    return _legacy_gateway_unavailable()
 
 
 @router.get("/connections/conversation/{conversation_id}")
 async def get_conversation_connections(
     conversation_id: str,
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     _require_admin(user)
-    connections = gateway.get_conversation_connections(conversation_id)
-    return {
-        "conversation_id": conversation_id,
-        "connections": connections,
-        "count": len(connections),
-    }
+    return _legacy_gateway_unavailable()
 
 
 @router.get("/health")
 async def websocket_health_check(
-    gateway: WebSocketGateway = Depends(get_websocket_gateway),
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     require_execution_identity(user)
-    try:
-        stats = gateway.get_connection_stats()
-        return {
-            "status": "healthy",
-            "runtime_authority": "ChatRuntime",
-            "legacy_stream_processor": "retired",
-            "websocket_gateway": {
-                "status": "running",
-                "connections": stats.get("total_connections", 0),
-                "authenticated_users": stats.get("unique_users", 0),
-            },
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-        }
-    except Exception as exc:
-        logger.exception(
-            "WebSocket health check failed",
-            extra={"error_type": type(exc).__name__},
-        )
-        return JSONResponse(
-            status_code=503,
-            content={
-                "status": "error",
-                "runtime_authority": "ChatRuntime",
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-            },
-        )
+    # This compatibility endpoint is not operational liveness or readiness.
+    return _legacy_gateway_unavailable()
 
 
 __all__ = [
