@@ -545,6 +545,9 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     const hintPending = page.waitForResponse(res => res.request() === ownerRequest, { timeout: 20_000 });
     const readPending = page.waitForResponse(res => inboxRequest(res.request()), { timeout: 20_000 });
     const foreignPending = request.get(origin + waitPath, { headers: aHeaders, timeout: 25_000, maxRedirects: 0 });
+    // Attach rejection observers immediately, even if an earlier assertion
+    // fails. Awaiting the original promises still enforces every requirement.
+    for (const pending of [hintPending, readPending, foreignPending]) void pending.catch(() => {});
     mark("broker_admission");
     await witness([ownerA, ownerB], 1);
     mark("commit_read");
@@ -556,8 +559,21 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     expect(read.changed).toBe(true);
     mark("hint_order");
     const hint = await hintPending;
+    test.info().annotations.push({ type: "kcomm-hint-http", description: String(hint.status()) });
+    const hintBody = await hint.json().catch(() => null);
+    // Classify only exact known public error codes/messages. Never include
+    // the body itself in a diagnostic annotation or public CI output.
+    const kind = hint.status() === 200 ? "none"
+      : hintBody?.error_code === "BACKEND_UPSTREAM_UNAVAILABLE" ? "proxy_unavailable"
+      : hintBody?.error_code === "BACKEND_REDIRECT_REJECTED" ? "redirect_rejected"
+      : hintBody?.detail === "Inbox invalidation unavailable" ? "invalidation_unavailable"
+      : hintBody?.detail === "Active session unavailable" ? "session_unavailable"
+      : hint.status() === 401 ? "auth_required"
+      : hint.status() === 403 ? "permission_denied"
+      : "other";
+    test.info().annotations.push({ type: "kcomm-hint-failure", description: kind });
     expect(hint.status()).toBe(200);
-    expect(await hint.json()).toEqual({ changed: true });
+    expect(hintBody).toEqual({ changed: true });
     expect(hint.headers()["cache-control"]).toBe("no-store");
     const reread = await readPending;
     expect(reread.status()).toBe(200);

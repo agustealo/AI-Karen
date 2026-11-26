@@ -28,6 +28,10 @@ _SCENARIOS = {
     "KCOMM-03G: committed change delivery, cancellation and live session revocation": "KCOMM-03G",
 }
 _STATUSES = {"passed", "failed", "timedOut", "skipped", "interrupted", "expected", "unexpected", "flaky"}
+_HINT_FAILURES = {
+    "none", "proxy_unavailable", "redirect_rejected", "invalidation_unavailable",
+    "session_unavailable", "auth_required", "permission_denied", "other",
+}
 _BROWSER_STAGES = {
     "login", "initial_projection", "broker_admission", "commit_read",
     "hint_order", "foreign_idle", "cancel", "reopen", "revoke",
@@ -58,6 +62,12 @@ def report_failure_summary(report):
                     ]
                     last = stages[-1] if stages else "unknown"
                     print(f"KCOMM_BROWSER_DIAGNOSTIC scenario={scenario} status={status} stage={last}")
+                    for item in test.get("annotations", []):
+                        value = item.get("description")
+                        if item.get("type") == "kcomm-hint-http" and isinstance(value, str) and re.fullmatch(r"[1-5][0-9]{2}", value):
+                            print("KCOMM_BROWSER_HINT_HTTP status=" + value)
+                        if item.get("type") == "kcomm-hint-failure" and isinstance(value, str) and value in _HINT_FAILURES:
+                            print("KCOMM_BROWSER_HINT_FAILURE kind=" + value)
                     for result in test.get("results", []):
                         print("KCOMM_BROWSER_RESULT status=" + safe_status(result.get("status")))
                         positions = set()
