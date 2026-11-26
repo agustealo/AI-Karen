@@ -426,3 +426,93 @@ async def test_admitted_specialist_emits_correlated_start_and_terminal_event(fai
         assert event.agent_id == "researcher"
         assert event.correlation_id == "corr-a"
         assert event.metadata["step_id"] == step.id
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mutation",
+    ["unauthenticated", "revoked", "foreign_user", "foreign_tenant",
+     "foreign_request", "foreign_correlation", "unregistered_plan",
+     "substituted_meter", "wrong_specialist", "widened_child"],
+)
+async def test_participation_writer_rejects_invalid_authority_before_io(mutation):
+    from ai_karen_engine.core.runtime.outcome.contracts import (
+        SpecialistParticipationPhase,
+    )
+    from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
+
+    _, root, meter, context = _request(allowed_agents=["researcher", "analyst"])
+    child = replace(root, allowed_agents=["researcher"])
+    context.register_runtime_model_child_plan(child, meter)
+    specialist_id = "researcher"
+    if mutation == "unauthenticated":
+        context.authenticated_user = None
+    elif mutation == "revoked":
+        context.authenticated_user.is_active = False
+    elif mutation == "foreign_user":
+        context.user_id = "other-user"
+    elif mutation == "foreign_tenant":
+        context.tenant_id = "other-tenant"
+    elif mutation == "foreign_request":
+        context.request_id = "other-request"
+    elif mutation == "foreign_correlation":
+        context.correlation_id = "other-correlation"
+    elif mutation == "unregistered_plan":
+        child = replace(child)
+    elif mutation == "substituted_meter":
+        meter = ExecutionBudgetMeter(root.budget)
+        meter.start()
+    elif mutation == "wrong_specialist":
+        specialist_id = "analyst"
+    elif mutation == "widened_child":
+        child.allowed_agents.append("analyst")
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    with pytest.raises(PermissionError):
+        await OutcomeRecorder(store=store).record_specialist_participation_async(
+            context=context, plan=child, meter=meter,
+            step_id="step-a", specialist_id=specialist_id,
+            phase=SpecialistParticipationPhase.STARTED,
+        )
+    store.save_unique_outcome_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["stored", "failed", "missing"])
+async def test_participation_writer_acknowledges_only_completed_strict_append(mode):
+    from ai_karen_engine.core.runtime.outcome.contracts import (
+        SpecialistParticipationPhase,
+    )
+    from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    _, root, meter, context = _request()
+    child = replace(root, allowed_agents=["researcher"])
+    context.register_runtime_model_child_plan(child, meter)
+    observed = []
+
+    async def append(payload):
+        observed.append(payload)
+        if mode == "failed":
+            raise OutcomeStoreError("append failed")
+
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock(side_effect=append))
+    recorder = OutcomeRecorder(store=None if mode == "missing" else store)
+    kwargs = dict(
+        context=context, plan=child, meter=meter,
+        step_id="step-a", specialist_id="researcher",
+        phase=SpecialistParticipationPhase.COMPLETED,
+    )
+    if mode == "stored":
+        receipt = await recorder.record_specialist_participation_async(**kwargs)
+        assert observed == [receipt.to_evidence_payload()]
+        assert receipt.tenant_id == context.tenant_id
+        assert receipt.user_id == context.user_id
+        assert receipt.trajectory_id == context.request_id
+        assert receipt.correlation_id == context.correlation_id
+    else:
+        with pytest.raises(OutcomeStoreError):
+            await recorder.record_specialist_participation_async(**kwargs)
+    if mode == "missing":
+        store.save_unique_outcome_async.assert_not_awaited()
+    else:
+        store.save_unique_outcome_async.assert_awaited_once()

@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
 from typing import Any
+from uuid import NAMESPACE_URL, uuid5
 
 
 class ExecutionStatus(str, Enum):
@@ -116,3 +117,89 @@ class OutcomeRecord:
         if self.metadata:
             data["metadata"] = self.metadata
         return data
+
+
+class SpecialistParticipationPhase(str, Enum):
+    """Observed specialist boundary, not a task outcome or user reward."""
+
+    STARTED = "started"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    INTERRUPTED = "interrupted"
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True, slots=True)
+class SpecialistParticipationReceipt:
+    """Scoped, deterministic observation identity for canonical outcome storage.
+
+    Construction validates shape only; authenticated authority and durable
+    acknowledgement must be enforced by the runtime writer.
+    """
+
+    tenant_id: str
+    user_id: str
+    trajectory_id: str
+    correlation_id: str
+    step_id: str
+    specialist_id: str
+    phase: SpecialistParticipationPhase
+    observed_at: datetime
+
+    def __post_init__(self) -> None:
+        for name in (
+            "tenant_id",
+            "user_id",
+            "trajectory_id",
+            "correlation_id",
+            "step_id",
+            "specialist_id",
+        ):
+            value = getattr(self, name)
+            if (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+                or len(value) > 256
+                or any(ord(char) < 32 or ord(char) == 127 for char in value)
+            ):
+                raise ValueError(f"Invalid specialist receipt {name}")
+        if not isinstance(self.phase, SpecialistParticipationPhase):
+            raise ValueError("Invalid specialist receipt phase")
+        if (
+            not isinstance(self.observed_at, datetime)
+            or self.observed_at.utcoffset() is None
+        ):
+            raise ValueError("Specialist receipt requires an aware timestamp")
+
+    @property
+    def receipt_id(self) -> str:
+        # Length-prefix fields so separators in legitimate IDs cannot collide.
+        fields = (
+            self.tenant_id,
+            self.user_id,
+            self.trajectory_id,
+            self.step_id,
+            self.phase.value,
+        )
+        identity = "".join(f"{len(value)}:{value}" for value in fields)
+        return str(uuid5(NAMESPACE_URL, "karen:agent.participation.v1:" + identity))
+
+    def to_evidence_payload(self) -> dict[str, Any]:
+        """Serialize an observation without inventing a task outcome."""
+        return {
+            "outcome_id": self.receipt_id,
+            "source": "runtime.execution",
+            "tenant_id": self.tenant_id,
+            "user_id": self.user_id,
+            "trajectory_id": self.trajectory_id,
+            "correlation_id": self.correlation_id,
+            "recorded_at": self.observed_at.isoformat(),
+            "metadata": {
+                "event_type": "agent.specialist.participation",
+                "receipt_version": "specialist-participation.v1",
+                "step_id": self.step_id,
+                "specialist_id": self.specialist_id,
+                "phase": self.phase.value,
+            },
+        }
