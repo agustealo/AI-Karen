@@ -80,6 +80,7 @@ class ExecutionRun:
     durable_registered: bool = False
     heartbeat_task: asyncio.Task[None] | None = field(default=None, repr=False)
     cancel_admission_pending: bool = field(default=False, repr=False)
+    cancel_signal_sent: bool = field(default=False, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -480,9 +481,13 @@ class MedusaRunManager:
                 self._runs.get(run.run_id) is run
                 and run.status is ExecutionRunStatus.CANCELLING
                 and not run.task.done()
-                and not run.task.cancelling()
+                and not run.cancel_signal_sent
             ):
-                run.task.cancel()
+                # Cleanup may consume CancelledError and call uncancel().
+                # A subsequent heartbeat must not interrupt that cleanup.
+                run.cancel_signal_sent = True
+                if not run.task.cancelling():
+                    run.task.cancel()
 
     async def cancel(
         self,
@@ -501,20 +506,26 @@ class MedusaRunManager:
                 local_run, audit_event_ref=audit_event_ref
             ):
                 raise RunNotCancellableError(f"Run {run_id} is not cancellable")
-            if local_run.shared_registered:
-                try:
-                    await self._distributed_store.request_cancel(
-                        run_id=run_id,
-                        tenant_id=tenant_id,
-                    )
-                except DistributedRunStoreUnavailable:
-                    logger.warning(
-                        "Shared cancel state unavailable; cancelling local owner task directly",
-                        extra={"run_id": run_id},
-                    )
-                except DistributedRunNotCancellable:
-                    pass
-            await self._signal_local_cancellation(local_run)
+            try:
+                if local_run.shared_registered:
+                    try:
+                        await self._distributed_store.request_cancel(
+                            run_id=run_id,
+                            tenant_id=tenant_id,
+                        )
+                    except DistributedRunStoreUnavailable:
+                        logger.warning(
+                            "Shared cancel state unavailable; cancelling local owner task directly",
+                            extra={"run_id": run_id},
+                        )
+                    except DistributedRunNotCancellable:
+                        pass
+                await self._signal_local_cancellation(local_run)
+            except asyncio.CancelledError:
+                # Requester disconnect does not revoke already admitted intent.
+                # Preserve the caller's cancellation, but signal the owned task.
+                await self._signal_local_cancellation(local_run)
+                raise
             return await self.get(run_id=run_id, tenant_id=tenant_id)
 
         if await self._distributed_available():
@@ -788,8 +799,17 @@ class MedusaRunManager:
         try:
             while True:
                 await asyncio.sleep(self._settings.run_heartbeat_interval_seconds)
-                if not run.shared_registered:
-                    return
+                async with self._lock:
+                    if (
+                        not run.shared_registered
+                        or self._runs.get(run.run_id) is not run
+                        or run.task.done()
+                        or run.status not in {
+                            ExecutionRunStatus.RUNNING,
+                            ExecutionRunStatus.CANCELLING,
+                        }
+                    ):
+                        return
                 try:
                     cancel_requested = await self._distributed_store.heartbeat(
                         run_id=run.run_id,
@@ -878,7 +898,9 @@ class MedusaRunManager:
                                 return
                         continue
                     await self._signal_local_cancellation(run)
-                    return
+                    # Cancellation is intent, not retirement. Keep the claim
+                    # alive while the owned task is still performing cleanup.
+                    # The terminal transition owns heartbeat shutdown.
         except asyncio.CancelledError:
             raise
         except Exception as exc:

@@ -109,13 +109,20 @@ async def _run_acceptance() -> None:
     )
     started = asyncio.Event()
     cancelled = asyncio.Event()
+    release_retirement = asyncio.Event()
 
     async def workload() -> None:
         started.set()
         try:
             await asyncio.sleep(30)
         except asyncio.CancelledError:
+            # Emulate cancellation-aware native cleanup that consumes the
+            # cancellation count but has not yet retired its resources.
+            current = asyncio.current_task()
+            assert current is not None
+            current.uncancel()
             cancelled.set()
+            await release_retirement.wait()
             raise
 
     task = asyncio.create_task(workload())
@@ -175,17 +182,24 @@ async def _run_acceptance() -> None:
         )
         assert shared_before["status"] == "running"
 
-        # The actual lease-owning manager must recover the Redis signal,
-        # interrupt its real asyncio task, and never claim terminality first.
-        with pytest.raises(asyncio.CancelledError):
-            await asyncio.wait_for(task, timeout=6)
-        assert cancelled.is_set()
+        # Recover the lost Redis signal and observe real task interruption,
+        # but deliberately hold cleanup beyond the original claim lifetime.
+        await asyncio.wait_for(cancelled.wait(), timeout=6)
+        await asyncio.sleep(owner_settings.run_lease_ttl_seconds + 1)
+        assert not task.done(), "Repeated cancellation interrupted cleanup"
+        assert task.cancelling() == 0
+        assert run.heartbeat_task is not None and not run.heartbeat_task.done()
+        assert await redis.client.get(f"{prefix}:claim:{run_id}") == owner_settings.worker_id
         shared_after = await owner._distributed_store.get(
             run_id=run_id, tenant_id=tenant_a
         )
         assert shared_after["status"] == "cancelling"
+        assert shared_after["distributed_control"]["lease_alive"] is True
         pending = await ledger.get(run_id=run_id, tenant_id=tenant_a)
         assert pending is not None and pending["status"] == "cancellation_requested"
+        release_retirement.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=6)
 
         # Explicitly emulate the coordinator's observed-task-finalizer after
         # actual CancelledError; requesting cancellation alone is insufficient.
@@ -193,6 +207,8 @@ async def _run_acceptance() -> None:
         final = await ledger.get(run_id=run_id, tenant_id=tenant_a)
         assert final is not None and final["status"] == "cancelled"
         assert final["audit_event_ref"] == audit_ref
+        assert not await redis.client.exists(f"{prefix}:claim:{run_id}")
+        assert run.heartbeat_task is None
 
         connection = await asyncpg.connect(os.environ["DATABASE_URL"])
         try:
