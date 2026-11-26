@@ -86,6 +86,8 @@ class Permission(str, Enum):
     DATA_WRITE = "data:write"
     DATA_DELETE = "data:delete"
     DATA_EXPORT = "data:export"
+    # Create a new owner-scoped inert artifact; never general data mutation.
+    ARTIFACT_CREATE_OWN = "artifact:create_own"
 
     # Card Studio inert, owner-scoped declarative templates.
     CARD_STUDIO_READ = "card_studio:read"
@@ -241,6 +243,7 @@ def _default_role_entries() -> Dict[str, Dict[str, Any]]:
                 Permission.CHANNEL_LINK.value,
                 Permission.BROWSER.value,
                 Permission.DATA_READ.value,
+                Permission.ARTIFACT_CREATE_OWN.value,
                 Permission.COMMUNICATIONS_READ.value,
                 Permission.COMMUNICATIONS_WRITE.value,
                 Permission.PLANNER_READ.value,

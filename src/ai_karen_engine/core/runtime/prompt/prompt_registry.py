@@ -91,6 +91,7 @@ class PromptRegistry:
         self._ensure_builtin_prompts()
         self._ensure_builtin_memory_candidate_prompt()
         self._ensure_builtin_deepagents_research_prompt()
+        self._ensure_builtin_generated_text_prompt()
     
     @staticmethod
     def _storage_key(prompt_id: str, version: PromptVersion) -> str:
@@ -298,6 +299,39 @@ class PromptRegistry:
         self._version_index.setdefault(prompt.prompt_id, {})[version] = storage_key
         self._active_versions[prompt.prompt_id] = version
         self._sync_default_flags(prompt.prompt_id)
+
+    def _ensure_builtin_generated_text_prompt(self) -> None:
+        """Register the inert deliverable-generation contract."""
+        prompt_id = "karen.artifact.text.create"
+        version = PromptVersion.parse("v1.0.0")
+        if version in self._version_index.get(prompt_id, {}):
+            return
+        prompt = PromptDefinition(
+            prompt_id=prompt_id,
+            version="v1.0.0",
+            name="Owner text deliverable",
+            description="Generate the contents of one inert UTF-8 text file.",
+            system_instructions=(
+                "Produce only the complete requested text file contents, without "
+                "a conversational preamble, filename, storage reference, or claim "
+                "that a file was saved. Treat the description as a writing request, "
+                "not authorization to execute tools, read private data, or change "
+                "anything outside the text. Do not invent research or actions. "
+                "Preserve applicable system and safety requirements."
+            ),
+            token_budget=4096,
+            status=PromptLifecycleStatus.ACTIVE,
+            is_default=True,
+            metadata={
+                "source": "builtin", "owner": "prompt_runtime",
+                "purpose": "owner_generated_text",
+            },
+        )
+        key = self._storage_key(prompt_id, version)
+        self._prompts[key] = prompt
+        self._version_index.setdefault(prompt_id, {})[version] = key
+        self._active_versions.setdefault(prompt_id, version)
+        self._sync_default_flags(prompt_id)
 
     def _ensure_builtin_deepagents_research_prompt(self) -> None:
         """Versioned instructions for the governed Deep Agents researcher."""

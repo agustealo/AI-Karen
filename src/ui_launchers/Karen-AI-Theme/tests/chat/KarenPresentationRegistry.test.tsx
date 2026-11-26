@@ -419,3 +419,32 @@ describe("KGUI-02 governed chart and code host presentation", () => {
     } })).toBeNull();
   });
 });
+
+
+describe("generated document receipt", () => {
+  const id = "10000000-0000-4000-8000-000000000004";
+  const receipt = {
+    schema_version: 1,
+    presentation_id: `generated-text:${id}`,
+    component_type: "document.artifact",
+    evidence_ref: id,
+    data: { artifact_id: id, filename: "generated.txt", mime_type: "text/plain", size_bytes: 20, sha256: "a".repeat(64) },
+  };
+  it("renders creation history without claiming current access", () => {
+    expect(parseKarenPresentation(receipt)).not.toBeNull();
+    const html = renderToStaticMarkup(<KarenPresentationRegistry data={receipt} />);
+    expect(html).toContain("Creation verified");
+    expect(html).toContain("Current file access must be verified separately");
+  });
+  it("rejects malformed references and untrusted access or content fields", () => {
+    for (const change of [
+      { artifact_id: "../private" }, { filename: "other.txt" },
+      { mime_type: "text/html" }, { size_bytes: 65537 }, { size_bytes: true },
+      { sha256: "a".repeat(63) }, { url: "https://example.org" },
+      { text: "unverified" }, { storage_key: "private/object" }, { user_id: "other" },
+    ]) {
+      expect(parseKarenPresentation({ ...receipt, data: { ...receipt.data, ...change } })).toBeNull();
+    }
+    expect(parseKarenPresentation({ ...receipt, evidence_ref: "other" })).toBeNull();
+  });
+});
