@@ -550,6 +550,10 @@ class AuthService {
   /**
    * Get current user data
    */
+  getAuthenticationRevision(): number {
+    return this.authenticationRevision;
+  }
+
   getCurrentUser(): AuthUser | null {
     try {
       const userData = localStorage.getItem('user_data');

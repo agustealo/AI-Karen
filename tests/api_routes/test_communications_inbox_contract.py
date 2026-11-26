@@ -80,6 +80,8 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
         response = await client.get(endpoint, params={"tenant_id": str(uuid4()), "user_id": str(uuid4())})
         assert response.status_code == 200
         assert response.json()["entries"][0]["revision"] == "9007199254740993"
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json()["capabilities"] == {"can_mutate": True, "producer_enabled": False, "can_reconcile": False}
         assert repo.calls[-1]["tenant_id"] == tenant
         assert repo.calls[-1]["user_id"] == owner
         assert repo.calls[-1]["inbox_filter"] == InboxFilter.ACTIVE
@@ -91,6 +93,9 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
         assert (await client.post(endpoint, json=payload)).status_code == 405
         assert (await client.post(endpoint + "/reconcile")).status_code == 503
         producer.enable_communications_terminal_producer = True
+        active_response = await client.get(endpoint)
+        assert active_response.status_code == 200
+        assert active_response.json()["capabilities"] == {"can_mutate": True, "producer_enabled": True, "can_reconcile": True}
         recovery = await client.post(endpoint + "/reconcile", params={"tenant_id": str(uuid4())})
         assert recovery.status_code == 200 and recovery.json() == {"admitted_count": 2}
         assert repo.calls[-1] == {"tenant_id": tenant, "user_id": owner}
@@ -127,7 +132,12 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
             assert (await client.post(endpoint + "/reconcile")).status_code == 403
         read_only = UserData(user_id=owner, tenant_id=tenant, permissions=["communications:read"])
         app.dependency_overrides[route.get_current_user] = lambda: read_only
+        read_only_response = await client.get(endpoint)
+        assert read_only_response.status_code == 200
+        assert read_only_response.json()["capabilities"] == {"can_mutate": False, "producer_enabled": True, "can_reconcile": False}
+        before += 1
         assert (await client.patch(mutation, json=payload)).status_code == 403
+        assert (await client.post(endpoint + "/reconcile")).status_code == 403
         assert len(repo.calls) == before
         app.dependency_overrides[route.get_current_user] = lambda: principal
         monkeypatch.setattr(service_module.auth_config, "should_bypass_auth", lambda: True)

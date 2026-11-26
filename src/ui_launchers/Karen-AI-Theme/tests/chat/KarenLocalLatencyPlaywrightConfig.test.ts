@@ -8,12 +8,16 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 async function loadBrowserConfig(
   mode: "local" | "terminal" | "ci",
   captureVideo = false,
+  privateMode: "none" | "inbox" | "participation" = "none",
 ) {
   vi.stubEnv("KAREN_LOCAL_LATENCY_BENCHMARK", mode === "local" ? "1" : "0");
   vi.stubEnv("CI", mode === "ci" ? "true" : "");
   vi.stubEnv("KAREN_UX_IDENTITY_REPLAY", "false");
   vi.stubEnv("KAREN_SEARCH_ACCEPTANCE_REQUIRED", "false");
   vi.stubEnv("KAREN_E2E_CAPTURE_VIDEO", captureVideo ? "true" : "false");
+  vi.stubEnv("KAREN_COMMS_INBOX_ACCEPTANCE", privateMode === "inbox" ? "true" : "false");
+  vi.stubEnv("KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE", privateMode === "participation" ? "true" : "false");
+  vi.stubEnv("PLAYWRIGHT_NO_COPY_PROMPT", "");
 
   // Import *after* selecting the environment to test evaluation-time
   // config authority, rather than replaying the implementation in a mock.
@@ -66,5 +70,18 @@ describe("KCON-776 real local latency Playwright configuration", () => {
     expect(config.use?.screenshot).toBe("only-on-failure");
     expect(config.use?.video).toBe("retain-on-failure");
     expect(config.use?.trace).toBe("retain-on-failure");
+  });
+});
+
+describe("private lifecycle acceptance configuration", () => {
+  it.each(["inbox", "participation"] as const)("protects %s even if recording was requested", async (mode) => {
+    const config = await loadBrowserConfig("ci", true, mode);
+    expect(config.retries).toBe(0);
+    expect(config.preserveOutput).toBe("never");
+    expect(config.reporter).toEqual([["list"]]);
+    expect(config.use?.trace).toBe("off");
+    expect(config.use?.video).toBe("off");
+    expect(config.use?.screenshot).toBe("off");
+    expect(process.env.PLAYWRIGHT_NO_COPY_PROMPT).toBe("1");
   });
 });
