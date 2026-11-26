@@ -1,4 +1,4 @@
-"""KCOMM-02A review candidate proof; never run against an application database."""
+"""KCOMM-02A canonical migration proof; never run against an application database."""
 from __future__ import annotations
 
 import asyncio
@@ -14,7 +14,7 @@ pytestmark = pytest.mark.asyncio
 ROOT = Path(__file__).resolve().parents[2]
 
 
-async def test_communications_candidate_real_postgres() -> None:
+async def test_communications_inbox_real_postgres() -> None:
     if (
         os.environ.get("KAREN_TEST_COMMUNICATIONS_POSTGRES") != "1"
         or os.environ.get("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
@@ -24,7 +24,7 @@ async def test_communications_candidate_real_postgres() -> None:
     if not dsn or urlparse(dsn).path != "/karen_communications_test":
         pytest.fail("Expected dedicated /karen_communications_test database")
     if urlparse(dsn).hostname not in {"localhost", "127.0.0.1", "::1"}:
-        pytest.fail("Communications candidate proof requires local PostgreSQL")
+        pytest.fail("Communications inbox proof requires local PostgreSQL")
 
     raw = await asyncpg.connect(dsn)
     backend = "comm_backend_" + uuid.uuid4().hex[:12]
@@ -59,7 +59,7 @@ async def test_communications_candidate_real_postgres() -> None:
             pytest.fail("Refuse any existing public application schema")
 
         # Minimal dependency fixtures only. The real source-key migrations and
-        # the candidate DDL below provide the constraints under test.
+        # the canonical communications migration provide the constraints under test.
         await raw.execute("""
             CREATE TABLE public.tenants (id uuid PRIMARY KEY);
             CREATE TABLE public.auth_users (user_id uuid PRIMARY KEY);
@@ -84,7 +84,7 @@ async def test_communications_candidate_real_postgres() -> None:
                 (ROOT / "supabase/migrations" / filename).read_text(encoding="utf-8")
             )
         await raw.execute(
-            (ROOT / "supabase/kcomm_02a_candidate.sql").read_text(encoding="utf-8")
+            (ROOT / "supabase/migrations/20261126144509_77_communications_inbox.sql").read_text(encoding="utf-8")
         )
         await raw.execute(f'CREATE ROLE "{backend}" NOLOGIN NOBYPASSRLS')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{backend}"')
@@ -127,6 +127,10 @@ async def test_communications_candidate_real_postgres() -> None:
             await query(insert, tenant, owner, conversation, execution,
                         user_id=other_owner)
 
+        # The composite FK also protects privileged SQL that bypasses RLS.
+        with pytest.raises(asyncpg.ForeignKeyViolationError):
+            await raw.fetch(insert, tenant, owner, second_conversation, execution)
+
         row = (await query(insert, tenant, owner, conversation, execution))[0]
         entry_id = row["entry_id"]
         assert row["revision"] == 1
@@ -145,10 +149,24 @@ async def test_communications_candidate_real_postgres() -> None:
             await raw.execute(f'SET LOCAL ROLE "{backend}"')
             assert await raw.fetchval(f"SELECT count(*) FROM {table}") == 0
 
+        for setting, value in (
+            ("app.current_tenant_id", str(tenant)),
+            ("app.current_user_id", str(owner)),
+        ):
+            async with raw.transaction():
+                await raw.execute(f'SET LOCAL ROLE "{backend}"')
+                await raw.execute("SELECT set_config($1, $2, true)", setting, value)
+                assert await raw.fetchval(f"SELECT count(*) FROM {table}") == 0
+
         for role in ("anon", "authenticated"):
             if await raw.fetchval("SELECT 1 FROM pg_roles WHERE rolname=$1", role):
+                for privilege in ("SELECT", "INSERT", "UPDATE", "DELETE"):
+                    assert not await raw.fetchval(
+                        "SELECT has_table_privilege($1,$2,$3)", role, table, privilege
+                    )
                 assert not await raw.fetchval(
-                    "SELECT has_table_privilege($1,$2,'SELECT')", role, table
+                    "SELECT has_function_privilege($1,$2,'EXECUTE')",
+                    role, "public.communications_inbox_lifecycle_guard()",
                 )
 
         with pytest.raises(asyncpg.CheckViolationError):

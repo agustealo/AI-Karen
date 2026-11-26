@@ -1,6 +1,5 @@
--- KCOMM-02A: UNVERSIONED REVIEW CANDIDATE. NOT A DEPLOYABLE MIGRATION.
--- Move this single source into a CLI-generated migration before acceptance.
--- Do not apply to a hosted or existing application database.
+-- KCOMM-02A: reference-only personal communications lifecycle.
+-- Forward-only schema; runtime activation requires repository/privacy acceptance.
 -- Requires canonical runtime and conversation composite source keys (46, 64).
 BEGIN;
 
