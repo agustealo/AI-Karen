@@ -860,7 +860,7 @@ async def test_private_stream_queue_revocation_denies_release(monkeypatch, bound
 
     monkeypatch.setattr(runtime, "_run_simple", produce)
     stream = runtime._run_simple_stream(
-        request, SimpleNamespace(), plan, meter, _meta=receipt,
+        request, SimpleNamespace(intent="general_assist"), plan, meter, _meta=receipt,
     )
     try:
         if boundary in ("second_delta", "terminal"):

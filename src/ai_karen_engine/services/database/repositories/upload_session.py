@@ -156,6 +156,22 @@ class UploadSessionRepository:
             await session.commit()
             return record
 
+    @staticmethod
+    async def _lock_session_row(session: AsyncSession, params: dict) -> bool:
+        """Lock the scoped row before evaluating any mutation deadline.
+
+        An UPDATE can evaluate its WHERE clause before waiting for a row lock.
+        The separate lock statement ensures the following clock check runs
+        after contention, even if the holder did not change the row.
+        """
+        result = await session.execute(text("""
+            SELECT session_id FROM public.artifact_upload_sessions
+            WHERE session_id = :session_id
+              AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
+            FOR UPDATE
+        """), params)
+        return result.first() is not None
+
     async def record_staged(
         self, *, tenant_id: str, owner_user_id: str, session_id: str,
         observed_bytes: int, observed_sha256: str,
@@ -179,13 +195,16 @@ class UploadSessionRepository:
             "observed_bytes": observed_bytes, "observed_sha256": observed_sha256,
         }
         async with self._session_factory() as session:
+            if not await self._lock_session_row(session, params):
+                await session.rollback()
+                return None
             result = await session.execute(text("""
                 UPDATE public.artifact_upload_sessions
                 SET state = 'staged', received_bytes = :observed_bytes,
-                    updated_at = now()
+                    updated_at = clock_timestamp()
                 WHERE session_id = :session_id
                   AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
-                  AND state = 'receiving' AND expires_at > now()
+                  AND state = 'receiving' AND expires_at > clock_timestamp()
                   AND artifact_id IS NULL
                   AND expected_bytes = :observed_bytes
                   AND expected_sha256 = :observed_sha256
@@ -226,16 +245,19 @@ class UploadSessionRepository:
             "storage_key": f"{identity['tenant_id']}/{session_uuid}/content",
         }
         async with self._session_factory() as session:
+            if not await self._lock_session_row(session, params):
+                await session.rollback()
+                return None
             result = await session.execute(text("""
                 UPDATE public.artifact_upload_sessions
                 SET state = 'committing', lease_owner = :lease_owner,
                     storage_key = :storage_key,
                     lease_expires_at = LEAST(expires_at, :lease_expires_at),
-                    updated_at = now()
+                    updated_at = clock_timestamp()
                 WHERE session_id = :session_id
                   AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
-                  AND state = 'staged' AND expires_at > now()
-                  AND :lease_expires_at > now()
+                  AND state = 'staged' AND expires_at > clock_timestamp()
+                  AND :lease_expires_at > clock_timestamp()
                   AND artifact_id IS NULL AND lease_owner IS NULL
                   AND storage_key IS NULL
                   AND received_bytes = expected_bytes
@@ -279,14 +301,17 @@ class UploadSessionRepository:
             "reserved_artifact_id": session_uuid,
         }
         async with self._session_factory() as session:
+            if not await self._lock_session_row(session, params):
+                await session.rollback()
+                return None
             result = await session.execute(text("""
                 UPDATE public.artifact_upload_sessions
                 SET state = 'reconcile_required', lease_owner = NULL,
-                    lease_expires_at = NULL, updated_at = now()
+                    lease_expires_at = NULL, updated_at = clock_timestamp()
                 WHERE session_id = :session_id
                   AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
-                  AND state = 'committing' AND expires_at > now()
-                  AND lease_owner = :lease_token AND lease_expires_at > now()
+                  AND state = 'committing' AND expires_at > clock_timestamp()
+                  AND lease_owner = :lease_token AND lease_expires_at > clock_timestamp()
                   AND artifact_id IS NULL AND storage_key = :storage_key
                   AND received_bytes = expected_bytes
                   AND expected_bytes = :observed_bytes
@@ -314,14 +339,17 @@ class UploadSessionRepository:
         identity = self._identity(tenant_id, owner_user_id)
         params = {**identity, "session_id": str(UUID(session_id))}
         async with self._session_factory() as session:
+            if not await self._lock_session_row(session, params):
+                await session.rollback()
+                return None
             result = await session.execute(text("""
                 UPDATE public.artifact_upload_sessions
                 SET state = 'reconcile_required', lease_owner = NULL,
-                    lease_expires_at = NULL, updated_at = now()
+                    lease_expires_at = NULL, updated_at = clock_timestamp()
                 WHERE session_id = :session_id
                   AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
                   AND state = 'committing'
-                  AND (lease_expires_at IS NULL OR lease_expires_at <= now())
+                  AND (lease_expires_at IS NULL OR lease_expires_at <= clock_timestamp())
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,
                           received_bytes, artifact_id, expected_sha256,
@@ -373,19 +401,22 @@ class UploadSessionRepository:
             "next_state": next_state,
         }
         async with self._session_factory() as session:
+            if not await self._lock_session_row(session, params):
+                await session.rollback()
+                return None
             result = await session.execute(text("""
                 UPDATE public.artifact_upload_sessions
                 SET state = :next_state,
                     lease_owner = NULL, lease_expires_at = NULL,
-                    updated_at = now()
+                    updated_at = clock_timestamp()
                 WHERE session_id = :session_id
                   AND tenant_id = :tenant_id
                   AND owner_user_id = :owner_user_id
                   AND state = :expected_state
-                  AND expires_at > now()
+                  AND expires_at > clock_timestamp()
                   AND (
                       :expected_state <> 'committing'
-                      OR (lease_owner = :lease_token AND lease_expires_at > now())
+                      OR (lease_owner = :lease_token AND lease_expires_at > clock_timestamp())
                   )
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,

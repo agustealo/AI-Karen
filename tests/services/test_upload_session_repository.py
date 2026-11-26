@@ -121,8 +121,12 @@ async def test_transition_is_compare_and_swap_and_owner_scoped():
     )
     assert changed is not None and changed.state == "receiving"
     assert db.committed
-    assert "owner_user_id = :owner_user_id" in db.statements[0][0]
-    assert "expires_at > now()" in db.statements[0][0]
+    lock_sql, update_sql = (statement for statement, _ in db.statements)
+    assert "FOR UPDATE" in lock_sql
+    assert "owner_user_id = :owner_user_id" in lock_sql
+    assert "tenant_id = :tenant_id" in lock_sql
+    assert "owner_user_id = :owner_user_id" in update_sql
+    assert "expires_at > clock_timestamp()" in update_sql
 
 
 @pytest.mark.asyncio

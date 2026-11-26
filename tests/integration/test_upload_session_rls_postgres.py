@@ -230,6 +230,69 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
         assert uncertain.lease_owner is None
         assert await repo.claim_commit(**scope, lease_expires_at=deadline) is None
 
+        # A lock-only blocker leaves the tuple unchanged. Deadline predicates
+        # must be evaluated after acquiring that lock, not before waiting.
+        for operation in ("claim", "consume", "transition"):
+            contender = await repo.create_or_get(
+                tenant_id=tenant, owner_user_id=owner, destination_id="explorer",
+                recipe="store_only", idempotency_key_hash=uuid4().hex + uuid4().hex,
+                manifest_sha256=digest, expected_bytes=42, expected_sha256=digest,
+                expires_at=datetime.utcnow() + timedelta(hours=1),
+            )
+            contender_scope = dict(tenant_id=tenant, owner_user_id=owner, session_id=contender.session_id)
+            assert await repo.transition(
+                **contender_scope, expected_state="created", next_state="receiving",
+            ) is not None
+            assert await repo.record_staged(
+                **contender_scope, observed_bytes=42, observed_sha256=digest,
+            ) is not None
+            short_deadline = datetime.utcnow() + timedelta(seconds=4)
+            if operation != "claim":
+                claim = await repo.claim_commit(
+                    **contender_scope, lease_expires_at=short_deadline,
+                )
+                assert claim is not None and claim.lease_owner
+            async with factory() as blocker:
+                blocker_pid = (await blocker.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+                await blocker.execute(text(
+                    "SELECT session_id FROM public.artifact_upload_sessions "
+                    "WHERE session_id=:id FOR UPDATE"
+                ), {"id": UUID(contender.session_id)})
+                if operation == "claim":
+                    work = repo.claim_commit(**contender_scope, lease_expires_at=short_deadline)
+                elif operation == "consume":
+                    work = repo.consume_write_claim(
+                        **contender_scope, lease_token=claim.lease_owner,
+                        observed_bytes=42, observed_sha256=digest,
+                    )
+                else:
+                    work = repo.transition(
+                        **contender_scope, expected_state="committing",
+                        next_state="reconcile_required", lease_token=claim.lease_owner,
+                    )
+                task = asyncio.create_task(work)
+                try:
+                    # Prove real contention before letting the deadline pass.
+                    async with factory() as observer:
+                        async with asyncio.timeout(3):
+                            while True:
+                                blocked = (await observer.execute(text(
+                                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
+                                    "WHERE :pid = ANY(pg_blocking_pids(pid)))"
+                                ), {"pid": blocker_pid})).scalar_one()
+                                if blocked:
+                                    break
+                                await asyncio.sleep(0.025)
+                        assert datetime.utcnow() < short_deadline
+                    await asyncio.sleep(max(0, (short_deadline - datetime.utcnow()).total_seconds()) + 0.1)
+                    await blocker.commit()
+                    assert await asyncio.wait_for(task, timeout=5) is None
+                finally:
+                    await blocker.rollback()
+                    if not task.done():
+                        task.cancel()
+                        await asyncio.gather(task, return_exceptions=True)
+
         # Recovery is deliberately read-only with respect to Storage. The
         # real PostgreSQL check below uses a bounded-reader double, not live
         # object bytes. Real reader integrity is tested in the existing suite.
