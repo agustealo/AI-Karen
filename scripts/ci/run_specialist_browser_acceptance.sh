@@ -15,31 +15,51 @@ case "${1:-}" in
   *) echo "::error::Unsupported specialist acceptance platform"; exit 1 ;;
 esac
 export KAREN_SEARCH_ACCEPTANCE_PLATFORM="$1"
-# The selected test has weaker opt-in modes; exactly one pass alone does not
-# establish lifecycle and cross-tenant proof. Require all modes before launch.
-for flag in KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE KAREN_SPECIALIST_LIFECYCLE_ACCEPTANCE KAREN_SPECIALIST_CROSS_TENANT_ACCEPTANCE; do
-  test "${!flag:-}" = true || { echo "::error::Full specialist acceptance flags are required"; exit 1; }
-done
-# Always activate the shared exact-origin deployment fixture, even when this
-# runner is invoked outside its normal protected workflow step.
+# Always activate the existing exact-origin deployment fixture.
 export KAREN_SEARCH_ACCEPTANCE_REQUIRED=true
-for name in KAREN_UX_EMAIL KAREN_UX_PASSWORD KAREN_UX_ACCOUNT_B_EMAIL KAREN_UX_ACCOUNT_B_PASSWORD KAREN_UX_ACCOUNT_C_EMAIL KAREN_UX_ACCOUNT_C_PASSWORD KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID; do
-  test -n "${!name}" || { echo "::error::Missing protected specialist fixture configuration"; exit 1; }
-done
+case "${2:-readback}" in
+  readback)
+    # Exactly one pass alone does not establish full lifecycle and isolation.
+    for flag in KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE KAREN_SPECIALIST_LIFECYCLE_ACCEPTANCE KAREN_SPECIALIST_CROSS_TENANT_ACCEPTANCE; do
+      test "${!flag:-}" = true || { echo "::error::Full specialist acceptance flags are required"; exit 1; }
+    done
+    for name in KAREN_UX_EMAIL KAREN_UX_PASSWORD KAREN_UX_ACCOUNT_B_EMAIL KAREN_UX_ACCOUNT_B_PASSWORD KAREN_UX_ACCOUNT_C_EMAIL KAREN_UX_ACCOUNT_C_PASSWORD KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID; do
+      test -n "${!name:-}" || { echo "::error::Missing protected specialist fixture configuration"; exit 1; }
+    done
+    spec='e2e/automation-two-account-acceptance.spec.ts'
+    title='ARM-05C.5B real participation receipts survive reload and deny a second account'
+    ;;
+  ordinary-chat)
+    test "$1" = docker || { echo "::error::Ordinary specialist trial requires signed Docker"; exit 1; }
+    test "${KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE:-}" = true &&
+      test "${KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED:-}" = true &&
+      test "${KAREN_CHAT_BOOT_ACCEPTANCE:-}" = 1 ||
+      { echo "::error::Explicit disposable ordinary-chat approval is required"; exit 1; }
+    for name in KAREN_UX_EMAIL KAREN_UX_PASSWORD KAREN_CHAT_BOOT_REVISION KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT KAREN_SPECIALIST_EXPECTED_PROVIDER KAREN_SPECIALIST_EXPECTED_MODEL KAREN_SPECIALIST_EXPECTED_ENGINE KAREN_SPECIALIST_EXPECTED_AGENT KAREN_SPECIALIST_EXPECTED_TOOL; do
+      test -n "${!name:-}" || { echo "::error::Missing protected ordinary-chat configuration"; exit 1; }
+    done
+    [[ "$KAREN_CHAT_BOOT_REVISION" =~ ^[a-f0-9]{40}$ ]] ||
+      { echo "::error::Exact reviewed revision required"; exit 1; }
+    spec='e2e/copilotkit-consumer-boot.spec.ts'
+    title='persists a real user message and a real assistant reply'
+    ;;
+  *) echo "::error::Unsupported specialist acceptance scenario"; exit 1 ;;
+esac
+test "$#" -le 2 || { echo "::error::Unexpected specialist acceptance arguments"; exit 1; }
 private_dir="$(mktemp -d "${RUNNER_TEMP:?}/specialist-acceptance.XXXXXXXX")"
 trap 'rm -rf -- "$private_dir"' EXIT
 # Never publish private Playwright diagnostics or even a failed report.
 # An ephemeral report is used solely to reject skipped/no-op success.
 if ! PLAYWRIGHT_JSON_OUTPUT_FILE="$private_dir/report.json" \
-  npx playwright test e2e/automation-two-account-acceptance.spec.ts \
+  npx playwright test "$spec" \
     --config=e2e/playwright.config.ts --project=chromium \
-    --grep='ARM-05C.5B real participation receipts survive reload and deny a second account' \
+    --grep="$title" \
     --workers=1 --retries=0 --forbid-only --reporter=json \
     --output="$private_dir/artifacts" >"$private_dir/runner.log" 2>&1; then
   echo "::error::Protected specialist browser acceptance failed (private diagnostics suppressed)"
   exit 1
 fi
-if ! python - "$private_dir/report.json" 2>/dev/null <<'PY'
+if ! python - "$private_dir/report.json" "$title" 2>/dev/null <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -62,7 +82,7 @@ def collect(suites):
         collect(suite.get("suites", []))
 collect(report.get("suites", []))
 if observed != [(
-    "ARM-05C.5B real participation receipts survive reload and deny a second account",
+    sys.argv[2],
     "expected", "passed", "chromium", ["passed"],
 )]:
     raise SystemExit(1)

@@ -445,7 +445,8 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
         assert job.count(name) == step.count(name)
     assert 'bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" vercel' in step
     shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text(encoding="utf-8")
-    assert "--grep='ARM-05C.5B real participation receipts survive reload and deny a second account'" in shell
+    assert "title='ARM-05C.5B real participation receipts survive reload and deny a second account'" in shell
+    assert '--grep="$title"' in shell
     assert "--retries=0" in shell and "--workers=1" in shell
     assert 'stats.get("expected") != 1' in shell
     assert '"unexpected", "skipped", "flaky"' in shell
@@ -489,7 +490,7 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
     def validate(payload: str) -> int:
         path.write_text(payload, encoding="utf-8")
         return subprocess.run(
-            [sys.executable, "-c", validator, str(path)],
+            [sys.executable, "-c", validator, str(path), title],
             capture_output=True,
             check=False,
         ).returncode
@@ -575,6 +576,65 @@ def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path:
 
     # Positive admission reaches the inert runner, but its failure remains a
     # failure and its temporary private diagnostics must be removed.
+    result = run("docker", {})
+    assert marker.exists()
+    assert result.returncode != 0
+    assert "private diagnostics suppressed" in result.stdout
+    assert not list(tmp_path.glob("specialist-acceptance.*"))
+
+def test_ordinary_specialist_runner_rejects_unapproved_modes_before_browser(tmp_path: Path) -> None:
+    script = ROOT / "scripts/ci/run_specialist_browser_acceptance.sh"
+    marker = tmp_path / "browser-launched"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npx = bin_dir / "npx"
+    npx.write_text('#!/bin/sh\n: > "$TEST_LAUNCH_MARKER"\nexit 99\n', encoding="utf-8")
+    npx.chmod(0o700)
+    required = (
+        "KAREN_UX_EMAIL", "KAREN_UX_PASSWORD", "KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID", "KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT",
+        "KAREN_SPECIALIST_EXPECTED_PROVIDER", "KAREN_SPECIALIST_EXPECTED_MODEL",
+        "KAREN_SPECIALIST_EXPECTED_ENGINE", "KAREN_SPECIALIST_EXPECTED_AGENT",
+        "KAREN_SPECIALIST_EXPECTED_TOOL",
+    )
+    env = {
+        "PATH": str(bin_dir) + os.pathsep + os.defpath,
+        "RUNNER_TEMP": str(tmp_path),
+        "TEST_LAUNCH_MARKER": str(marker),
+        "KAREN_CHAT_BOOT_REVISION": "a" * 40,
+        "KAREN_CHAT_BOOT_ACCEPTANCE": "1",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE": "true",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED": "true",
+        **dict.fromkeys(required, "synthetic-test-only"),
+    }
+
+    def run(platform: str, overrides: dict[str, str | None]) -> subprocess.CompletedProcess[str]:
+        current = env.copy()
+        for key, value in overrides.items():
+            if value is None:
+                current.pop(key, None)
+            else:
+                current[key] = value
+        return subprocess.run(
+            ["bash", str(script), platform, "ordinary-chat"],
+            env=current, capture_output=True, text=True, check=False,
+        )
+
+    for name in (*required, "KAREN_CHAT_BOOT_REVISION", "KAREN_CHAT_BOOT_ACCEPTANCE",
+                 "KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE", "KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED"):
+        result = run("docker", {name: None})
+        assert result.returncode != 0
+        assert not marker.exists()
+        assert "synthetic-test-only" not in result.stdout + result.stderr
+    for platform, overrides in (
+        ("vercel", {"VERCEL_AUTOMATION_BYPASS_SECRET": "synthetic-test-only"}),
+        ("docker", {"KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED": "false"}),
+        ("docker", {"KAREN_CHAT_BOOT_REVISION": "bad"}),
+        ("docker", {"VERCEL_AUTOMATION_BYPASS_SECRET": ""}),
+    ):
+        assert run(platform, overrides).returncode != 0
+        assert not marker.exists()
+
     result = run("docker", {})
     assert marker.exists()
     assert result.returncode != 0

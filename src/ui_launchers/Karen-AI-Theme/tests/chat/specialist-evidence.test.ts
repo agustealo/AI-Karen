@@ -31,6 +31,11 @@ describe("ordinary specialist evidence contract", () => {
     const { run, lifecycle, participation, tools } = fixture();
     expect(verifyFreshSpecialistEvidence(runId, approved, run, lifecycle, participation, tools).toolCallId).toBe("call");
   });
+  it("does not use transition UUID ordering to infer same-timestamp lifecycle order", () => {
+    const { run, lifecycle, participation, tools } = fixture();
+    const reordered = { ...lifecycle, transitions: [lifecycle.transitions[1], lifecycle.transitions[0], lifecycle.transitions[2]] };
+    expect(verifyFreshSpecialistEvidence(runId, approved, run, reordered, participation, tools).toolCallId).toBe("call");
+  });
   it("rejects foreign, truncated, missing, failed and contradictory evidence", () => {
     const { run, lifecycle, participation, tools } = fixture();
     for (const bad of [

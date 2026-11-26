@@ -131,26 +131,28 @@ export function verifyFreshSpecialistEvidence(
       !Array.isArray(lifecycle.transitions) || lifecycle.transitions.length !== 3) {
     throw new Error("Exact durable specialist lifecycle unavailable");
   }
-  const expectedTransitions = [[null, "created"], ["created", "running"], ["running", "completed"]];
+  // Creation and running may have the exact same timestamp. Validate the
+  // semantic chain and unique transition identities rather than UUID sort order.
+  const expectedTransitions = [[null, "created"], ["created", "running"], ["running", "completed"]] as const;
   const transitionIds: string[] = [];
-  let lastTime = -Infinity;
-  let startedAt = NaN;
-  let completedAt = NaN;
-  for (const [index, item] of lifecycle.transitions.entries()) {
+  const times: number[] = [];
+  for (const [from, to] of expectedTransitions) {
+    const matching = lifecycle.transitions.filter(item => record(item) && item.to_status === to);
+    const item: unknown = matching.length === 1 ? matching[0] : undefined;
     if (!hasExactKeys(item, ["transition_id", "from_status", "to_status", "event_at", "source"]) ||
         !bounded(item.transition_id) || transitionIds.includes(item.transition_id) ||
-        item.from_status !== expectedTransitions[index][0] ||
-        item.to_status !== expectedTransitions[index][1] ||
-        item.source !== "runtime" || typeof item.event_at !== "string") {
+        item.from_status !== from || item.source !== "runtime" || typeof item.event_at !== "string") {
       throw new Error("Invalid durable specialist transition");
     }
     const time = Date.parse(item.event_at);
-    if (!Number.isFinite(time) || time < lastTime) throw new Error("Invalid durable lifecycle time");
-    if (index === 1) startedAt = time;
-    if (index === 2) completedAt = time;
-    lastTime = time;
+    if (!Number.isFinite(time) || (times.length > 0 && time < times[times.length - 1])) {
+      throw new Error("Invalid durable lifecycle time");
+    }
+    times.push(time);
     transitionIds.push(item.transition_id);
   }
+  const startedAt = times[1];
+  const completedAt = times[2];
   const observations = parseParticipation(participation, runId);
   const entered = observations.receipts.filter(row => row.phase === "started");
   const returned = observations.receipts.filter(row => row.phase === "completed");

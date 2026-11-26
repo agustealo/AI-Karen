@@ -45,7 +45,7 @@ def test_docker_scenario_reuses_existing_protected_acceptance_workflow() -> None
     before = _job(workflow, "docker-provenance-before")
     browser = _job(workflow, "authenticated-docker-search-replay")
     after = _job(workflow, "docker-provenance-after")
-    guard = "(inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation') && github.ref == 'refs/heads/main'"
+    guard = "(inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat') && github.ref == 'refs/heads/main'"
     for job in (before, browser, after):
         assert guard in job
         assert "ref: " + chr(36) + "{{ inputs.target_sha }}" in job
@@ -112,7 +112,7 @@ def test_browser_is_hosted_and_credentials_are_only_available_to_proof_step() ->
     for secret in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
         binding = secret + ": " + chr(36) + "{{ secrets." + secret + " }}"
         assert binding not in job_scope
-        assert browser.count(binding) == 2
+        assert browser.count(binding) == 3
         assert binding in proof
 
     for step in (
@@ -191,3 +191,35 @@ def test_signed_docker_specialist_reuses_host_chain_and_private_gate() -> None:
     shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text()
     assert '[[ -v VERCEL_AUTOMATION_BYPASS_SECRET ]]' in shell
     assert 'export KAREN_SEARCH_ACCEPTANCE_PLATFORM="$1"' in shell
+
+def test_signed_docker_ordinary_specialist_is_explicit_and_step_scoped() -> None:
+    workflow = WORKFLOW.read_text()
+    assert "          - docker-specialist-ordinary-chat\n" in workflow
+    before = _job(workflow, "docker-provenance-before")
+    browser = _job(workflow, "authenticated-docker-search-replay")
+    after = _job(workflow, "docker-provenance-after")
+    title = "Prove fresh ordinary-chat specialist execution on signed Docker"
+    proof = browser.split("      - name: " + title, 1)[1].split("\n      - ", 1)[0]
+    assert "if: inputs.scenario == 'docker-specialist-ordinary-chat'" in proof
+    assert 'KAREN_CHAT_BOOT_ACCEPTANCE: "1"' in proof
+    assert 'KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE: "true"' in proof
+    assert 'bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" docker ordinary-chat' in proof
+    for name in (
+        "KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT",
+        "KAREN_SPECIALIST_EXPECTED_PROVIDER",
+        "KAREN_SPECIALIST_EXPECTED_MODEL",
+        "KAREN_SPECIALIST_EXPECTED_ENGINE",
+        "KAREN_SPECIALIST_EXPECTED_AGENT",
+        "KAREN_SPECIALIST_EXPECTED_TOOL",
+    ):
+        assert name in proof
+        assert name not in before and name not in after
+        assert browser.count(name) == proof.count(name)
+    for secret in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
+        assert secret + ": " + chr(36) + "{{ secrets." + secret + " }}" in proof
+    assert browser.count("python -m scripts.ci.verify_backend_target") == 2
+    assert "upload-artifact" not in browser
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in browser
