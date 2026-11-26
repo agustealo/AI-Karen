@@ -82,3 +82,6 @@ async def test_participation_control_plane_checks_owner_before_read(monkeypatch,
             assert result is None
     if mode not in {"owned", "empty"}:
         store.list_specialist_participation_async.assert_not_awaited()
+    manager.get.assert_awaited_once_with(
+        run_id="run", tenant_id="tenant", require_durable_history=True,
+    )

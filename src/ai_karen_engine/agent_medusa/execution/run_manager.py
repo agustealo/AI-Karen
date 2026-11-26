@@ -522,7 +522,14 @@ class MedusaRunManager:
                 extra={"run_id": run_id, "tenant_id": tenant_id},
             )
 
-    async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
+    async def get(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        require_durable_history: bool = False,
+    ) -> dict[str, Any]:
+        """Read live ownership or history; strict callers reject unknown history."""
         async with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
@@ -548,7 +555,11 @@ class MedusaRunManager:
             except DistributedRunStoreUnavailable:
                 pass
 
-        durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
+        durable = await self._get_durable(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            require_available=require_durable_history,
+        )
         if durable is None:
             raise RunNotFoundError(run_id)
         return durable
@@ -788,13 +799,16 @@ class MedusaRunManager:
         *,
         run_id: str,
         tenant_id: str,
+        require_available: bool = False,
     ) -> dict[str, Any] | None:
         if not self._settings.durable_run_ledger_enabled:
+            if require_available:
+                raise DurableRunLedgerUnavailable("medusa_durable_ledger_disabled")
             return None
         try:
             return await self._durable_ledger.get(run_id=run_id, tenant_id=tenant_id)
         except DurableRunLedgerUnavailable:
-            if self._settings.durable_run_ledger_required:
+            if require_available or self._settings.durable_run_ledger_required:
                 raise
             logger.exception(
                 "Medusa durable run lookup unavailable",

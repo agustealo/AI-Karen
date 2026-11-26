@@ -140,7 +140,11 @@ class AgentMedusaControlPlane:
         if not run_id or not tenant_id or not user_id:
             return None
         try:
-            run = await self.get_run(run_id=run_id, tenant_id=tenant_id)
+            run = await self._run_manager.get(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                require_durable_history=True,
+            )
         except (RunNotFoundError, RunTenantMismatchError):
             return None
         if (
