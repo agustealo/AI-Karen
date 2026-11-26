@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import secrets
 import subprocess
+import tempfile
 import time
 from urllib.parse import urlsplit
 from urllib.request import HTTPCookieProcessor, HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -131,16 +132,54 @@ def main():
                "KAREN_UX_ACCOUNT_B_EMAIL": accounts[1]["email"], "KAREN_UX_ACCOUNT_B_PASSWORD": accounts[1]["password"],
                "KAREN_UX_ACCOUNT_A_PENDING_INBOX_EXECUTION_ID": runs[0],
                "KAREN_UX_ACCOUNT_B_INBOX_EXECUTION_ID": runs[1]}
-        subprocess.run([
-            "npx", "--no-install", "playwright", "test", "e2e/comms-visual-acceptance.spec.ts",
-            "--config=e2e/playwright.config.ts", "--project=chromium", "--reporter=list",
-            "--retries=0", "--grep=KCOMM-02E",
-        ], cwd=UI, env=env, check=True, timeout=420)
-        print("DISPOSABLE COMMUNICATIONS SIGNED-SESSION LIFECYCLE PROOF PASSED")
+        # Use a private ephemeral report to reject no-op/skip success, never
+        # upload or print browser diagnostic bodies or fixture credentials.
+        with tempfile.TemporaryDirectory(prefix="kcomm-browser-") as directory:
+            private = Path(directory)
+            report_path = private / "report.json"
+            env["PLAYWRIGHT_JSON_OUTPUT_FILE"] = str(report_path)
+            with (private / "runner.log").open("w", encoding="utf-8") as log:
+                result = subprocess.run([
+                    "npx", "--no-install", "playwright", "test", "e2e/comms-visual-acceptance.spec.ts",
+                    "--config=e2e/playwright.config.ts", "--project=chromium",
+                    "--reporter=json", "--workers=1", "--retries=0", "--forbid-only",
+                    "--grep=KCOMM-02E", "--output=" + str(private / "artifacts"),
+                ], cwd=UI, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=420)
+            if result.returncode != 0 or not report_path.is_file():
+                raise RuntimeError("Disposable Chromium scenario failed; private diagnostics suppressed")
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            stats = report.get("stats", {})
+            if report.get("errors") != [] or stats.get("expected") != 1 or any(
+                stats.get(key) != 0 for key in ("unexpected", "skipped", "flaky")
+            ):
+                raise RuntimeError("Exactly one passing browser scenario without skips or retries required")
+            observed = []
+
+            def collect(suites):
+                for suite in suites:
+                    for spec in suite.get("specs", []):
+                        for test in spec.get("tests", []):
+                            observed.append((spec.get("title"), test.get("status"),
+                                             test.get("expectedStatus"), test.get("projectName"),
+                                             [r.get("status") for r in test.get("results", [])]))
+                    collect(suite.get("suites", []))
+
+            collect(report.get("suites", []))
+            if observed != [(
+                "KCOMM-02E: real signed-session recovery, lifecycle persistence and account isolation",
+                "expected", "passed", "chromium", ["passed"],
+            )]:
+                raise RuntimeError("Incorrect browser acceptance inventory")
+        print("DISPOSABLE COMMUNICATIONS SIGNED-SESSION LIFECYCLE PROOF PASSED: one test, zero skips or retries")
     finally:
         subprocess.run(["docker", "rm", "-f", web_container], stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, check=False, timeout=30)
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as exc:
+        # Exception tracebacks can contain request/response details.
+        print("Disposable Communications proof failed: " + type(exc).__name__)
+        raise SystemExit(1) from None
