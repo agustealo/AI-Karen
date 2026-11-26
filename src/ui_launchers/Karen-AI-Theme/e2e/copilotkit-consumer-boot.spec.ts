@@ -2,7 +2,7 @@ import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 import { openAutomationWorkspace } from "./fixtures/automation-workspace-navigation";
 import type { Page } from "@playwright/test";
-import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedSpecialist, matchesApprovedSpecialistReceipt, validRuntimeRequestId, verifyFreshSpecialistEvidence, type ApprovedSpecialist } from "./fixtures/specialist-evidence";
+import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedSpecialist, matchesApprovedSpecialistReceipt, validRuntimeRequestId, verifyFreshSpecialistEvidence, verifyAttestedSpecialistActivity, type ApprovedSpecialist } from "./fixtures/specialist-evidence";
 
 /**
  * The preview route previously owned this CSS, so the dashboard could render
@@ -193,7 +193,7 @@ async function expectVerifiedExecutionReceipt(
 
 async function readFreshSpecialistEvidence(
   page: Page, target: URL, conversationId: string, transportRunId: string,
-  runtimeRequestId: string, approved: ApprovedSpecialist,
+  runtimeRequestId: string, assistantId: string, approved: ApprovedSpecialist,
 ) {
   if (new URL(page.url()).origin !== target.origin) throw new Error("Unapproved specialist readback origin");
   const status = await readAuthorizedSameOriginJson(page,
@@ -208,10 +208,14 @@ async function readFreshSpecialistEvidence(
     throw new Error("Fresh owned specialist evidence is unavailable");
   }
   const proof = verifyFreshSpecialistEvidence(runtimeRequestId, approved, run.body, lifecycle.body, participation.body, tools.body);
+  const history = await readAuthorizedSameOriginJson(page, `/api/copilotkit/threads/${conversationId}/messages`);
+  if (!history.ok) throw new Error("Fresh attested activity history unavailable");
+  const activity = verifyAttestedSpecialistActivity(history.body, conversationId, assistantId, transportRunId,
+    runtimeRequestId, approved, proof.stepId);
   // Compare the complete durable receipt inventories on replay, not only IDs.
   // Keep the live run snapshot out of equality: worker-local and durable
   // projections legitimately differ while their immutable identity agrees.
-  return { proof, lifecycle: lifecycle.body, participation: participation.body, tools: tools.body };
+  return { proof, activity, lifecycle: lifecycle.body, participation: participation.body, tools: tools.body };
 
 }
 
@@ -687,7 +691,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       expect(observedRunRequests).toEqual(["/api/copilotkit/agent/default/run"]);
       expect(specialistTransportIds).toHaveLength(1);
       if (!firstReceipt.runtimeRequestId) throw new Error("Attested runtime request identity missing");
-      specialistEvidence = await readFreshSpecialistEvidence(page, target, id!, specialistTransportIds[0], firstReceipt.runtimeRequestId, approvedSpecialist);
+      specialistEvidence = await readFreshSpecialistEvidence(page, target, id!, specialistTransportIds[0], firstReceipt.runtimeRequestId, firstReceipt.assistantId, approvedSpecialist);
     }
     // A saved backend answer alone is not a functioning consumer chat.
     // The active CopilotKit view must render the real assistant response
@@ -893,7 +897,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     const replayedReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);
     if (approvedSpecialist) {
       expect(replayedReceipt).toEqual(firstReceipt);
-      expect(await readFreshSpecialistEvidence(page, target, id!, specialistTransportIds[0], firstReceipt.runtimeRequestId!, approvedSpecialist)).toEqual(specialistEvidence);
+      expect(await readFreshSpecialistEvidence(page, target, id!, specialistTransportIds[0], firstReceipt.runtimeRequestId!, firstReceipt.assistantId, approvedSpecialist)).toEqual(specialistEvidence);
       expect(observedRunRequests, "Reload must not resubmit inference").toHaveLength(1);
       expect(specialistMutations, "Consumer must not mutate execution authority").toEqual([]);
     }

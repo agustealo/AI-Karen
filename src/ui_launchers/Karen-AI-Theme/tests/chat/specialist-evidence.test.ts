@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedSpecialist, matchesApprovedSpecialistReceipt, verifyFreshSpecialistEvidence, type ApprovedSpecialist } from "../../e2e/fixtures/specialist-evidence";
+import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedSpecialist, matchesApprovedSpecialistReceipt, verifyFreshSpecialistEvidence, verifyAttestedSpecialistActivity, type ApprovedSpecialist } from "../../e2e/fixtures/specialist-evidence";
 
 const approved: ApprovedSpecialist = { tenantId: "tenant", userId: "owner", provider: "local",
   model: "model", engine: "ollama", agent: "research", tool: "lookup", prompt: "read only" };
@@ -91,5 +91,47 @@ describe("ordinary specialist evidence contract", () => {
     expect(approvedSpecialistIdentity({ ...session, valid: false }, approved)).toBe(false);
     expect(approvedSpecialistIdentity({ ...session, user: { ...session.user, roles: ["super_admin"] } }, approved)).toBe(false);
     expect(approvedSpecialistIdentity({ ...session, user: { ...session.user, tenant_id: "foreign" } }, approved)).toBe(false);
+  });
+});
+
+describe("fresh assistant-bound specialist activity", () => {
+  const thread = "thread";
+  const assistant = "assistant";
+  const transport = "transport-a";
+  const step = (status: string, event_type: string, sequence: number) => ({
+    type: "CUSTOM", name: "karen.agent_step.v1", messageId: assistant,
+    value: { step_id: "step", agent_id: approved.agent, status, event_type,
+      description: "Observed activity", run_id: transport, sequence },
+  });
+  const started = step("running", "agent_step_started", 2);
+  const completed = step("completed", "agent_step_completed", 9);
+  const internal = step("completed", "deepagents_plan_completed", 5);
+  const receipt = { type: "CUSTOM", name: "karen.execution_receipt.v1", messageId: assistant,
+    value: { runtime_request_id: runId, actual_provider: approved.provider, actual_model: approved.model,
+      runtime_engine: approved.engine, response_source: "deepagents_verified_output" } };
+  const history = { threadId: thread, recovery_run: null, messages: [
+    { id: "user", role: "user", content: "Approved prompt" },
+    { id: assistant, role: "assistant", content: "Answer" },
+  ], replayEvents: [started, internal, completed, receipt] };
+  const verify = (value: unknown) => verifyAttestedSpecialistActivity(value, thread, assistant, transport, runId, approved, "step");
+  it("joins the exact message and transport run to ordered outer invocation evidence", () => {
+    expect(verify(history)).toEqual({ startedSequence: 2, completedSequence: 9 });
+  });
+  it("rejects stale, cross-run, misbound, contradictory and internal-only evidence", () => {
+    for (const replayEvents of [
+      [receipt], [internal, receipt], [started, receipt], [completed, started, receipt],
+      [started, { ...completed, messageId: "foreign" }, receipt],
+      [started, { ...completed, value: { ...completed.value, run_id: "foreign" } }, receipt],
+      [started, { ...completed, value: { ...completed.value, step_id: "foreign" } }, receipt],
+      [started, { ...completed, value: { ...completed.value, agent_id: "foreign" } }, receipt],
+      [started, step("failed", "agent_step_failed", 5), completed, receipt],
+      [started, step("completed", "agent_step_completed", 2), receipt],
+      [started, completed, completed, receipt],
+      [started, completed, { ...receipt, value: { ...receipt.value, runtime_request_id: "foreign" } }],
+      [started, completed, { ...receipt, messageId: "foreign" }],
+      [started, completed, receipt, receipt],
+    ]) expect(() => verify({ ...history, replayEvents })).toThrow();
+    expect(() => verify({ ...history, recovery_run: {} })).toThrow();
+    expect(() => verify({ ...history, messages: [...history.messages, history.messages[1]] })).toThrow();
   });
 });

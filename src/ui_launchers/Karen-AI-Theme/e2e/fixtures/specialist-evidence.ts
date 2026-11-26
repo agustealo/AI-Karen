@@ -211,3 +211,64 @@ export function verifyFreshSpecialistEvidence(
     participationIds: [entered[0].receipt_id, returned[0].receipt_id], transitionIds,
   };
 }
+
+// Owned history projects only completed, assistant-digest-attested agent
+// journal events. The generic run cursor deliberately rejects agent/tool
+// replay; do not broaden that cursor or invent missing tool observations.
+export function verifyAttestedSpecialistActivity(
+  history: unknown, threadId: string, assistantId: string, transportRunId: string,
+  runtimeRequestId: string, approved: ApprovedSpecialist,
+  stepId: string,
+): { startedSequence: number; completedSequence: number } {
+  if (!validRuntimeRequestId(runtimeRequestId) || !validRuntimeRequestId(transportRunId) ||
+      transportRunId.length > 100 || !bounded(assistantId) || !bounded(stepId, 128) ||
+      !record(history) || history.threadId !== threadId || history.recovery_run !== null ||
+      !Array.isArray(history.messages) || history.messages.length !== 2 ||
+      !record(history.messages[0]) || history.messages[0].role !== "user" ||
+      !record(history.messages[1]) || history.messages[1].role !== "assistant" ||
+      history.messages[1].id !== assistantId || !Array.isArray(history.replayEvents)) {
+    throw new Error("Fresh attested activity history is unavailable");
+  }
+  const receipts = history.replayEvents.filter(event => record(event) &&
+    event.type === "CUSTOM" && event.name === "karen.execution_receipt.v1");
+  if (receipts.length !== 1 || receipts[0].messageId !== assistantId ||
+      !matchesApprovedSpecialistReceipt(receipts[0].value, approved) ||
+      receipts[0].value.runtime_request_id !== runtimeRequestId) {
+    throw new Error("Attested specialist activity receipt identity mismatch");
+  }
+  const events = history.replayEvents.filter(event => record(event) &&
+    event.type === "CUSTOM" && event.name === "karen.agent_step.v1");
+  if (!events.length || events.length > 100) throw new Error("Observed specialist activity missing or unbounded");
+  let sequence = 0;
+  const matching: Array<{ status: string; sequence: number }> = [];
+  for (const event of events) {
+    const value: unknown = event.value;
+    if (event.messageId !== assistantId || !hasExactKeys(value, [
+      "step_id", "agent_id", "status", "event_type", "description", "run_id", "sequence",
+    ]) || value.run_id !== transportRunId || !bounded(value.step_id, 128) ||
+        !bounded(value.agent_id, 128) || typeof value.sequence !== "number" ||
+        !Number.isInteger(value.sequence) || value.sequence <= sequence || value.sequence > 2048 ||
+        typeof value.status !== "string" || !["running", "completed", "failed", "cancelled", "skipped"].includes(value.status) ||
+        typeof value.event_type !== "string" || typeof value.description !== "string" ||
+        value.description.length > 2000) {
+      throw new Error("Invalid attested specialist activity");
+    }
+    sequence = value.sequence;
+    // SDK-internal plan/subagent phases share the outer specialist step ID;
+    // do not confuse them with actual coordinator invocation boundaries.
+    if (value.event_type.startsWith("deepagents_")) continue;
+    if (value.agent_id !== approved.agent || value.step_id !== stepId) {
+      throw new Error("Unapproved specialist invocation in fresh activity");
+    }
+    const expected = { running: "agent_step_started", completed: "agent_step_completed" } as const;
+    if ((value.status !== "running" && value.status !== "completed") ||
+        value.event_type !== expected[value.status]) {
+      throw new Error("Contradictory specialist invocation activity");
+    }
+    matching.push({ status: value.status, sequence });
+  }
+  if (matching.length !== 2 || matching[0].status !== "running" || matching[1].status !== "completed") {
+    throw new Error("Ordered specialist invocation activity unavailable");
+  }
+  return { startedSequence: matching[0].sequence, completedSequence: matching[1].sequence };
+}
