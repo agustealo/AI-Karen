@@ -3384,6 +3384,8 @@ class ChatRuntime:
         they are reloaded from the tenant/user-owned canonical repository.
         """
         request.research_continuation_question = None
+        # Scrub before any early exit, including an unavailable persona.
+        self._discard_untrusted_clarification_metadata(request)
         if not request.messages:
             return
         current = request.messages[-1]
@@ -3471,8 +3473,8 @@ class ChatRuntime:
             request.metadata["conversation_history_status"] = "unavailable"
             request.metadata["conversation_history_reason"] = type(exc).__name__
             request.metadata["history_message_count"] = 0
-        # Caller metadata must not choose a new effective mutation query.
-        self._discard_untrusted_clarification_metadata(request)
+        if request.research_continuation_question is not None:
+            return
         if not self._resolve_typed_pending_clarification(request):
             self._resolve_pending_weather_followup(request)
 
@@ -3489,6 +3491,8 @@ class ChatRuntime:
             "clarification_slot",
             "clarification_source",
             "clarification_inputs",
+            "weather_followup_location",
+            "weather_followup_resolved",
         ):
             request.metadata.pop(key, None)
 
@@ -3635,8 +3639,11 @@ class ChatRuntime:
         slot = str(pending.get("slot") or "").strip()
         original = str(pending.get("original_request") or "").strip()
         answer = str(latest.get("content") or "").strip()
+        from ai_karen_engine.core.cortex.routing_intents import is_delegated_choice_reply
+
         if (
-            not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", slot)
+            is_delegated_choice_reply(answer)
+            or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", slot)
             or not original or len(original) > 4000
             or not answer or len(answer) > 500
             or answer.casefold() in {"cancel", "never mind", "nevermind", "stop"}
@@ -3740,6 +3747,10 @@ class ChatRuntime:
         if prompt != "Which city or location should I check the weather for?":
             return
         location = str(current.get("content", "")).strip()
+        from ai_karen_engine.core.cortex.routing_intents import is_delegated_choice_reply
+
+        if is_delegated_choice_reply(location):
+            return
         if not re.fullmatch(r"[A-Za-z][A-Za-z .,'-]{0,79}", location):
             return
         if location.casefold() in {"yes", "no", "thanks", "thank you", "cancel", "nevermind"}:

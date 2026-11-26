@@ -2171,3 +2171,64 @@ def test_research_handoff_receipt_excludes_restricted_retrieval() -> None:
     request.search_retrieval_options = None
     request.attachment_references = [{"source_id": "test"}]
     assert not receipt(request, text, meta)
+
+
+@pytest.mark.parametrize("reply", [
+    "Surprise me", "Anything you choose", "Whatever you prefer",
+    "You decide.", "It's up to you!", "No preference",
+])
+@pytest.mark.parametrize("slot, original, question", [
+    ("weather_location", "What's the weather?", "Which city or location should I check the weather for?"),
+    ("party_size", "Find a restaurant booking", "How many people?"),
+    ("meeting_time", "Book a meeting", "What time?"),
+    ("automation.details", "Create a daily automation", "When should it run?"),
+])
+def test_preference_delegation_is_not_a_required_input(reply, slot, original, question):
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request(reply)
+    request.messages = [
+        {"role": "user", "content": original},
+        {"role": "assistant", "content": question, "metadata": {
+            "pending_clarification": {
+                "status": "awaiting_user", "slot": slot,
+                "original_request": original,
+            },
+        }},
+        {"role": "user", "content": reply},
+    ]
+    assert not ChatRuntime._resolve_typed_pending_clarification(request)
+    ChatRuntime._resolve_pending_weather_followup(request)
+    assert request.messages[-1]["content"] == reply
+    assert "clarification_effective_query" not in request.metadata
+    assert "clarification_inputs" not in request.metadata
+    assert not request.metadata.get("weather_followup_resolved")
+
+
+@pytest.mark.parametrize("reply", [
+    "Surprise me", "Anything you choose", "Whatever you think is best",
+    "Your call", "Please choose for me",
+])
+def test_legacy_weather_clarification_never_treats_delegation_as_location(reply):
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+
+    request = _request(reply)
+    request.messages = [
+        {"role": "user", "content": "What's the weather?"},
+        {"role": "assistant", "content": "Which city or location should I check the weather for?"},
+        {"role": "user", "content": reply},
+    ]
+    ChatRuntime._resolve_pending_weather_followup(request)
+    assert request.messages[-1]["content"] == reply
+    assert not request.metadata.get("weather_followup_resolved")
+
+
+@pytest.mark.parametrize("text", [
+    "Choose a restaurant for me", "Pick the best option and book it",
+    "Detroit", "Four", "Choose my account",
+    "Anything you choose, then delete the old files",
+])
+def test_delegation_recognition_does_not_consume_compound_or_factual_requests(text):
+    from ai_karen_engine.core.cortex.routing_intents import is_delegated_choice_reply
+
+    assert not is_delegated_choice_reply(text)

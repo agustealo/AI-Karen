@@ -72,6 +72,23 @@ def is_research_paper_followup(query: str) -> bool:
     ))
 
 
+def is_delegated_choice_reply(query: str) -> bool:
+    """Recognize a standalone preference delegation, not action approval.
+
+    A delegated choice supplies no factual location, identity, schedule,
+    party size or other required input. Compound requests remain ordinary
+    user messages and are not rewritten by this recognition.
+    """
+    return bool(re.fullmatch(
+        r"(?:please\s+)?(?:surprise me|"
+        r"(?:anything|whatever|whichever)(?:\s+you\s+(?:choose|prefer|like|want|think(?:\s+is)?\s+best))?|"
+        r"you\s+(?:choose|decide|pick)|(?:choose|decide|pick)\s+for\s+me|"
+        r"(?:it(?:'s| is)\s+)?up\s+to\s+you|"
+        r"your\s+(?:choice|call)|no\s+preference)[?!.]*",
+        " ".join(query.casefold().replace("’", "'").strip().split()),
+    ))
+
+
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "artifact.code.read": {
         "triggers": [],
