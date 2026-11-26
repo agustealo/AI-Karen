@@ -154,6 +154,8 @@ class TimeoutSettings:
     chat_run_lease_seconds: int = 120
     chat_run_heartbeat_seconds: int = 10
     communications_invalidation_timeout_ms: int = 250
+    communications_invalidation_wait_seconds: int = 10
+    communications_invalidation_max_waiters: int = 2
     tool_timeout_seconds: int = 30
     web_search_timeout_seconds: int = 60
     extension_timeout_seconds: int = 30
@@ -182,6 +184,7 @@ class FeatureFlags:
     enable_communications_terminal_producer: bool = False
     # KCOMM-03E: best-effort internal invalidation only, no client delivery.
     enable_communications_invalidation: bool = False
+    enable_communications_invalidation_wait: bool = False
     # KUI-002D3B2B: mutation transport remains opt-in after authenticated acceptance.
     enable_presentation_pin_mutations: bool = False
     # KGUI-CARD-STUDIO-01C: opt-in authenticated template CRUD, no publication.
@@ -480,6 +483,26 @@ class RuntimeSettings:
                 raise ValueError("Communications invalidation timeout must be 1 to 1000 ms")
             self.timeouts.communications_invalidation_timeout_ms = value
 
+        env_wait = env("KARI_ENABLE_COMMUNICATIONS_INVALIDATION_WAIT")
+        if env_wait is not None:
+            normalized = env_wait.strip().lower()
+            if normalized not in {"1", "0", "true", "false", "yes", "no", "on", "off"}:
+                raise ValueError("KARI_ENABLE_COMMUNICATIONS_INVALIDATION_WAIT must be a boolean")
+            self.features.enable_communications_invalidation_wait = normalized in {"1", "true", "yes", "on"}
+        for key, attribute, maximum in (
+            ("KARI_COMMUNICATIONS_INVALIDATION_WAIT_SECONDS", "communications_invalidation_wait_seconds", 15),
+            ("KARI_COMMUNICATIONS_INVALIDATION_MAX_WAITERS", "communications_invalidation_max_waiters", 4),
+        ):
+            value = env(key)
+            if value is not None:
+                try:
+                    parsed = int(value)
+                except ValueError:
+                    raise ValueError(f"Invalid {key}") from None
+                if not 1 <= parsed <= maximum:
+                    raise ValueError(f"Invalid {key}")
+                setattr(self.timeouts, attribute, parsed)
+
         env_pin_mutations = env("KARI_ENABLE_PRESENTATION_PIN_MUTATIONS")
         if env_pin_mutations is not None:
             self.features.enable_presentation_pin_mutations = as_bool(env_pin_mutations)
@@ -607,6 +630,18 @@ class RuntimeSettings:
         timeout = self.timeouts.communications_invalidation_timeout_ms
         if type(timeout) is not int or not 1 <= timeout <= 1000:
             issues.append("Communications invalidation timeout must be 1 to 1000 ms")
+
+        if not isinstance(self.features.enable_communications_invalidation_wait, bool):
+            issues.append("Communications invalidation wait flag must be boolean")
+        if self.features.enable_communications_invalidation_wait and not self.features.enable_communications_invalidation:
+            issues.append("Communications invalidation wait requires the invalidation producer")
+        for attribute, maximum in (
+            ("communications_invalidation_wait_seconds", 15),
+            ("communications_invalidation_max_waiters", 4),
+        ):
+            value = getattr(self.timeouts, attribute)
+            if type(value) is not int or not 1 <= value <= maximum:
+                issues.append(f"Invalid {attribute}")
 
         if not isinstance(self.features.enable_card_studio_crud, bool):
             issues.append("Card Studio CRUD flag must be boolean")

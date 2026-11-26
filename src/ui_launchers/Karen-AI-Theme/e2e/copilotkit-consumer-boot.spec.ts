@@ -1477,6 +1477,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         const foreign = await browser.newContext({ storageState: { cookies: [], origins: [] }, acceptDownloads: false });
         try {
           const active = await foreign.newPage();
+          await requireReviewedRevision(active, target);
           await requireLiveCanonicalBackend(active, target);
           await signInApprovedKaren(active, account.email!, account.password!, { allowLocalLoopback: true });
           await requireAccount(active, account);

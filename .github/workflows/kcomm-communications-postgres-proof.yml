@@ -5,6 +5,9 @@ on:
     paths:
       - "supabase/migrations/*communications_inbox*.sql"
       - "tests/integration/test_communications_inbox_postgres.py"
+      - "tests/integration/test_communications_invalidation_redis.py"
+      - "src/ai_karen_engine/core/realtime/inbox_invalidation.py"
+      - "src/ai_karen_engine/platform/memory/redis/redis_connection_manager.py"
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
       - "src/ai_karen_engine/persistence/repositories/chat_run_repository.py"
       - "src/ai_karen_engine/config/runtime.py"
@@ -22,6 +25,9 @@ on:
     paths:
       - "supabase/migrations/**"
       - "tests/integration/test_communications_inbox_postgres.py"
+      - "tests/integration/test_communications_invalidation_redis.py"
+      - "src/ai_karen_engine/core/realtime/inbox_invalidation.py"
+      - "src/ai_karen_engine/platform/memory/redis/redis_connection_manager.py"
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
       - "src/ai_karen_engine/persistence/repositories/chat_run_repository.py"
       - "src/ai_karen_engine/config/runtime.py"
@@ -124,6 +130,24 @@ jobs:
           python -m compileall -q src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py src/ai_karen_engine/services/privacy_compliance.py tests/integration/test_communications_inbox_postgres.py
           pytest tests/integration/test_communications_inbox_postgres.py -q -rs
           pytest tests/api_routes/test_communications_center_scope.py tests/api_routes/test_communications_inbox_contract.py tests/api_routes/test_chat_run_repository.py -q -rs
+      - name: Prove real Redis owner isolation across independent processes
+        shell: bash
+        env:
+          KAREN_TEST_DISPOSABLE_REDIS: "1"
+        run: |
+          set -euo pipefail
+          container="kcomm-redis-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run --rm -d --name "$container" -p 127.0.0.1::6379 redis:7-alpine redis-server --save "" --appendonly no
+          for attempt in $(seq 1 30); do
+            if docker exec "$container" redis-cli ping | grep -qx PONG; then break; fi
+            sleep 1
+          done
+          test "$(docker exec "$container" redis-cli ping)" = PONG
+          binding="$(docker port "$container" 6379/tcp)"
+          [[ "$binding" =~ ^127\.0\.0\.1:([0-9]+)$ ]]
+          export KAREN_TEST_COMMUNICATIONS_REDIS_URL="redis://$binding/0"
+          pytest tests/integration/test_communications_invalidation_redis.py -q -rs
       - name: Record evidence boundary
         if: always()
         run: |

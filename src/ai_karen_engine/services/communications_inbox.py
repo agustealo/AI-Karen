@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from uuid import UUID
 
@@ -9,6 +10,9 @@ from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
 from ai_karen_engine.core.security.auth_config import auth_config
+from ai_karen_engine.core.realtime.inbox_invalidation import (
+    InboxInvalidationUnavailable, wait_for_inbox_invalidation,
+)
 from ai_karen_engine.persistence.repositories.communications_inbox_repository import (
     CommunicationsInboxRepository,
     InboxCursor,
@@ -101,6 +105,33 @@ class CommunicationsInboxService:
             can_mutate=can_mutate, producer_enabled=producer_enabled,
             can_reconcile=can_mutate and producer_enabled,
         ))
+
+    async def wait_owned(
+        self, *, user: UserData, correlation_id: str,
+        reauthenticate: Callable[[], Awaitable[UserData]],
+        disconnected: Callable[[], Awaitable[bool]],
+    ) -> bool:
+        """Admit only the current owner; reauthorize after releasing Redis."""
+        scope = self._authorize(user, Permission.COMMUNICATIONS_READ, correlation_id)
+        changed = await wait_for_inbox_invalidation(
+            tenant_id=scope[0], user_id=scope[1], disconnected=disconnected,
+        )
+        fresh = await reauthenticate()
+        if self._authorize(fresh, Permission.COMMUNICATIONS_READ, correlation_id) != scope:
+            raise CommunicationsAuthorizationError("Communications principal changed")
+        if await disconnected():
+            raise InboxInvalidationUnavailable("Communications invalidation unavailable")
+        settings = get_runtime_settings()
+        if (
+            settings.features.enable_communications_invalidation is not True
+            or settings.features.enable_communications_invalidation_wait is not True
+        ):
+            raise InboxInvalidationUnavailable("Communications invalidation unavailable")
+        logger.info("communications.invalidation.wait_completed", extra={
+            "tenant_id": scope[0], "user_id": scope[1],
+            "correlation_id": correlation_id, "changed": changed,
+        })
+        return changed
 
     async def mutate_owned(
         self, *, user: UserData, correlation_id: str, entry_id: UUID,
