@@ -144,7 +144,7 @@ test("CK-07E8 native controlled view retains an authenticated draft without star
     await expect(hideContext).toBeVisible();
     await expect(hideContext).toHaveAttribute("aria-expanded", "true");
     const desktopDeck = desktopContext.locator(
-      '[data-testid="canonical-conversation-rail"], [data-testid="karen-copilot-rail-unverified"]',
+      '[data-testid="conversation-context-rail"], [data-testid="karen-copilot-rail-unverified"]',
     );
     await expect(desktopDeck).toHaveCount(1);
     await expect(desktopDeck).toBeVisible();
@@ -162,7 +162,7 @@ test("CK-07E8 native controlled view retains an authenticated draft without star
     await expect(intelligenceToggle).toContainText("Response context");
     await intelligenceToggle.click();
     await expect(mobileIntelligence).toHaveAttribute("open", "");
-    const verifiedMobileDeck = mobileIntelligence.getByTestId("canonical-conversation-rail");
+    const verifiedMobileDeck = mobileIntelligence.getByTestId("conversation-context-rail");
     const unverifiedMobileDeck = mobileIntelligence.getByTestId("karen-copilot-rail-unverified");
     const verifiedCount = await verifiedMobileDeck.count();
     const unverifiedCount = await unverifiedMobileDeck.count();
