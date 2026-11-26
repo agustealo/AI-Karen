@@ -14,6 +14,7 @@ from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import (
     _trusted_chat_execution_context,
 )
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.core.runtime.policy.runtime_policy import (
     PolicyDecision, RuntimePolicyEnforcer,
@@ -163,6 +164,9 @@ async def test_medusa_refuses_invalid_shared_meter_before_any_planning(invalid):
 
     planner = SimpleNamespace(create_plan=AsyncMock())
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.planner = planner
     with pytest.raises(PermissionError, match="medusa_shared_budget_authority_invalid"):
         await coordinator._handle_request(request)
@@ -196,6 +200,9 @@ async def test_empty_root_allowlists_reject_serialized_handoff_widening():
         replace(root, allowed_tools=["unapproved-tool"]),
     )
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.planner = SimpleNamespace(create_plan=AsyncMock())
     with pytest.raises(
         PermissionError, match="medusa_shared_budget_authority_invalid",
@@ -220,6 +227,9 @@ async def test_mutated_original_empty_root_permissions_cannot_authorize_handoff(
         request.authorized_plan = asdict(root)
         planner = SimpleNamespace(create_plan=AsyncMock())
         coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
         coordinator.planner = planner
         with pytest.raises(
             PermissionError, match="medusa_shared_budget_authority_invalid",
@@ -249,6 +259,9 @@ async def test_shared_medusa_restricts_serialized_handoff_to_one_specialist():
     )
     request.authorized_plan = asdict(replace(root, allowed_agents=["analyst"]))
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.registry = SimpleNamespace()
     coordinator.planner = SimpleNamespace(
         create_plan=AsyncMock(side_effect=RuntimeError("planner_sentinel")),
@@ -269,6 +282,9 @@ async def test_shared_medusa_rejects_widened_specialist_handoff():
     request, _root, meter, context = _request(allowed_agents=["analyst"])
     request.authorized_plan["allowed_agents"] = ["analyst", "unapproved"]
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.planner = SimpleNamespace(create_plan=AsyncMock())
     with pytest.raises(
         PermissionError, match="medusa_shared_budget_authority_invalid",
@@ -286,6 +302,9 @@ async def test_standalone_authenticated_medusa_binds_own_real_meter_once():
         create_plan=AsyncMock(side_effect=RuntimeError("planner_sentinel")),
     )
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.planner = planner
     coordinator.registry = SimpleNamespace()
     with pytest.raises(RuntimeError, match="planner_sentinel"):
@@ -310,6 +329,9 @@ async def test_shared_medusa_degradation_metadata_restores_original_plan_identit
         create_plan=AsyncMock(side_effect=RuntimeError("planner_sentinel")),
     )
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.planner = planner
     coordinator.registry = SimpleNamespace()
     with pytest.raises(RuntimeError, match="planner_sentinel"):
@@ -327,6 +349,9 @@ async def test_valid_original_shared_budget_reaches_existing_planner_without_res
         create_plan=AsyncMock(side_effect=RuntimeError("planner_sentinel")),
     )
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.planner = planner
     # The valid path reaches the real coordinator's planner call, which
     # explicitly receives the canonical registry. Provide that dependency.
@@ -358,6 +383,9 @@ async def test_specialist_pre_invocation_failure_emits_no_start(failure):
     specialist = SimpleNamespace(run=AsyncMock())
     registration = SimpleNamespace(lifecycle_state="active")
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.registry = SimpleNamespace(
         get_agent=AsyncMock(return_value=registration),
         get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
@@ -404,6 +432,9 @@ async def test_admitted_specialist_emits_correlated_start_and_terminal_event(fai
 
     specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.registry = SimpleNamespace(
         get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
         get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
@@ -558,6 +589,9 @@ async def test_specialist_cancellation_preserves_observed_execution_boundary(bou
     emitter = InterruptingEmitter()
     specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.registry = SimpleNamespace(
         get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
         get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
@@ -620,6 +654,9 @@ async def test_scheduler_emits_each_skipped_step_once(exhausted):
     plan = DeepExecutionPlan(request_id=request.request_id, steps=[first, second, third])
     events = []
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.registry = SimpleNamespace()
     coordinator.planner = SimpleNamespace(create_plan=AsyncMock(return_value=plan))
     coordinator.active_plans = {}
@@ -686,6 +723,9 @@ async def test_post_invocation_failure_does_not_emit_false_specialist_failure(bo
     emitter = FailingEmitter()
     specialist = SimpleNamespace(run=AsyncMock(return_value={"result": "observed"}))
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.registry = SimpleNamespace(
         get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
         get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
@@ -718,6 +758,9 @@ async def test_wave_propagates_post_invocation_error_without_rewriting_completed
     step = PlanStep(agent_specialist="researcher")
     plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
     coordinator = object.__new__(MedusaCoordinator)
+    coordinator._outcome_recorder = OutcomeRecorder(
+        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    )
     coordinator.registry = SimpleNamespace()
     coordinator.planner = SimpleNamespace(create_plan=AsyncMock(return_value=plan))
     coordinator.active_plans = {}
@@ -739,5 +782,143 @@ async def test_wave_propagates_post_invocation_error_without_rewriting_completed
     assert step.output_data == {"result": "observed"}
     assert step.error is None
     coordinator._execute_step.assert_awaited_once()
+    coordinator.assembler.assemble.assert_not_awaited()
+    assert request.request_id not in coordinator.active_plans
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["completed", "failed", "interrupted", "before_call", "append_failed"])
+async def test_coordinator_records_only_observed_terminal_participation(boundary):
+    import asyncio
+
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+    from ai_karen_engine.agent_medusa.contracts.events import AgentEventType
+    from ai_karen_engine.agent_medusa.execution.event_emitter import EventEmitter
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, root, meter, _ = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+    pending = set()
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock())
+
+    class InterruptingEmitter(EventEmitter):
+        async def emit(self, event):
+            if boundary == "before_call" and event.type == AgentEventType.AGENT_STARTED:
+                raise asyncio.CancelledError
+            await super().emit(event)
+
+    async def invoke(*args, **kwargs):
+        store.save_unique_outcome_async.assert_not_awaited()
+        if boundary == "failed":
+            raise RuntimeError("invocation_failed")
+        if boundary == "interrupted":
+            raise asyncio.CancelledError
+        return {"result": "observed"}
+
+    async def append(payload):
+        if boundary == "append_failed":
+            raise OutcomeStoreError("append failed")
+
+    store.save_unique_outcome_async.side_effect = append
+    specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
+    emitter = InterruptingEmitter()
+    coordinator = MedusaCoordinator(
+        registry=SimpleNamespace(
+            get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
+            get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
+        ),
+        factory=SimpleNamespace(resolve=lambda _: specialist),
+        lifecycle=SimpleNamespace(set_status=AsyncMock()),
+        outcome_recorder=OutcomeRecorder(store=store),
+    )
+
+    async def execute():
+        return await coordinator._execute_step(
+            step, plan, request, root, meter, emitter,
+            pending_participation=pending,
+        )
+
+    if boundary in {"before_call", "interrupted"}:
+        with pytest.raises(asyncio.CancelledError):
+            await execute()
+    elif boundary == "failed":
+        with pytest.raises(RuntimeError, match="invocation_failed"):
+            await execute()
+    elif boundary == "append_failed":
+        with pytest.raises(OutcomeStoreError, match="append failed"):
+            await execute()
+    else:
+        assert await execute() == {"result": "observed"}
+
+    if boundary == "before_call":
+        specialist.run.assert_not_awaited()
+        store.save_unique_outcome_async.assert_not_awaited()
+        assert not pending
+        return
+
+    specialist.run.assert_awaited_once()
+    store.save_unique_outcome_async.assert_awaited_once()
+    payload = store.save_unique_outcome_async.await_args.args[0]
+    assert payload["tenant_id"] == "tenant-a"
+    assert payload["user_id"] == "user-a"
+    assert payload["trajectory_id"] == "request-a"
+    assert payload["correlation_id"] == "corr-a"
+    assert payload["metadata"]["step_id"] == step.id
+    assert payload["metadata"]["specialist_id"] == "researcher"
+    assert payload["metadata"]["phase"] == (
+        "completed" if boundary == "append_failed" else boundary
+    )
+    if boundary in {"completed", "append_failed"}:
+        assert step.status == StepStatus.COMPLETED
+        assert step.output_data == {"result": "observed"}
+        assert not any(event.type == AgentEventType.AGENT_FAILED for event in emitter.events)
+    assert pending == ({step.id} if boundary == "append_failed" else set())
+
+
+@pytest.mark.asyncio
+async def test_wave_timeout_during_completion_receipt_cannot_assemble_success():
+    import asyncio
+
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, _, meter, _ = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+
+    async def append(payload):
+        await asyncio.Event().wait()
+
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock(side_effect=append))
+    specialist = SimpleNamespace(run=AsyncMock(return_value={"result": "observed"}))
+    coordinator = MedusaCoordinator(
+        planner=SimpleNamespace(create_plan=AsyncMock(return_value=plan)),
+        registry=SimpleNamespace(
+            get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
+            get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
+        ),
+        factory=SimpleNamespace(resolve=lambda _: specialist),
+        lifecycle=SimpleNamespace(set_status=AsyncMock()),
+        assembler=SimpleNamespace(assemble=AsyncMock()),
+        outcome_recorder=OutcomeRecorder(store=store),
+    )
+    # Bound the wave rather than wall-clock sleeps or a real database.
+    meter.remaining_duration_ms = AsyncMock(return_value=50)
+    with pytest.raises(OutcomeStoreError, match="acknowledgement unavailable"):
+        await coordinator._handle_request(request)
+
+    specialist.run.assert_awaited_once()
+    store.save_unique_outcome_async.assert_awaited_once()
+    assert step.status == StepStatus.COMPLETED
+    assert step.output_data == {"result": "observed"}
     coordinator.assembler.assemble.assert_not_awaited()
     assert request.request_id not in coordinator.active_plans

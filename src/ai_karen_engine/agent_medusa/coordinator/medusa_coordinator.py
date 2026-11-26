@@ -5,7 +5,9 @@ import logging
 from dataclasses import asdict, replace
 from typing import Any, Dict, List, Optional
 
-from ...core.runtime.outcome.store import OutcomeStoreError
+from ...core.runtime.outcome.contracts import SpecialistParticipationPhase
+from ...core.runtime.outcome.recorder import OutcomeRecorder
+from ...core.runtime.outcome.store import OutcomeStoreError, get_outcome_store
 from ...core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
@@ -87,6 +89,7 @@ class MedusaCoordinator:
         lifecycle: Optional[MedusaAgentLifecycle] = None,
         event_emitter: Optional[EventEmitter] = None,
         run_manager: Optional[MedusaRunManager] = None,
+        outcome_recorder: Optional[OutcomeRecorder] = None,
     ) -> None:
         self.planner = planner or CapabilityAwareMedusaPlanner()
         self.registry = registry or get_medusa_registry()
@@ -94,6 +97,10 @@ class MedusaCoordinator:
         self.assembler = assembler or ResponseAssembler()
         self.lifecycle = lifecycle or MedusaAgentLifecycle()
         self.run_manager = run_manager or get_medusa_run_manager()
+        self._outcome_recorder = (
+            outcome_recorder if outcome_recorder is not None
+            else OutcomeRecorder(store=get_outcome_store())
+        )
         self.active_plans: Dict[str, DeepExecutionPlan] = {}
         self.event_emitter = event_emitter or EventEmitter()
         self.trajectories: Dict[str, ExecutionTrajectory] = {}
@@ -331,6 +338,7 @@ class MedusaCoordinator:
         agent_trace: list[str] = []
 
         reported_skips: set[str] = set()
+        pending_participation: set[str] = set()
 
         async def report_skips() -> None:
             for step in plan.steps:
@@ -419,12 +427,19 @@ class MedusaCoordinator:
                                     trajectory,
                                     degraded_agents,
                                     degradation_reasons,
+                                    pending_participation,
                                 )
                                 for step in wave
                             ],
                             return_exceptions=True,
                         )
                 except TimeoutError:
+                    # Cancellation of an in-flight append does not establish
+                    # whether the durable observation was committed.
+                    if pending_participation:
+                        raise OutcomeStoreError(
+                            "Specialist participation acknowledgement unavailable"
+                        )
                     for step in wave:
                         if step.status != StepStatus.COMPLETED:
                             step.status = StepStatus.FAILED
@@ -440,6 +455,10 @@ class MedusaCoordinator:
                 # receipt failed. Never downgrade that uncertainty to a
                 # partial response merely because sibling agents succeeded.
                 self._require_durable_tool_receipts(results)
+                if pending_participation:
+                    raise OutcomeStoreError(
+                        "Specialist participation acknowledgement unavailable"
+                    )
                 for step, result in zip(wave, results):
                     if isinstance(result, BaseException):
                         # A post-invocation observation or cleanup failure
@@ -511,6 +530,7 @@ class MedusaCoordinator:
         trajectory: Any = None,
         degraded_agents: Optional[List[str]] = None,
         degradation_reasons: Optional[Dict[str, str]] = None,
+        pending_participation: Optional[set[str]] = None,
     ) -> Dict[str, Any]:
         logger.info(
             "medusa_step_started",
@@ -757,6 +777,31 @@ class MedusaCoordinator:
             "degraded_mode": is_degraded,
         }
 
+        async def record_participation(phase: SpecialistParticipationPhase) -> None:
+            # Legacy requests without original authenticated chat authority
+            # remain observational; serialized grants cannot produce receipts.
+            if trusted_context is None:
+                return
+            if pending_participation is not None:
+                pending_participation.add(step.id)
+            try:
+                await self._outcome_recorder.record_specialist_participation_async(
+                    context=trusted_context,
+                    plan=specialist_plan,
+                    meter=meter,
+                    step_id=step.id,
+                    specialist_id=step.agent_specialist,
+                    phase=phase,
+                )
+            except OutcomeStoreError:
+                raise
+            except Exception as exc:
+                raise OutcomeStoreError(
+                    "Specialist participation acknowledgement unavailable"
+                ) from exc
+            if pending_participation is not None:
+                pending_participation.discard(step.id)
+
         await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
         invocation_entered = False
         try:
@@ -774,6 +819,7 @@ class MedusaCoordinator:
             result = await specialist.run(step.input_data, context, execution=execution)
             step.status = StepStatus.COMPLETED
             step.output_data = result
+            await record_participation(SpecialistParticipationPhase.COMPLETED)
             if emitter is not None:
                 await emitter.emit(
                     AgentEvent(
@@ -800,6 +846,22 @@ class MedusaCoordinator:
             if step.status != StepStatus.COMPLETED:
                 step.status = StepStatus.FAILED
                 step.error = "cancelled"
+                if invocation_entered:
+                    try:
+                        await record_participation(
+                            SpecialistParticipationPhase.INTERRUPTED
+                        )
+                    except Exception:
+                        # Preserve caller cancellation; the pending marker
+                        # blocks successful aggregation on a wave timeout.
+                        logger.exception(
+                            "medusa_interruption_receipt_unacknowledged",
+                            extra={
+                                "run_id": request.request_id,
+                                "step_id": step.id,
+                                "agent_id": step.agent_specialist,
+                            },
+                        )
                 if emitter is not None:
                     await emitter.emit(
                         AgentEvent(
@@ -825,6 +887,8 @@ class MedusaCoordinator:
             )
             raise
         except Exception as exc:
+            if invocation_entered and step.status != StepStatus.COMPLETED:
+                await record_participation(SpecialistParticipationPhase.FAILED)
             if (
                 invocation_entered
                 and step.status != StepStatus.COMPLETED
