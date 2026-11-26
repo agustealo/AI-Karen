@@ -63,8 +63,9 @@ class HierarchicalTruncationPolicy:
 
     Memory/tool inputs are assumed to arrive best-first from their canonical
     owners, so pressure removes items from the tail. Conversation history is
-    different: the latest user message is always protected and older messages
-    are removed first.
+    different: the latest user message is always protected. Old turns are
+    removed together, and the most recent preceding objective is retained
+    while other eligible context can still be trimmed.
     """
 
     def __init__(self) -> None:
@@ -188,6 +189,7 @@ class HierarchicalTruncationPolicy:
             estimate = estimate_tokens(request)
             return int(getattr(estimate, "total_tokens", 0))
 
+        preserve_recent = True
         while total_tokens() > request.token_budget:
             changed = False
             for section in self.get_truncation_order():
@@ -195,7 +197,9 @@ class HierarchicalTruncationPolicy:
                 if before <= request.token_budget:
                     break
 
-                removed = self._truncate_once(request, section)
+                removed = self._truncate_once(
+                    request, section, preserve_recent=preserve_recent,
+                )
                 if removed <= 0:
                     continue
 
@@ -219,13 +223,23 @@ class HierarchicalTruncationPolicy:
                     break
 
             if not changed:
+                # The immediate prior turn is a preference, not an exemption
+                # from the token budget. Drop it only after other eligible
+                # sections cannot shrink further.
+                if preserve_recent and self.can_truncate("history"):
+                    preserve_recent = False
+                    continue
                 break
 
         return events
 
-    def _truncate_once(self, request: PromptAssemblyRequest, section: str) -> int:
+    def _truncate_once(
+        self, request: PromptAssemblyRequest, section: str, *, preserve_recent: bool = False,
+    ) -> int:
         if section == "history":
-            return self._remove_oldest_history_message(request)
+            return self._remove_oldest_history_turn(
+                request, preserve_recent=preserve_recent,
+            )
         if section == "workflow" and request.workflow_context:
             request.workflow_context = {}
             return 1
@@ -268,21 +282,51 @@ class HierarchicalTruncationPolicy:
         return 0
 
     @staticmethod
-    def _remove_oldest_history_message(request: PromptAssemblyRequest) -> int:
-        if len(request.messages) <= 1:
+    def _remove_oldest_history_turn(
+        request: PromptAssemblyRequest, *, preserve_recent: bool,
+    ) -> int:
+        """Trim history without orphaning a prior assistant reply.
+
+        System/tool/attachment records are not owned by this history rule.
+        The latest user and anything after it belong to the active turn.
+        """
+        messages = request.messages
+        latest_user_index = next(
+            (i for i in range(len(messages) - 1, -1, -1)
+             if str(messages[i].get("role", "")).lower() == "user"),
+            None,
+        )
+        if latest_user_index is None:
             return 0
 
-        latest_user_index: Optional[int] = None
-        for index in range(len(request.messages) - 1, -1, -1):
-            if str(request.messages[index].get("role", "")).lower() == "user":
-                latest_user_index = index
-                break
-
-        for index, message in enumerate(request.messages):
-            if index == latest_user_index or message.get("source") == "verified_attachment_data":
-                continue
+        turns: List[List[int]] = []
+        for index, message in enumerate(messages[:latest_user_index]):
             role = str(message.get("role", "")).lower()
-            if role in {"user", "assistant"}:
-                request.messages.pop(index)
-                return 1
+            if role == "user":
+                turns.append([index])
+            elif role == "assistant":
+                if not turns:
+                    turns.append([])
+                turns[-1].append(index)
+
+        for position, turn in enumerate(turns):
+            if not turn:
+                continue
+            if any(messages[i].get("source") == "verified_attachment_data" for i in turn):
+                # Never detach a protected record from the turn it belongs to.
+                continue
+            is_recent_objective = (
+                position == len(turns) - 1
+                and str(messages[turn[0]].get("role", "")).lower() == "user"
+            )
+            if is_recent_objective and preserve_recent:
+                return 0
+            if is_recent_objective and len(turn) > 1:
+                # Under unavoidable pressure, keep the user's actual request
+                # rather than the assistant's possibly verbose earlier answer.
+                # A subsequent pass can drop the anchor if it still cannot fit.
+                turn = turn[1:]
+            for index in reversed(turn):
+                messages.pop(index)
+            return len(turn)
         return 0

@@ -1,6 +1,9 @@
 """Canonical prompt ordering: internal context never follows the active user turn."""
 
 import pytest
+from types import SimpleNamespace
+
+from ai_karen_engine.core.runtime.prompt.truncation_policy import HierarchicalTruncationPolicy
 
 from ai_karen_engine.core.runtime.prompt.prompt_assembler import PromptAssembler
 from ai_karen_engine.core.runtime.prompt.prompt_contract import PromptAssemblyRequest
@@ -69,3 +72,96 @@ async def test_personal_followup_prompt_prioritizes_new_turn_not_replayed_biogra
     assert "do not repeat the same biography" in instructions[0]
     assert "acknowledge the new fact directly" in instructions[0]
     assert "Prior assistant answers are discourse context" in instructions[0]
+
+
+
+def _budget_estimate(request):
+    """Deterministic token-cost fixture, not a provider tokenizer."""
+    return SimpleNamespace(total_tokens=(
+        sum(len(message["content"]) for message in request.messages)
+        + sum(len(item["content"]) for item in request.memory_items)
+    ))
+
+
+def test_budget_trims_old_turn_without_orphaning_its_reply():
+    messages = [
+        {"role": "user", "content": "Old objective"},
+        {"role": "assistant", "content": "Old unrelated reply"},
+        {"role": "user", "content": "Make an original card game"},
+        {"role": "assistant", "content": "Which theme?"},
+        {"role": "user", "content": "Surprise me"},
+    ]
+    request = PromptAssemblyRequest(
+        messages=list(messages),
+        token_budget=sum(len(m["content"]) for m in messages[2:]),
+    )
+    events = HierarchicalTruncationPolicy().enforce(request, _budget_estimate)
+    assert request.messages == messages[2:]
+    assert len(events) == 1
+    assert events[0].section == "history"
+    assert events[0].items_removed == 2
+    assert events[0].tokens_after <= request.token_budget
+
+
+def test_budget_prefers_immediate_task_over_optional_memory():
+    messages = [
+        {"role": "user", "content": "Build a card game"},
+        {"role": "assistant", "content": "Which kind?"},
+        {"role": "user", "content": "Anything you choose"},
+    ]
+    request = PromptAssemblyRequest(
+        messages=list(messages),
+        memory_items=[{"content": "Unrelated memory " * 20}],
+        token_budget=sum(len(m["content"]) for m in messages),
+    )
+    events = HierarchicalTruncationPolicy().enforce(request, _budget_estimate)
+    assert request.messages == messages
+    assert request.memory_items == []
+    assert [event.section for event in events] == ["memory"]
+
+
+def test_budget_drops_verbose_reply_before_immediate_user_objective():
+    messages = [
+        {"role": "user", "content": "Make a card game"},
+        {"role": "assistant", "content": "Long explanation " * 50},
+        {"role": "user", "content": "Surprise me"},
+    ]
+    request = PromptAssemblyRequest(
+        messages=list(messages),
+        token_budget=len(messages[0]["content"]) + len(messages[-1]["content"]),
+    )
+    events = HierarchicalTruncationPolicy().enforce(request, _budget_estimate)
+    assert request.messages == [messages[0], messages[-1]]
+    assert events[0].items_removed == 1
+    assert _budget_estimate(request).total_tokens <= request.token_budget
+
+
+def test_budget_can_drop_prior_anchor_but_never_active_user_or_attachment():
+    attachment = {
+        "role": "system", "content": "Verified attachment",
+        "source": "verified_attachment_data",
+    }
+    active = {"role": "user", "content": "Continue"}
+    request = PromptAssemblyRequest(
+        messages=[
+            {"role": "user", "content": "Previous objective"},
+            {"role": "assistant", "content": "Previous answer"},
+            attachment, active,
+        ],
+        token_budget=len(attachment["content"]) + len(active["content"]),
+    )
+    events = HierarchicalTruncationPolicy().enforce(request, _budget_estimate)
+    assert request.messages == [attachment, active]
+    assert sum(event.items_removed for event in events) == 2
+
+
+def test_budget_never_detaches_protected_history_record():
+    messages = [
+        {"role": "user", "content": "Prior question"},
+        {"role": "assistant", "content": "Verified attachment", "source": "verified_attachment_data"},
+        {"role": "user", "content": "Continue"},
+    ]
+    request = PromptAssemblyRequest(messages=list(messages), token_budget=1)
+    events = HierarchicalTruncationPolicy().enforce(request, _budget_estimate)
+    assert request.messages == messages
+    assert events == []
