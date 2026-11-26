@@ -320,6 +320,7 @@ class ToolBridge:
                 agent_id=agent_id,
                 message=f"tool {tool_name} started",
                 correlation_id=correlation_id,
+                request_id=trajectory_id,
                 metadata={"tool": tool_name, "step_id": step_id, "tool_call_id": tool_call_id},
             ))
 
@@ -439,6 +440,7 @@ class ToolBridge:
                 agent_id=agent_id,
                 message=f"tool {tool_name} {'completed' if success else 'failed'}",
                 correlation_id=correlation_id,
+                request_id=trajectory_id,
                 metadata={"tool": tool_name, "step_id": step_id, "tool_call_id": tool_call_id, "success": success},
             ))
         if workflow_authority_check is not None:
