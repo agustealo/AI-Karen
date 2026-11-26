@@ -1,6 +1,9 @@
 """The first-party live UI audit reuses protected deployment and auth authority."""
 
+import re
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/karen-history-browser-acceptance.yml"
@@ -15,6 +18,69 @@ def _protected_job() -> str:
     marker = "\n  authenticated-settings-visual-acceptance:\n"
     assert content.count(marker) == 1
     return content.split(marker, 1)[1]
+
+
+def _assert_workspace_credential_boundary(job: str) -> None:
+    """Permit login credentials only in the two mutually exclusive browser steps."""
+    header, steps = job.split("\n    steps:", 1)
+    chunks = re.split(r"\n(?=      - )", steps)
+    allowed = {
+        "Verify authenticated workspace browser acceptance": "!=",
+        "Prove protected specialist lifecycle and cross-tenant readback": "==",
+    }
+    credential_names = ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD")
+    for credential in credential_names:
+        assert credential not in header
+    seen = set()
+    for step in chunks:
+        if not step.strip():
+            continue
+        title = step.splitlines()[0].removeprefix("      - name: ")
+        if title not in allowed:
+            for credential in credential_names:
+                assert credential not in step, title
+            continue
+        assert title not in seen
+        seen.add(title)
+        assert (
+            f"        if: inputs.scenario {allowed[title]} 'specialist-participation'"
+            in step.splitlines()
+        )
+        before_env, env_and_run = step.split("\n        env:\n", 1)
+        env, run = env_and_run.split("\n        run:", 1)
+        for credential in credential_names:
+            reference = "secrets." + credential
+            assignment = "          " + credential + ": " + "${{ " + reference + " }}"
+            assert env.splitlines().count(assignment) == 1
+            assert step.count(reference) == 1
+            assert credential not in before_env
+            assert reference not in run
+    assert seen == set(allowed)
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    ("extra_step", "job_env", "missing_binding", "wrong_condition", "duplicate_binding"),
+)
+def test_workspace_credential_boundary_rejects_unsafe_changes(mutation: str) -> None:
+    job = _protected_job()
+    email = "          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}"
+    if mutation == "extra_step":
+        job += "\n      - name: Untrusted setup\n        env:\n" + email + "\n"
+    elif mutation == "job_env":
+        job = job.replace("\n    steps:", "\n" + email + "\n    steps:", 1)
+    elif mutation == "missing_binding":
+        job = job.replace(email, "", 1)
+    elif mutation == "wrong_condition":
+        job = job.replace(
+            "        if: inputs.scenario != 'specialist-participation'",
+            "        if: inputs.scenario == 'specialist-participation'",
+            1,
+        )
+    else:
+        job = job.replace(email, email + "\n" + email, 1)
+    with pytest.raises(AssertionError):
+        _assert_workspace_credential_boundary(job)
 
 
 def test_plugin_scenario_reuses_exact_main_provenance_and_env_boundary() -> None:
@@ -35,11 +101,7 @@ def test_plugin_scenario_reuses_exact_main_provenance_and_env_boundary() -> None
     assert "--retries=0" in job
     assert 'test "$KAREN_PLUGIN_SURFACES_ACCEPTANCE" = "true"' in job
 
-    header = job.split("\n    steps:", 1)[0]
-    assert "secrets.KAREN_UX_EMAIL" not in header
-    assert "secrets.KAREN_UX_PASSWORD" not in header
-    assert job.count("KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}") == 1
-    assert job.count("KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}") == 1
+    _assert_workspace_credential_boundary(job)
     assert "actions/upload-artifact" not in job
     assert "docker compose up" not in job
 
