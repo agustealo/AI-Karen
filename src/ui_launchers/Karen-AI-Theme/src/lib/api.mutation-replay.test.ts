@@ -241,3 +241,76 @@ describe('single-attempt authenticated mutations', () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+
+describe('request diagnostic privacy', () => {
+  const marker = 'private-acquisition';
+  const endpoint = `/api/plugins/file-explorer/inventory?search=${marker}%20plan&cursor=private-cursor`;
+
+  beforeEach(() => {
+    localStorage.clear();
+    vi.spyOn(clientInternals, 'getPreferredBaseUrl').mockReturnValue('http://api:8000');
+    vi.spyOn(clientInternals, 'getFallbackBaseUrl').mockReturnValue(null);
+    vi.spyOn(clientInternals, 'hasFallbackBaseUrl').mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+    localStorage.clear();
+  });
+
+  function observeDiagnostics() {
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    return () => {
+      const calls = [...log.mock.calls, ...warn.mock.calls, ...error.mock.calls];
+      expect(calls.length).toBeGreaterThan(0);
+      for (const args of calls) {
+        expect(args.every((arg) => typeof arg === 'string')).toBe(true);
+        expect(args.join(' ')).not.toContain(marker);
+        expect(args.join(' ')).not.toContain('private-cursor');
+        expect(args.join(' ')).not.toContain('search=');
+      }
+    };
+  }
+
+  it('preserves the query on the wire but never logs it on success', async () => {
+    const assertPrivate = observeDiagnostics();
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ items: [] })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(apiClient.get(endpoint)).resolves.toEqual({ items: [] });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(endpoint);
+    assertPrivate();
+  });
+
+  it('does not log a transport exception that embeds the private target', async () => {
+    const assertPrivate = observeDiagnostics();
+    const failure = new TypeError(`Failed to fetch ${endpoint}`);
+    const fetchMock = vi.fn().mockRejectedValue(failure);
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(apiClient.get(endpoint)).rejects.toBe(failure);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(endpoint);
+    assertPrivate();
+  });
+
+  it('keeps safe-read fallback requests private without changing their targets', async () => {
+    const assertPrivate = observeDiagnostics();
+    vi.mocked(clientInternals.getFallbackBaseUrl).mockReturnValue('http://127.0.0.1:8000');
+    vi.mocked(clientInternals.hasFallbackBaseUrl).mockReturnValue(true);
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response('unavailable', { status: 503 }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({ items: [] })));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(apiClient.get(endpoint)).resolves.toEqual({ items: [] });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    for (const call of fetchMock.mock.calls) expect(call[0]).toBe(endpoint);
+    assertPrivate();
+  });
+});
