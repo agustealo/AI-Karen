@@ -30,7 +30,7 @@ case "$mode" in
   fresh)
     test "$1" = docker && test "${KAREN_SPECIALIST_FRESH_ACCEPTANCE:-}" = true || { echo "::error::Fresh specialist acceptance requires explicit signed Docker mode"; exit 1; }
     title='ARM-05C.8C fresh specialist execution survives reload'
-    required=(KAREN_UX_EMAIL KAREN_UX_PASSWORD KAREN_SPECIALIST_EXPECTED_PROVIDER KAREN_SPECIALIST_EXPECTED_MODEL KAREN_SPECIALIST_EXPECTED_ENGINE)
+    required=(KAREN_UX_EMAIL KAREN_UX_PASSWORD KAREN_UX_ACCOUNT_B_EMAIL KAREN_UX_ACCOUNT_B_PASSWORD KAREN_UX_ACCOUNT_C_EMAIL KAREN_UX_ACCOUNT_C_PASSWORD KAREN_SPECIALIST_EXPECTED_PROVIDER KAREN_SPECIALIST_EXPECTED_MODEL KAREN_SPECIALIST_EXPECTED_ENGINE)
     ;;
   *) echo "::error::Unsupported specialist scenario"; exit 1 ;;
 esac

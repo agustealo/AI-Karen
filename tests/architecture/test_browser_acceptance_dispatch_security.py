@@ -587,7 +587,9 @@ def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path:
         "KAREN_SPECIALIST_EXPECTED_ENGINE": "synthetic-test-only",
     }
     for overrides in ({}, {**fresh, "KAREN_SPECIALIST_FRESH_ACCEPTANCE": None},
-                      {**fresh, "KAREN_SPECIALIST_EXPECTED_MODEL": None}):
+                      {**fresh, "KAREN_SPECIALIST_EXPECTED_MODEL": None},
+                      {**fresh, "KAREN_UX_ACCOUNT_B_PASSWORD": None},
+                      {**fresh, "KAREN_UX_ACCOUNT_C_EMAIL": None}):
         assert run("docker", overrides, "fresh").returncode != 0
         assert not marker.exists()
     assert run("vercel", {**fresh, "VERCEL_AUTOMATION_BYPASS_SECRET": "synthetic-test-only"}, "fresh").returncode != 0

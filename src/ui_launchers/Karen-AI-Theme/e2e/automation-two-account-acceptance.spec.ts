@@ -606,30 +606,39 @@ function observeFreshHistory(body: FreshHistory, threadId: string, prompt: strin
   const receipt = events[0].value;
   if (!receipt || !requestIdentity(receipt.runtime_request_id) ||
       receipt.actual_provider !== provider || receipt.actual_model !== model ||
-      receipt.runtime_engine !== engine || receipt.degraded_mode !== false ||
+      receipt.runtime_engine !== engine ||
+      // The canonical projector emits degraded_mode only when true.
+      (receipt.degraded_mode !== undefined && receipt.degraded_mode !== false) ||
       typeof receipt.response_source !== "string" ||
       !/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/i.test(receipt.response_source)) return null;
   return { assistant, receipt, runId: receipt.runtime_request_id };
 }
 
-test(freshTitle, async ({ page }) => {
-  test.skip(!freshEnabled, "Explicit protected fresh specialist execution opt-in required");
-  test.setTimeout(6 * 60_000);
-  if (process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
-      process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== "true" || local ||
-      process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined) {
-    throw new Error("Fresh specialist acceptance requires the protected signed Docker scenario");
-  }
-  const origin = requireApprovedOrigin();
-  const { email, password } = accounts[0];
-  const provider = process.env.KAREN_SPECIALIST_EXPECTED_PROVIDER;
-  const model = process.env.KAREN_SPECIALIST_EXPECTED_MODEL;
-  const engine = process.env.KAREN_SPECIALIST_EXPECTED_ENGINE;
-  if (!email || !password || !nonblank(provider) || !nonblank(model) ||
-      !engine || !localEngines.has(engine)) {
-    throw new Error("Dedicated consumer credentials and approved local provider identity required");
-  }
-  await signInApprovedKaren(page, email, password);
+test("ARM-05C.9 rejects unbound or degraded fresh history receipts", () => {
+  const assistant = { id: "assistant", role: "assistant", content: "Test-only answer" };
+  const receipt = { runtime_request_id: "runtime_1", actual_provider: "approved-provider",
+    actual_model: "approved-model", runtime_engine: "ollama", response_source: "model" };
+  const body = {
+    threadId: "thread", recovery_run: null,
+    messages: [{ id: "user", role: "user", content: "prompt" }, assistant],
+    replayEvents: [{ type: "CUSTOM", name: "karen.execution_receipt.v1", messageId: assistant.id, value: receipt }],
+  };
+  const observe = (input: FreshHistory) => observeFreshHistory(input, "thread", "prompt", "approved-provider", "approved-model", "ollama");
+  expect(observe(body)?.runId).toBe("runtime_1");
+  expect(observe({ ...body, replayEvents: [{ ...body.replayEvents[0], value: { ...receipt, degraded_mode: false } }] })).not.toBeNull();
+  for (const invalid of [
+    { ...receipt, degraded_mode: true }, { ...receipt, degraded_mode: null },
+    { ...receipt, runtime_request_id: undefined }, { ...receipt, runtime_request_id: "bad\n" },
+    { ...receipt, actual_provider: "foreign" }, { ...receipt, actual_model: "foreign" },
+    { ...receipt, runtime_engine: "remote_api" }, { ...receipt, response_source: "unavailable" },
+  ]) expect(observe({ ...body, replayEvents: [{ ...body.replayEvents[0], value: invalid }] })).toBeNull();
+  expect(observe({ ...body, replayEvents: [{ ...body.replayEvents[0], messageId: "foreign" }] })).toBeNull();
+  expect(observe({ ...body, replayEvents: [...body.replayEvents, ...body.replayEvents] })).toBeNull();
+  expect(observe({ ...body, recovery_run: { status: "running" } })).toBeNull();
+  expect(observe({ ...body, messages: [...body.messages, assistant] })).toBeNull();
+});
+
+async function verifiedFreshPrincipal(page: Page, origin: string): Promise<{ user_id: string; tenant_id: string }> {
   const session = await scopedParticipationGet(page, origin, "/api/auth/validate-session");
   const identity = session.payload as {
     valid?: boolean; session_valid?: boolean; authenticated?: boolean;
@@ -638,9 +647,46 @@ test(freshTitle, async ({ page }) => {
   if (session.status !== 200 || identity?.valid !== true || identity.session_valid !== true ||
       identity.authenticated !== true || !identity.user || !nonblank(identity.user.user_id) ||
       !nonblank(identity.user.tenant_id) || ["default", "dev-tenant"].includes(identity.user.tenant_id.toLowerCase()) ||
-      !Array.isArray(identity.user.roles) || identity.user.roles.includes("admin")) {
+      !Array.isArray(identity.user.roles) || identity.user.roles.some(role => typeof role !== "string" || role.toLowerCase() === "admin")) {
     throw new Error("A verified dedicated non-admin principal and tenant are required");
   }
+  return { user_id: identity.user.user_id, tenant_id: identity.user.tenant_id };
+}
+
+async function signOutFreshPrincipal(page: Page, origin: string, evidencePaths: readonly string[]): Promise<void> {
+  await openAutomationWorkspace(page, "My Account", false);
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page).toHaveURL(/\/login(?:[?#]|$)/, { timeout: 30_000 });
+  for (const path of evidencePaths) {
+    const read = await scopedParticipationGet(page, origin, path, false);
+    expect([401, 403], "Signed-out principal cannot read new run evidence").toContain(read.status);
+  }
+}
+
+test(freshTitle, async ({ page }) => {
+  test.skip(!freshEnabled, "Explicit protected fresh specialist execution opt-in required");
+  test.setTimeout(9 * 60_000);
+  if (process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
+      process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== "true" || local ||
+      process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined) {
+    throw new Error("Fresh specialist acceptance requires the protected signed Docker scenario");
+  }
+  const origin = requireApprovedOrigin();
+  const { email, password } = accounts[0];
+  const freshAccounts = [accounts[0], accounts[1], crossTenantAccount];
+  if (freshAccounts.some(account => !account.email?.trim() || !account.password) ||
+      new Set(freshAccounts.map(account => account.email?.trim().toLowerCase())).size !== 3) {
+    throw new Error("Three distinct sanitized principals are required before fresh execution");
+  }
+  const provider = process.env.KAREN_SPECIALIST_EXPECTED_PROVIDER;
+  const model = process.env.KAREN_SPECIALIST_EXPECTED_MODEL;
+  const engine = process.env.KAREN_SPECIALIST_EXPECTED_ENGINE;
+  if (!email || !password || !nonblank(provider) || !nonblank(model) ||
+      !engine || !localEngines.has(engine)) {
+    throw new Error("Dedicated consumer credentials and approved local provider identity required");
+  }
+  await signInApprovedKaren(page, email, password);
+  const owner = await verifiedFreshPrincipal(page, origin);
   const shell = page.getByTestId("karen-copilot-consumer-chat");
   const ask = page.getByRole("button", { name: "Ask Karen", exact: true });
   if (!(await shell.isVisible().catch(() => false)) &&
@@ -689,15 +735,15 @@ test(freshTitle, async ({ page }) => {
   const packet = (await submitted).postDataJSON() as { threadId?: string; runId?: string };
   expect(packet.threadId === threadId && requestIdentity(packet.runId)).toBe(true);
 
-  let observed: FreshObservation | null = null;
+  const observation: { result: FreshObservation | null } = { result: null };
   await expect.poll(async () => {
     const read = await scopedParticipationGet(page, origin, historyPath);
     if (read.status !== 200) return false;
-    observed = observeFreshHistory(read.payload as FreshHistory, threadId, prompt, provider, model, engine);
-    return !!observed;
+    observation.result = observeFreshHistory(read.payload as FreshHistory, threadId, prompt, provider, model, engine);
+    return !!observation.result;
   }, { timeout: 180_000, intervals: [1000, 2000, 3000] }).toBe(true);
-  if (!observed) throw new Error("No attested fresh local model receipt");
-  const result: FreshObservation = observed;
+  const result = observation.result;
+  if (!result) throw new Error("No attested fresh local model receipt");
   const runId = result.runId; // Never substitute the SDK transport run ID.
   const receiptView = shell.getByTestId("karen-copilot-assistant-message")
     .getByTestId("karen-restored-execution-receipt");
@@ -727,5 +773,22 @@ test(freshTitle, async ({ page }) => {
   expect(restoredTools.status).toBe(200);
   expect(parseFreshToolEvidence(restoredTools.payload, runId)).toEqual(tools);
   expect(executions, "Reload must not resubmit inference").toEqual(["/api/copilotkit/agent/default/run"]);
+  const evidencePaths = [participationPath(runId), toolPath];
+  await signOutFreshPrincipal(page, origin, evidencePaths);
+  const foreignIds = new Set([owner.user_id]);
+  for (const [index, account] of freshAccounts.slice(1).entries()) {
+    await signInApprovedKaren(page, account.email!, account.password!);
+    const foreign = await verifiedFreshPrincipal(page, origin);
+    expect(foreignIds.has(foreign.user_id), "Foreign principal must have a distinct user identity").toBe(false);
+    foreignIds.add(foreign.user_id);
+    expect(foreign.tenant_id === owner.tenant_id,
+      "Require both same-tenant and cross-tenant non-owner probes").toBe(index === 0);
+    for (const path of [...evidencePaths, historyPath]) {
+      const denied = await scopedParticipationGet(page, origin, path);
+      expect(denied.status, "Authenticated non-owner cannot read new run evidence or history").toBe(404);
+    }
+    await signOutFreshPrincipal(page, origin, evidencePaths);
+  }
+  expect(executions, "Authorization probes must not start additional inference").toEqual(["/api/copilotkit/agent/default/run"]);
   expect(mutations, "Consumer must not mutate execution authority").toEqual([]);
 });

@@ -184,7 +184,8 @@ def test_signed_docker_specialist_reuses_host_chain_and_private_gate() -> None:
         assert f'KAREN_SPECIALIST_{flag}_ACCEPTANCE: "true"' in proof
     for name in ("KAREN_UX_ACCOUNT_B_EMAIL", "KAREN_UX_ACCOUNT_B_PASSWORD", "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD", "KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID", "KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID", "KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID", "KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID"):
         assert name + ": " + chr(36) + "{{ secrets." + name + " }}" in proof
-        assert browser.count(name) == proof.count(name)
+        expected_count = 2 if name.endswith(("_EMAIL", "_PASSWORD")) else 1
+        assert browser.count(name) == expected_count
         assert name not in before and name not in after
     assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in browser
     assert "upload-artifact" not in browser
@@ -203,6 +204,10 @@ def test_fresh_specialist_acceptance_is_separate_and_provenance_bound() -> None:
     assert 'KAREN_SPECIALIST_FRESH_ACCEPTANCE: "true"' in proof
     assert 'bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" docker fresh' in proof
     assert "PARTICIPATION_RUN_ID" not in proof
+    for account in ("B", "C"):
+        for field in ("EMAIL", "PASSWORD"):
+            name = f"KAREN_UX_ACCOUNT_{account}_{field}"
+            assert name + ": " + chr(36) + "{{ secrets." + name + " }}" in proof
     for key in ("PROVIDER", "MODEL", "ENGINE"):
         name = "KAREN_SPECIALIST_EXPECTED_" + key
         assert name + ": " + chr(36) + "{{ vars." + name + " }}" in proof
