@@ -442,8 +442,13 @@ class MedusaCoordinator:
                 self._require_durable_tool_receipts(results)
                 for step, result in zip(wave, results):
                     if isinstance(result, BaseException):
-                        step.status = StepStatus.FAILED
-                        step.error = type(result).__name__
+                        # A post-invocation observation or cleanup failure
+                        # cannot undo an already returned specialist result.
+                        if step.status != StepStatus.COMPLETED:
+                            step.status = StepStatus.FAILED
+                            step.error = step.error or type(result).__name__
+                        else:
+                            raise result
                     else:
                         step_outputs.append(result)
                         agent_trace.append(step.agent_specialist)
@@ -820,7 +825,11 @@ class MedusaCoordinator:
             )
             raise
         except Exception as exc:
-            if emitter is not None:
+            if (
+                invocation_entered
+                and step.status != StepStatus.COMPLETED
+                and emitter is not None
+            ):
                 await emitter.emit(
                     AgentEvent(
                         type=AgentEventType.AGENT_FAILED,
