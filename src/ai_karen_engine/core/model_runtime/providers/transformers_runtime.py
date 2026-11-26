@@ -103,14 +103,13 @@ class TransformersRuntime(LLMProviderBase):
         torch.cuda.synchronize(device)
 
     @contextmanager
-    def _native_device_scope(self, active: Any) -> Iterator[None]:
+    def _native_device_scope(self, device: Any) -> Iterator[None]:
         """Fence device work before releasing the caller's generation lock.
 
         This is local process/device synchronization, not a GPU memory
         release receipt or proof of remote scheduler cancellation.
         """
         self._require_native_retirement_ready()
-        device = getattr(active, "device", None)
         kind = getattr(device, "type", None)
         if kind not in {"cpu", "cuda"} or (
             kind == "cuda" and getattr(device, "index", None) is None
@@ -247,20 +246,36 @@ class TransformersRuntime(LLMProviderBase):
                     )
                     if checkpoint is not None:
                         checkpoint()
-                    prepared_pipeline = pipeline(
-                        "text-generation",
-                        model=model,
-                        tokenizer=tokenizer,
-                        device=device_idx,
-                    )
-                    # Publish pipeline and loaded-model identity together,
-                    # excluding concurrent generations while switching.
-                    # Loading can enqueue device work as well. Fence it
-                    # before publishing, even if the request has been stopped.
-                    if checkpoint is not None:
-                        with self._native_device_scope(prepared_pipeline):
-                            checkpoint()
+                    # The loader has selected the placement device before
+                    # constructing the pipeline. Fence the entire placement
+                    # stage, including a constructor that raises after enqueueing
+                    # CUDA work but before returning a pipeline object.
                     with _checkpointed_lock(self._generation_lock, checkpoint):
+                        self._require_native_retirement_ready()
+                        if checkpoint is None:
+                            prepared_pipeline = pipeline(
+                                "text-generation", model=model,
+                                tokenizer=tokenizer, device=device_idx,
+                            )
+                        else:
+                            placement_device = (
+                                torch.device("cuda", device_idx)
+                                if device_idx >= 0 else torch.device("cpu")
+                            )
+                            with self._native_device_scope(placement_device):
+                                checkpoint()
+                                prepared_pipeline = pipeline(
+                                    "text-generation", model=model,
+                                    tokenizer=tokenizer, device=device_idx,
+                                )
+                                if getattr(prepared_pipeline, "device", None) != placement_device:
+                                    # Unexpected placement makes the known-device
+                                    # fence insufficient to certify retirement.
+                                    TransformersRuntime._native_retirement_hold.set()
+                                    logger.error("native_pipeline_placement_unverified")
+                                    raise ProviderNotAvailable("native_device_retirement_unverified")
+                                checkpoint()
+                            checkpoint()
                         self._require_native_retirement_ready()
                         self._pipeline = prepared_pipeline
                         self.model_path = resolved_path
@@ -329,7 +344,10 @@ class TransformersRuntime(LLMProviderBase):
                 ))
             ):
                 raise ProviderNotAvailable("native_authorized_model_identity_drift")
-            retirement = self._native_device_scope(active) if checkpoint is not None else nullcontext()
+            retirement = (
+                self._native_device_scope(getattr(active, "device", None))
+                if checkpoint is not None else nullcontext()
+            )
             with retirement:
                 yield active.model, active.tokenizer
 
@@ -386,7 +404,7 @@ class TransformersRuntime(LLMProviderBase):
                         raise ProviderNotAvailable("native_authorized_model_identity_drift")
                     generation_options = generation_checkpoint_options(before_generate)
                     retirement = (
-                        self._native_device_scope(active_pipeline)
+                        self._native_device_scope(getattr(active_pipeline, "device", None))
                         if before_generate is not None else nullcontext()
                     )
                     with retirement:

@@ -872,6 +872,7 @@ def test_native_generation_stopping_criteria_uses_host_checkpoint(monkeypatch):
             raise ProviderNotAvailable("governed_model_execution_cancelled")
 
     class Pipeline:
+        device = SimpleNamespace(type="cpu", index=None)
         tokenizer = SimpleNamespace(eos_token_id=0)
 
         def __call__(self, prompt, **kwargs):
@@ -894,3 +895,60 @@ def test_native_generation_stopping_criteria_uses_host_checkpoint(monkeypatch):
             "private input", required_model="selected-model", before_generate=checkpoint,
         )
     assert tokens == ["first token"]
+
+
+@pytest.mark.parametrize("failure", ["constructor", "cancelled", "wrong_device", "fence"])
+def test_governed_pipeline_placement_fences_even_before_publication(monkeypatch, failure):
+    import sys
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    events = []
+    stopped = threading.Event()
+    monkeypatch.setattr(module.TransformersRuntime, "_native_retirement_hold", threading.Event())
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    device = SimpleNamespace(type="cuda", index=2)
+    runtime = module.TransformersRuntime(model_path="selected-model", device="cuda:2")
+
+    def checkpoint():
+        if stopped.is_set():
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    def make_pipeline(*args, **kwargs):
+        assert kwargs["device"] == 2
+        assert runtime._generation_lock._is_owned()
+        events.append("placement")
+        if failure == "constructor":
+            raise RuntimeError("constructor failed after enqueue")
+        if failure == "cancelled":
+            stopped.set()
+        actual = SimpleNamespace(type="cuda", index=3) if failure == "wrong_device" else device
+        return SimpleNamespace(device=actual)
+
+    def synchronize(observed):
+        assert observed is device
+        assert runtime._generation_lock._is_owned()
+        events.append("fence")
+        if failure == "fence":
+            raise RuntimeError("driver failure")
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        device=lambda kind, index=None: device if (kind, index) == ("cuda", 2) else pytest.fail("unexpected placement"),
+        cuda=SimpleNamespace(is_available=lambda: True, synchronize=synchronize),
+        float16=object(),
+    ))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoTokenizer=SimpleNamespace(from_pretrained=lambda *a, **kw: object()),
+        AutoModelForCausalLM=SimpleNamespace(from_pretrained=lambda *a, **kw: object()),
+        pipeline=make_pipeline,
+    ))
+    if failure == "constructor":
+        assert runtime.warm("selected-model", exact_only=True, checkpoint=checkpoint) is False
+    else:
+        expected = "execution_cancelled" if failure == "cancelled" else "retirement_hold"
+        with pytest.raises(ProviderNotAvailable, match=expected):
+            runtime.warm("selected-model", exact_only=True, checkpoint=checkpoint)
+    assert events == ["placement", "fence"]
+    assert runtime._pipeline is None
+    assert module.TransformersRuntime._native_retirement_hold.is_set() == (
+        failure in {"wrong_device", "fence"}
+    )

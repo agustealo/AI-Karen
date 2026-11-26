@@ -88,7 +88,39 @@ The source regression exercises explicit device selection, lock ordering,
 cancelled borrow retirement and failed-fence replacement denial using test
 doubles. **Actual CUDA host acceptance remains NOT_RUN.** These checks do not
 establish multi-device/remote execution, GPU weight release, process-death
-recovery, or successful cancellation of a hung driver. Partial failure during
-pipeline construction before a device can be observed is a separate acceptance
-gap. Do not promote this source contract into a consumer-ready or GPU release
-receipt.
+recovery, or successful cancellation of a hung driver. Governed pipeline
+placement is now fenced using the explicit selected placement device even if
+the pipeline constructor raises before returning an object. A returned pipeline
+with mismatched placement puts native execution on hold. This does not certify
+arbitrary device work inside third-party loaders or failed multi-device loading.
+Do not promote this source contract into a consumer-ready or GPU release receipt.
+
+
+## Durable orphan recovery audit (KUI-004B4.48C7Z8E8)
+
+Chat's durable authority is `SqlChatRunRepository` and its
+`ChatRunCoordinator`, not the separate Medusa run ledger:
+
+- `admit` turns expired running/cancelling rows into orphaned rows within the
+  authenticated conversation transaction. The unresolved-run partial unique
+  index still fences new transport and submission IDs.
+- `renew` and `finish` use the scoped lease token and expiry. Standalone
+  completion is not allowed; the canonical conversation repository atomically
+  commits transcript and run finality.
+- `read_recovery_run` and `read_projected_events` observe durable state only.
+  Expired active rows are interrupted, not confirmed cancelled or completed.
+- `ChatRunCoordinator.stream` cancels upstream on lease loss and refuses a
+  terminal completion without the exact committed transcript evidence.
+- Medusa reconciles its own active rows from Redis and marks absent leases
+  orphaned; this is not a device-retirement receipt and must not be used to
+  reopen a chat admission.
+
+No new recovery ledger or automatic replay mechanism is introduced. Existing
+source recovery rules remain in force. Process-wide native holds are not durable
+across worker death: host quiescence and authorized operator recovery remain
+required. A further adversarial finding is that a late device synchronization
+failure can be observed and discarded by the blocking worker cancellation join,
+which preserves caller cancellation but may obscure the unverified device
+retirement from the chat lifecycle. Propagate that failure without enabling
+fallback or resolving the orphan fence before certifying recovery. Actual
+process-death plus device recovery acceptance remains NOT_RUN.
