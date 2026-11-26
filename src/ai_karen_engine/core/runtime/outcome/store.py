@@ -126,6 +126,8 @@ class InMemoryOutcomeStore(OutcomeStore):
         self._tenant_index: dict[str, list[int]] = {}
 
     def save_outcome(self, payload: dict[str, Any]) -> None:
+        if PostgresOutcomeStore._is_specialist_participation(payload):
+            raise OutcomeStoreError("Specialist participation requires durable persistence")
         idx = len(self._records)
         record = dict(payload)
         self._records.append(record)
