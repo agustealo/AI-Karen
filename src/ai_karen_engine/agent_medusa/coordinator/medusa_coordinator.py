@@ -723,6 +723,7 @@ class MedusaCoordinator:
         }
 
         await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
+        invocation_entered = False
         try:
             if emitter is not None:
                 await emitter.emit(
@@ -734,6 +735,7 @@ class MedusaCoordinator:
                         metadata={"step_id": step.id, "degraded": is_degraded},
                     )
                 )
+            invocation_entered = True
             result = await specialist.run(step.input_data, context, execution=execution)
             step.status = StepStatus.COMPLETED
             step.output_data = result
@@ -758,8 +760,26 @@ class MedusaCoordinator:
                 )
             return result
         except asyncio.CancelledError:
-            step.status = StepStatus.FAILED
-            step.error = "cancelled"
+            # A returned specialist result is not undone by cancellation of
+            # subsequent observational processing.
+            if step.status != StepStatus.COMPLETED:
+                step.status = StepStatus.FAILED
+                step.error = "cancelled"
+                if emitter is not None:
+                    await emitter.emit(
+                        AgentEvent(
+                            type=AgentEventType.AGENT_INTERRUPTED,
+                            agent_id=step.agent_specialist,
+                            message=f"step {step.id} interrupted",
+                            correlation_id=self._correlation_id(request),
+                            metadata={
+                                "step_id": step.id,
+                                "degraded": is_degraded,
+                                "invocation_entered": invocation_entered,
+                                "reason_code": "cancelled",
+                            },
+                        )
+                    )
             logger.info(
                 "medusa_step_cancelled",
                 extra={
