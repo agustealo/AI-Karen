@@ -32,7 +32,7 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
     assert get_rbac_manager().has_permission(principal, Permission.COMMUNICATIONS_READ)
     assert get_rbac_manager().has_permission(principal, Permission.COMMUNICATIONS_WRITE)
     audits = []
-    producer = SimpleNamespace(enable_communications_terminal_producer=False)
+    producer = SimpleNamespace(enable_communications_terminal_producer=False, enable_communications_invalidation=False, enable_communications_invalidation_wait=False)
     monkeypatch.setattr(service_module, "get_runtime_settings", lambda: SimpleNamespace(features=producer))
     monkeypatch.setattr(service_module.auth_config, "should_bypass_auth", lambda: False)
     monkeypatch.setattr(service_module, "get_audit_logger", lambda: SimpleNamespace(
@@ -81,7 +81,7 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
         assert response.status_code == 200
         assert response.json()["entries"][0]["revision"] == "9007199254740993"
         assert response.headers["cache-control"] == "no-store"
-        assert response.json()["capabilities"] == {"can_mutate": True, "producer_enabled": False, "can_reconcile": False}
+        assert response.json()["capabilities"] == {"can_mutate": True, "producer_enabled": False, "can_reconcile": False, "invalidation_wait_enabled": False}
         assert repo.calls[-1]["tenant_id"] == tenant
         assert repo.calls[-1]["user_id"] == owner
         assert repo.calls[-1]["inbox_filter"] == InboxFilter.ACTIVE
@@ -92,10 +92,13 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
         assert (await client.patch(mutation, json={**payload, "operation": "restart"})).status_code == 422
         assert (await client.post(endpoint, json=payload)).status_code == 405
         assert (await client.post(endpoint + "/reconcile")).status_code == 503
+        producer.enable_communications_invalidation_wait = True
+        assert (await client.get(endpoint)).json()["capabilities"]["invalidation_wait_enabled"] is False
+        producer.enable_communications_invalidation = True
         producer.enable_communications_terminal_producer = True
         active_response = await client.get(endpoint)
         assert active_response.status_code == 200
-        assert active_response.json()["capabilities"] == {"can_mutate": True, "producer_enabled": True, "can_reconcile": True}
+        assert active_response.json()["capabilities"] == {"can_mutate": True, "producer_enabled": True, "can_reconcile": True, "invalidation_wait_enabled": True}
         recovery = await client.post(endpoint + "/reconcile", params={"tenant_id": str(uuid4())})
         assert recovery.status_code == 200 and recovery.json() == {"admitted_count": 2}
         assert repo.calls[-1] == {"tenant_id": tenant, "user_id": owner}
@@ -134,7 +137,7 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
         app.dependency_overrides[route.get_current_user] = lambda: read_only
         read_only_response = await client.get(endpoint)
         assert read_only_response.status_code == 200
-        assert read_only_response.json()["capabilities"] == {"can_mutate": False, "producer_enabled": True, "can_reconcile": False}
+        assert read_only_response.json()["capabilities"] == {"can_mutate": False, "producer_enabled": True, "can_reconcile": False, "invalidation_wait_enabled": True}
         before += 1
         assert (await client.patch(mutation, json=payload)).status_code == 403
         assert (await client.post(endpoint + "/reconcile")).status_code == 403

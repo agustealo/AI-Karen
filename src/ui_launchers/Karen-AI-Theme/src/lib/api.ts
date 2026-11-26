@@ -437,13 +437,19 @@ class ApiClient {
     }
   }
 
-  private async getAuthHeaders(): Promise<Record<string, string>> {
+  private async getAuthHeaders(passive = false): Promise<Record<string, string>> {
     try {
       const headers: Record<string, string> = {
         'Content-Type': 'application/json'
       };
 
       const accessToken = localStorage.getItem('access_token');
+      if (passive) {
+        // An optional notification wait must not rotate credentials, publish
+        // session warnings or invalidate another request's auth state.
+        if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
+        return headers;
+      }
       console.log('[ApiClient] getAuthHeaders called; token present:', !!accessToken);
 
       if (accessToken) {
@@ -615,13 +621,15 @@ class ApiClient {
     skipAuth: boolean = false,
     responseKind: 'json' | 'blob' = 'json',
     principalScope?: ApiPrincipalScope,
+    boundedWait = false,
   ): Promise<T> {
     const assertScope = () => {
+      if (boundedWait && init.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError');
       if (principalScope && !isCurrentApiPrincipalScope(principalScope)) throw new Error('Authenticated request scope changed');
     };
     const send = async (baseUrl: string | null): Promise<Response> => {
       assertScope();
-      const authHeaders = skipAuth ? {} : await this.getAuthHeaders();
+      const authHeaders = skipAuth ? {} : await this.getAuthHeaders(boundedWait);
       assertScope();
       const requestHeaders = {
         ...authHeaders,
@@ -640,6 +648,7 @@ class ApiClient {
         const result = await fetch(url, {
           ...init,
           ...(principalScope ? { cache: 'no-store' as const } : {}),
+          ...(boundedWait ? { redirect: 'error' as const } : {}),
           headers: requestHeaders,
           credentials: 'include',
         });
@@ -653,8 +662,8 @@ class ApiClient {
 
     // Only idempotent reads may be retried or sent to a fallback origin.
     // A mutation might have committed before a proxy/network reply failed.
-    const safeRead = !init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase());
-    const preferredBaseUrl = this.getPreferredBaseUrl();
+    const safeRead = !boundedWait && (!init.method || ['GET', 'HEAD'].includes(init.method.toUpperCase()));
+    const preferredBaseUrl = boundedWait ? SAME_ORIGIN_API_BASE_URL : this.getPreferredBaseUrl();
     const fallbackBaseUrl: string | null = this.getFallbackBaseUrl(preferredBaseUrl) || null;
 
     let response: Response;
@@ -669,6 +678,17 @@ class ApiClient {
     if (safeRead && (this.shouldRetryWithDirectBackend(response, fallbackBaseUrl) ||
         this.shouldRetryMissingApiRoute(endpoint, response, fallbackBaseUrl))) {
       response = await send(fallbackBaseUrl);
+    }
+
+    // A bounded wait is optional: no credential mutation, retry, or fallback
+    // even when a previously valid session has expired. Normal inbox GET owns
+    // the existing refresh/reconciliation behavior.
+    if (boundedWait) {
+      assertScope();
+      if (!response.ok) throw new ApiError(response.status, 'Inbox invalidation unavailable');
+      const text = await response.text();
+      assertScope();
+      return (text ? JSON.parse(text) : undefined) as T;
     }
 
     // 401 Handling - Only attempt refresh if request was authenticated and refresh token is present
@@ -914,6 +934,13 @@ class ApiClient {
 
   async get<T>(endpoint: string, principalScope?: ApiPrincipalScope): Promise<T> {
     return this.request<T>(endpoint, {}, false, 'json', principalScope);
+  }
+
+  async waitForInboxInvalidation(principalScope: ApiPrincipalScope, signal: AbortSignal): Promise<unknown> {
+    if (!this.isBrowser() || !principalScope || !signal) throw new Error('Authenticated browser wait required');
+    return this.request<unknown>('/api/communications-center/inbox/wait', {
+      method: 'GET', signal,
+    }, false, 'json', principalScope, true);
   }
 
   async getUnauthenticated<T>(endpoint: string): Promise<T> {
