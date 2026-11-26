@@ -7,6 +7,7 @@ come from the authoritative ChatRuntime stream.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 
 from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
@@ -369,6 +370,12 @@ class AGUIEventProjection:
                 value = meta.get(key)
                 if isinstance(value, str) and value.strip():
                     execution_receipt[key] = _text(value, limit)
+            # The typed runtime envelope, not arbitrary metadata or AG-UI
+            # transport identity, owns this join key. It identifies a request,
+            # not proof that Medusa or any particular tool executed.
+            request_id = getattr(chunk, "request_id", None)
+            if isinstance(request_id, str) and re.fullmatch(r"[A-Za-z0-9_-]{1,128}", request_id):
+                execution_receipt["runtime_request_id"] = request_id
             # Server-owned frozen persona evidence, never client preferences.
             # Export only a bounded identifier and the revision it was read at.
             persona_id = meta.get("persona_id")
