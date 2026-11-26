@@ -42,7 +42,7 @@ def _request():
         messages=[{"role": "user", "content": "Research the request"}],
         context=ChatExecutionContext(
             user_id="u-1", tenant_id="t-1", session_id="s-1",
-            conversation_id="c-1", request_id="req-1", correlation_id="corr-1",
+            conversation_id="c-1", request_id="req-1", correlation_id="corr-1", request_id="req-1",
         ),
     )
 
@@ -63,10 +63,10 @@ def _plan():
     )
 
 
-def _event(kind, *, correlation_id="corr-1", **metadata):
+def _event(kind, *, correlation_id="corr-1", request_id="req-1", **metadata):
     return AgentEvent(
         type=kind, agent_id="researcher", message="internal sensitive description",
-        correlation_id=correlation_id,
+        correlation_id=correlation_id, request_id=request_id,
         metadata={"step_id": "step-1", "secret": "do-not-expose", **metadata},
     )
 
@@ -74,7 +74,7 @@ def _event(kind, *, correlation_id="corr-1", **metadata):
 def test_medusa_agent_projection_contains_only_authorized_status_and_identity():
     rt = WorkflowRuntime()
     emitted = rt._project_medusa_event(
-        _event(AgentEventType.AGENT_STARTED), correlation_id="corr-1",
+        _event(AgentEventType.AGENT_STARTED), correlation_id="corr-1", request_id="req-1",
     )
     assert emitted.type == ChatStreamEventType.AGENT_STEP
     assert emitted.metadata["event_type"] == "agent_step_started"
@@ -86,10 +86,10 @@ def test_medusa_agent_projection_contains_only_authorized_status_and_identity():
     assert "internal sensitive" not in str(emitted)
 
     finished = rt._project_medusa_event(
-        _event(AgentEventType.AGENT_COMPLETED), correlation_id="corr-1",
+        _event(AgentEventType.AGENT_COMPLETED), correlation_id="corr-1", request_id="req-1",
     )
     failed = rt._project_medusa_event(
-        _event(AgentEventType.AGENT_FAILED), correlation_id="corr-1",
+        _event(AgentEventType.AGENT_FAILED), correlation_id="corr-1", request_id="req-1",
     )
     assert finished.metadata["status"] == "completed"
     assert failed.metadata["status"] == "failed"
@@ -103,7 +103,7 @@ def test_medusa_tool_projection_preserves_actual_ids_without_tool_arguments():
             tool="web_search", tool_call_id="call-1",
             args={"api_key": "never-expose"},
         ),
-        correlation_id="corr-1",
+        correlation_id="corr-1", request_id="req-1",
     )
     done = rt._project_medusa_event(
         _event(
@@ -111,7 +111,7 @@ def test_medusa_tool_projection_preserves_actual_ids_without_tool_arguments():
             tool="web_search", tool_call_id="call-1",
             result={"secret": "never-expose"},
         ),
-        correlation_id="corr-1",
+        correlation_id="corr-1", request_id="req-1",
     )
     assert begin.type == ChatStreamEventType.TOOL
     assert begin.metadata["phase"] == "started"
@@ -124,15 +124,15 @@ def test_medusa_projection_rejects_cross_run_events_and_unidentified_tools():
     rt = WorkflowRuntime()
     assert rt._project_medusa_event(
         _event(AgentEventType.AGENT_STARTED, correlation_id="other-run"),
-        correlation_id="corr-1",
+        correlation_id="corr-1", request_id="req-1",
     ) is None
     assert rt._project_medusa_event(
         _event(AgentEventType.TOOL_CALL_STARTED, tool="web_search"),
-        correlation_id="corr-1",
+        correlation_id="corr-1", request_id="req-1",
     ) is None
     assert rt._project_medusa_event(
         _event(AgentEventType.PLAN_CREATED),
-        correlation_id="corr-1",
+        correlation_id="corr-1", request_id="req-1",
     ) is None
 
 
@@ -251,7 +251,7 @@ def test_deepagents_real_planning_and_delegation_events_project_to_agent_activit
                 subagent_run_id="real-123" if activity_kind == "subagent" else "",
                 private_tool_input={"token": "never-forward"},
             ),
-            correlation_id="corr-1",
+            correlation_id="corr-1", request_id="req-1",
         )
         completed = rt._project_medusa_event(
             _event(
@@ -259,7 +259,7 @@ def test_deepagents_real_planning_and_delegation_events_project_to_agent_activit
                 activity_kind=activity_kind, status="completed",
                 subagent_run_id="real-123" if activity_kind == "subagent" else "",
             ),
-            correlation_id="corr-1",
+            correlation_id="corr-1", request_id="req-1",
         )
         assert started.type == ChatStreamEventType.AGENT_STEP
         assert started.metadata["status"] == "running"
@@ -277,21 +277,21 @@ def test_deepagents_progress_requires_actual_sdk_source_and_subagent_identity():
             AgentEventType.REASONING_STEP,
             step_id="deepagents-unproven", status="running",
             activity_kind="subagent", subagent_run_id="real-123",
-        ), correlation_id="corr-1",
+        ), correlation_id="corr-1", request_id="req-1",
     ) is None
     assert rt._project_medusa_event(
         _event(
             AgentEventType.PLAN_UPDATED,
             step_id="deepagents-unproven", status="running",
             activity_kind="plan", source="different-engine",
-        ), correlation_id="corr-1",
+        ), correlation_id="corr-1", request_id="req-1",
     ) is None
     assert rt._project_medusa_event(
         _event(
             AgentEventType.REASONING_STEP,
             step_id="deepagents-unproven", status="running",
             activity_kind="subagent", source="deepagents",
-        ), correlation_id="corr-1",
+        ), correlation_id="corr-1", request_id="req-1",
     ) is None
 
 
@@ -304,7 +304,7 @@ def test_verified_postgres_checkpoint_is_status_only_never_resume_claim():
             checkpoint_verified=True, resumable=False,
             raw_checkpoint={"secret": "private-bytes"},
         ),
-        correlation_id="corr-1",
+        correlation_id="corr-1", request_id="req-1",
     )
     assert event.type == ChatStreamEventType.STATUS
     assert event.metadata["checkpoint_verified"] is True
@@ -318,6 +318,57 @@ def test_verified_postgres_checkpoint_is_status_only_never_resume_claim():
             step_id="step-1", source="deepagents",
             checkpoint_verified=False, resumable=True,
         ),
-        correlation_id="corr-1",
+        correlation_id="corr-1", request_id="req-1",
     )
     assert unsafe is None
+
+
+@pytest.mark.parametrize("request_id", [None, "", "foreign-request"])
+def test_medusa_projection_rejects_same_correlation_foreign_request(request_id):
+    assert WorkflowRuntime._project_medusa_event(
+        _event(AgentEventType.AGENT_STARTED, request_id=request_id),
+        correlation_id="corr-1", request_id="req-1",
+    ) is None
+
+
+@pytest.mark.parametrize(
+    ("kind", "status", "event_type"),
+    [(AgentEventType.AGENT_INTERRUPTED, "cancelled", "agent_step_cancelled"),
+     (AgentEventType.AGENT_SKIPPED, "skipped", "agent_step_skipped")],
+)
+def test_medusa_projects_observed_non_success_terminal_steps(kind, status, event_type):
+    chunk = WorkflowRuntime._project_medusa_event(
+        _event(kind, reason_code="private reason"),
+        correlation_id="corr-1", request_id="req-1",
+    )
+    assert chunk.type == ChatStreamEventType.AGENT_STEP
+    assert chunk.metadata["status"] == status
+    assert chunk.metadata["event_type"] == event_type
+    assert "private reason" not in str(chunk)
+
+
+@pytest.mark.asyncio
+async def test_foreign_event_flood_cannot_consume_live_queue(monkeypatch):
+    class ObservedCoordinator:
+        def attach_sink(self, sink):
+            self._sink = sink
+
+        async def handle_request(self, request):
+            for _ in range(300):
+                self._sink(_event(AgentEventType.AGENT_STARTED, request_id="foreign"))
+            self._sink(_event(AgentEventType.AGENT_SKIPPED))
+            return RuntimeResponse(
+                request_id=request.request_id, status=ResponseStatus.SUCCESS,
+                content="Verified answer",
+            )
+
+    monkeypatch.setattr(
+        "ai_karen_engine.agent_medusa.coordinator.medusa_coordinator.MedusaCoordinator",
+        ObservedCoordinator,
+    )
+    chunks = [c async for c in WorkflowRuntime().stream(_request(), _decision(), _plan())]
+    assert [c.type for c in chunks] == [
+        ChatStreamEventType.STATUS, ChatStreamEventType.AGENT_STEP, ChatStreamEventType.CONTENT,
+    ]
+    assert chunks[1].metadata["status"] == "skipped"
+    assert chunks[-1].content == "Verified answer"
