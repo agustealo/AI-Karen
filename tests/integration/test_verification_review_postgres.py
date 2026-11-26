@@ -1104,6 +1104,49 @@ async def _assert_specialist_participation_reads(
         receipt_id=start.receipt_id, subject_id=subject_id,
     )
 
+    # ARM-05C: a real relation-availability failure, not a mocked store or
+    # synthetic successful empty inventory. This helper runs only in the
+    # designated disposable database; restore the original relation on every
+    # path before continuing with the existing corruption proof.
+    _disposable_dsn()
+    assert await raw.fetchval("SELECT current_database()") == "karen_review_test"
+    assert await raw.fetchval(
+        "SELECT to_regclass('public.outcome_records_arm_fault') IS NULL"
+    )
+    empty_scope = {**scope, "trajectory_id": run_id + "-missing"}
+    assert await reader.list_specialist_participation_async(**empty_scope) == (
+        [], False,
+    )
+    async with raw.transaction():
+        await raw.execute("SET LOCAL lock_timeout = '5s'")
+        await raw.execute(
+            "ALTER TABLE public.outcome_records RENAME TO outcome_records_arm_fault"
+        )
+    try:
+        assert await raw.fetchval(
+            "SELECT to_regclass('public.outcome_records') IS NULL"
+        )
+        for unavailable_scope in (scope, empty_scope):
+            with pytest.raises(
+                OutcomeStoreError, match="^Specialist participation evidence unavailable$"
+            ) as failure:
+                await reader.list_specialist_participation_async(**unavailable_scope)
+            assert failure.value.__cause__ is not None
+    finally:
+        async with raw.transaction():
+            await raw.execute("SET LOCAL lock_timeout = '5s'")
+            await raw.execute(
+                "ALTER TABLE public.outcome_records_arm_fault RENAME TO outcome_records"
+            )
+    # Reuse the original reader to prove the failed transaction did not poison
+    # later reads or discard durable observations.
+    assert await reader.list_specialist_participation_async(**scope) == (
+        expected, False,
+    )
+    assert await reader.list_specialist_participation_async(**empty_scope) == (
+        [], False,
+    )
+
     # Simulate corruption by a privileged database operator, not a writer bypass.
     await raw.execute(
         "UPDATE public.outcome_records SET payload=jsonb_set(payload, "
