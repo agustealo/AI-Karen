@@ -7,6 +7,7 @@ PostgreSQL engine, performs no runtime DDL, and never cancels asyncio tasks.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -21,6 +22,8 @@ logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = {"created", "running", "cancellation_requested"}
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "orphaned"}
+
+TerminalAuthorizer = Callable[[str, str | None, str | None], Awaitable[str]]
 
 
 class DurableRunLedgerUnavailable(RuntimeError):
@@ -90,7 +93,8 @@ class DurableRunLedger(Protocol):
         completed_at: datetime,
         error_type: str | None,
         outcome_status: str | None = None,
-    ) -> None: ...
+        authorize_terminal: TerminalAuthorizer | None = None,
+    ) -> str: ...
 
     async def set_outcome_status(
         self,
@@ -136,6 +140,11 @@ class DurableRunLedger(Protocol):
         reconciled_at: datetime,
         completed_at: datetime | None = None,
         error_type: str | None = None,
+        outcome_status: str | None = None,
+        expected_worker_id: str | None = None,
+        expected_correlation_id: str | None = None,
+        expected_user_id: str | None = None,
+        terminal_authority: str | None = None,
     ) -> bool: ...
 
     async def link_audit_event(
@@ -423,12 +432,13 @@ class PostgresDurableRunLedger:
         completed_at: datetime,
         error_type: str | None,
         outcome_status: str | None = None,
-    ) -> None:
+        authorize_terminal: TerminalAuthorizer | None = None,
+    ) -> str:
         """Persist lifecycle and outcome in the same owner-fenced transaction."""
 
         if status not in _TERMINAL_STATUSES:
             raise ValueError(f"Invalid durable Medusa terminal status: {status}")
-        await self._owned_transition(
+        return await self._owned_transition(
             run_id=run_id,
             tenant_id=tenant_id,
             worker_id=worker_id,
@@ -439,6 +449,7 @@ class PostgresDurableRunLedger:
             transition_kind="terminal",
             error_type=error_type,
             outcome_status=outcome_status,
+            authorize_terminal=authorize_terminal,
         )
 
     async def set_outcome_status(
@@ -650,12 +661,30 @@ class PostgresDurableRunLedger:
         reconciled_at: datetime,
         completed_at: datetime | None = None,
         error_type: str | None = None,
+        outcome_status: str | None = None,
+        expected_worker_id: str | None = None,
+        expected_correlation_id: str | None = None,
+        expected_user_id: str | None = None,
+        terminal_authority: str | None = None,
     ) -> bool:
         """Repair durable state only from an authoritative Redis observation."""
 
         normalized = "cancellation_requested" if status == "cancelling" else status
         if normalized not in {"cancellation_requested", *_TERMINAL_STATUSES}:
             raise ValueError(f"Unsupported shared Medusa status: {status}")
+        valid_outcomes = {
+            "completed": {"success", "partial", "degraded", None},
+            "failed": {"error", "timeout", None},
+            "cancelled": {"cancelled", None},
+            "orphaned": {None},
+            "cancellation_requested": {None},
+        }
+        if outcome_status not in valid_outcomes[normalized]:
+            raise ValueError("Invalid shared terminal outcome")
+        if normalized in {"completed", "failed", "cancelled"} and (
+            completed_at is None or not expected_worker_id
+        ):
+            raise ValueError("Shared terminal receipt lacks identity or timestamp")
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
@@ -663,6 +692,31 @@ class PostgresDurableRunLedger:
                 if row is None:
                     return False
                 current = str(row["status"])
+                if any(
+                    expected is not None and str(row.get(key)) != expected
+                    for key, expected in (
+                        ("owner_worker_id", expected_worker_id),
+                        ("correlation_id", expected_correlation_id),
+                        ("user_id", expected_user_id),
+                    )
+                ):
+                    return False
+                late_cancellation = (
+                    current == "cancellation_requested"
+                    and normalized in {"completed", "failed"}
+                )
+                # Only a receipt emitted while the existing durable row lock
+                # was held proves that an accepted terminal operation preceded
+                # the conflicting durable cancellation. Preserve its audit trail.
+                if late_cancellation and (
+                    terminal_authority != "durable_arbitrated"
+                    or not expected_worker_id
+                    or not expected_correlation_id
+                    or not expected_user_id
+                    or completed_at is None
+                    or outcome_status is None
+                ):
+                    return False
                 if current not in _ACTIVE_STATUSES or current == normalized:
                     return False
                 terminal_at = completed_at or reconciled_at
@@ -673,6 +727,7 @@ class PostgresDurableRunLedger:
                     "terminal_at": terminal_at,
                     "reconciled_at": reconciled_at,
                     "error_type": error_type,
+                    "outcome_status": outcome_status,
                 }
                 if normalized in _TERMINAL_STATUSES:
                     await session.execute(
@@ -684,6 +739,15 @@ class PostgresDurableRunLedger:
                                 updated_at = :reconciled_at,
                                 reconciled_at = :reconciled_at,
                                 error_type = COALESCE(:error_type, error_type),
+                                metadata = CASE
+                                    WHEN CAST(:outcome_status AS text) IS NULL THEN metadata
+                                    ELSE jsonb_set(
+                                        COALESCE(metadata, '{}'::jsonb),
+                                        '{outcome_status}',
+                                        to_jsonb(CAST(:outcome_status AS text)),
+                                        true
+                                    )
+                                END,
                                 last_worker_transition_at = :reconciled_at
                             WHERE run_id = :run_id
                               AND tenant_id = CAST(:tenant_id AS uuid)
@@ -713,7 +777,11 @@ class PostgresDurableRunLedger:
                     worker_id=str(row.get("owner_worker_id") or "") or None,
                     source="redis_reconciliation",
                     event_at=reconciled_at,
-                    metadata={"shared_status": status},
+                    metadata={
+                        "shared_status": status,
+                        "terminal_authority": terminal_authority,
+                        "late_cancellation": late_cancellation,
+                    },
                 )
                 return True
         except SQLAlchemyError as exc:
@@ -771,7 +839,8 @@ class PostgresDurableRunLedger:
         transition_kind: str,
         error_type: str | None = None,
         outcome_status: str | None = None,
-    ) -> None:
+        authorize_terminal: TerminalAuthorizer | None = None,
+    ) -> str:
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
@@ -787,6 +856,36 @@ class PostgresDurableRunLedger:
                     raise DurableRunLedgerConflict(
                         f"Run {run_id} cannot transition {current} -> {to_status}"
                     )
+                if authorize_terminal is not None:
+                    if transition_kind != "terminal":
+                        raise ValueError(
+                            "Terminal authorizer requires terminal transition"
+                        )
+                    # The existing row lock serializes durable cancellation.
+                    # Redis still owns lease acceptance; SQL must not publish
+                    # a terminal result until live authority confirms it.
+                    if current == "cancellation_requested" and to_status != "orphaned":
+                        to_status, error_type, outcome_status = (
+                            "cancelled",
+                            None,
+                            "cancelled",
+                        )
+                    resolved = await authorize_terminal(
+                        to_status, error_type, outcome_status
+                    )
+                    if resolved != to_status:
+                        if resolved != "cancelled" or to_status not in {
+                            "completed",
+                            "failed",
+                        }:
+                            raise DurableRunLedgerConflict(
+                                "Shared terminal resolution is inconsistent"
+                            )
+                        to_status, error_type, outcome_status = (
+                            "cancelled",
+                            None,
+                            "cancelled",
+                        )
                 params = {
                     "run_id": run_id,
                     "tenant_id": canonical_tenant_id,
@@ -850,6 +949,7 @@ class PostgresDurableRunLedger:
                     source=source,
                     event_at=event_at,
                 )
+            return to_status
         except DurableRunLedgerConflict:
             raise
         except SQLAlchemyError as exc:
@@ -860,7 +960,7 @@ class PostgresDurableRunLedger:
     async def _lock_row(self, session: Any, run_id: str, tenant_id: str) -> Any | None:
         result = await session.execute(
             text("""
-                SELECT run_id, status, owner_worker_id
+                SELECT run_id, status, owner_worker_id, correlation_id, user_id
                 FROM agent_medusa_runs
                 WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)
                 FOR UPDATE
