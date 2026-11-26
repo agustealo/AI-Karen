@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
+from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/karen-history-browser-acceptance.yml"
@@ -443,7 +447,7 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
     assert "--retries=0" in step and "--workers=1" in step
     assert 'stats.get("expected") != 1' in step
     assert '"unexpected", "skipped", "flaky"' in step
-    assert '"expected", "passed", ["passed"]' in step
+    assert '"expected", "passed", "chromium", ["passed"]' in step
     assert "umask 077" in step and "mktemp -d" in step
     assert "trap 'rm -rf --" in step
     assert "upload-artifact" not in job
@@ -455,3 +459,61 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
     assert 'from "./fixtures/verified-search-deployment"' in spec
     assert 'trace: "off", screenshot: "off", video: "off"' in spec
     assert "page.route(" not in spec
+
+
+def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> None:
+    """Execute the actual inline gate on synthetic test-only report fixtures."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Prove protected specialist lifecycle and cross-tenant readback", 1
+    )[1].split("\n      - name:", 1)[0]
+    shell = dedent(step.split("        run: |\n", 1)[1])
+    subprocess.run(["bash", "-n"], input=shell, text=True, check=True)
+    validator = shell.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    title = "ARM-05C.5B real participation receipts survive reload and deny a second account"
+
+    def report(**test_overrides):
+        test = {
+            "status": "expected",
+            "expectedStatus": "passed",
+            "projectName": "chromium",
+            "results": [{"status": "passed"}],
+            **test_overrides,
+        }
+        return {
+            "errors": [],
+            "stats": {"expected": 1, "unexpected": 0, "skipped": 0, "flaky": 0},
+            "suites": [{"suites": [{"specs": [{"title": title, "tests": [test]}]}]}],
+        }
+
+    path = tmp_path / "report.json"
+
+    def validate(payload: str) -> int:
+        path.write_text(payload, encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, "-c", validator, str(path)],
+            capture_output=True,
+            check=False,
+        ).returncode
+
+    assert validate(json.dumps(report())) == 0
+    invalid = [
+        report(status="skipped"),
+        report(expectedStatus="failed"),
+        report(projectName="firefox"),
+        report(results=[{"status": "failed"}, {"status": "passed"}]),
+        report(results=[]),
+        {**report(), "errors": [{"message": "test-only"}]},
+        {**report(), "stats": {"expected": 1}},
+        {**report(), "stats": {"expected": 0, "unexpected": 0, "skipped": 1, "flaky": 0}},
+        {**report(), "suites": []},
+    ]
+    wrong_title = report()
+    wrong_title["suites"][0]["suites"][0]["specs"][0]["title"] = "test-only wrong scenario"
+    invalid.append(wrong_title)
+    duplicate = report()
+    duplicate["suites"].append(duplicate["suites"][0])
+    invalid.append(duplicate)
+    for payload in invalid:
+        assert validate(json.dumps(payload)) != 0
+    assert validate("{malformed") != 0

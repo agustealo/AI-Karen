@@ -1008,15 +1008,15 @@ jobs:
             echo "::error::Protected specialist browser acceptance failed (private diagnostics suppressed)"
             exit 1
           fi
-          if ! python - "$private_dir/report.json" <<'PY'
+          if ! python - "$private_dir/report.json" 2>/dev/null <<'PY'
           import json
           import sys
           from pathlib import Path
 
           report = json.loads(Path(sys.argv[1]).read_text())
           stats = report.get("stats", {})
-          if stats.get("expected") != 1 or any(
-              stats.get(key, 0) for key in ("unexpected", "skipped", "flaky")
+          if report.get("errors") != [] or stats.get("expected") != 1 or any(
+              stats.get(key) != 0 for key in ("unexpected", "skipped", "flaky")
           ):
               raise SystemExit(1)
           observed = []
@@ -1026,12 +1026,13 @@ jobs:
                       for test in spec.get("tests", []):
                           observed.append((spec.get("title"), test.get("status"),
                                            test.get("expectedStatus"),
+                                           test.get("projectName"),
                                            [r.get("status") for r in test.get("results", [])]))
                   collect(suite.get("suites", []))
           collect(report.get("suites", []))
           if observed != [(
               "ARM-05C.5B real participation receipts survive reload and deny a second account",
-              "expected", "passed", ["passed"],
+              "expected", "passed", "chromium", ["passed"],
           )]:
               raise SystemExit(1)
           PY
