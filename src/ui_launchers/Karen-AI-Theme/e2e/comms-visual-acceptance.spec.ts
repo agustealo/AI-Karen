@@ -1,5 +1,7 @@
 import { expect, test, type Page, type TestInfo } from "@playwright/test";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import { openAutomationWorkspace } from "./fixtures/automation-workspace-navigation";
+import { INBOX_PATH, readPage, readReceipt, type InboxEntry, type InboxFilter, type InboxOperation } from "../src/components/comms/communications-inbox-contract";
 
 /**
  * KUI-COMMS: authenticated, real-service visual and interaction acceptance.
@@ -331,4 +333,115 @@ test("KUI-COMMS: authenticated Medusa run receipts render and refresh", async ({
   const refreshed = await refreshedRequest;
   expect(refreshed.status(), "Refresh must make another authenticated Medusa request").toBe(200);
   await expect(card.getByTestId("comms-owned-run-count")).not.toContainText("Unverified");
+});
+
+
+/**
+ * Explicitly authorized destructive lifecycle acceptance on disposable,
+ * already runtime-produced notification fixtures only. No synthetic records,
+ * no route interception, no database seeding, no execution retry.
+ */
+test("KCOMM-02E: real signed-session recovery, lifecycle persistence and account isolation", async ({ page }) => {
+  test.skip(process.env.KAREN_COMMS_INBOX_ACCEPTANCE !== "true", "Opt in to dedicated disposable inbox lifecycle acceptance");
+  test.setTimeout(5 * 60_000);
+  const accountB = process.env.KAREN_UX_ACCOUNT_B_EMAIL;
+  const passwordB = process.env.KAREN_UX_ACCOUNT_B_PASSWORD;
+  const runA = process.env.KAREN_UX_ACCOUNT_A_PENDING_INBOX_EXECUTION_ID;
+  const runB = process.env.KAREN_UX_ACCOUNT_B_INBOX_EXECUTION_ID;
+  const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+  if (!email || !password || !accountB || !passwordB || email.toLowerCase() === accountB.toLowerCase()
+      || !runA || !runB || !uuid.test(runA) || !uuid.test(runB) || runA === runB || runA.slice(0,8) === runB.slice(0,8)) {
+    throw new Error("Two distinct disposable accounts and two genuine distinct runtime execution IDs are required");
+  }
+  const origin = validateTarget().origin;
+  const options = { allowLocalLoopback: process.env.KAREN_LOCAL_CHAT_ACCEPTANCE === "1" };
+  const inbox = page.getByTestId("personal-communications-inbox");
+  const root = page.getByTestId("comms-center");
+  const responseFor = (method: string, path: string, filter?: InboxFilter) => page.waitForResponse(response => {
+    const url = new URL(response.url());
+    return url.origin === origin && url.pathname === path && response.request().method() === method
+      && (filter === undefined || (url.searchParams.get("inbox_filter") === filter && !url.searchParams.has("cursor_id")));
+  }, { timeout: 30_000 });
+  async function readAfter(action: () => Promise<unknown>, filter: InboxFilter) {
+    const pending = responseFor("GET", INBOX_PATH, filter);
+    await action();
+    const response = await pending;
+    expect(response.status()).toBe(200);
+    const projection = readPage(await response.json(), filter, null);
+    await expect(inbox.getByTestId("personal-inbox-unread")).toHaveText(projection.active_unread_count + " unread active");
+    return projection;
+  }
+  function locateEntry(entry: InboxEntry) {
+    return inbox.getByRole("listitem").filter({ hasText: "Execution " + entry.execution_id.slice(0, 8) });
+  }
+  async function openInbox() {
+    await openCommunications(page);
+    return readAfter(() => root.getByRole("tab", { name: "Inbox", exact: true }).click(), "active");
+  }
+  async function mutate(entry: InboxEntry, operation: InboxOperation, label: string) {
+    const row = locateEntry(entry);
+    await expect(row).toHaveCount(1);
+    const receiptPending = responseFor("PATCH", INBOX_PATH + "/" + entry.entry_id);
+    const reread = responseFor("GET", INBOX_PATH, "active");
+    await row.getByRole("button", { name: label, exact: true }).click();
+    const response = await receiptPending;
+    expect(response.status()).toBe(200);
+    const body = response.request().postDataJSON();
+    expect(body).toEqual({ operation, expected_revision: entry.revision });
+    const receipt = readReceipt(await response.json(), entry, operation);
+    expect(receipt.changed).toBe(true);
+    const refreshed = await reread;
+    expect(refreshed.status()).toBe(200);
+    const projection = readPage(await refreshed.json(), "active", null);
+    await expect(inbox.getByTestId("personal-inbox-unread")).toHaveText(projection.active_unread_count + " unread active");
+    if (operation === "archive") {
+      expect(projection.entries.some(e => e.entry_id === entry.entry_id)).toBe(false);
+      await expect(row).toHaveCount(0);
+    } else {
+      const durable = projection.entries.find(e => e.entry_id === entry.entry_id);
+      expect(durable).toEqual(receipt.entry);
+      await expect(row).toContainText(operation === "read" ? "Read" : "Acknowledged");
+    }
+    return receipt.entry;
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signInApprovedKaren(page, email, password, options);
+  const before = await openInbox();
+  expect(before.entries.some(e => e.execution_id === runA || e.execution_id === runB)).toBe(false);
+  const recovery = responseFor("POST", INBOX_PATH + "/reconcile");
+  const afterRecovery = readAfter(() => inbox.getByRole("button", { name: "Recover missed notifications" }).click(), "active");
+  const recoveryResponse = await recovery;
+  expect(recoveryResponse.status()).toBe(200);
+  const count: unknown = (await recoveryResponse.json()).admitted_count;
+  expect(typeof count === "number" && Number.isSafeInteger(count) && count >= 1 && count <= 50).toBe(true);
+  const recovered = await afterRecovery;
+  const admitted = recovered.entries.find(e => e.execution_id === runA);
+  if (!admitted || admitted.read_at || admitted.acknowledged_at || admitted.archived_at) {
+    throw new Error("Expected newly recovered unread runtime fixture on first page");
+  }
+  expect(recovered.entries.some(e => e.execution_id === runB)).toBe(false);
+  const read = await mutate(admitted, "read", "Mark read");
+  const acknowledged = await mutate(read, "acknowledge", "Acknowledge");
+  const archived = await mutate(acknowledged, "archive", "Archive");
+  const archivedPage = await readAfter(() => inbox.getByRole("button", { name: "Archived", exact: true }).click(), "archived");
+  expect(archivedPage.entries.find(e => e.entry_id === archived.entry_id)).toEqual(archived);
+  await expect(locateEntry(archived)).toContainText("Archived");
+  await page.reload();
+  await openInbox();
+  const afterReload = await readAfter(() => inbox.getByRole("button", { name: "Archived", exact: true }).click(), "archived");
+  expect(afterReload.entries.find(e => e.entry_id === archived.entry_id)).toEqual(archived);
+
+  // Prove logout at the backend, not merely a client redirect.
+  await openAutomationWorkspace(page, "My Account", false);
+  await page.getByRole("button", { name: "Sign out", exact: true }).click();
+  await expect(page).toHaveURL(/\/login(?:[?#]|$)/, { timeout: 30_000 });
+  const signedOutStatus = await page.evaluate(async path => (await fetch(path, { credentials: "same-origin", cache: "no-store" })).status, INBOX_PATH);
+  expect([401, 403]).toContain(signedOutStatus);
+  await signInApprovedKaren(page, accountB, passwordB, options);
+  const other = await openInbox();
+  expect(other.entries.some(e => e.execution_id === runB)).toBe(true);
+  expect(other.entries.some(e => e.entry_id === archived.entry_id || e.execution_id === runA)).toBe(false);
+  await expect(inbox.getByText("Execution " + runA.slice(0,8), { exact: false })).toHaveCount(0);
+  const otherArchived = await readAfter(() => inbox.getByRole("button", { name: "Archived", exact: true }).click(), "archived");
+  expect(otherArchived.entries.some(e => e.entry_id === archived.entry_id || e.execution_id === runA)).toBe(false);
 });

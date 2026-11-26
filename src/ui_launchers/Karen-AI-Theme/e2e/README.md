@@ -801,3 +801,17 @@ It selects exactly the real lifecycle test with all three required flags,
 rejects any skipped or retried result, and deletes temporary private reports
 without publishing browser diagnostics. A successful dispatch is necessary
 before marking live specialist readback verified.
+
+
+## KCOMM-02E: authenticated personal inbox lifecycle acceptance
+
+Run on a disposable, explicitly approved local or HTTPS installation with the canonical producer migration applied and the producer enabled. Two dedicated accounts are mandatory. Account A must have a **genuine runtime-created pending eligibility marker**, not an already admitted notification; account B must have a distinct existing active runtime notification. Use a controlled real-runtime failure and interrupted projection in the disposable environment to establish A's fixture. No fixture creation is performed by this browser test; never insert a fake notification or mark a production execution to obtain a passing result. The designated execution IDs must fit the first active/archived pages of the sanitized accounts. The test permanently archives A's fixture, so supply a fresh fixture for each run.
+
+```sh
+KAREN_COMMS_INBOX_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+npx playwright test comms-visual-acceptance.spec.ts --project=chromium --retries=0 --grep="KCOMM-02E"
+```
+
+Supply KAREN_UX_EMAIL, KAREN_UX_PASSWORD, KAREN_UX_ACCOUNT_B_EMAIL, KAREN_UX_ACCOUNT_B_PASSWORD, KAREN_UX_ACCOUNT_A_PENDING_INBOX_EXECUTION_ID and KAREN_UX_ACCOUNT_B_INBOX_EXECUTION_ID securely in the environment, never in committed files. On approved HTTPS omit the loopback opt-in. The suite checks real recovery POST, server-derived count, exact revision and source receipts for read/ack/archive, readback after reload, signed-out denial, and A-to-B isolation in the same browser. It does not prove new runtime failure creation by itself, cross-tenant isolation unless fixtures have distinct tenants, or delivery over a push transport. No retries, trace, video, screenshot or persistent per-test output in this mode; treat console logs as sensitive. Source/CI typecheck is not execution of this authenticated suite.
