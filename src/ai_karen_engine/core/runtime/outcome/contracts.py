@@ -184,3 +184,22 @@ class SpecialistParticipationReceipt:
         )
         identity = "".join(f"{len(value)}:{value}" for value in fields)
         return str(uuid5(NAMESPACE_URL, "karen:agent.participation.v1:" + identity))
+
+    def to_evidence_payload(self) -> dict[str, Any]:
+        """Serialize an observation without inventing a task outcome."""
+        return {
+            "outcome_id": self.receipt_id,
+            "source": "runtime.execution",
+            "tenant_id": self.tenant_id,
+            "user_id": self.user_id,
+            "trajectory_id": self.trajectory_id,
+            "correlation_id": self.correlation_id,
+            "recorded_at": self.observed_at.isoformat(),
+            "metadata": {
+                "event_type": "agent.specialist.participation",
+                "receipt_version": "specialist-participation.v1",
+                "step_id": self.step_id,
+                "specialist_id": self.specialist_id,
+                "phase": self.phase.value,
+            },
+        }
