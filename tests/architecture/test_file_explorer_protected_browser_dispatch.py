@@ -34,12 +34,18 @@ def test_existing_protected_browser_workflow_owns_live_file_explorer_dispatch():
 def test_protected_file_explorer_browser_mode_never_records_credentials():
     config = PLAYWRIGHT.read_text(encoding="utf-8")
     assert "fileExplorerAcceptance = process.env.KAREN_FILE_EXPLORER_ACCEPTANCE === 'true'" in config
-    assert "fileExplorerAcceptance;" in config
-    assert "settingsAcceptance || navigationAcceptance || fileExplorerAcceptance" in config
-    assert "privateBrowserRun" in config
-    assert "screenshot: privateBrowserRun ? 'off'" in config
-    assert "trace: privateBrowserRun" in config
-    assert "video: privateBrowserRun" in config
+    # Inspect each relevant expression, not the position of a mode in an OR chain.
+    private_modes = config.split("const privateBrowserRun = ", 1)[1].split(";", 1)[0]
+    assert "fileExplorerAcceptance" in {mode.strip() for mode in private_modes.split("||")}
+    retry_modes, retry_value = config.split("retries: ", 1)[1].split(",", 1)[0].split("?", 1)
+    assert "fileExplorerAcceptance" in {mode.strip() for mode in retry_modes.split("||")}
+    assert retry_value.strip().startswith("0 :")
+    reporter_modes, reporter_value = config.split("reporter: ", 1)[1].split("?", 1)
+    assert "fileExplorerAcceptance" in {mode.strip() for mode in reporter_modes.split("||")}
+    assert reporter_value.strip().startswith("[['list']]")
+    for field in ("screenshot", "trace", "video"):
+        value = config.split(f"{field}: privateBrowserRun", 1)[1].lstrip()
+        assert value.startswith("? 'off'")
 
 
 def test_live_file_explorer_acceptance_is_not_a_mock_or_skipped_proof():
