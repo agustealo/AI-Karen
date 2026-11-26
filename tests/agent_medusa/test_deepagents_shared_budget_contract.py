@@ -1187,3 +1187,108 @@ async def test_retained_entry_callback_cannot_write_after_specialist_returns():
         await retained[0]()
     assert store.save_unique_outcome_async.await_count == 2
     assert not pending
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["receipt", "cancelled", "tool_receipt"])
+async def test_secondary_cleanup_cannot_replace_primary_execution_failure(mode):
+    import asyncio
+
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+    from ai_karen_engine.agent_medusa.execution.event_emitter import EventEmitter
+    from ai_karen_engine.agent_medusa.lifecycle.lifecycle_manager import LifecycleStatus
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, root, meter, _ = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+    pending = set()
+    primary = OutcomeStoreError("primary receipt failure")
+
+    async def work(*args, **kwargs):
+        if mode == "cancelled":
+            raise asyncio.CancelledError
+        if mode == "tool_receipt":
+            raise primary
+        return {"result": "observed"}
+
+    async def append(payload):
+        if mode == "receipt" and payload["metadata"]["phase"] == "completed":
+            raise primary
+
+    async def lifecycle_status(agent, status):
+        if status == LifecycleStatus.IDLE:
+            raise RuntimeError("secondary cleanup failure")
+
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock(side_effect=append))
+    specialist = SimpleNamespace(run=_entered_run(side_effect=work))
+    coordinator = MedusaCoordinator(
+        registry=SimpleNamespace(
+            get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
+            get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
+        ),
+        factory=SimpleNamespace(resolve=lambda _: specialist),
+        lifecycle=SimpleNamespace(set_status=AsyncMock(side_effect=lifecycle_status)),
+        outcome_recorder=OutcomeRecorder(store=store),
+    )
+    expected = asyncio.CancelledError if mode == "cancelled" else OutcomeStoreError
+    with pytest.raises(expected) as raised:
+        await coordinator._execute_step(
+            step, plan, request, root, meter, EventEmitter(), pending_participation=pending,
+        )
+    specialist.run.assert_awaited_once()
+    if mode != "cancelled":
+        assert raised.value is primary
+    if mode == "receipt":
+        assert step.status is StepStatus.COMPLETED
+        assert step.output_data == {"result": "observed"}
+        assert pending == {step.id}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["child_cancelled", "sibling_receipt_timeout"])
+async def test_wave_preserves_cancellation_and_completed_sibling_receipt_failure(mode):
+    import asyncio
+
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, _, meter, _ = _request()
+    first = PlanStep(id="first", agent_specialist="researcher")
+    second = PlanStep(id="second", agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[first, second])
+    primary = OutcomeStoreError("sibling receipt failure")
+    coordinator = MedusaCoordinator(
+        planner=SimpleNamespace(create_plan=AsyncMock(return_value=plan)),
+        assembler=SimpleNamespace(assemble=AsyncMock()),
+    )
+
+    async def execute(step, *args):
+        if step is first:
+            step.status = StepStatus.FAILED
+            if mode == "child_cancelled":
+                raise asyncio.CancelledError
+            raise primary
+        if mode == "sibling_receipt_timeout":
+            await asyncio.Event().wait()
+        step.status = StepStatus.COMPLETED
+        return {"result": "observed"}
+
+    coordinator._execute_step = AsyncMock(side_effect=execute)
+    if mode == "sibling_receipt_timeout":
+        meter.remaining_duration_ms = AsyncMock(return_value=50)
+    expected = asyncio.CancelledError if mode == "child_cancelled" else OutcomeStoreError
+    with pytest.raises(expected) as raised:
+        await coordinator._handle_request(request)
+    if mode == "sibling_receipt_timeout":
+        assert raised.value is primary
+    coordinator.assembler.assemble.assert_not_awaited()
+    assert request.request_id not in coordinator.active_plans

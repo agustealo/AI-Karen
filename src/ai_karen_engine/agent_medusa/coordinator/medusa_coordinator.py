@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from dataclasses import asdict, replace
 from typing import Any, Dict, List, Optional
 
@@ -194,7 +195,13 @@ class MedusaCoordinator:
         try:
             response = await self._handle_request(request)
         except asyncio.CancelledError:
-            await self.run_manager.mark_cancelled(request.request_id)
+            try:
+                await self.run_manager.mark_cancelled(request.request_id)
+            except Exception:
+                logger.exception(
+                    "medusa_run_cancellation_transition_failed",
+                    extra={"run_id": request.request_id},
+                )
             logger.info(
                 "medusa_run_cancelled",
                 extra={
@@ -206,7 +213,17 @@ class MedusaCoordinator:
             )
             raise
         except Exception as exc:
-            await self.run_manager.mark_failed(request.request_id, exc)
+            try:
+                await self.run_manager.mark_failed(request.request_id, exc)
+            except Exception:
+                if not isinstance(exc, OutcomeStoreError):
+                    raise
+                # Never replace a non-retryable receipt failure with a
+                # potentially retryable run-ledger transition error.
+                logger.exception(
+                    "medusa_run_failure_transition_failed",
+                    extra={"run_id": request.request_id},
+                )
             logger.exception(
                 "medusa_run_failed",
                 extra={
@@ -421,35 +438,53 @@ class MedusaCoordinator:
                         step.error = "execution_budget_exhausted"
                     await report_skips()
                     continue
+                wave_tasks = [
+                    asyncio.create_task(
+                        self._execute_step(
+                            step,
+                            plan,
+                            request,
+                            authorized_plan,
+                            meter,
+                            request_emitter,
+                            trajectory,
+                            degraded_agents,
+                            degradation_reasons,
+                            pending_participation,
+                        )
+                    )
+                    for step in wave
+                ]
                 try:
                     async with asyncio.timeout(remaining_seconds):
                         results = await asyncio.gather(
-                            *[
-                                self._execute_step(
-                                    step,
-                                    plan,
-                                    request,
-                                    authorized_plan,
-                                    meter,
-                                    request_emitter,
-                                    trajectory,
-                                    degraded_agents,
-                                    degradation_reasons,
-                                    pending_participation,
-                                )
-                                for step in wave
-                            ],
-                            return_exceptions=True,
+                            *wave_tasks, return_exceptions=True,
                         )
                 except TimeoutError:
+                    # A completed sibling can have failed its tool receipt
+                    # before a different child exhausted the wave deadline.
+                    # Gather cancellation must not erase that evidence failure.
+                    self._require_durable_tool_receipts([
+                        task.exception() for task in wave_tasks
+                        if task.done() and not task.cancelled()
+                    ])
                     # Cancellation of an in-flight append does not establish
                     # whether the durable observation was committed.
                     if pending_participation:
                         raise OutcomeStoreError(
                             "Specialist participation acknowledgement unavailable"
                         )
-                    for step in wave:
-                        if step.status != StepStatus.COMPLETED:
+                    for step, task in zip(wave, wave_tasks):
+                        if step.status == StepStatus.COMPLETED:
+                            if task.done() and not task.cancelled():
+                                error = task.exception()
+                                if error is not None:
+                                    raise error
+                            elif task.cancelled():
+                                raise OutcomeStoreError(
+                                    "Completed specialist post-invocation processing interrupted"
+                                )
+                        elif step.status in {StepStatus.PENDING, StepStatus.RUNNING}:
                             step.status = StepStatus.FAILED
                             step.error = "execution_deadline_exceeded"
                     for step in plan.steps:
@@ -467,8 +502,15 @@ class MedusaCoordinator:
                     raise OutcomeStoreError(
                         "Specialist participation acknowledgement unavailable"
                     )
+                # A child cancellation is never an ordinary DAG failure.
+                # Inspect the whole wave before assembling sibling outputs.
+                for result in results:
+                    if isinstance(result, asyncio.CancelledError):
+                        raise result
                 for step, result in zip(wave, results):
                     if isinstance(result, BaseException):
+                        if not isinstance(result, Exception):
+                            raise result
                         # A post-invocation observation or cleanup failure
                         # cannot undo an already returned specialist result.
                         if step.status != StepStatus.COMPLETED:
@@ -901,20 +943,26 @@ class MedusaCoordinator:
                             },
                         )
                 if emitter is not None:
-                    await emitter.emit(
-                        AgentEvent(
-                            type=AgentEventType.AGENT_INTERRUPTED,
-                            agent_id=step.agent_specialist,
-                            message=f"step {step.id} interrupted",
-                            correlation_id=self._correlation_id(request),
-                            metadata={
-                                "step_id": step.id,
-                                "degraded": is_degraded,
-                                "invocation_entered": invocation_entered,
-                                "reason_code": "cancelled",
-                            },
+                    try:
+                        await emitter.emit(
+                            AgentEvent(
+                                type=AgentEventType.AGENT_INTERRUPTED,
+                                agent_id=step.agent_specialist,
+                                message=f"step {step.id} interrupted",
+                                correlation_id=self._correlation_id(request),
+                                metadata={
+                                    "step_id": step.id,
+                                    "degraded": is_degraded,
+                                    "invocation_entered": invocation_entered,
+                                    "reason_code": "cancelled",
+                                },
+                            )
                         )
-                    )
+                    except Exception:
+                        logger.exception(
+                            "medusa_interruption_event_failed",
+                            extra={"run_id": request.request_id, "step_id": step.id},
+                        )
             logger.info(
                 "medusa_step_cancelled",
                 extra={
@@ -946,24 +994,47 @@ class MedusaCoordinator:
                 and step.status != StepStatus.COMPLETED
                 and emitter is not None
             ):
-                await emitter.emit(
-                    AgentEvent(
-                        type=AgentEventType.AGENT_FAILED,
-                        agent_id=step.agent_specialist,
-                        message=f"step {step.id} failed",
-                        correlation_id=self._correlation_id(request),
-                        metadata={
-                            "step_id": step.id,
-                            "error_type": type(exc).__name__,
-                            "degraded": is_degraded,
-                        },
+                try:
+                    await emitter.emit(
+                        AgentEvent(
+                            type=AgentEventType.AGENT_FAILED,
+                            agent_id=step.agent_specialist,
+                            message=f"step {step.id} failed",
+                            correlation_id=self._correlation_id(request),
+                            metadata={
+                                "step_id": step.id,
+                                "error_type": type(exc).__name__,
+                                "degraded": is_degraded,
+                            },
+                        )
                     )
-                )
+                except Exception:
+                    if not isinstance(exc, OutcomeStoreError):
+                        raise
+                    logger.exception(
+                        "medusa_failure_event_failed",
+                        extra={"run_id": request.request_id, "step_id": step.id},
+                    )
             raise
         finally:
             # The capability belongs to this call only, not a retained context.
             execution._invocation_entry = None
-            await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
+            primary = sys.exc_info()[1]
+            try:
+                await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
+            except Exception:
+                if primary is None:
+                    raise
+                # Cleanup is secondary to an already propagating exception,
+                # including cancellation and strict receipt failures.
+                logger.exception(
+                    "medusa_step_cleanup_failed",
+                    extra={
+                        "run_id": request.request_id,
+                        "step_id": step.id,
+                        "primary_error_type": type(primary).__name__,
+                    },
+                )
 
     async def _record_participation(
         self,
