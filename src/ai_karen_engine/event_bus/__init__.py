@@ -1,5 +1,5 @@
 """
-Simple in-memory and Redis-backed event bus with tenant & role filtering.
+Legacy destructive event queue with tenant and role isolation.
 Enhanced with hook-specific event types and routing.
 """
 
@@ -7,8 +7,11 @@ from __future__ import annotations
 
 import collections
 import json
+import logging
 import os
+import threading
 import uuid
+from copy import deepcopy
 from dataclasses import asdict, dataclass
 from typing import Any, Deque, Dict, List, Optional, Union, Callable
 
@@ -25,6 +28,13 @@ REDIS_URL = config_manager.get_config_value("redis", "url", default=os.getenv("R
 EVENT_LIST_KEY = config_manager.get_config_value("event_bus", "key", default="kari:events")
 ALLOWED_PUBLISH_ROLES = set(config_manager.get_config_value("event_bus", "allowed_roles", default=["admin", "user"]))
 
+logger = logging.getLogger(__name__)
+
+
+class EventBusUnavailable(RuntimeError):
+    """The configured event queue cannot safely complete an operation."""
+
+
 @dataclass
 class Event:
     id: str
@@ -36,10 +46,12 @@ class Event:
     tenant_id: Optional[str] = None
 
 class EventBus:
-    """In-memory FIFO event bus with optional Redis fallback and hook routing."""
+    """Legacy role-scoped work queue, not a private-user broadcast transport."""
 
-    def __init__(self) -> None:
+    def __init__(self, *, use_redis: Optional[bool] = None) -> None:
         self._queue: Deque[Event] = collections.deque()
+        self._queue_lock = threading.Lock()
+        self._list_key = EVENT_LIST_KEY
         self._redis: Optional["redis.Redis"] = None
         self._hook_handlers: Dict[str, List[Callable]] = collections.defaultdict(list)
         self._hook_enabled = True
@@ -49,11 +61,14 @@ class EventBus:
         self._typing_events: Dict[str, Dict[str, Any]] = {}
         self._collaboration_sessions: Dict[str, Dict[str, Any]] = {}
 
-        if redis and REDIS_URL:
+        use_redis = bool(REDIS_URL) if use_redis is None else use_redis
+        if use_redis:
+            if redis is None or not REDIS_URL:
+                raise EventBusUnavailable("Configured Redis event queue is unavailable")
             try:
                 self._redis = redis.from_url(REDIS_URL)
             except Exception:
-                self._redis = None
+                raise EventBusUnavailable("Configured Redis event queue is unavailable") from None
 
     def publish(
         self,
@@ -64,61 +79,108 @@ class EventBus:
         roles: Optional[List[str]] = None,
         tenant_id: Optional[str] = None,
     ) -> str:
-        # enforce allowed roles
-        if not roles or not ALLOWED_PUBLISH_ROLES.intersection(roles):
+        if (
+            not isinstance(roles, list)
+            or not all(isinstance(role, str) and role.strip() for role in roles)
+            or not ALLOWED_PUBLISH_ROLES.intersection(roles)
+        ):
             raise PermissionError("Publish denied: insufficient roles")
-        eid = str(uuid.uuid4())
-        event = Event(eid, capsule, event_type, payload, risk, roles, tenant_id)
+        if tenant_id is not None and (
+            not isinstance(tenant_id, str) or not tenant_id.strip()
+            or tenant_id != tenant_id.strip()
+        ):
+            raise ValueError("Invalid event tenant scope")
 
-        # trigger hook handlers if enabled
+        event = Event(str(uuid.uuid4()), capsule, event_type, deepcopy(payload), risk, list(roles), tenant_id)
+        if self._redis is not None:
+            try:
+                self._redis.rpush(self._list_key, json.dumps(asdict(event)))
+            except Exception:
+                logger.warning("event_bus.publish_unavailable")
+                raise EventBusUnavailable("Event publication unavailable") from None
+        else:
+            with self._queue_lock:
+                self._queue.append(deepcopy(event))
+
+        # Hooks are not a durable delivery receipt; invoke only after enqueue.
         if self._hook_enabled:
             self._trigger_hook_handlers(event)
-
-        # try Redis first
-        if self._redis:
-            try:
-                self._redis.rpush(EVENT_LIST_KEY, json.dumps(asdict(event)))
-                return eid
-            except Exception:
-                self._redis = None  # disable Redis on failure
-
-        # fallback to in-memory queue
-        self._queue.append(event)
-        return eid
+        return event.id
 
     def consume(
         self,
         roles: Optional[List[str]] = None,
         tenant_id: Optional[str] = None,
     ) -> List[Event]:
-        results: List[Event] = []
+        """Remove only matching events. Unattributed events remain internal."""
+        if (
+            not isinstance(tenant_id, str) or not tenant_id.strip()
+            or tenant_id != tenant_id.strip()
+            or not isinstance(roles, list) or not roles
+            or not all(isinstance(role, str) and role.strip() for role in roles)
+        ):
+            raise PermissionError("Event consumption requires tenant and role scope")
+        allowed_roles = set(roles)
 
-        # drain Redis list if available
-        if self._redis:
-            try:
-                raw = self._redis.lrange(EVENT_LIST_KEY, 0, -1)
-                self._redis.delete(EVENT_LIST_KEY)
-                for item in raw:
-                    text = item.decode() if isinstance(item, (bytes, bytearray)) else item
-                    data = json.loads(text)
-                    results.append(Event(**data))
-            except Exception:
-                self._redis = None  # disable Redis on error
+        def allowed(event: Event) -> bool:
+            return (
+                event.tenant_id == tenant_id
+                and isinstance(event.roles, list)
+                and all(isinstance(role, str) for role in event.roles)
+                and bool(allowed_roles.intersection(event.roles))
+            )
 
-        # drain in-memory queue
-        results.extend(self._queue)
-        self._queue.clear()
+        if self._redis is not None:
+            return self._consume_redis(allowed)
 
-        # apply tenant & role filtering
-        def allowed(e: Event) -> bool:
-            if tenant_id is not None and e.tenant_id != tenant_id:
-                return False
-            if roles and not set(roles).intersection(e.roles):
-                return False
-            return True
+        with self._queue_lock:
+            selected: List[Event] = []
+            remaining: Deque[Event] = collections.deque()
+            for event in self._queue:
+                (selected if allowed(event) else remaining).append(event)
+            self._queue = remaining
+            return selected
 
-        return [e for e in results if allowed(e)]
-    
+    def _consume_redis(self, allowed: Callable[[Event], bool]) -> List[Event]:
+        """Atomically select/remove matching entries without deleting the queue.
+
+        WATCH protects the snapshot from concurrent producers and consumers.
+        Malformed and unmatched entries are left intact for their owners or
+        maintenance; no decoded payload or raw exception is logged.
+        """
+        try:
+            for _ in range(3):
+                try:
+                    with self._redis.pipeline() as pipe:
+                        pipe.watch(self._list_key)
+                        selected: List[Event] = []
+                        selected_raw = []
+                        for item in pipe.lrange(self._list_key, 0, -1):
+                            try:
+                                event = Event(**json.loads(item))
+                            except (TypeError, ValueError, UnicodeError):
+                                continue
+                            if allowed(event):
+                                selected.append(event)
+                                selected_raw.append(item)
+                        if not selected:
+                            return []
+                        pipe.multi()
+                        for item in selected_raw:
+                            pipe.lrem(self._list_key, 1, item)
+                        removed = pipe.execute()
+                        if removed != [1] * len(selected):
+                            raise EventBusUnavailable("Event queue removal was not confirmed")
+                        return selected
+                except redis.exceptions.WatchError:
+                    continue
+        except EventBusUnavailable:
+            raise
+        except Exception:
+            logger.warning("event_bus.consume_unavailable")
+            raise EventBusUnavailable("Event consumption unavailable") from None
+        raise EventBusUnavailable("Event queue changed during consumption")
+
     def register_hook_handler(self, event_type: str, handler: Callable[[Event], None]) -> None:
         """Register a hook handler for specific event types."""
         self._hook_handlers[event_type].append(handler)
@@ -319,61 +381,25 @@ class EventBus:
         )
 
 class RedisEventBus(EventBus):
-    """Explicit Redis-only event bus (list semantics)."""
+    """Explicit Redis-only adapter reusing the canonical queue operations."""
 
     def __init__(
         self,
         redis_client: Optional["redis.Redis"] = None,
         list_key: Optional[str] = None,
     ) -> None:
-        # Initialize parent EventBus (which includes hook functionality)
-        EventBus.__init__(self)
-        if redis_client:
+        super().__init__(use_redis=False)
+        if redis_client is not None:
             self._redis = redis_client
         elif redis is None:
-            raise ImportError("redis package is required for RedisEventBus")
-        elif REDIS_URL:
-            self._redis = redis.from_url(REDIS_URL)
+            raise EventBusUnavailable("Redis event queue dependency unavailable")
         else:
-            self._redis = redis.Redis()
+            try:
+                self._redis = redis.from_url(REDIS_URL) if REDIS_URL else redis.Redis()
+            except Exception:
+                raise EventBusUnavailable("Configured Redis event queue is unavailable") from None
         self._list_key = list_key or EVENT_LIST_KEY
 
-    def publish(
-        self,
-        capsule: str,
-        event_type: str,
-        payload: Dict[str, Any],
-        risk: float = 0.0,
-        roles: Optional[List[str]] = None,
-        tenant_id: Optional[str] = None,
-    ) -> str:
-        if not roles or not ALLOWED_PUBLISH_ROLES.intersection(roles):
-            raise PermissionError("Publish denied: insufficient roles")
-        eid = str(uuid.uuid4())
-        ev = Event(eid, capsule, event_type, payload, risk, roles or [], tenant_id)
-        
-        # trigger hook handlers if enabled
-        if self._hook_enabled:
-            self._trigger_hook_handlers(ev)
-        
-        self._redis.rpush(self._list_key, json.dumps(asdict(ev)))
-        return eid
-
-    def consume(
-        self,
-        roles: Optional[List[str]] = None,
-        tenant_id: Optional[str] = None,
-    ) -> List[Event]:
-        raw = self._redis.lrange(self._list_key, 0, -1)
-        if raw:
-            self._redis.delete(self._list_key)
-        events: List[Event] = []
-        for item in raw:
-            text = item.decode() if isinstance(item, (bytes, bytearray)) else item
-            data = json.loads(text)
-            events.append(Event(**data))
-        # apply same filtering as base
-        return super().consume(roles=roles, tenant_id=tenant_id)
 
 # Singleton accessor
 _global_bus: Union[EventBus, RedisEventBus, None] = None
@@ -385,17 +411,12 @@ def get_event_bus() -> Union[EventBus, RedisEventBus]:
         return _global_bus
 
     backend = config_manager.get_config_value("event_bus", "backend", default="memory").lower()
-    if backend == "redis" and redis:
-        try:
-            _global_bus = RedisEventBus()
-        except Exception as e:
-            # Log the exception for debugging
-            import logging
-            logging.getLogger(__name__).debug(f"Failed to create RedisEventBus: {e}")
-            _global_bus = EventBus()
+    if backend == "redis":
+        _global_bus = RedisEventBus()
     else:
+        # Preserve the existing URL-driven selection for legacy configurations.
         _global_bus = EventBus()
 
     return _global_bus
 
-__all__ = ["Event", "EventBus", "RedisEventBus", "get_event_bus"]
+__all__ = ["Event", "EventBus", "EventBusUnavailable", "RedisEventBus", "get_event_bus"]
