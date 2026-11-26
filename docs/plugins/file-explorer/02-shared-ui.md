@@ -259,3 +259,44 @@ is still unsupported. The controlled composer fences the SDK's synchronous
 optimistic empty callback after a rejected attachment send, without blocking
 later manual clearing. Stale content reauthorization and actual file-byte
 execution require separate proof; this case does not certify them.
+
+## KEXP-005E: local session revocation and cross-tenant isolation
+
+Use the same private local environment as 005A. Verify actual API, database
+and Storage isolation before setting the isolation attestation. Prepare two
+distinct sanitized accounts in **different tenants**, each with one uniquely
+named root file and one uniquely named root folder on the first page, rename
+permission, and a dedicated conversation whose saved draft already contains
+its own exact active file reference. The scenario does not seed these objects.
+Supply `KAREN_UX_ISOLATION_EMAIL` and `KAREN_UX_ISOLATION_PASSWORD` privately,
+in addition to the primary owner credentials, and set the six fixture UUIDs:
+
+```bash
+export KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED=true
+export KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE=true
+for actor in A B; do
+  for kind in SOURCE FOLDER CONVERSATION; do
+    key="KAREN_FILE_EXPLORER_ISOLATION_${actor}_${kind}_ID"
+    read -r -p "$key: " "$key"
+    export "$key"
+  done
+done
+CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium \
+  --grep='KFILE-ISOLATION-LOCAL:' --workers=1 --retries=0
+```
+
+The same browser signs in A, selects an owned source, signs out, signs in B
+and returns to A. A separate cookie-free request context must first prove
+the observed bearer works, then replay that exact credential after logout.
+Inventory and draft reads plus an unchanged-name rename probe must be denied.
+B must have successful independent owner access, a distinct backend tenant,
+no A inventory or selection, and receive 404 for A's draft and 403/409 for
+A's folder rename. A's new session verifies the original folder and source
+revision remain intact and the prior bearer is still rejected. The negative
+rename probes use only an unchanged name on a disposable folder; no deletes
+or content changes are authorized. No raw credentials, request captures or
+browser state may be published. A cookie-only transport cannot satisfy this
+specific bearer-replay scenario. No observed local result is claimed.
+This tests draft ownership and session admission, not retired-content
+reauthorization or attachment-byte execution.

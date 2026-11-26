@@ -128,3 +128,18 @@ def test_local_attachment_acceptance_uses_real_consumer_and_is_not_protected_dis
     assert 'await composer.press("Enter")' in source
     assert 'expect(runs, "Draft operations must never execute inference").toBe(0)' in source
     assert 'expect(organizationWrites, "Draft attachment selection must never mutate files").toBe(0)' in source
+
+def test_local_isolation_requires_actual_principal_transition_and_revoked_credential_replay():
+    source = SPEC.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert 'KFILE-ISOLATION-LOCAL:' in source
+    assert 'KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE !== "true"' in source
+    assert 'KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE' not in workflow
+    assert 'KFILE-ISOLATION-LOCAL' not in workflow
+    assert 'other.identity.tenant_id === owner.identity.tenant_id' in source
+    assert 'const revokedInventory = await replay.request.get(endpoint(prefix + "/hierarchy"), owner.options)' in source
+    assert 'expect([401, 403]).toContain(revokedRename.status())' in source
+    assert 'expect(foreignDraft.status()).toBe(404)' in source
+    assert 'expect([403, 409]).toContain(foreignRename.status())' in source
+    assert 'expect(restored.folder).toEqual(owner.folder)' in source
+    assert 'expect([401, 403]).toContain(stillRevoked.status())' in source

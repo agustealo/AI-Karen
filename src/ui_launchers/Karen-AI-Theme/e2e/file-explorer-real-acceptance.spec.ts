@@ -885,6 +885,154 @@ test("KFILE-ATTACHMENT-LOCAL: capacity, saved references and blocked submission"
 });
 
 /**
+ * Real local principal/tenant transition and revoked-credential admission.
+ * Two distinct sanitized tenants, preseeded files, folders and drafts.
+ * No setup writes; the only mutation probes request an unchanged folder name.
+ * Never use a real customer's credentials or objects.
+ */
+test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session denial", async ({ page, browser }) => {
+  test.skip(!enabled || process.env.KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE !== "true",
+    "Requires explicit local isolation acceptance");
+  test.setTimeout(6 * 60_000);
+  const origin = trustedOrigin();
+  if (origin.protocol !== "http:" || process.env.GITHUB_ACTIONS === "true" ||
+      process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined ||
+      process.env.KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED !== "true") {
+    throw new Error("Isolation acceptance requires an attested isolated local stack");
+  }
+  const otherEmail = process.env.KAREN_UX_ISOLATION_EMAIL;
+  const otherPassword = process.env.KAREN_UX_ISOLATION_PASSWORD;
+  const aSource = process.env.KAREN_FILE_EXPLORER_ISOLATION_A_SOURCE_ID;
+  const bSource = process.env.KAREN_FILE_EXPLORER_ISOLATION_B_SOURCE_ID;
+  const aFolder = process.env.KAREN_FILE_EXPLORER_ISOLATION_A_FOLDER_ID;
+  const bFolder = process.env.KAREN_FILE_EXPLORER_ISOLATION_B_FOLDER_ID;
+  const aDraft = process.env.KAREN_FILE_EXPLORER_ISOLATION_A_CONVERSATION_ID;
+  const bDraft = process.env.KAREN_FILE_EXPLORER_ISOLATION_B_CONVERSATION_ID;
+  const ids = [aSource, bSource, aFolder, bFolder, aDraft, bDraft];
+  if (!email || !password || !otherEmail || !otherPassword ||
+      email.trim().toLowerCase() === otherEmail.trim().toLowerCase() ||
+      ids.some(id => !id || !uuidPattern.test(id)) || new Set(ids).size !== ids.length) {
+    throw new Error("Two distinct sanitized accounts and six distinct fixture UUIDs required");
+  }
+  await page.setViewportSize(widths[3]);
+  const prefix = "/api/plugins/file-explorer";
+  const endpoint = (path: string) => new URL(path, origin).toString();
+  const draftUrl = (id: string) => endpoint("/api/conversations/" + id + "/draft?include_attachments=true");
+  const explorer = page.getByRole("region", { name: "Shared File Explorer" });
+  // A separate cookie-free transport makes a replay a real test of the
+  // observed access credential, not merely a test of an empty cookie jar.
+  const replay = await browser.newContext({ baseURL: origin.origin, serviceWorkers: "block" });
+  type Identity = { user_id: string; tenant_id: string };
+  async function inspectActor(sourceId: string, folderId: string, foreignSource: string, foreignFolder: string) {
+    const pending = nextRealPage(page, origin);
+    await enterWorkspace(page);
+    const http = await pending;
+    expect(http.status()).toBe(200);
+    const inventory = inventoryResponse(await http.json());
+    expect(inventory.items.some(file => file.source_id === foreignSource)).toBe(false);
+    expect(inventory.folders.some(folder => folder.folder_id === foreignFolder)).toBe(false);
+    const file = inventory.items.find(item => item.source_id === sourceId);
+    const folder = inventory.folders.find(item => item.folder_id === folderId);
+    if (!file || !folder) throw new Error("Dedicated owned fixtures must be on the first root page");
+    expect(inventory.items.filter(item => item.name === file.name)).toHaveLength(1);
+    expect(inventory.folders.filter(item => item.name === folder.name)).toHaveLength(1);
+    await verifyDisplayedInventory(page, inventory);
+    await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
+    // Observe the exact browser credential, without reading local storage,
+    // printing headers or exporting browser state. Require a bearer so the
+    // independent replay can prove both pre-revocation and post-revocation.
+    const observed = await http.request().allHeaders();
+    const authorization = observed.authorization;
+    if (!authorization || !/^Bearer \S+$/.test(authorization)) {
+      throw new Error("A real observed bearer credential is required for revocation proof");
+    }
+    const options = { headers: { authorization }, maxRedirects: 0, maxRetries: 0 };
+    const identityHttp = await replay.request.get(endpoint("/api/auth/me"), options);
+    expect(identityHttp.status()).toBe(200);
+    const identity = await identityHttp.json() as Identity;
+    expect(Boolean(identity.user_id && identity.tenant_id)).toBe(true);
+    const control = await replay.request.get(endpoint(prefix + "/hierarchy"), options);
+    expect(control.status()).toBe(200);
+    const controlInventory = inventoryResponse(await control.json());
+    expect(controlInventory.items.some(item => item.source_id === sourceId)).toBe(true);
+    expect(controlInventory.folders.some(item => item.folder_id === folderId)).toBe(true);
+    await expect(explorer.getByRole("button", { name: "Rename " + folder.name, exact: true })).toBeEnabled();
+    return { file, folder, identity, options };
+  }
+  async function verifyOwnDraft(id: string, actor: Awaited<ReturnType<typeof inspectActor>>, foreignId: string) {
+    const response = await replay.request.get(draftUrl(id), actor.options);
+    expect(response.status()).toBe(200);
+    const body = await response.json() as { revision: number; attachment_references: { source_id: string; revision: string }[] };
+    expect(Number.isSafeInteger(body.revision)).toBe(true);
+    expect(Array.isArray(body.attachment_references)).toBe(true);
+    expect(body.attachment_references).toContainEqual({ source_id: actor.file.source_id, revision: actor.file.revision });
+    expect(body.attachment_references.some(ref => ref.source_id === foreignId)).toBe(false);
+  }
+  try {
+    await signInApprovedKaren(page, email, password, { allowLocalLoopback: true });
+    const owner = await inspectActor(aSource!, aFolder!, bSource!, bFolder!);
+    await verifyOwnDraft(aDraft!, owner, bSource!);
+    await explorer.getByRole("checkbox", { name: "Select " + owner.file.name, exact: true }).check();
+    await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
+
+    await page.getByRole("button", { name: "My Account", exact: true }).last().click();
+    const logout = page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.origin === origin.origin && url.pathname === "/api/auth/logout" && response.request().method() === "POST";
+    }, { timeout: 30_000 });
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    expect((await logout).ok()).toBe(true);
+    await expect(page).toHaveURL(/\/login(?:[/?#]|$)/, { timeout: 30_000 });
+    await expect(explorer).toHaveCount(0);
+
+    // Replay the same credential that succeeded before logout, on the same
+    // independent transport. A login redirect or anonymous 401 is not proof.
+    const revokedInventory = await replay.request.get(endpoint(prefix + "/hierarchy"), owner.options);
+    expect([401, 403]).toContain(revokedInventory.status());
+    const revokedDraft = await replay.request.get(draftUrl(aDraft!), owner.options);
+    expect([401, 403]).toContain(revokedDraft.status());
+    const revokedRename = await replay.request.patch(endpoint(prefix + "/folders/" + owner.folder.folder_id), {
+      ...owner.options, data: { name: owner.folder.name, expected_revision: owner.folder.revision },
+    });
+    expect([401, 403]).toContain(revokedRename.status());
+
+    await signInApprovedKaren(page, otherEmail, otherPassword, { allowLocalLoopback: true });
+    const other = await inspectActor(bSource!, bFolder!, aSource!, aFolder!);
+    expect(other.identity.user_id === owner.identity.user_id).toBe(false);
+    expect(other.identity.tenant_id === owner.identity.tenant_id, "Fixtures must belong to different verified tenants").toBe(false);
+    expect(other.file.name === owner.file.name).toBe(false);
+    expect(other.folder.name === owner.folder.name).toBe(false);
+    await expect(explorer.getByRole("checkbox", { name: "Select " + owner.file.name, exact: true })).toHaveCount(0);
+    await expect(explorer.getByRole("button", { name: "Open folder " + owner.folder.name, exact: true })).toHaveCount(0);
+    await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
+    await verifyOwnDraft(bDraft!, other, aSource!);
+
+    const foreignDraft = await replay.request.get(draftUrl(aDraft!), other.options);
+    expect(foreignDraft.status()).toBe(404);
+    const foreignRename = await replay.request.patch(endpoint(prefix + "/folders/" + owner.folder.folder_id), {
+      ...other.options, data: { name: owner.folder.name, expected_revision: owner.folder.revision },
+    });
+    expect([403, 409]).toContain(foreignRename.status());
+
+    // A new A login verifies that denial did not alter the fixture and that
+    // the old credential remains revoked even after the principal returns.
+    await page.getByRole("button", { name: "My Account", exact: true }).last().click();
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page).toHaveURL(/\/login(?:[/?#]|$)/, { timeout: 30_000 });
+    await signInApprovedKaren(page, email, password, { allowLocalLoopback: true });
+    const restored = await inspectActor(aSource!, aFolder!, bSource!, bFolder!);
+    expect(restored.identity).toEqual(owner.identity);
+    expect(restored.folder).toEqual(owner.folder);
+    expect(restored.file.revision).toBe(owner.file.revision);
+    await verifyOwnDraft(aDraft!, restored, bSource!);
+    const stillRevoked = await replay.request.get(endpoint(prefix + "/hierarchy"), owner.options);
+    expect([401, 403]).toContain(stillRevoked.status());
+  } finally {
+    await replay.close();
+  }
+});
+
+/**
  * Opt-in real selection-to-analysis evidence. The dedicated acceptance owner
  * must seed a supported, active text/code artifact on the first owner page,
  * enable both canonical plugins, and supply its exact UUID. No route mocking.
