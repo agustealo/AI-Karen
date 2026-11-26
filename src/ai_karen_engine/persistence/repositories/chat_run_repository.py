@@ -250,7 +250,7 @@ class SqlChatRunRepository:
                     submitted_text=submitted_text,
                 ):
                     raise DraftSubmissionConflict("composer_draft_submission_conflict")
-        if attention_enabled:
+        if attention_enabled and not admitted:
             await self._reconcile_attention(
                 tenant_id=tenant, user_id=user, conversation_id=conversation,
             )
@@ -1068,7 +1068,7 @@ class SqlChatRunRepository:
                 if next_status is None:
                     raise RuntimeError("chat_run_cancel_concurrent_state_changed")
                 status = str(next_status)
-        if attention_enabled:
+        if attention_enabled and status in {"failed", "orphaned"}:
             await self._reconcile_attention(
                 tenant_id=scope["tenant"], user_id=scope["owner"],
                 conversation_id=scope["conversation"],

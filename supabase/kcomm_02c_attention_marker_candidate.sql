@@ -48,6 +48,16 @@ END;
 $guard$;
 
 REVOKE ALL ON FUNCTION public.runtime_chat_communications_attention_guard() FROM PUBLIC;
+DO $revoke$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'anon') THEN
+        REVOKE ALL ON FUNCTION public.runtime_chat_communications_attention_guard() FROM anon;
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'authenticated') THEN
+        REVOKE ALL ON FUNCTION public.runtime_chat_communications_attention_guard() FROM authenticated;
+    END IF;
+END;
+$revoke$;
 CREATE TRIGGER runtime_chat_communications_attention_guard
     BEFORE INSERT OR UPDATE OF communications_attention_eligible_at
     ON public.runtime_chat_runs

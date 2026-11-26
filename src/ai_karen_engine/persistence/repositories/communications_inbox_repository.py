@@ -224,7 +224,7 @@ class CommunicationsInboxRepository:
                   {filters}
                 ORDER BY r.communications_attention_eligible_at, r.execution_id
                 LIMIT :limit
-                FOR KEY SHARE OF c, r
+                FOR KEY SHARE OF c, r SKIP LOCKED
             )
             INSERT INTO public.communications_inbox_entries
                 (tenant_id, user_id, conversation_id, execution_id)
