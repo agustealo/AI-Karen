@@ -163,6 +163,10 @@ const participationRunIds = [
   process.env.KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID,
   process.env.KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID,
 ] as const;
+// Expanded lifecycle mode deliberately shares the private participation
+// configuration. It must never silently turn into the original two-run proof.
+const lifecycleEnabled = process.env.KAREN_SPECIALIST_LIFECYCLE_ACCEPTANCE === "true";
+const emptyRunId = process.env.KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID;
 const personalRunsPath = "/api/agent-runtime/my-runs";
 const phases = {
   started: "Method entered",
@@ -180,7 +184,7 @@ type ParticipationRow = {
 };
 type ParticipationReadback = {
   run_id: string;
-  evidence_status: "recorded";
+  evidence_status: "recorded" | "empty";
   receipts: ParticipationRow[];
   truncated: false;
   response_source: "postgres_outcome_records";
@@ -198,11 +202,12 @@ function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<
 
 // Validate the raw wire payload before casting or comparing. Never include
 // unexpected fields or their values in a diagnostic.
-function parseParticipation(value: unknown, runId: string): ParticipationReadback {
+function parseParticipation(value: unknown, runId: string, expectedStatus: "recorded" | "empty" = "recorded"): ParticipationReadback {
   if (!hasExactKeys(value, ["run_id", "evidence_status", "receipts", "truncated", "response_source"])
       || value.run_id !== runId || value.response_source !== "postgres_outcome_records"
-      || value.evidence_status !== "recorded" || value.truncated !== false
-      || !Array.isArray(value.receipts) || value.receipts.length === 0 || value.receipts.length > 100) {
+      || value.evidence_status !== expectedStatus || value.truncated !== false
+      || !Array.isArray(value.receipts) || value.receipts.length > 100
+      || (expectedStatus === "empty" ? value.receipts.length !== 0 : value.receipts.length === 0)) {
     throw new Error("Invalid or unexpected participation envelope");
   }
   const ids = new Set<string>();
@@ -221,12 +226,13 @@ function parseParticipation(value: unknown, runId: string): ParticipationReadbac
     ids.add(row.receipt_id);
     terminal ||= row.phase !== "started";
   }
-  if (!terminal) throw new Error("Terminal observation fixture required");
+  if (expectedStatus === "recorded" && !terminal) throw new Error("Terminal observation fixture required");
   return value as ParticipationReadback;
 }
 
 function sameParticipation(left: ParticipationReadback, right: ParticipationReadback): boolean {
-  return left.run_id === right.run_id && left.receipts.length === right.receipts.length
+  return left.run_id === right.run_id && left.evidence_status === right.evidence_status
+    && left.receipts.length === right.receipts.length
     && left.receipts.every((row, index) => {
       const other = right.receipts[index];
       return row.receipt_id === other.receipt_id && row.step_id === other.step_id
@@ -256,10 +262,10 @@ async function scopedParticipationGet(page: Page, origin: string, path: string, 
   }, { origin, path, authenticated });
 }
 
-async function readParticipation(page: Page, origin: string, runId: string): Promise<ParticipationReadback> {
+async function readParticipation(page: Page, origin: string, runId: string, expectedStatus: "recorded" | "empty" = "recorded"): Promise<ParticipationReadback> {
   const response = await scopedParticipationGet(page, origin, participationPath(runId));
   expect(response.status, "Owner participation read must return 200").toBe(200);
-  return parseParticipation(response.payload, runId);
+  return parseParticipation(response.payload, runId, expectedStatus);
 }
 
 // Pure negative control: synthetic test-only values, no authenticated host.
@@ -280,6 +286,13 @@ test("ARM-05C.5B rejects overbroad receipt projections", () => {
     .toThrow("Invalid or unexpected participation receipt");
   expect(() => parseParticipation({ ...envelope, receipts: [row, row] }, "run"))
     .toThrow("Invalid or unexpected participation receipt");
+  const empty = { ...envelope, evidence_status: "empty", receipts: [] };
+  expect(parseParticipation(empty, "run", "empty").receipts).toHaveLength(0);
+  expect(() => parseParticipation(empty, "run")).toThrow("Invalid or unexpected participation envelope");
+  expect(() => parseParticipation({ ...empty, receipts: [row] }, "run", "empty"))
+    .toThrow("Invalid or unexpected participation envelope");
+  expect(() => parseParticipation({ ...empty, truncated: true }, "run", "empty"))
+    .toThrow("Invalid or unexpected participation envelope");
 });
 
 async function verifyParticipationProjection(
@@ -304,13 +317,21 @@ async function verifyParticipationProjection(
   const observed = await pending;
   expect(observed.status()).toBe(200);
   // Compare the actual UI request with a separate authenticated read.
-  expect(sameParticipation(parseParticipation(await observed.json(), own), expected),
+  expect(sameParticipation(parseParticipation(await observed.json(), own, expected.evidence_status), expected),
     "UI request must match independent receipt readback").toBe(true);
   const region = root.getByRole("region", { name: "Recorded specialist participation" });
   await expect(region).toBeVisible();
   await expect(region.getByText(/do not prove inference, external actions, or overall task success/)).toBeVisible();
   const rows = region.getByRole("listitem");
   await expect(rows).toHaveCount(expected.receipts.length);
+  const emptyMessage = region.getByText("No durable specialist participation was recorded. Execution status alone does not establish participation.", { exact: true });
+  await expect(region.getByText("Specialist participation evidence is unavailable. Refresh runtime to retry.", { exact: true })).toHaveCount(0);
+  if (expected.evidence_status === "empty") {
+    await expect(emptyMessage).toBeVisible();
+  } else {
+    await expect(emptyMessage).toHaveCount(0);
+    await expect(region.getByText(/A method-entry receipt without a recorded terminal observation does not establish current activity or completion/)).toBeVisible();
+  }
   for (const [index, row] of expected.receipts.entries()) {
     const item = rows.nth(index);
     await expect(item.getByText(row.specialist_id + " · " + phases[row.phase], { exact: true })).toBeVisible();
@@ -320,6 +341,10 @@ async function verifyParticipationProjection(
 }
 
 test("ARM-05C.5B real participation receipts survive reload and deny a second account", async ({ page }) => {
+  // Fail closed if an operator requests the extension without its private mode.
+  if (lifecycleEnabled && !participationEnabled) {
+    throw new Error("Lifecycle acceptance requires KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE=true.");
+  }
   test.skip(!participationEnabled, "Opt in with KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE=true.");
   test.setTimeout(6 * 60_000);
   const origin = requireApprovedOrigin();
@@ -329,7 +354,12 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
       || accounts[0].email?.trim().toLowerCase() === accounts[1].email?.trim().toLowerCase()) {
     throw new Error("Two distinct sanitized accounts and two distinct terminal run IDs are mandatory.");
   }
+  if (lifecycleEnabled && (!emptyRunId || !/^[A-Za-z0-9_-]{1,128}$/.test(emptyRunId)
+      || emptyRunId === a || emptyRunId === b)) {
+    throw new Error("Lifecycle acceptance requires a third, distinct owned terminal run with verified empty evidence.");
+  }
   await page.setViewportSize({ width: 1440, height: 900 });
+  const observedPhases = new Set<keyof typeof phases>();
   const forbidden: string[] = [];
   page.context().on("request", request => {
     const url = new URL(request.url());
@@ -360,17 +390,37 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
     const denied = await scopedParticipationGet(page, origin, participationPath(foreign));
     expect(denied.status, "Authenticated non-owner must receive 404").toBe(404);
     const expected = await readParticipation(page, origin, own);
+    for (const row of expected.receipts) observedPhases.add(row.phase);
     await verifyParticipationProjection(page, origin, own, foreign, expected);
     // Reopen after a fresh document load; selection persistence is not claimed.
     await page.goto(origin + "/dashboard");
     expect(sameParticipation(await readParticipation(page, origin, own), expected),
       "Durable receipt readback must survive reload").toBe(true);
     await verifyParticipationProjection(page, origin, own, foreign, expected);
+    if (lifecycleEnabled && emptyRunId) {
+      if (index === 0) {
+        const empty = await readParticipation(page, origin, emptyRunId, "empty");
+        await page.goto(origin + "/dashboard");
+        await verifyParticipationProjection(page, origin, emptyRunId, foreign, empty);
+        await page.goto(origin + "/dashboard");
+        expect(sameParticipation(await readParticipation(page, origin, emptyRunId, "empty"), empty),
+          "Verified empty evidence must survive reload").toBe(true);
+        await verifyParticipationProjection(page, origin, emptyRunId, foreign, empty);
+      } else {
+        const deniedEmpty = await scopedParticipationGet(page, origin, participationPath(emptyRunId));
+        expect(deniedEmpty.status, "Foreign owner must not read even an empty receipt inventory").toBe(404);
+      }
+    }
     await openAutomationWorkspace(page, "My Account", false);
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login(?:[?#]|$)/, { timeout: 30_000 });
     const signedOut = await scopedParticipationGet(page, origin, participationPath(own), false);
     expect([401, 403], "Signed-out principal must not read participation").toContain(signedOut.status);
+  }
+  if (lifecycleEnabled) {
+    for (const phase of Object.keys(phases) as Array<keyof typeof phases>) {
+      expect(observedPhases.has(phase), "Approved fixtures must cover " + phase).toBe(true);
+    }
   }
   expect(forbidden, "Readback must not submit inference or mutate executions").toEqual([]);
 });
