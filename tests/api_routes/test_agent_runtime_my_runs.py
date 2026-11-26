@@ -229,3 +229,38 @@ async def test_agent_discovery_redacts_internal_metadata_and_denies_invalid_scop
         "eligibility": "runtime_decided_per_request",
     }]
     assert "private-prompt" not in str(result)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode, expected", [("owned", 200), ("missing", 404), ("wrong", 404), ("unavailable", 503), ("inactive", 403), ("default", 403), ("dev-tenant", 403)])
+async def test_transition_route_uses_authenticated_owner_and_honest_errors(mode, expected):
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import DurableRunLedgerUnavailable
+    from ai_karen_engine.api_routes.agents.runtime import get_my_run_transitions
+
+    tenant, owner = str(uuid4()), str(uuid4())
+    receipt = {"run_id": "run-1", "transitions": [], "truncated": False,
+               "response_source": "postgres_durable_run_ledger"}
+    reader = AsyncMock(return_value=receipt)
+    if mode == "missing":
+        reader.return_value = None
+    elif mode == "wrong":
+        reader.return_value = {**receipt, "run_id": "other"}
+    elif mode == "unavailable":
+        reader.side_effect = DurableRunLedgerUnavailable("internal error")
+    principal = SimpleNamespace(
+        tenant_id=mode if mode in {"default", "dev-tenant"} else tenant,
+        user_id=owner, is_active=mode != "inactive",
+    )
+    plane = SimpleNamespace(read_run_transitions=reader)
+    if expected == 200:
+        assert await get_my_run_transitions("run-1", current_user=principal, control_plane=plane) == receipt
+    else:
+        with pytest.raises(HTTPException) as error:
+            await get_my_run_transitions("run-1", current_user=principal, control_plane=plane)
+        assert error.value.status_code == expected
+        assert "internal error" not in error.value.detail
+    if expected == 403:
+        reader.assert_not_awaited()
+    else:
+        reader.assert_awaited_once_with(run_id="run-1", tenant_id=tenant, user_id=owner)
