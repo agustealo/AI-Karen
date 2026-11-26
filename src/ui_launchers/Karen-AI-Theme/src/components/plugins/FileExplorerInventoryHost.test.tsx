@@ -14,9 +14,15 @@ const mocks = vi.hoisted(() => ({
   patch: vi.fn(),
   delete: vi.fn(),
   useAuth: vi.fn(),
+  captureApiPrincipalScope: vi.fn(),
+  isCurrentApiPrincipalScope: vi.fn(),
 }));
 
-vi.mock('@/lib/api', () => ({ apiClient: { get: mocks.get, post: mocks.post, patch: mocks.patch, delete: mocks.delete } }));
+vi.mock('@/lib/api', () => ({
+  apiClient: { get: mocks.get, post: mocks.post, patch: mocks.patch, delete: mocks.delete },
+  captureApiPrincipalScope: mocks.captureApiPrincipalScope,
+  isCurrentApiPrincipalScope: mocks.isCurrentApiPrincipalScope,
+}));
 vi.mock('@/lib/useAuth', () => ({ useAuth: mocks.useAuth }));
 
 const SHA = 'a'.repeat(64);
@@ -112,13 +118,33 @@ function Consumer({ mode, consumer, onAttach }: { mode?: 'analysis' | 'selection
   );
 }
 
+type TransportScope = { tenant_id: string; user_id: string; revision: number };
+let transportOverride: TransportScope | null | undefined;
+const ownerScope: TransportScope = { tenant_id: 'tenant-one', user_id: 'owner-one', revision: 1 };
+function transportScope(): TransportScope | null {
+  if (transportOverride !== undefined) return transportOverride;
+  const state = mocks.useAuth();
+  return state?.isAuthenticated && state.user ? {
+    tenant_id: state.user.tenant_id, user_id: state.user.user_id, revision: 1,
+  } : null;
+}
+
 beforeEach(() => {
+  transportOverride = undefined;
   mocks.get.mockReset();
   mocks.post.mockReset();
   mocks.patch.mockReset();
   mocks.delete.mockReset();
   mocks.useAuth.mockReset();
   mocks.useAuth.mockReturnValue(auth());
+  mocks.captureApiPrincipalScope.mockReset().mockImplementation((tenant_id: string, user_id: string) => {
+    const current = transportScope();
+    return current?.tenant_id === tenant_id && current.user_id === user_id ? { ...current } : null;
+  });
+  mocks.isCurrentApiPrincipalScope.mockReset().mockImplementation((scope: TransportScope) => {
+    const current = transportScope();
+    return current?.tenant_id === scope.tenant_id && current.user_id === scope.user_id && current.revision === scope.revision;
+  });
 });
 
 afterEach(() => {
@@ -766,7 +792,7 @@ describe('Explorer management preflight and mutation receipts', () => {
     fireEvent.click(screen.getByText('Rename'));
     await waitFor(() => expect(screen.getByTestId('message').textContent).toContain('not confirmed'));
     expect(mocks.patch).toHaveBeenCalledWith('/api/plugins/file-explorer/folders/' + folder,
-      { name: 'New', expected_revision: '7' });
+      { name: 'New', expected_revision: '7' }, {}, ownerScope);
     expect(mocks.get.mock.calls.filter(([path]) => path.includes('/hierarchy?'))).toHaveLength(2);
   });
   it('rejects retained mutation and selection callbacks across mode and principal changes', async () => {
@@ -797,6 +823,59 @@ describe('Explorer management preflight and mutation receipts', () => {
     await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.rename']).toBe('available'));
     await act(async () => other.management?.onMutate({ action: 'rename', sourceId: folder, expectedRevision: '7', name: 'New' }));
     expect(mocks.patch).not.toHaveBeenCalled();
+  });
+
+  it('binds root creation and its management evidence to the displayed transport principal', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    mocks.post.mockResolvedValue({ ...evidence, folder: { folder_id: FILE_B, parent_folder_id: null, name: 'New', revision: '1' } });
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">{props => {
+      latest = props; return <span>{String(props.authorized)}</span>;
+    }}</FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.create']).toBe('available'));
+    expect(mocks.get).toHaveBeenNthCalledWith(1, '/api/plugins/file-explorer/hierarchy?limit=100', ownerScope);
+    expect(mocks.get).toHaveBeenNthCalledWith(2, '/api/plugins/file-explorer/capabilities', ownerScope);
+    await act(async () => latest.management?.onMutate({ action: 'create', name: 'New' }));
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(mocks.post).toHaveBeenCalledWith('/api/plugins/file-explorer/folders',
+      { name: 'New', parent_folder_id: null }, {}, ownerScope);
+  });
+
+  it.each([
+    { tenant_id: 'tenant-one', user_id: 'owner-two', revision: 2 },
+    { tenant_id: 'tenant-two', user_id: 'owner-one', revision: 2 },
+    { tenant_id: 'tenant-one', user_id: 'owner-one', revision: 2 },
+    null,
+  ])('rejects retained organization callbacks before React commits a transport identity transition: %j', async (next) => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">{props => {
+      latest = props; return <span>{String(props.authorized)}</span>;
+    }}</FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.create']).toBe('available'));
+    const retained = latest.management!;
+    transportOverride = next;
+    await act(async () => {
+      await retained.onMutate({ action: 'create', name: 'Previous owner name' });
+      await retained.onMutate({ action: 'rename', sourceId: folder, expectedRevision: '7', name: 'New' });
+      await retained.onMutate({ action: 'delete', sourceId: folder, expectedRevision: '7' });
+      retained.onBrowseDestination?.(folder, '7');
+    });
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.patch).not.toHaveBeenCalled();
+    expect(mocks.delete).not.toHaveBeenCalled();
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not request management inventory when UI and transport principals disagree', async () => {
+    transportOverride = { tenant_id: 'tenant-one', user_id: 'owner-two', revision: 2 };
+    let latest!: FileExplorerInventoryProps;
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">{props => {
+      latest = props; return <span>{String(props.authorized)}</span>;
+    }}</FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.error).toContain('access was denied'));
+    expect(latest.authorized).toBe(false);
+    expect(mocks.get).not.toHaveBeenCalled();
   });
 
   it('rejects a changed-name receipt that fails to advance the organization revision', async () => {
@@ -839,7 +918,7 @@ describe('Explorer management preflight and mutation receipts', () => {
       expectedRevision: '7', destinationId: child }));
     expect(mocks.post).toHaveBeenCalledTimes(1);
     expect(mocks.post).toHaveBeenCalledWith('/api/plugins/file-explorer/move/folder/' + folder,
-      { destination_id: child, expected_revision: '7' });
+      { destination_id: child, expected_revision: '7' }, {}, ownerScope);
   });
 
   it('does not accept a destination response after cancellation', async () => {
@@ -869,7 +948,7 @@ describe('Explorer management preflight and mutation receipts', () => {
     fireEvent.click(screen.getByText('Delete'));
     await waitFor(() => expect(screen.getByTestId('message').textContent).toContain('confirmed'));
     expect(mocks.delete).toHaveBeenCalledWith('/api/plugins/file-explorer/folders/' + folder,
-      { expected_revision: '7' });
+      { expected_revision: '7' }, {}, ownerScope);
   });
 });
 

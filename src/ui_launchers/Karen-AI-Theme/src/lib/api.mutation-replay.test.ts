@@ -245,7 +245,7 @@ describe('single-attempt authenticated mutations', () => {
 
 describe("principal-fenced API requests", () => {
   afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
-  it("does not dispatch a mutation after authentication changes during asynchronous header resolution", async () => {
+  it.each(["post", "patch", "delete"] as const)("does not dispatch a %s mutation after authentication changes during asynchronous header resolution", async (method) => {
     const identity = { tenant_id: "tenant", user_id: "owner" } as ReturnType<typeof authService.getCurrentUser>;
     vi.mocked(authService.getCurrentUser).mockReturnValue(identity);
     vi.mocked(authService.getAuthenticationRevision).mockReturnValue(1);
@@ -257,7 +257,7 @@ describe("principal-fenced API requests", () => {
     vi.spyOn(internals, "getAuthHeaders").mockReturnValue(pending);
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
-    const request = apiClient.patch("/api/communications-center/inbox/example", { operation: "read" }, {}, scope!);
+    const request = apiClient[method]("/api/plugins/file-explorer/folders/example", { expected_revision: "7" }, {}, scope!);
     vi.mocked(authService.getAuthenticationRevision).mockReturnValue(2);
     release({ Authorization: "Bearer test-token" });
     await expect(request).rejects.toThrow("Authenticated request scope changed");

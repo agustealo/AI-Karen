@@ -9,7 +9,7 @@
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
-import { apiClient } from '@/lib/api';
+import { apiClient, captureApiPrincipalScope, isCurrentApiPrincipalScope, type ApiPrincipalScope } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
 import { MAX_DRAFT_ATTACHMENTS, type DraftAttachment } from '../chat/copilotkit/useKarenPersistedDraft';
 import { ContentIntelligenceSelectionPanel } from './ContentIntelligenceSelectionPanel';
@@ -54,6 +54,7 @@ interface HierarchyLocation {
 
 interface ScopedPage extends InventoryPage {
   scopeIdentity: object;
+  principalScope: ApiPrincipalScope | null;
   hierarchy?: HierarchyLocation;
   principalKey: string;
   generation: number;
@@ -61,6 +62,7 @@ interface ScopedPage extends InventoryPage {
 
 interface DestinationRequest {
   generation: number;
+  principalScope: ApiPrincipalScope;
   sourceId: string;
   expectedRevision: string;
   kind: ExplorerItem['kind'];
@@ -325,6 +327,8 @@ export function FileExplorerInventoryHost({
   renderAnalysis?: (panel: ReactNode, props: FileExplorerInventoryProps) => ReactNode;
 }) {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
+  const tenantId = user?.tenant_id ?? '';
+  const userId = user?.user_id ?? '';
   const principalKey = useMemo(() => {
     if (!isAuthenticated || !user?.user_id || !user?.tenant_id) {
       return '';
@@ -400,6 +404,15 @@ export function FileExplorerInventoryHost({
     setErrorState(null);
     setSelectedSourceIds([]);
 
+    // Management evidence is bound to the transport identity that requested it,
+    // not a freshly captured session at the time a retained callback is invoked.
+    const principalScope = managementEnabled ? captureApiPrincipalScope(tenantId, userId) : null;
+    if (managementEnabled && !principalScope) {
+      setErrorState({ principalKey, scopeIdentity, message: 'File inventory is unavailable or access was denied.' });
+      setLoading(false);
+      return;
+    }
+
     const inventoryEndpoint = hierarchy
       ? '/api/plugins/file-explorer/hierarchy?limit=100' +
         (parentId ? '&parent_folder_id=' + encodeURIComponent(parentId) : '') +
@@ -409,12 +422,15 @@ export function FileExplorerInventoryHost({
         (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
     const endpoint = inventoryEndpoint + (search ? '&search=' + encodeURIComponent(search) : '');
 
-    void apiClient.get<unknown>(endpoint)
-      .then((data) => {
+    const inventoryRequest = principalScope
+      ? apiClient.get<unknown>(endpoint, principalScope)
+      : apiClient.get<unknown>(endpoint);
+    void inventoryRequest.then((data) => {
         if (cancelled || scopeRef.current !== scopeIdentity || generationRef.current !== generation) return;
+        if (principalScope && !isCurrentApiPrincipalScope(principalScope)) throw new Error('Authenticated request scope changed');
         const verified = hierarchy ? assertHierarchyPage(data, parentId, afterFolderId, cursor) : assertInventoryPage(data, null, consumer === 'content-intelligence');
         if (verified.has_more && verified.next_cursor === cursor) throw new Error('Invalid file inventory response');
-        setPage({ ...verified, principalKey, scopeIdentity, generation });
+        setPage({ ...verified, principalKey, scopeIdentity, generation, principalScope });
       })
       .catch((error: unknown) => {
         if (cancelled || scopeRef.current !== scopeIdentity || generationRef.current !== generation) return;
@@ -438,7 +454,7 @@ export function FileExplorerInventoryHost({
       cancelled = true;
       generationRef.current += 1;
     };
-  }, [principalKey, authLoading, request, consumer, hierarchy, scopeIdentity]);
+  }, [principalKey, authLoading, request, consumer, hierarchy, scopeIdentity, managementEnabled, tenantId, userId]);
 
   const currentPage = !authLoading && principalKey && page?.scopeIdentity === scopeIdentity ? page : null;
   const callbackGeneration = generationRef.current;
@@ -446,12 +462,13 @@ export function FileExplorerInventoryHost({
   const activeSearch = !authLoading && request.scopeIdentity === scopeIdentity ? request.search ?? '' : '';
 
   useEffect(() => {
-    if (!managementEnabled || !currentPage) return;
+    if (!managementEnabled || !currentPage?.principalScope || !isCurrentApiPrincipalScope(currentPage.principalScope)) return;
+    const principalScope = currentPage.principalScope;
     let cancelled = false;
     const generation = currentPage.generation;
-    void apiClient.get<unknown>('/api/plugins/file-explorer/capabilities')
+    void apiClient.get<unknown>('/api/plugins/file-explorer/capabilities', principalScope)
       .then(data => {
-        if (!cancelled && generationRef.current === generation) {
+        if (!cancelled && generationRef.current === generation && isCurrentApiPrincipalScope(principalScope)) {
           setCapability({ generation, operations: capabilityResponse(data) });
         }
       })
@@ -611,14 +628,14 @@ export function FileExplorerInventoryHost({
   }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch, isCurrentNavigation]);
 
   const loadDestination = useCallback((next: DestinationRequest) => {
-    if (generationRef.current !== next.generation || mutationRef.current) return;
+    if (generationRef.current !== next.generation || mutationRef.current || !isCurrentApiPrincipalScope(next.principalScope)) return;
     destinationRef.current = next;
     setDestinationState(next);
     const endpoint = '/api/plugins/file-explorer/hierarchy?limit=100' +
       (next.parentId ? '&parent_folder_id=' + encodeURIComponent(next.parentId) : '') +
       (next.cursor ? '&after_folder_id=' + encodeURIComponent(next.cursor) : '');
-    void apiClient.get<unknown>(endpoint).then(data => {
-      if (destinationRef.current !== next || generationRef.current !== next.generation) return;
+    void apiClient.get<unknown>(endpoint, next.principalScope).then(data => {
+      if (destinationRef.current !== next || generationRef.current !== next.generation || !isCurrentApiPrincipalScope(next.principalScope)) return;
       const page = assertHierarchyPage(data, next.parentId, next.cursor, null);
       if (next.kind === 'folder' && page.hierarchy.breadcrumbs.some(crumb => crumb.folder_id === next.sourceId)) {
         throw new Error('Invalid descendant destination');
@@ -637,11 +654,11 @@ export function FileExplorerInventoryHost({
   const onBrowseDestination = useCallback((sourceId: string, expectedRevision: string) => {
     if (!managementEnabled || !currentPage?.hierarchy || loading || currentError ||
         generationRef.current !== currentPage.generation || capability?.generation !== currentPage.generation ||
-        mutationRef.current) return;
+        !currentPage.principalScope || !isCurrentApiPrincipalScope(currentPage.principalScope) || mutationRef.current) return;
     const item = currentPage.items.find(entry => entry.source_id === sourceId);
     if (!item || !validRevision(item.organization_revision) || item.organization_revision !== expectedRevision ||
         capability.operations[item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move'] !== 'available') return;
-    loadDestination({ generation: currentPage.generation, sourceId, expectedRevision, kind: item.kind,
+    loadDestination({ generation: currentPage.generation, principalScope: currentPage.principalScope, sourceId, expectedRevision, kind: item.kind,
       parentId: null, cursor: null, page: null, error: null });
   }, [managementEnabled, currentPage, loading, currentError, capability, loadDestination]);
 
@@ -681,8 +698,10 @@ export function FileExplorerInventoryHost({
   const onMutate = useCallback(async (mutation: ExplorerMutation) => {
     if (!managementEnabled || !currentPage?.hierarchy || loading || currentError ||
         generationRef.current !== currentPage.generation ||
-        capability?.generation !== currentPage.generation ||
+        capability?.generation !== currentPage.generation || scopeRef.current !== scopeIdentity ||
+        !currentPage.principalScope || !isCurrentApiPrincipalScope(currentPage.principalScope) ||
         mutationRef.current?.principalKey === principalKey) return;
+    const principalScope = currentPage.principalScope;
     if (!mutation || typeof mutation !== 'object' ||
         !['create', 'rename', 'move', 'delete'].includes(mutation.action)) return;
     const item = mutation.action === 'create' ? undefined :
@@ -702,7 +721,7 @@ export function FileExplorerInventoryHost({
     const location = currentPage.hierarchy;
     if (mutation.action === 'move') {
       const proof = destinationRef.current;
-      if (!proof?.page || proof.error || proof.generation !== currentPage.generation ||
+      if (!proof?.page || proof.error || proof.generation !== currentPage.generation || proof.principalScope !== principalScope ||
           proof.sourceId !== mutation.sourceId || proof.expectedRevision !== mutation.expectedRevision ||
           proof.kind !== item?.kind || proof.parentId !== mutation.destinationId) return;
     }
@@ -717,20 +736,21 @@ export function FileExplorerInventoryHost({
     try {
       let result: unknown;
       if (mutation.action === 'create') {
-        result = await apiClient.post(prefix + '/folders', { name: mutation.name, parent_folder_id: location.parentId });
+        result = await apiClient.post(prefix + '/folders', { name: mutation.name, parent_folder_id: location.parentId }, {}, principalScope);
       } else if (mutation.action === 'rename') {
         result = await apiClient.patch(prefix + '/folders/' + mutation.sourceId, {
           name: mutation.name, expected_revision: mutation.expectedRevision,
-        });
+        }, {}, principalScope);
       } else if (mutation.action === 'delete') {
         result = await apiClient.delete(prefix + '/folders/' + mutation.sourceId, {
           expected_revision: mutation.expectedRevision,
-        });
+        }, {}, principalScope);
       } else {
         result = await apiClient.post(prefix + '/move/' + (item?.kind === 'file' ? 'artifact' : 'folder') + '/' + mutation.sourceId, {
           destination_id: mutation.destinationId, expected_revision: mutation.expectedRevision,
-        });
+        }, {}, principalScope);
       }
+      if (!isCurrentApiPrincipalScope(principalScope)) throw new Error('Authenticated request scope changed');
       assertMutationReceipt(result, mutation, location.parentId, item);
     } catch (error) {
       const status = error && typeof error === 'object' && 'status' in error ? error.status : null;
