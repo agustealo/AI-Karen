@@ -317,3 +317,54 @@ def test_explorer_database_provenance_includes_container_and_database_identity(t
     observed = verifier.verify_local_supabase_database(env, database)
     assert observed["container_id"] == container
     assert observed["database_oid"] == "12345"
+
+
+def test_explorer_acceptance_contracts_are_executed_by_main_quality():
+    workflow = (ROOT / ".github/workflows/main-quality-gate.yml").read_text()
+    assert (
+        "python -m pytest tests/architecture/test_file_explorer_protected_browser_dispatch.py "
+        "tests/architecture/test_kcard_local_acceptance_contract.py -q"
+    ) in workflow
+
+
+def test_explorer_runner_refuses_unsafe_admission_before_any_browser_execution(tmp_path):
+    import os
+    import subprocess
+
+    runner = ROOT / "scripts/ci/kui-local-acceptance.sh"
+    repo = tmp_path / "clean-checkout"
+    repo.mkdir()
+    env = {"PATH": os.environ["PATH"], "HOME": str(tmp_path), "GIT_CONFIG_NOSYSTEM": "1"}
+    subprocess.run(["git", "init", "-q"], cwd=repo, env=env, check=True, timeout=10)
+    subprocess.run(
+        ["git", "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid",
+         "commit", "-q", "--allow-empty", "-m", "fixture"],
+        cwd=repo, env=env, check=True, timeout=10,
+    )
+    sha = subprocess.check_output(
+        ["git", "rev-parse", "HEAD"], cwd=repo, env=env, text=True, timeout=10,
+    ).strip()
+    local = {
+        **env,
+        "RUN_FILE_EXPLORER_LOCAL": "1",
+        "KAREN_BASE_URL": "http://127.0.0.1:8010",
+        "KAREN_LOCAL_CHAT_ACCEPTANCE": "1",
+        "KAREN_SANITIZED_ACCOUNT": "true",
+    }
+    cases = (
+        ({"GITHUB_ACTIONS": "true"}, "Explorer requires local execution"),
+        ({"VERCEL_AUTOMATION_BYPASS_SECRET": ""}, "Explorer requires local execution"),
+        ({"KAREN_BASE_URL": "https://example.invalid"}, "Explicit approved local origin"),
+        ({"KAREN_SETTINGS_VERIFIED_DEPLOYMENT": "true"}, "Protected deployment flags"),
+        ({"RUN_CARD_STUDIO_LOCAL": "1"}, "Run Explorer acceptance separately"),
+        ({}, "Missing explicit Explorer approval"),
+    )
+    for overrides, reason in cases:
+        result = subprocess.run(
+            ["bash", str(runner), sha], cwd=repo, env={**local, **overrides},
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        assert result.returncode == 2
+        assert reason in result.stderr
+        assert ">>> " not in result.stdout
+    assert not (tmp_path / ".local/state/ai-karen").exists()
