@@ -16,6 +16,8 @@ import {
 import useAuth from "@/lib/useAuth";
 import { apiClient } from "@/lib/api";
 import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalog";
+import { useRuntimeApprovals } from "@/components/approvals/useRuntimeApprovals";
+export { isRuntimeApproval, type RuntimeApproval } from "@/components/approvals/useRuntimeApprovals";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -52,16 +54,6 @@ export interface AgentRunRecord {
   } | null;
 }
 
-export interface RuntimeApproval {
-  approval_id: string;
-  conversation_id?: string | null;
-  intent: string;
-  risk_level: string;
-  reason_codes: string[];
-  status: string;
-  expires_at: string;
-}
-
 export interface AgentRunsResponse {
   runs: AgentRunRecord[];
   total: number;
@@ -87,14 +79,6 @@ export function isAgentRunsResponse(value: unknown): value is AgentRunsResponse 
   return isObject(value) && Array.isArray(value.runs) && value.runs.every(isAgentRunRecord)
     && value.total === value.runs.length && new Set(value.runs.map((run) => run.run_id)).size === value.runs.length
     && nonemptyString(value.generated_at) && Number.isFinite(Date.parse(value.generated_at));
-}
-
-export function isRuntimeApproval(value: unknown): value is RuntimeApproval {
-  return isObject(value) && nonemptyString(value.approval_id) && nonemptyString(value.intent)
-    && nonemptyString(value.risk_level) && nonemptyString(value.status)
-    && (value.conversation_id == null || typeof value.conversation_id === "string")
-    && Array.isArray(value.reason_codes) && value.reason_codes.every((reason) => typeof reason === "string")
-    && nonemptyString(value.expires_at) && Number.isFinite(Date.parse(value.expires_at));
 }
 
 const transitionStatuses = ["created", "running", "cancellation_requested", "completed", "failed", "cancelled", "orphaned"] as const;
@@ -328,32 +312,28 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
 
   const [catalog, setCatalog] = useState<AgentCatalogResponse | null>(null);
   const [runs, setRuns] = useState<AgentRunRecord[]>([]);
-  const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
-  const [approvalsError, setApprovalsError] = useState("");
-  const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
-  const [pendingApprovalDecision, setPendingApprovalDecision] = useState<{ approvalId: string; decision: "approved" | "rejected" } | null>(null);
   const [isLoadingCatalog, setIsLoadingCatalog] = useState(true);
   const [isLoadingRuns, setIsLoadingRuns] = useState(true);
   const [runsGeneratedAt, setRunsGeneratedAt] = useState<string | null>(null);
   const [isRevalidatingRun, setIsRevalidatingRun] = useState(false);
-  const [isLoadingApprovals, setIsLoadingApprovals] = useState(true);
   const [catalogError, setCatalogError] = useState("");
   const [runsError, setRunsError] = useState("");
   const [actionMessage, setActionMessage] = useState("");
+  const {
+    approvals, approvalsError, decidingApprovalId, pendingApprovalDecision,
+    setPendingApprovalDecision, isLoadingApprovals, approvalDecisionError,
+    approvalDecisionUncertain, loadApprovals, decideApproval,
+  } = useRuntimeApprovals(isAuthenticated, setActionMessage);
   const [cancellationError, setCancellationError] = useState("");
   const [cancellationUncertain, setCancellationUncertain] = useState(false);
   const cancellationUncertainRef = useRef(false);
   const cancellationRevision = useRef(0);
-  const [approvalDecisionError, setApprovalDecisionError] = useState("");
-  const [approvalDecisionUncertain, setApprovalDecisionUncertain] = useState(false);
   const [cancellingRunId, setCancellingRunId] = useState<string | null>(null);
   const cancellationInFlightRef = useRef(false);
   const [selectedRunId, setSelectedRunId] = useState<string | null>(null);
   const [verifiedRun, setVerifiedRun] = useState<AgentRunRecord | null>(null);
   const [runListRevision, setRunListRevision] = useState(0);
   const [hasActiveRunPolling, setHasActiveRunPolling] = useState(false);
-  const approvalDecisionInFlightRef = useRef(false);
-  const approvalReadRevision = useRef(0);
   const workspaceLive = useRef(false);
   useLayoutEffect(() => {
     workspaceLive.current = true;
@@ -558,80 +538,6 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       setContextMessage(error instanceof Error ? error.message : "Could not verify or copy this execution reference.");
     }
   }, [isAuthenticated, isAdmin]);
-
-  const loadApprovals = useCallback(async (afterDecision = false) => {
-    if (!workspaceLive.current || (approvalDecisionInFlightRef.current && !afterDecision)) return;
-    const revision = ++approvalReadRevision.current;
-    if (!isAuthenticated) {
-      setApprovals([]);
-      setApprovalsError("");
-      setApprovalDecisionUncertain(false);
-      setIsLoadingApprovals(false);
-      return;
-    }
-    setIsLoadingApprovals(true);
-    try {
-      const records = await apiClient.get<unknown>("/api/approvals/");
-      if (!workspaceLive.current || revision !== approvalReadRevision.current) return;
-      if (!Array.isArray(records) || !records.every(isRuntimeApproval) || new Set(records.map((record) => record.approval_id)).size !== records.length) throw new Error("Approval response does not match the runtime contract.");
-      setApprovals(records);
-      setApprovalsError("");
-      setApprovalDecisionUncertain(false);
-      setApprovalDecisionError("");
-    } catch (error) {
-      if (!workspaceLive.current || revision !== approvalReadRevision.current) return;
-      setApprovals([]);
-      setApprovalsError(error instanceof Error ? error.message : "Could not load approval requests.");
-    } finally {
-      if (workspaceLive.current && revision === approvalReadRevision.current) setIsLoadingApprovals(false);
-    }
-  }, [isAuthenticated]);
-
-  useEffect(() => {
-    if (!isAuthenticated) return;
-    const discover = () => {
-      if (document.visibilityState === "visible" && !approvalDecisionInFlightRef.current) void loadApprovals();
-    };
-    const timer = window.setInterval(discover, 60000);
-    document.addEventListener("visibilitychange", discover);
-    return () => { window.clearInterval(timer); document.removeEventListener("visibilitychange", discover); };
-  }, [isAuthenticated, loadApprovals]);
-
-  const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
-    if (!workspaceLive.current || !isAuthenticated || approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError || approvalDecisionUncertain) return;
-    const approval = approvals.find((item) => item.approval_id === approvalId);
-    if (!approval || approval.status !== "pending" || Date.parse(approval.expires_at) <= Date.now()) {
-      setApprovalDecisionError("This approval is unavailable or expired. Refresh the list before deciding.");
-      setPendingApprovalDecision(null);
-      return;
-    }
-    approvalDecisionInFlightRef.current = true;
-    approvalReadRevision.current += 1;
-    setDecidingApprovalId(approvalId);
-    setPendingApprovalDecision(null);
-    setApprovalDecisionError("");
-    try {
-      const result = await apiClient.post<unknown>(
-        `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
-        { decision },
-      );
-      if (!workspaceLive.current) return;
-      if (!isRuntimeApproval(result) || result.approval_id !== approvalId) throw new Error("Approval response could not be verified. Refresh before deciding again.");
-      setActionMessage(
-        result.status === decision
-          ? `Decision recorded: ${decision}. Karen must still revalidate and resume the original request.`
-          : `Approval status: ${result.status}. No action has been executed by this decision.`,
-      );
-      await loadApprovals(true);
-    } catch (error) {
-      if (!workspaceLive.current) return;
-      setApprovalDecisionUncertain(true);
-      setApprovalDecisionError("Decision outcome could not be verified. Refresh before attempting another decision.");
-    } finally {
-      approvalDecisionInFlightRef.current = false;
-      setDecidingApprovalId(null);
-    }
-  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError, approvalDecisionUncertain, isAuthenticated]);
 
   const refresh = useCallback(async () => {
     setActionMessage("");
