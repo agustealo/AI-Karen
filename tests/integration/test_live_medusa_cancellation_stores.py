@@ -272,6 +272,10 @@ async def _run_acceptance() -> None:
             redis=redis, ledger=ledger, prefix=prefix,
             tenant_id=tenant_a, marker=marker
         )
+        await _terminal_arbitration_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix,
+            tenant_id=tenant_a, marker=marker,
+        )
     finally:
         # Failure before the first cancellation must not strand workload cleanup.
         release_retirement.set()
@@ -616,6 +620,96 @@ async def _retirement_replay_acceptance(
         if run.heartbeat_task is not None:
             run.heartbeat_task.cancel()
             await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+
+
+async def _terminal_arbitration_acceptance(
+    *,
+    redis: RedisConnectionManager,
+    ledger: PostgresDurableRunLedger,
+    prefix: str,
+    tenant_id: str,
+    marker: str,
+) -> None:
+    """Real durable-only and Redis-only cancellation plus stale terminal rejection."""
+    client = redis.client
+    assert client is not None
+    settings = _settings(worker=f"terminal-owner-{marker}", prefix=prefix)
+    store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+    for mode in ("durable_cancel", "redis_cancel", "lost_claim", "success"):
+        run_id = f"{marker}-terminal-{mode}"
+        owner = MedusaRunManager(
+            settings=settings, distributed_store=store, durable_ledger=ledger
+        )
+        task = asyncio.create_task(asyncio.sleep(0))
+        run = None
+        try:
+            run = await owner.register(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                correlation_id=f"corr-{run_id}",
+                user_id="terminal-owner",
+                task=task,
+            )
+            await task
+            assert run.shared_registered and run.durable_registered
+            if mode == "durable_cancel":
+                # Commit cancellation before its Redis signal reaches the owner.
+                await ledger.mark_cancelling(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    requested_at=datetime.now(timezone.utc),
+                    audit_event_ref=f"audit-{run_id}",
+                    source="admin_cancel",
+                )
+                assert (await store.get(run_id=run_id, tenant_id=tenant_id))[
+                    "status"
+                ] == "running"
+            elif mode == "redis_cancel":
+                await store.request_cancel(run_id=run_id, tenant_id=tenant_id)
+                pending = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+                assert pending is not None and pending["status"] == "running"
+            elif mode == "lost_claim":
+                await client.delete(f"{prefix}:claim:{run_id}")
+
+            before = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+            assert before is not None
+            resolved = await owner.mark_response(run_id, "success")
+            local = await owner.get(run_id=run_id, tenant_id=tenant_id)
+            durable = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+            assert durable is not None
+            shared = await store.get(run_id=run_id, tenant_id=tenant_id)
+            if mode == "lost_claim":
+                assert resolved.value == local["status"] == "orphaned"
+                assert local["completed_at"] is None
+                assert local["outcome_status"] is None
+                assert durable == before
+                assert shared["status"] == "orphaned"
+                assert shared["outcome_status"] is None
+            else:
+                expected = "completed" if mode == "success" else "cancelled"
+                outcome = "success" if mode == "success" else "cancelled"
+                assert resolved.value == expected
+                assert local["status"] == durable["status"] == shared["status"] == expected
+                assert (
+                    local["outcome_status"]
+                    == durable["outcome_status"]
+                    == shared["outcome_status"]
+                    == outcome
+                )
+                assert local["completed_at"] == durable["completed_at"] == shared["completed_at"]
+                if mode == "durable_cancel":
+                    assert durable["audit_event_ref"] == f"audit-{run_id}"
+            assert not await client.exists(f"{prefix}:claim:{run_id}")
+            assert await owner.mark_response(run_id, "success") is resolved
+            assert await ledger.get(run_id=run_id, tenant_id=tenant_id) == durable
+        finally:
+            if run is not None and run.heartbeat_task is not None:
+                run.heartbeat_task.cancel()
+                await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            await client.delete(f"{prefix}:claim:{run_id}", f"{prefix}:run:{run_id}")
 
 
 @pytest.mark.parametrize(
