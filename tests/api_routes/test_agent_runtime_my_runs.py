@@ -272,10 +272,12 @@ async def test_transition_route_uses_authenticated_owner_and_honest_errors(mode,
     ("outage", 503), ("ledger_outage", 503), ("inactive", 403),
     ("unverified", 403), ("default", 403), ("dev-tenant", 403), ("long_id", 404),
 ])
-async def test_participation_route_preserves_owner_scope_and_availability(mode, expected):
+@pytest.mark.parametrize("kind", ["participation", "tool_receipts"])
+async def test_participation_route_preserves_owner_scope_and_availability(mode, expected, kind):
     from unittest.mock import AsyncMock
     from ai_karen_engine.agent_medusa.execution.durable_run_ledger import DurableRunLedgerUnavailable
-    from ai_karen_engine.api_routes.agents.runtime import get_my_run_participation
+    from ai_karen_engine.api_routes.agents.runtime import get_my_run_participation, get_my_run_tool_receipts
+    endpoint = get_my_run_participation if kind == "participation" else get_my_run_tool_receipts
     from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
 
     tenant, owner = str(uuid4()), str(uuid4())
@@ -287,6 +289,13 @@ async def test_participation_route_preserves_owner_scope_and_availability(mode, 
         "truncated": False,
         "response_source": "postgres_outcome_records",
     }
+    if kind == "tool_receipts":
+        evidence.pop("truncated")
+        evidence["window_limit_reached"] = False
+        evidence["receipts"] = [] if mode == "empty" else [{
+            "receipt_id": "out_tool_test", "success": True,
+            "execution_scope": "tool_runtime_acknowledgment", "independently_verified": False,
+        }]
     reader = AsyncMock(return_value=evidence)
     if mode == "missing":
         reader.return_value = None
@@ -300,12 +309,12 @@ async def test_participation_route_preserves_owner_scope_and_availability(mode, 
         tenant_id=mode if mode in {"default", "dev-tenant"} else tenant,
         user_id=owner, is_active=mode != "inactive", is_verified=mode != "unverified",
     )
-    plane = SimpleNamespace(read_run_participation=reader)
+    plane = SimpleNamespace(**{f"read_run_{kind}": reader})
     if expected == 200:
-        assert await get_my_run_participation(run_id, current_user=principal, control_plane=plane) == evidence
+        assert await endpoint(run_id, current_user=principal, control_plane=plane) == evidence
     else:
         with pytest.raises(HTTPException) as error:
-            await get_my_run_participation(run_id, current_user=principal, control_plane=plane)
+            await endpoint(run_id, current_user=principal, control_plane=plane)
         assert error.value.status_code == expected
         assert "private database diagnostic" not in error.value.detail
     if expected == 403 or mode == "long_id":

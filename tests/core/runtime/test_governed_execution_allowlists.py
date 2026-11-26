@@ -63,15 +63,14 @@ async def test_runtime_policy_authorizes_requested_agents_as_typed_constraints()
     policy = await pipeline._evaluate_execution_policy(_request(), _cognitive())
 
     assert policy.allowed is True
-    assert policy.runtime_constraints["allowed_agents"] == [
-        "research-agent",
-        "verification-agent",
-    ]
+    # Metadata requests delegation but does not grant specialist execution.
+    assert policy.runtime_constraints["agent_delegation"] is True
+    assert policy.runtime_constraints["allowed_agents"] == []
     assert policy.runtime_constraints["allowed_tools"] == ["search"]
     assert policy.runtime_constraints["allowed_plugins"] == ["source-verifier"]
 
     plan = policy.to_authorized_plan()
-    assert plan.allowed_agents == ["research-agent", "verification-agent"]
+    assert plan.allowed_agents == []
     assert plan.allowed_tools == ["search"]
     assert plan.allowed_plugins == ["source-verifier"]
     assert plan.authorized_user_id == "user-a"
@@ -88,17 +87,15 @@ async def test_policy_allowlists_survive_decision_and_chat_plan_boundary():
     policy = await pipeline._evaluate_execution_policy(request, cognitive)
     decision = pipeline._apply_execution_policy(cognitive, policy)
 
-    assert decision.policy_constraints["allowed_agents"] == [
-        "research-agent",
-        "verification-agent",
-    ]
+    # The decision boundary must not turn advisory candidates into grants.
+    assert decision.policy_constraints["allowed_agents"] == []
     assert decision.policy_constraints["allowed_tools"] == ["search"]
     assert decision.policy_constraints["allowed_plugins"] == ["source-verifier"]
 
     runtime = ChatRuntime.__new__(ChatRuntime)
     plan = runtime._build_authorized_plan(request, decision)
 
-    assert plan.allowed_agents == ["research-agent", "verification-agent"]
+    assert plan.allowed_agents == []
     assert plan.allowed_tools == ["search"]
     assert plan.allowed_plugins == ["source-verifier"]
     assert plan.authorized_user_id == "user-a"
