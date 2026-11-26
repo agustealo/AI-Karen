@@ -19,6 +19,7 @@ import time
 from urllib.parse import urljoin, urlsplit, parse_qs
 
 import httpx
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, BinaryIO, Dict, Optional, Sequence
 
@@ -145,8 +146,15 @@ class SupabaseArtifactStore(ArtifactStore):
                 ord(char) < 32 and char not in "\n\r\t" for char in body
             ):
                 return RepositoryResult(success=False, error=unavailable)
-            # Validate serializability before consuming the one-shot claim.
-            json.dumps(request.metadata, allow_nan=False)
+            # Freeze validated data and metadata before yielding to the ledger.
+            # Another coroutine must not mutate the payload after digest admission.
+            try:
+                request = replace(
+                    request, data=data,
+                    metadata=json.loads(json.dumps(request.metadata, allow_nan=False)),
+                )
+            except (TypeError, ValueError):
+                return RepositoryResult(success=False, error=unavailable)
             ledger = UploadSessionRepository(self._session_factory)
             scope = dict(
                 tenant_id=request.tenant_id, owner_user_id=request.user_id,
@@ -195,9 +203,20 @@ class SupabaseArtifactStore(ArtifactStore):
             options = {"content-type": request.content_type}
             if reserved:
                 options["upsert"] = "false"
-            bucket.upload(storage_key, data, options)
-        except Exception:
-            logger.exception("Artifact object upload failed for artifact_id=%s", artifact_id)
+            if reserved:
+                # Cancellation cannot establish remote non-execution. The spent
+                # claim already fences retries even if the SDK worker continues.
+                await asyncio.to_thread(bucket.upload, storage_key, data, options)
+            else:
+                bucket.upload(storage_key, data, options)
+        except Exception as exc:
+            if reserved:
+                logger.warning(
+                    "Reserved artifact object upload outcome unavailable",
+                    extra={"artifact_id": artifact_id, "error_type": type(exc).__name__},
+                )
+            else:
+                logger.exception("Artifact object upload failed for artifact_id=%s", artifact_id)
             return RepositoryResult(success=False, error="storage_upload_failed")
 
         artifact = Artifact(
@@ -244,8 +263,14 @@ class SupabaseArtifactStore(ArtifactStore):
                 )
                 commit_attempted = True
                 await session.commit()
-        except Exception:
-            logger.exception("Artifact metadata persistence uncertain for artifact_id=%s", artifact_id)
+        except Exception as exc:
+            if reserved:
+                logger.warning(
+                    "Reserved artifact metadata persistence uncertain",
+                    extra={"artifact_id": artifact_id, "error_type": type(exc).__name__},
+                )
+            else:
+                logger.exception("Artifact metadata persistence uncertain for artifact_id=%s", artifact_id)
             if not commit_attempted and not reserved:
                 try:
                     bucket.remove([storage_key])

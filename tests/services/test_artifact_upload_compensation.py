@@ -198,3 +198,39 @@ async def test_reserved_writer_rejects_invalid_content_before_claim(monkeypatch,
     result = await store.upload_reserved_text(upload, session_id=session_id, lease_token=token)
     assert not result.success and result.error == "reserved_upload_unavailable"
     assert not bucket.uploads
+
+
+@pytest.mark.asyncio
+async def test_reserved_writer_freezes_payload_before_claim(monkeypatch):
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+    from ai_karen_engine.services.database.repositories import supabase_artifact_store as module
+
+    tenant, owner, session_id, token = (str(uuid4()) for _ in range(4))
+    db = Session()
+    store, bucket = make_store(db)
+    upload = ArtifactUploadRequest(
+        tenant_id=tenant, user_id=owner, filename="generated.txt",
+        content_type="text/plain", data=b"first\nsecond",
+        metadata={"generation": {"version": 1}},
+    )
+
+    async def claim(**kwargs):
+        assert not bucket.uploads
+        upload.tenant_id = str(uuid4())
+        upload.data = b"changed"
+        upload.metadata["generation"]["version"] = 2
+        return SimpleNamespace(state="reconcile_required")
+
+    ledger = SimpleNamespace(
+        consume_write_claim=claim,
+        reconcile_verified_text=AsyncMock(return_value=SimpleNamespace(
+            state="committed", artifact_id=session_id,
+        )),
+    )
+    monkeypatch.setattr(module, "UploadSessionRepository", lambda factory: ledger)
+    result = await store.upload_reserved_text(upload, session_id=session_id, lease_token=token)
+    assert result.success
+    assert bucket.objects == {f"{tenant}/{session_id}/content": b"first\nsecond"}
+    assert result.data.metadata == {"generation": {"version": 1}}
+    assert result.data.tenant_id == tenant

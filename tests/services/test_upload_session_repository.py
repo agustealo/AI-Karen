@@ -49,7 +49,8 @@ class FakeSession:
             if self.record["state"] != params["expected_state"]:
                 return Result()
             self.record["state"] = params["next_state"]
-            self.record["artifact_id"] = params["artifact_id"]
+            if "artifact_id" in params:
+                self.record["artifact_id"] = params["artifact_id"]
         return Result(self.record)
 
     async def commit(self):
