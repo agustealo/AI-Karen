@@ -1179,6 +1179,56 @@ class RuntimePolicyEnforcer:
                     evaluated_at=evaluated_at,
                 )
 
+        # Generated artifacts are a dedicated direct-chat operation. Asking
+        # for a capability or possessing read access must not confer write
+        # authority. Actual principal/session verification at dispatch remains
+        # mandatory even after this issuer decision.
+        artifact_requested = (
+            request.action == GENERATED_TEXT_ARTIFACT_CAPABILITY
+            or GENERATED_TEXT_ARTIFACT_CAPABILITY in request.requested_capabilities
+        )
+        if artifact_requested:
+            from ai_karen_engine.auth.models import UserData
+            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+            principal = UserData(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                roles=list(request.roles),
+                permissions=list(request.permissions),
+            )
+            manager = get_rbac_manager()
+            topology = request.execution_topology
+            if (
+                request.action != GENERATED_TEXT_ARTIFACT_CAPABILITY
+                or set(request.requested_capabilities) != {GENERATED_TEXT_ARTIFACT_CAPABILITY}
+                or request.attachment_references
+                or not request.session_id
+                or not request.correlation_id
+                or request.runtime_level is not RuntimeLevel.FULL
+                or type(request.max_model_calls) is not int
+                or request.max_model_calls < 1
+                or request.requested_reasoning_modes
+                or request.tool_id or request.plugin_id or request.extension_id
+                or any(topology.get(key) for key in (
+                    "tool_requirements", "plugin_candidates", "requested_agents",
+                    "workflow_id", "agent_delegation", "requires_human_gate",
+                    "requires_resumability", "requires_parallel_execution",
+                    "graph_required",
+                ))
+                or not manager.has_permission(principal, Permission.DATA_READ)
+                or not manager.has_permission(principal, Permission.ARTIFACT_CREATE_OWN)
+            ):
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=[GENERATED_TEXT_ARTIFACT_CAPABILITY],
+                    denied_reasoning_modes=list(request.requested_reasoning_modes),
+                    evaluated_at=evaluated_at,
+                )
+
         # Freeze the exact selected sources in the issuer's authorization.
         # Client-provided reference IDs never confer read rights by themselves.
         if request.attachment_references:
@@ -1244,56 +1294,6 @@ class RuntimePolicyEnforcer:
                 denied_reasoning_modes=list(request.requested_reasoning_modes),
                 evaluated_at=evaluated_at,
             )
-
-        # Generated artifacts are a dedicated direct-chat operation. Asking
-        # for a capability or possessing read access must not confer write
-        # authority. Actual principal/session verification at dispatch remains
-        # mandatory even after this issuer decision.
-        artifact_requested = (
-            request.action == GENERATED_TEXT_ARTIFACT_CAPABILITY
-            or GENERATED_TEXT_ARTIFACT_CAPABILITY in request.requested_capabilities
-        )
-        if artifact_requested:
-            from ai_karen_engine.auth.models import UserData
-            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
-
-            principal = UserData(
-                user_id=request.user_id,
-                tenant_id=request.tenant_id,
-                roles=list(request.roles),
-                permissions=list(request.permissions),
-            )
-            manager = get_rbac_manager()
-            topology = request.execution_topology
-            if (
-                request.action != GENERATED_TEXT_ARTIFACT_CAPABILITY
-                or set(request.requested_capabilities) != {GENERATED_TEXT_ARTIFACT_CAPABILITY}
-                or request.attachment_references
-                or not request.session_id
-                or not request.correlation_id
-                or request.runtime_level is not RuntimeLevel.FULL
-                or type(request.max_model_calls) is not int
-                or request.max_model_calls < 1
-                or request.requested_reasoning_modes
-                or request.tool_id or request.plugin_id or request.extension_id
-                or any(topology.get(key) for key in (
-                    "tool_requirements", "plugin_candidates", "requested_agents",
-                    "workflow_id", "agent_delegation", "requires_human_gate",
-                    "requires_resumability", "requires_parallel_execution",
-                    "graph_required",
-                ))
-                or not manager.has_permission(principal, Permission.DATA_READ)
-                or not manager.has_permission(principal, Permission.ARTIFACT_CREATE_OWN)
-            ):
-                return PolicyDecision(
-                    decision_id=decision_id,
-                    policy_version=policy_version,
-                    allowed=False,
-                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
-                    denied_capabilities=[GENERATED_TEXT_ARTIFACT_CAPABILITY],
-                    denied_reasoning_modes=list(request.requested_reasoning_modes),
-                    evaluated_at=evaluated_at,
-                )
 
         # Personal planner mutations require their own explicit write
         # entitlement. A CORTEX capability request is not an RBAC grant.
