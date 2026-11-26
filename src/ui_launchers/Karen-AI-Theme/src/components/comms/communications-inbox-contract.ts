@@ -23,6 +23,7 @@ export type InboxCapabilities = {
   can_mutate: boolean;
   producer_enabled: boolean;
   can_reconcile: boolean;
+  invalidation_wait_enabled: boolean;
 };
 export type InboxPage = {
   entries: InboxEntry[];
@@ -56,6 +57,7 @@ export function readPage(v: unknown, filter: InboxFilter, previous: InboxCursor 
   const capabilities = v.capabilities;
   if (!isObject(capabilities) || typeof capabilities.can_mutate !== "boolean"
     || typeof capabilities.producer_enabled !== "boolean" || typeof capabilities.can_reconcile !== "boolean"
+    || (capabilities.invalidation_wait_enabled !== undefined && typeof capabilities.invalidation_wait_enabled !== "boolean")
     || capabilities.can_reconcile !== (capabilities.can_mutate && capabilities.producer_enabled)) {
     throw new Error("Invalid inbox capabilities");
   }
@@ -68,7 +70,12 @@ export function readPage(v: unknown, filter: InboxFilter, previous: InboxCursor 
   if (v.next_cursor && (entries.length !== PAGE_SIZE || !last || last.entry_id !== v.next_cursor.entry_id
     || last.created_at !== v.next_cursor.created_at)) throw new Error("Invalid inbox cursor");
   return { entries, next_cursor: v.next_cursor, active_unread_count: v.active_unread_count,
-    capabilities: { can_mutate: capabilities.can_mutate, producer_enabled: capabilities.producer_enabled, can_reconcile: capabilities.can_reconcile } };
+    capabilities: { can_mutate: capabilities.can_mutate, producer_enabled: capabilities.producer_enabled, can_reconcile: capabilities.can_reconcile,
+      invalidation_wait_enabled: capabilities.invalidation_wait_enabled === true } };
+}
+export function readInvalidation(v: unknown): boolean {
+  if (!isObject(v) || Object.keys(v).length !== 1 || typeof v.changed !== "boolean") throw new Error("Invalid inbox hint");
+  return v.changed;
 }
 export function operationRecorded(entry: InboxEntry, operation: InboxOperation): boolean {
   return operation === "read" ? entry.read_at !== null : operation === "acknowledge" ? entry.acknowledged_at !== null : entry.archived_at !== null;

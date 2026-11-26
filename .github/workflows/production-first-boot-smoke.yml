@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       communications_browser:
-        description: "Disposable local Communications lifecycle browser proof"
+        description: "Disposable local Communications lifecycle and invalidation browser proof"
         type: boolean
         default: false
   push:
@@ -209,14 +209,14 @@ jobs:
           done
 
       - uses: actions/setup-node@v4
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.communications_browser == true }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:communications-browser'))) }}
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
 
       - name: Install disposable browser proof dependencies
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.communications_browser == true }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:communications-browser'))) }}
         working-directory: src/ui_launchers/Karen-AI-Theme
         run: |
           npm ci --no-audit --no-fund
@@ -225,7 +225,7 @@ jobs:
       - name: Execute real production first boot
         env:
           KAREN_SMOKE_API_IMAGE: ai-karen-api:beta
-          KAREN_SMOKE_COMMS_BROWSER_PROOF: ${{ (github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) && 'true' || 'false' }}
+          KAREN_SMOKE_COMMS_BROWSER_PROOF: ${{ (((github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:communications-browser')))) && 'true' || 'false' }}
         run: bash scripts/ci/production-first-boot-smoke.sh
 
       - name: Execute real production web boot

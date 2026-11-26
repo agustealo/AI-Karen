@@ -263,6 +263,11 @@ def test_disposable_communications_browser_is_opt_in_and_isolated() -> None:
     assert "default: false" in workflow.split("communications_browser:", 1)[1].split("  push:", 1)[0]
     assert "kcomm-02e-disposable-browser-proof-" not in workflow
     assert workflow.count("github.event_name == 'workflow_dispatch' && inputs.communications_browser == true") == 3
+    assert workflow.count("github.event.pull_request.head.repo.full_name == github.repository") == 3
+    assert workflow.count("contains(github.event.pull_request.labels.*.name, 'ci:communications-browser')") == 3
+    assert "pull_request_target:" not in workflow
+    assert "contents: read" in workflow
+    assert "kcomm-03g-signed-invalidation-proof-" not in workflow
     assert 'COMMS_BROWSER_PROOF="${KAREN_SMOKE_COMMS_BROWSER_PROOF:-false}"' in smoke
     assert "Communications fixture proof must not contact a live model" in smoke
     assert "Refusing non-disposable database target" in fixture

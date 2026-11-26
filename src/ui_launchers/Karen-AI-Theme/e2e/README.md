@@ -892,3 +892,11 @@ No hosted account or deployment, fabricated event, mock API, direct runtime-row
 write, or production flag change. The exact-head run must actually execute
 both scenarios. This does not certify distributed HTTP worker capacity or
 real model inference failure.
+
+The same disposable acceptance can be explicitly requested on a non-draft,
+same-repository pull request by applying both `ci:merge-gate` and
+`ci:communications-browser`. Fork PRs cannot activate it with a label.
+The label is an opt-in CI execution control, not an application feature flag;
+ordinary pushes and unlabeled PRs retain the existing first-boot behavior.
+The workflow retains read-only permissions and does not use
+`pull_request_target`. Remove the browser label when no longer needed.

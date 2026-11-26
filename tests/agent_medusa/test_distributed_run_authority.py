@@ -9,9 +9,17 @@ import pytest
 from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
     DistributedRunNotCancellable,
     DistributedRunNotFound,
+    DistributedRunOwnershipLost,
+    DistributedRunStoreUnavailable,
     DistributedRunTenantMismatch,
+    RedisDistributedRunStore,
 )
-from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
+from ai_karen_engine.agent_medusa.execution.run_manager import (
+    ExecutionRunStatus,
+    MedusaRunManager,
+    RunNotCancellableError,
+    RunTenantMismatchError,
+)
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
 
 
@@ -721,3 +729,205 @@ async def test_unverified_retirement_stops_heartbeat_and_retires_shared_claim():
     assert observed["status"] == "orphaned"
     assert observed["error_type"] == "NativeRetirementUnverified"
     assert observed["cancellable"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [-2, -1, 0, 1, 2])
+async def test_redis_heartbeat_uses_single_fenced_mutation(result: int) -> None:
+    """The advisory read cannot authorize a subsequent metadata write."""
+    from types import SimpleNamespace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        _HEARTBEAT_RUN_SCRIPT,
+    )
+
+    class ScriptClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        async def ping(self) -> bool:
+            return True
+
+        async def hgetall(self, key: str) -> dict[str, str]:
+            self.calls.append(("read", key))
+            return {
+                "run_id": "fenced",
+                "tenant_id": "tenant-a",
+                "owner_worker_id": "worker-a",
+                "status": "running",
+            }
+
+        async def eval(self, *args: Any) -> int:
+            self.calls.append(args)
+            return result
+
+    client = ScriptClient()
+    settings = _settings("worker-a")
+    store = RedisDistributedRunStore(
+        settings=settings,
+        redis_manager=SimpleNamespace(client=client, is_degraded=lambda: False),
+    )
+    errors = {
+        -2: DistributedRunNotFound,
+        -1: DistributedRunOwnershipLost,
+        2: DistributedRunStoreUnavailable,
+    }
+    if result in errors:
+        with pytest.raises(errors[result]):
+            await store.heartbeat(run_id="fenced", worker_id="worker-a")
+    else:
+        assert await store.heartbeat(run_id="fenced", worker_id="worker-a") is (
+            result == 1
+        )
+    assert len(client.calls) == 2
+    read, mutation = client.calls
+    assert read == ("read", store._run_key("fenced"))
+    assert mutation[:10] == (
+        _HEARTBEAT_RUN_SCRIPT,
+        3,
+        store._claim_key("fenced"),
+        store._run_key("fenced"),
+        store._tenant_index("tenant-a"),
+        "worker-a",
+        "tenant-a",
+        "fenced",
+        str(settings.run_lease_ttl_seconds),
+        str(settings.run_terminal_retention_seconds),
+    )
+    assert datetime.fromisoformat(mutation[11]) - datetime.fromisoformat(
+        mutation[10]
+    ) == timedelta(seconds=settings.run_lease_ttl_seconds)
+    # Every identity and active-state check precedes the first mutation.
+    first_write = _HEARTBEAT_RUN_SCRIPT.index("redis.call('EXPIRE'")
+    for guard in (
+        "'GET', KEYS[1]",
+        "'EXISTS', KEYS[2]",
+        "'owner_worker_id'",
+        "'tenant_id'",
+        "'run_id'",
+        "status ~= 'running' and status ~= 'cancelling'",
+    ):
+        assert _HEARTBEAT_RUN_SCRIPT.index(guard) < first_write
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failure", [DistributedRunOwnershipLost, DistributedRunNotFound]
+)
+@pytest.mark.parametrize("already_cancelling", [False, True])
+async def test_observed_lease_loss_fences_local_terminal_results(
+    failure: type[Exception], already_cancelling: bool
+) -> None:
+    """No stale terminal writes or duplicate runtime signal after proven loss."""
+    entered_cleanup = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    class LostStore(SharedFakeRunStore):
+        fail_heartbeat = False
+        terminal_writes = 0
+        outcome_writes = 0
+
+        async def heartbeat(self, *, run_id: str, worker_id: str) -> bool:
+            if self.fail_heartbeat:
+                raise failure("injected definitive lease loss")
+            return await super().heartbeat(run_id=run_id, worker_id=worker_id)
+
+        async def mark_terminal(self, **kwargs: Any) -> None:
+            self.terminal_writes += 1
+            await super().mark_terminal(**kwargs)
+
+        async def set_outcome_status(self, **kwargs: Any) -> None:
+            self.outcome_writes += 1
+
+    class ObservedLedger:
+        terminal_writes = 0
+
+        async def mark_terminal(self, **kwargs: Any) -> None:
+            self.terminal_writes += 1
+
+    async def workload() -> None:
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            current = asyncio.current_task()
+            assert current is not None
+            current.uncancel()
+            entered_cleanup.set()
+            await release_cleanup.wait()
+            raise
+
+    store = LostStore()
+    ledger = ObservedLedger()
+    manager = MedusaRunManager(settings=_settings("owner"), distributed_store=store)
+    task = asyncio.create_task(workload())
+    await asyncio.sleep(0)
+    scope = dict(run_id="lost-lease", tenant_id="tenant-a")
+    run = None
+    try:
+        run = await manager.register(
+            **scope, correlation_id="corr", user_id="owner", task=task
+        )
+        heartbeat = run.heartbeat_task
+        assert heartbeat is not None
+        if already_cancelling:
+            await manager.cancel(**scope)
+            await asyncio.wait_for(entered_cleanup.wait(), timeout=3)
+        run.durable_registered = True
+        manager._durable_ledger = ledger
+        store.fail_heartbeat = True
+        await asyncio.wait_for(heartbeat, timeout=4)
+        await asyncio.wait_for(entered_cleanup.wait(), timeout=3)
+        assert run.shared_ownership_lost
+        assert run.heartbeat_task is None
+        assert not task.done() and task.cancelling() == 0
+        snapshot = await manager.get(**scope)
+        assert snapshot["status"] == "orphaned"
+        assert snapshot["completed_at"] is None
+        assert snapshot["outcome_status"] is None
+        assert snapshot["cancellable"] is False
+        assert snapshot["distributed_control"]["supported"] is False
+        with pytest.raises(RunTenantMismatchError):
+            await manager.cancel(run_id=scope["run_id"], tenant_id="foreign")
+        with pytest.raises(RunNotCancellableError):
+            await manager.cancel(**scope)
+        with pytest.raises(RuntimeError, match="already active or unresolved"):
+            await manager.register(
+                **scope, correlation_id="new", user_id="owner", task=task
+            )
+        assert await manager.mark_response(
+            scope["run_id"], "success"
+        ) is ExecutionRunStatus.ORPHANED
+        assert await manager.mark_failed(
+            scope["run_id"], RuntimeError("late failure")
+        ) is ExecutionRunStatus.ORPHANED
+        assert await manager.mark_cancelled(
+            scope["run_id"]
+        ) is ExecutionRunStatus.ORPHANED
+        assert run.run_id not in manager._terminal_order
+        assert (
+            store.terminal_writes
+            == store.outcome_writes
+            == ledger.terminal_writes
+            == 0
+        )
+        release_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3)
+        assert await manager.mark_cancelled(
+            scope["run_id"]
+        ) is ExecutionRunStatus.ORPHANED
+        assert run.run_id in manager._terminal_order
+        assert (
+            store.terminal_writes
+            == store.outcome_writes
+            == ledger.terminal_writes
+            == 0
+        )
+    finally:
+        release_cleanup.set()
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)

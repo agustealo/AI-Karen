@@ -6,7 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  INBOX_PATH, INBOX_REFRESH_INTERVAL_MS, INBOX_REFRESH_MIN_GAP_MS, inboxPagePath, operationRecorded, readPage, readReceipt,
+  INBOX_PATH, INBOX_REFRESH_INTERVAL_MS, INBOX_REFRESH_MIN_GAP_MS, inboxPagePath, operationRecorded, readPage, readReceipt, readInvalidation,
   type InboxCursor, type InboxEntry, type InboxFilter, type InboxOperation, type InboxPage,
 } from "./communications-inbox-contract";
 
@@ -161,6 +161,8 @@ function InboxView({ controller, active, refreshRevision, onOpenConversation }: 
   const viewLive = useRef(false);
   const lastRefresh = useRef(refreshRevision);
   const lastAutomaticRead = useRef<number | null>(null);
+  const nextWaitAt = useRef(0);
+  const waitEnabled = page?.capabilities.invalidation_wait_enabled === true;
   const [handoffError, setHandoffError] = useState("");
   useLayoutEffect(() => {
     viewLive.current = true;
@@ -174,8 +176,8 @@ function InboxView({ controller, active, refreshRevision, onOpenConversation }: 
     void load(filter, null);
   }, [refreshRevision, filter, load, setNotice]);
 
-  // Authenticated read reconciliation only. Do not use the simulated
-  // realtime client or tenant-wide notification topic as delivery evidence.
+  // One view-owned reconciliation loop. Redis hints only request a canonical
+  // read, never mutate records or establish permanent connectivity.
   useEffect(() => {
     if (!active || busy || loading || uncertain) return;
     const refreshVisible = () => {
@@ -185,17 +187,67 @@ function InboxView({ controller, active, refreshRevision, onOpenConversation }: 
       lastAutomaticRead.current = now;
       void load(filter, cursor, false, true);
     };
-    const timer = window.setInterval(refreshVisible, INBOX_REFRESH_INTERVAL_MS);
-    window.addEventListener("focus", refreshVisible);
-    window.addEventListener("online", refreshVisible);
-    document.addEventListener("visibilitychange", refreshVisible);
-    return () => {
-      window.clearInterval(timer);
-      window.removeEventListener("focus", refreshVisible);
-      window.removeEventListener("online", refreshVisible);
-      document.removeEventListener("visibilitychange", refreshVisible);
+    let disposed = false;
+    let pending: AbortController | null = null;
+    let waitTimer: number | null = null;
+    const eligible = () => !disposed && waitEnabled && current()
+      && document.visibilityState === "visible" && navigator.onLine;
+    const cancelWait = () => {
+      if (waitTimer !== null) window.clearTimeout(waitTimer);
+      waitTimer = null;
+      if (pending) {
+        nextWaitAt.current = Math.max(nextWaitAt.current, Date.now() + INBOX_REFRESH_MIN_GAP_MS);
+        pending.abort();
+      }
     };
-  }, [active, busy, loading, uncertain, current, filter, cursor, load]);
+    const scheduleWait = () => {
+      if (!eligible() || pending || waitTimer !== null) return;
+      waitTimer = window.setTimeout(() => {
+        waitTimer = null;
+        if (!eligible() || pending) return;
+        const attempt = new AbortController();
+        pending = attempt;
+        void (async () => {
+          try {
+            const raw = await apiClient.waitForInboxInvalidation(scope, attempt.signal);
+            if (!eligible() || attempt.signal.aborted) return;
+            const changed = readInvalidation(raw);
+            nextWaitAt.current = Date.now() + INBOX_REFRESH_MIN_GAP_MS;
+            if (changed) refreshVisible();
+          } catch {
+            // Optional delivery is unavailable. Preserve durable records and
+            // fall back to the normal polling cadence, never a hot retry.
+            if (eligible() && !attempt.signal.aborted) {
+              nextWaitAt.current = Date.now() + INBOX_REFRESH_INTERVAL_MS;
+            }
+          } finally {
+            if (pending === attempt) pending = null;
+            scheduleWait();
+          }
+        })();
+      }, Math.max(0, nextWaitAt.current - Date.now()));
+    };
+    const visibilityChanged = () => {
+      if (!eligible()) cancelWait();
+      refreshVisible();
+      scheduleWait();
+    };
+    const timer = window.setInterval(refreshVisible, INBOX_REFRESH_INTERVAL_MS);
+    window.addEventListener("focus", visibilityChanged);
+    window.addEventListener("online", visibilityChanged);
+    window.addEventListener("offline", cancelWait);
+    document.addEventListener("visibilitychange", visibilityChanged);
+    scheduleWait();
+    return () => {
+      disposed = true;
+      cancelWait();
+      window.clearInterval(timer);
+      window.removeEventListener("focus", visibilityChanged);
+      window.removeEventListener("online", visibilityChanged);
+      window.removeEventListener("offline", cancelWait);
+      document.removeEventListener("visibilitychange", visibilityChanged);
+    };
+  }, [active, busy, loading, uncertain, current, filter, cursor, load, scope, waitEnabled]);
 
   async function openConversation(entry: InboxEntry) {
     if (!current() || busy || loading || uncertain || handoffLock.current || !onOpenConversation || !page?.entries.includes(entry)) return;

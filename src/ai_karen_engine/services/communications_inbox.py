@@ -46,6 +46,7 @@ class InboxCapabilities:
     can_mutate: bool
     producer_enabled: bool
     can_reconcile: bool
+    invalidation_wait_enabled: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -100,10 +101,15 @@ class CommunicationsInboxService:
         # These are UI affordances only. Every mutation reauthorizes the
         # current principal; a previously returned capability is not a grant.
         can_mutate = get_rbac_manager().has_permission(user, Permission.COMMUNICATIONS_WRITE)
-        producer_enabled = get_runtime_settings().features.enable_communications_terminal_producer
+        features = get_runtime_settings().features
+        producer_enabled = features.enable_communications_terminal_producer
         return OwnedInboxPage(page, InboxCapabilities(
             can_mutate=can_mutate, producer_enabled=producer_enabled,
             can_reconcile=can_mutate and producer_enabled,
+            invalidation_wait_enabled=(
+                features.enable_communications_invalidation is True
+                and features.enable_communications_invalidation_wait is True
+            ),
         ))
 
     async def wait_owned(
