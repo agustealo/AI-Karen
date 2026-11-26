@@ -445,6 +445,113 @@ def test_completed_dependencies_do_not_block_execution() -> None:
     assert plan.get_next_runnable_steps() == [downstream]
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("parallelism", [1, 2])
+async def test_coordinator_observes_dependency_completion_and_parallelism(
+    parallelism: int,
+) -> None:
+    """Observe the real coordinator loop at a controlled specialist boundary.
+
+    A fixed DAG and test-double invocations isolate scheduling, not providers
+    or durable stores. Dependency selection and the budget meter remain real.
+    """
+    request = _request()
+    assert request.authorized_plan is not None
+    request.authorized_plan["budget"] = {
+        "max_parallelism": parallelism,
+        "max_duration_ms": 30000,
+        "max_agent_turns": 5,
+    }
+    steps = [
+        PlanStep(
+            id="dependent",
+            agent_specialist="researcher",
+            dependencies=["a", "b", "c"],
+        ),
+        *[
+            PlanStep(id=key, agent_specialist="researcher")
+            for key in ("a", "b", "c")
+        ],
+    ]
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=steps)
+    planner = SimpleNamespace(create_plan=AsyncMock(return_value=plan))
+    assembler = SimpleNamespace(
+        assemble=AsyncMock(
+            return_value=RuntimeResponse(
+                request_id=request.request_id,
+                status=ResponseStatus.SUCCESS,
+                content="controlled scheduler result",
+            )
+        )
+    )
+    coordinator = MedusaCoordinator(planner=planner, assembler=assembler)
+    entered = {step.id: asyncio.Event() for step in steps}
+    release = {step.id: asyncio.Event() for step in steps}
+    active: set[str] = set()
+    completed: set[str] = set()
+    started: list[str] = []
+    peak = 0
+
+    async def execute(
+        step, deep_plan, runtime_request, authorized_plan, meter, *_args
+    ):
+        nonlocal peak
+        assert deep_plan is plan
+        assert runtime_request is request
+        assert authorized_plan.budget.max_parallelism == parallelism
+        assert await meter.reserve_agent_turn() is True
+        assert set(step.dependencies) <= completed
+        assert step.id not in started
+        started.append(step.id)
+        active.add(step.id)
+        peak = max(peak, len(active))
+        step.status = StepStatus.RUNNING
+        entered[step.id].set()
+        try:
+            await release[step.id].wait()
+            completed.add(step.id)
+            step.status = StepStatus.COMPLETED
+            return {"step_id": step.id}
+        finally:
+            active.remove(step.id)
+
+    with patch.object(coordinator, "_execute_step", new=execute):
+        task = asyncio.create_task(coordinator._handle_request(request))
+        try:
+            independent = ["a", "b", "c"]
+            for offset in range(0, len(independent), parallelism):
+                wave = independent[offset : offset + parallelism]
+                await asyncio.wait_for(
+                    asyncio.gather(*(entered[key].wait() for key in wave)),
+                    timeout=5,
+                )
+                assert active == set(wave)
+                assert set(started) == set(independent[: offset + len(wave)])
+                assert not entered["dependent"].is_set()
+                for key in wave:
+                    release[key].set()
+
+            await asyncio.wait_for(entered["dependent"].wait(), timeout=5)
+            assert completed == {"a", "b", "c"}
+            assert active == {"dependent"}
+            release["dependent"].set()
+            response = await asyncio.wait_for(task, timeout=5)
+        finally:
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+    assert response.status is ResponseStatus.SUCCESS
+    assert peak == parallelism
+    assert completed == {"a", "b", "c", "dependent"}
+    assert not active
+    assert all(step.status is StepStatus.COMPLETED for step in plan.steps)
+    assert plan.is_complete
+    assert request.request_id not in coordinator.active_plans
+    assembler.assemble.assert_awaited_once()
+    assert assembler.assemble.await_args.kwargs["status"] is ResponseStatus.SUCCESS
+
+
 def test_coordinator_parallel_waves_obey_runtime_policy_budget() -> None:
     """Guard against accidentally restoring unbounded gather scheduling."""
     import ast
