@@ -273,6 +273,22 @@ if grep -Fq "name 'RobotsPolicy' is not defined" <<<"${startup_logs}"; then
   fail_with_api_logs
 fi
 
+echo "[smoke] proving access logs omit raw request query values"
+privacy_marker="karen_privacy_probe_$("${PYTHON_BIN}" -c 'import secrets; print(secrets.token_hex(16))')"
+privacy_before="$(docker logs "${API_CONTAINER}" 2>&1 | grep -Fc 'GET /health/live HTTP/' || true)"
+curl -fsS "${BASE_URL}/health/live?search=${privacy_marker}&file_cursor=${privacy_marker}_cursor" >/dev/null
+privacy_logs="$(docker logs "${API_CONTAINER}" 2>&1)"
+if grep -Fq "$privacy_marker" <<<"$privacy_logs"; then
+  echo "Request query value escaped the application logging privacy boundary" >&2
+  exit 1
+fi
+privacy_after="$(grep -Fc 'GET /health/live HTTP/' <<<"$privacy_logs" || true)"
+if (( privacy_after <= privacy_before )); then
+  echo "Expected sanitized access record was not observed" >&2
+  exit 1
+fi
+echo "PRODUCTION REQUEST TARGET PRIVACY PROOF PASSED"
+
 echo "[smoke] proving empty installation reports first-run"
 first_run_json="$(curl -fsS "${BASE_URL}/api/auth/first-run")"
 "${PYTHON_BIN}" - "${first_run_json}" <<'PY'
