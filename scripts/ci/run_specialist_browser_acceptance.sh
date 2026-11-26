@@ -17,7 +17,8 @@ esac
 export KAREN_SEARCH_ACCEPTANCE_PLATFORM="$1"
 # Always activate the existing exact-origin deployment fixture.
 export KAREN_SEARCH_ACCEPTANCE_REQUIRED=true
-case "${2:-readback}" in
+mode="${2:-readback}"
+case "$mode" in
   readback)
     # Exactly one pass alone does not establish full lifecycle and isolation.
     for flag in KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE KAREN_SPECIALIST_LIFECYCLE_ACCEPTANCE KAREN_SPECIALIST_CROSS_TENANT_ACCEPTANCE; do
@@ -59,7 +60,7 @@ if ! PLAYWRIGHT_JSON_OUTPUT_FILE="$private_dir/report.json" \
   echo "::error::Protected specialist browser acceptance failed (private diagnostics suppressed)"
   exit 1
 fi
-if ! python - "$private_dir/report.json" "$title" 2>/dev/null <<'PY'
+if ! python - "$private_dir/report.json" "$mode" 2>/dev/null <<'PY'
 import json
 import sys
 from pathlib import Path
@@ -81,8 +82,12 @@ def collect(suites):
                                  [r.get("status") for r in test.get("results", [])]))
         collect(suite.get("suites", []))
 collect(report.get("suites", []))
-if observed != [(
-    sys.argv[2],
+title = {
+    "readback": "ARM-05C.5B real participation receipts survive reload and deny a second account",
+    "ordinary-chat": "ARM-08 fresh ordinary-chat specialist execution survives reload",
+}.get(sys.argv[2])
+if title is None or observed != [(
+    title,
     "expected", "passed", "chromium", ["passed"],
 )]:
     raise SystemExit(1)

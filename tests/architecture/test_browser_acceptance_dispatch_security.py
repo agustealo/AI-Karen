@@ -487,10 +487,10 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
 
     path = tmp_path / "report.json"
 
-    def validate(payload: str) -> int:
+    def validate(payload: str, mode: str = "readback") -> int:
         path.write_text(payload, encoding="utf-8")
         return subprocess.run(
-            [sys.executable, "-c", validator, str(path), title],
+            [sys.executable, "-c", validator, str(path), mode],
             capture_output=True,
             check=False,
         ).returncode
@@ -516,6 +516,12 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
     for payload in invalid:
         assert validate(json.dumps(payload)) != 0
     assert validate("{malformed") != 0
+    ordinary = report()
+    ordinary["suites"][0]["suites"][0]["specs"][0]["title"] = "ARM-08 fresh ordinary-chat specialist execution survives reload"
+    assert validate(json.dumps(ordinary), "ordinary-chat") == 0
+    assert validate(json.dumps(ordinary)) != 0
+    assert validate(json.dumps(report()), "ordinary-chat") != 0
+    assert validate(json.dumps(ordinary), "unknown") != 0
 
 
 def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path: Path) -> None:

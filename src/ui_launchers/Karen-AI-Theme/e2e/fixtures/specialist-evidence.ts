@@ -92,15 +92,33 @@ export function validRuntimeRequestId(value: unknown): value is string {
   return bounded(value, 128) && !/[^A-Za-z0-9_-]/.test(value);
 }
 
+// Keep this acceptance-only subset aligned with the backend RuntimeEngine enum.
+// An engine label is attribution, not independent physical locality proof.
+const localEngineIds = new Set(["lmstudio", "vllm", "sglang", "llamacpp", "tensorrt_llm", "ollama", "transformers"]);
+
+export function validApprovedSpecialist(approved: ApprovedSpecialist): boolean {
+  return [approved.tenantId, approved.userId, approved.provider, approved.model, approved.agent, approved.tool]
+    .every(value => bounded(value)) &&
+    !["default", "dev-tenant"].includes(approved.tenantId.toLowerCase()) &&
+    localEngineIds.has(approved.engine) && !!approved.prompt.trim() && approved.prompt.length <= 2000;
+}
+
+export function emptyFreshSpecialistHistory(value: unknown, threadId: string): boolean {
+  return record(value) && value.threadId === threadId &&
+    value.recovery_run === null && Array.isArray(value.messages) &&
+    value.messages.length === 0 && Array.isArray(value.replayEvents) && value.replayEvents.length === 0;
+}
+
 export function matchesApprovedSpecialistReceipt(value: unknown, approved: ApprovedSpecialist): boolean {
-  return record(value) && validRuntimeRequestId(value.runtime_request_id) &&
+  return validApprovedSpecialist(approved) && record(value) && validRuntimeRequestId(value.runtime_request_id) &&
     value.actual_provider === approved.provider && value.actual_model === approved.model &&
     value.runtime_engine === approved.engine && value.response_source === "deepagents_verified_output" &&
-    value.degraded_mode !== true && (value.fallback_level == null || value.fallback_level === 0);
+    (value.degraded_mode === undefined || value.degraded_mode === false) &&
+    (value.fallback_level === undefined || value.fallback_level === null || value.fallback_level === 0);
 }
 
 export function approvedSpecialistIdentity(value: unknown, approved: ApprovedSpecialist): boolean {
-  if (!record(value) || value.valid !== true || value.session_valid !== true ||
+  if (!validApprovedSpecialist(approved) || !record(value) || value.valid !== true || value.session_valid !== true ||
       value.authenticated !== true || !record(value.user)) return false;
   const user = value.user;
   return user.user_id === approved.userId && user.tenant_id === approved.tenantId &&
@@ -118,7 +136,7 @@ export function verifyFreshSpecialistEvidence(
   runId: string, approved: ApprovedSpecialist, run: unknown, lifecycle: unknown,
   participation: unknown, tools: unknown,
 ): { stepId: string; toolCallId: string; toolReceiptId: string; participationIds: string[]; transitionIds: string[] } {
-  if (!validRuntimeRequestId(runId) || !record(run) ||
+  if (!validApprovedSpecialist(approved) || !validRuntimeRequestId(runId) || !record(run) ||
       run.run_id !== runId || run.request_id !== runId ||
       run.tenant_id !== approved.tenantId || run.user_id !== approved.userId ||
       run.status !== "completed" || run.outcome_status !== "success" ||
@@ -174,13 +192,15 @@ export function verifyFreshSpecialistEvidence(
   if (!hasExactKeys(row, ["receipt_id", "tool_call_id", "tool_name", "tool_version", "agent_id",
       "step_id", "policy_decision_id", "success", "error_type", "result_sha256", "recorded_at",
       "execution_scope", "independently_verified"]) ||
-      !bounded(row.receipt_id) || !bounded(row.tool_call_id, 128) ||
+      typeof row.tool_call_id !== "string" || row.tool_call_id.length !== 36 ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.tool_call_id) ||
+      row.receipt_id !== "out_tool_" + row.tool_call_id.replace(/-/g, "") ||
       row.tool_name !== approved.tool || row.agent_id !== approved.agent ||
       row.step_id !== entered[0].step_id || row.policy_decision_id !== run.policy_decision_id ||
       row.success !== true || row.error_type !== null ||
       row.execution_scope !== "tool_runtime_acknowledgment" || row.independently_verified !== false ||
       !(row.tool_version === null || bounded(row.tool_version)) ||
-      !(row.result_sha256 === null || (typeof row.result_sha256 === "string" && /^[0-9a-f]{64}$/.test(row.result_sha256))) ||
+      typeof row.result_sha256 !== "string" || row.result_sha256.length !== 64 || /[^0-9a-f]/.test(row.result_sha256) ||
       typeof row.recorded_at !== "string" || !Number.isFinite(Date.parse(row.recorded_at)) ||
       Date.parse(row.recorded_at) < Date.parse(entered[0].observed_at) ||
       Date.parse(row.recorded_at) > Date.parse(returned[0].observed_at)) {

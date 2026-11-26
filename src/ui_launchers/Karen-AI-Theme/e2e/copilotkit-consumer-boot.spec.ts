@@ -1,7 +1,7 @@
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 import type { Page } from "@playwright/test";
-import { approvedSpecialistIdentity, matchesApprovedSpecialistReceipt, validRuntimeRequestId, verifyFreshSpecialistEvidence, type ApprovedSpecialist } from "./fixtures/specialist-evidence";
+import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedSpecialist, matchesApprovedSpecialistReceipt, validRuntimeRequestId, verifyFreshSpecialistEvidence, type ApprovedSpecialist } from "./fixtures/specialist-evidence";
 
 /**
  * The preview route previously owned this CSS, so the dashboard could render
@@ -206,7 +206,12 @@ async function readFreshSpecialistEvidence(
   if (![run, lifecycle, participation, tools].every(result => result.ok)) {
     throw new Error("Fresh owned specialist evidence is unavailable");
   }
-  return verifyFreshSpecialistEvidence(runtimeRequestId, approved, run.body, lifecycle.body, participation.body, tools.body);
+  const proof = verifyFreshSpecialistEvidence(runtimeRequestId, approved, run.body, lifecycle.body, participation.body, tools.body);
+  // Compare the complete durable receipt inventories on replay, not only IDs.
+  // Keep the live run snapshot out of equality: worker-local and durable
+  // projections legitimately differ while their immutable identity agrees.
+  return { proof, lifecycle: lifecycle.body, participation: participation.body, tools: tools.body };
+
 }
 
 /**
@@ -301,8 +306,9 @@ const approvedSpecialist: ApprovedSpecialist | undefined = ordinarySpecialistAcc
 if (approvedSpecialist && (!releaseMode || localMode || personalContextAcceptance || kcon770FaultAcceptance || authState ||
     process.env.KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED !== "true" ||
     process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
-    !approvedEmail || !approvedPassword || Object.values(approvedSpecialist).some(value => !value.trim()) ||
-    approvedSpecialist.prompt.length > 2000)) {
+    process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== "true" ||
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined ||
+    !approvedEmail || !approvedPassword || !validApprovedSpecialist(approvedSpecialist))) {
   throw new Error("Fresh specialist trial requires explicit signed Docker disposable-account approval and complete configuration");
 }
 
@@ -433,6 +439,12 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
 
     const id = await shell.getAttribute("data-conversation-id");
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
+    if (approvedSpecialist) {
+      if (new URL(page.url()).origin !== target.origin) throw new Error("Unapproved specialist browser origin");
+      const empty = await readAuthorizedSameOriginJson(page, `/api/copilotkit/threads/${id}/messages`);
+      expect(empty.ok && emptyFreshSpecialistHistory(empty.body, id!),
+        "Fresh conversation must have no pre-existing evidence or unresolved execution").toBe(true);
+    }
     const prompt = approvedSpecialist ?
       `${approvedSpecialist.prompt}\n\nAcceptance reference: ${crypto.randomUUID()}` :
       `Karen live acceptance ${crypto.randomUUID()}: Please respond with a brief greeting.`;
@@ -443,12 +455,19 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     // Waiting for autosave here would make the acceptance test meaningless.
     const observedRunRequests: string[] = [];
     const specialistTransportIds: string[] = [];
+    const specialistMutations: string[] = [];
     page.on("request", (request) => {
-      const pathname = new URL(request.url()).pathname;
+      const url = new URL(request.url());
+      const pathname = url.pathname;
+      if (approvedSpecialist && url.origin === target.origin &&
+          !["GET", "HEAD", "OPTIONS"].includes(request.method()) &&
+          (pathname.startsWith("/api/agent-runtime/") || pathname.startsWith("/api/admin/agents/"))) {
+        specialistMutations.push(request.method());
+      }
       if (request.method() === "POST" && (
         pathname === "/api/copilotkit/agent/default/run" ||
         pathname === "/api/chat/ag-ui" ||
-        pathname === "/api/chat/stream"
+        pathname === "/api/chat/stream" || (approvedSpecialist && pathname === "/api/chat")
       )) {
         observedRunRequests.push(pathname);
         if (approvedSpecialist && pathname === "/api/copilotkit/agent/default/run" && new URL(request.url()).origin === target.origin) {
@@ -603,7 +622,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         { clearing: true, status: 200, revision: 2 },
       ]);
     const firstReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);
-    let specialistEvidence: ReturnType<typeof verifyFreshSpecialistEvidence> | undefined;
+    let specialistEvidence: Awaited<ReturnType<typeof readFreshSpecialistEvidence>> | undefined;
     if (approvedSpecialist) {
       expect(observedRunRequests).toEqual(["/api/copilotkit/agent/default/run"]);
       expect(specialistTransportIds).toHaveLength(1);
@@ -815,7 +834,8 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     if (approvedSpecialist) {
       expect(replayedReceipt).toEqual(firstReceipt);
       expect(await readFreshSpecialistEvidence(page, target, id!, specialistTransportIds[0], firstReceipt.runtimeRequestId!, approvedSpecialist)).toEqual(specialistEvidence);
-      expect(observedRunRequests).toHaveLength(1);
+      expect(observedRunRequests, "Reload must not resubmit inference").toHaveLength(1);
+      expect(specialistMutations, "Consumer must not mutate execution authority").toEqual([]);
     }
     await expect(restored.getByTestId("karen-copilot-rail-unverified")).toHaveCount(0, {
       timeout: 30_000,
