@@ -1,5 +1,6 @@
 "use client";
 
+import type { AgentStepEvent, AgentStepEventType } from '@/lib/types';
 import type { RuntimeProviderCatalogResponse } from '@/lib/model-runtime-inventory';
 import { authService } from '@/lib/auth';
 import { dispatchAuthInvalidated } from '@/lib/auth-events';
@@ -58,28 +59,7 @@ export interface StreamingMetrics {
   connectionHealth: 'excellent' | 'good' | 'poor' | 'critical';
 }
 
-export type AgentStepEventType =
-  | 'agent_step_started'
-  | 'agent_step_completed'
-  | 'agent_step_failed'
-  | 'agent_step_skipped'
-  | 'tool_execution_started'
-  | 'tool_execution_completed'
-  | 'web_search_started'
-  | 'web_search_sources_found'
-  | 'extension_execution_started'
-  | 'extension_execution_completed'
-  | 'citation_bundle_ready'
-  | 'degraded_mode_entered';
-
-export interface AgentStepEvent {
-  type: AgentStepEventType;
-  step_id: string;
-  action_type?: string;
-  correlation_id?: string;
-  timestamp?: string;
-  metadata?: Record<string, unknown>;
-}
+export type { AgentStepEvent, AgentStepEventType } from '@/lib/types';
 
 export interface Citation {
   id: string;

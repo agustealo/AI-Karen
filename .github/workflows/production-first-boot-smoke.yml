@@ -10,8 +10,6 @@ on:
   push:
     branches:
       - main
-      # Temporary isolated proof branch; remove before promotion.
-      - kcomm-02e-disposable-browser-proof-20261126
     paths:
       - "Dockerfile"
       - "requirements.txt"
@@ -211,14 +209,14 @@ jobs:
           done
 
       - uses: actions/setup-node@v4
-        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || github.ref == 'refs/heads/kcomm-02e-disposable-browser-proof-20261126' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.communications_browser == true }}
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
 
       - name: Install disposable browser proof dependencies
-        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || github.ref == 'refs/heads/kcomm-02e-disposable-browser-proof-20261126' }}
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.communications_browser == true }}
         working-directory: src/ui_launchers/Karen-AI-Theme
         run: |
           npm ci --no-audit --no-fund
@@ -227,7 +225,7 @@ jobs:
       - name: Execute real production first boot
         env:
           KAREN_SMOKE_API_IMAGE: ai-karen-api:beta
-          KAREN_SMOKE_COMMS_BROWSER_PROOF: ${{ ((github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || github.ref == 'refs/heads/kcomm-02e-disposable-browser-proof-20261126') && 'true' || 'false' }}
+          KAREN_SMOKE_COMMS_BROWSER_PROOF: ${{ (github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) && 'true' || 'false' }}
         run: bash scripts/ci/production-first-boot-smoke.sh
 
       - name: Execute real production web boot

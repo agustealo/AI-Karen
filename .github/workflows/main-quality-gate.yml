@@ -135,6 +135,9 @@ jobs:
       - name: Voice Runtime STT and engine-neutral synthesis contracts
         run: pytest tests/core/voice -q
 
+      - name: Legacy event queue tenant isolation and atomic removal
+        run: pytest tests/unit/test_event_bus_isolation.py -q
+
       - name: Verify authentication and training route imports
         run: |
           python -m py_compile src/ai_karen_engine/auth/models.py src/ai_karen_engine/auth/rbac_middleware.py src/ai_karen_engine/auth/session.py src/ai_karen_engine/api_routes/admin/training.py
@@ -148,6 +151,9 @@ jobs:
 
       - name: Enforce durable account session revocation
         run: pytest tests/auth/test_live_session_enforcement.py tests/architecture/test_auth_session_validation_contract.py tests/architecture/test_account_beta_recovery_contract.py -q
+
+      - name: Realtime topic isolation and fail-closed subscription authorization
+        run: pytest tests/unit/core/realtime/test_topics.py tests/unit/core/realtime/test_subscriptions.py -q
 
       - name: Ruff correctness baseline
         run: |

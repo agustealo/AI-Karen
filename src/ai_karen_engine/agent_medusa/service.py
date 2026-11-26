@@ -109,10 +109,21 @@ class AgentMedusaService:
             return response
 
         except Exception as e:
-            logger.error(f"AgentMedusaService execution error: {e}", exc_info=True)
-            self.tracer.add_event(trace.trace_id, "error", str(e))
+            # The safe response contract forbids upstream exception text in
+            # ordinary logs and traces. Preserve diagnostic identity and type.
+            logger.error(
+                "medusa.service_execution_error",
+                extra={
+                    "request_id": request.request_id,
+                    "correlation_id": correlation_id,
+                    "error_type": type(e).__name__,
+                },
+            )
+            self.tracer.add_event(trace.trace_id, "error", type(e).__name__)
             self.tracer.end_trace(trace.trace_id, success=False)
-            return to_safe_response(e, correlation_id=correlation_id)
+            return to_safe_response(
+                e, correlation_id=correlation_id, request_id=request.request_id,
+            )
 
 _service: Optional[AgentMedusaService] = None
 

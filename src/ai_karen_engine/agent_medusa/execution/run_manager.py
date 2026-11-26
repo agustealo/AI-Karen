@@ -49,6 +49,15 @@ class ExecutionRunStatus(str, Enum):
     CANCELLED = "cancelled"
     ORPHANED = "orphaned"
 
+    @classmethod
+    def for_response(cls, outcome_status: str) -> ExecutionRunStatus:
+        """Map a normalized response outcome to its proposed lifecycle."""
+        if outcome_status in {"success", "partial", "degraded"}:
+            return cls.COMPLETED
+        if outcome_status in {"error", "timeout"}:
+            return cls.FAILED
+        raise ValueError(f"Unsupported Medusa outcome status: {outcome_status}")
+
 
 @dataclass
 class ExecutionRun:
@@ -263,13 +272,7 @@ class MedusaRunManager:
         """Return the resolved lifecycle, not merely the proposed response."""
 
         normalized = str(outcome_status or "").strip().lower()
-        if normalized not in {"success", "partial", "degraded", "error", "timeout"}:
-            raise ValueError(f"Unsupported Medusa outcome status: {outcome_status}")
-        lifecycle = (
-            ExecutionRunStatus.COMPLETED
-            if normalized in {"success", "partial", "degraded"}
-            else ExecutionRunStatus.FAILED
-        )
+        lifecycle = ExecutionRunStatus.for_response(normalized)
         resolved = await self._mark_terminal(
             run_id,
             lifecycle,
@@ -554,8 +557,11 @@ class MedusaRunManager:
         tenant_id: str,
         require_durable_history: bool = False,
         user_id: str | None = None,
+        require_durable_identity: bool = False,
     ) -> dict[str, Any]:
-        """Read scoped live ownership or history; strict reads verify remote identity."""
+        """Read scoped live/history state; evidence reads require durable identity."""
+        require_durable_history = require_durable_history or require_durable_identity
+        snapshot: dict[str, Any] | None = None
         async with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
@@ -568,7 +574,12 @@ class MedusaRunManager:
                     shared_registered=run.shared_registered,
                     orphaned=run.status is ExecutionRunStatus.ORPHANED,
                 )
-                return snapshot
+        if snapshot is not None:
+            if require_durable_identity:
+                await self._verify_live_durable_identity(
+                    snapshot, run_id=run_id, tenant_id=tenant_id
+                )
+            return snapshot
 
         await self._reconcile_tenant_from_redis(tenant_id)
         if await self._distributed_available():
@@ -593,29 +604,10 @@ class MedusaRunManager:
                 # Redis owns live coordination, but its snapshot does not
                 # carry the original request ID. Join only exact scoped
                 # identity evidence from the existing PostgreSQL ledger.
-                durable = await self._get_durable(
-                    run_id=run_id, tenant_id=tenant_id, require_available=True
+                request_id = await self._verify_live_durable_identity(
+                    shared, run_id=run_id, tenant_id=tenant_id
                 )
-                if (
-                    durable is None
-                    or shared.get("run_id") != run_id
-                    or any(
-                        not isinstance(shared.get(key), str)
-                        or not shared[key]
-                        or shared[key] != durable.get(key)
-                        for key in ("run_id", "tenant_id", "user_id", "correlation_id")
-                    )
-                    or not isinstance(durable.get("request_id"), str)
-                    or not durable["request_id"]
-                    or (
-                        "request_id" in shared
-                        and shared["request_id"] != durable["request_id"]
-                    )
-                ):
-                    raise DurableRunLedgerUnavailable(
-                        "medusa_remote_run_identity_unavailable"
-                    )
-                return {**shared, "request_id": durable["request_id"]}
+                return {**shared, "request_id": request_id}
 
         durable = await self._get_durable(
             run_id=run_id,
@@ -627,6 +619,36 @@ class MedusaRunManager:
         ):
             raise RunNotFoundError(run_id)
         return durable
+
+    async def _verify_live_durable_identity(
+        self,
+        snapshot: dict[str, Any],
+        *,
+        run_id: str,
+        tenant_id: str,
+    ) -> str:
+        """Verify the same immutable identity for local and remote live reads."""
+        durable = await self._get_durable(
+            run_id=run_id, tenant_id=tenant_id, require_available=True
+        )
+        if (
+            durable is None
+            or snapshot.get("run_id") != run_id
+            or any(
+                not isinstance(snapshot.get(key), str)
+                or not snapshot[key]
+                or snapshot[key] != durable.get(key)
+                for key in ("run_id", "tenant_id", "user_id", "correlation_id")
+            )
+            or not isinstance(durable.get("request_id"), str)
+            or not durable["request_id"]
+            or (
+                "request_id" in snapshot
+                and snapshot["request_id"] != durable["request_id"]
+            )
+        ):
+            raise DurableRunLedgerUnavailable("medusa_live_run_identity_unavailable")
+        return durable["request_id"]
 
     async def read_run_transitions(
         self,

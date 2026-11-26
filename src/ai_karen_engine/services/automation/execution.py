@@ -21,6 +21,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionResult,
     ChatExecutionStatus,
 )
+from ai_karen_engine.core.runtime.outcome.contracts import project_governed_tool_receipt
 from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
 from ai_karen_engine.core.runtime.task_output_verification import assess_structured_output
 from ai_karen_engine.core.runtime.task_execution import execute_task_definition
@@ -199,25 +200,7 @@ async def list_saved_task_tool_receipts(
         trajectory_id=request_id, tenant_id=tenant_id,
         user_id=user_id, limit=limit,
     )
-    return [
-        {
-            "receipt_id": event["outcome_id"],
-            "tool_call_id": (event.get("metadata") or {}).get("tool_call_id"),
-            "tool_name": (event.get("metadata") or {}).get("tool_name"),
-            "tool_version": (event.get("metadata") or {}).get("tool_version"),
-            "agent_id": (event.get("metadata") or {}).get("agent_id"),
-            "step_id": (event.get("metadata") or {}).get("step_id"),
-            "policy_decision_id": (event.get("metadata") or {}).get("policy_decision_id"),
-            "success": event.get("tool_success") is True
-                       and event.get("status") == "success",
-            "error_type": (event.get("metadata") or {}).get("error_type"),
-            "result_sha256": (event.get("metadata") or {}).get("result_sha256"),
-            "recorded_at": event.get("recorded_at"),
-            "execution_scope": "tool_runtime_acknowledgment",
-            "independently_verified": False,
-        }
-        for event in events
-    ]
+    return [project_governed_tool_receipt(event) for event in events]
 
 
 async def list_saved_task_reviews(

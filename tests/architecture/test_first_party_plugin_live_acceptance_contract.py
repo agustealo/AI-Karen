@@ -38,18 +38,29 @@ def test_plugin_scenario_reuses_exact_main_provenance_and_env_boundary() -> None
     header = job.split("\n    steps:", 1)[0]
     assert "secrets.KAREN_UX_EMAIL" not in header
     assert "secrets.KAREN_UX_PASSWORD" not in header
-    # The specialist scenario now owns a separate, mutually exclusive
-    # credential-bearing step; neither scenario may expose job-wide secrets.
-    standard = job.split("      - name: Verify authenticated workspace browser acceptance\n", 1)[1].split("\n      - name:", 1)[0]
-    specialist = job.split("      - name: Prove protected specialist lifecycle and cross-tenant readback\n", 1)[1].split("\n      - name:", 1)[0]
-    assert "if: inputs.scenario != 'specialist-participation'" in standard
-    assert "if: inputs.scenario == 'specialist-participation'" in specialist
+    # The specialist scenario has its own mutually exclusive browser step.
+    # Both use the same approved account, but neither leaks it to setup or
+    # provenance jobs. Count all references as well as the exact mappings.
+    for title, condition in (
+        (
+            "Verify authenticated workspace browser acceptance",
+            "inputs.scenario != 'specialist-participation'",
+        ),
+        (
+            "Prove protected specialist lifecycle and cross-tenant readback",
+            "inputs.scenario == 'specialist-participation'",
+        ),
+    ):
+        marker = "      - name: " + title + "\n"
+        assert job.count(marker) == 1
+        step = job.split(marker, 1)[1].split("\n      - ", 1)[0]
+        assert "        if: " + condition + "\n" in step
+        env = step.split("        env:\n", 1)[1].split("        run:", 1)[0]
+        for name in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
+            mapping = "          " + name + ": ${{ secrets." + name + " }}"
+            assert env.splitlines().count(mapping) == 1
     for name in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
-        binding = name + ": ${{ secrets." + name + " }}"
-        assert job.count(binding) == 2
-        assert standard.count(binding) == specialist.count(binding) == 1
-        assert binding in standard.split("        run:", 1)[0]
-        assert binding in specialist.split("        run:", 1)[0]
+        assert job.count("secrets." + name + " }}") == 2
     assert "actions/upload-artifact" not in job
     assert "docker compose up" not in job
 

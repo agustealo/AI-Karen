@@ -153,13 +153,7 @@ async def get_my_run_transitions(
     return receipt
 
 
-@router.get("/my-runs/{run_id}/participation")
-async def get_my_run_participation(
-    run_id: str,
-    current_user: UserData = Depends(get_current_user),
-    control_plane: AgentMedusaControlPlane = Depends(get_run_control_plane),
-) -> Dict[str, Any]:
-    """Expose recorded observations only to the authenticated run owner."""
+def _verified_evidence_scope(current_user: UserData) -> tuple[str, str]:
     tenant_id = str(current_user.tenant_id or "").strip()
     owner_id = str(current_user.user_id or "").strip()
     if (
@@ -170,6 +164,17 @@ async def get_my_run_participation(
         or tenant_id.lower() in {"default", "dev-tenant"}
     ):
         raise HTTPException(status_code=403, detail="Verified active user and tenant required")
+    return tenant_id, owner_id
+
+
+@router.get("/my-runs/{run_id}/participation")
+async def get_my_run_participation(
+    run_id: str,
+    current_user: UserData = Depends(get_current_user),
+    control_plane: AgentMedusaControlPlane = Depends(get_run_control_plane),
+) -> Dict[str, Any]:
+    """Expose recorded observations only to the authenticated run owner."""
+    tenant_id, owner_id = _verified_evidence_scope(current_user)
     if not run_id or len(run_id) > 128:
         raise HTTPException(status_code=404, detail="Execution participation not found")
     from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
@@ -185,6 +190,30 @@ async def get_my_run_participation(
         raise HTTPException(status_code=503, detail="Execution participation unavailable") from exc
     if evidence is None or evidence.get("run_id") != run_id:
         raise HTTPException(status_code=404, detail="Execution participation not found")
+    return evidence
+
+
+@router.get("/my-runs/{run_id}/tool-receipts")
+async def get_my_run_tool_receipts(
+    run_id: str,
+    current_user: UserData = Depends(get_current_user),
+    control_plane: AgentMedusaControlPlane = Depends(get_run_control_plane),
+) -> Dict[str, Any]:
+    """Expose durable governed tool acknowledgments, not permission or task success."""
+    tenant_id, owner_id = _verified_evidence_scope(current_user)
+    if not run_id or len(run_id) > 128:
+        raise HTTPException(status_code=404, detail="Execution tool receipts not found")
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import DurableRunLedgerUnavailable
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    try:
+        evidence = await control_plane.read_run_tool_receipts(
+            run_id=run_id, tenant_id=tenant_id, user_id=owner_id,
+        )
+    except (DurableRunLedgerUnavailable, OutcomeStoreError) as exc:
+        raise HTTPException(status_code=503, detail="Execution tool receipts unavailable") from exc
+    if evidence is None or evidence.get("run_id") != run_id:
+        raise HTTPException(status_code=404, detail="Execution tool receipts not found")
     return evidence
 
 
