@@ -482,3 +482,186 @@ async def test_real_folder_search_literal_owner_scope_and_keyset(monkeypatch):
                     await conn.close()
         finally:
             await engine.dispose()
+
+async def _insert_depth_chain(conn, tenant, owner, folders):
+    parent = None
+    for folder in folders:
+        await conn.execute(
+            "INSERT INTO public.artifact_folders "
+            "(folder_id,tenant_id,owner_user_id,parent_folder_id,name) "
+            "VALUES ($1,$2,$3,$4,'Depth fixture')",
+            folder, tenant, owner, parent,
+        )
+        parent = folder
+
+
+async def test_hierarchy_depth_boundary_and_subtree_move(monkeypatch):
+    """The database guard and real breadcrumb reader agree at the boundary."""
+    from types import SimpleNamespace
+
+    from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+    from ai_karen_engine.persistence.postgres import transactions
+    from ai_karen_engine.services.database.repositories.supabase_artifact_store import (
+        SupabaseArtifactStore,
+    )
+
+    tenant = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"])
+    owner = UUID(os.environ["KAREN_TEST_ARTIFACT_OWNER_ID"])
+    chain = [uuid4() for _ in range(64)]
+    root, child, rejected_id = uuid4(), uuid4(), uuid4()
+    rejected_name = rejected_id.hex
+    engine = create_async_engine(make_url(_dsn()).set(drivername="postgresql+asyncpg"))
+    sessions = async_sessionmaker(engine, expire_on_commit=False)
+    monkeypatch.setattr(
+        transactions, "get_postgres_engine",
+        lambda: SimpleNamespace(async_session_factory=sessions),
+    )
+    store = SupabaseArtifactStore(
+        sessions, None, hierarchy_transaction=transactions.async_transaction_scope,
+    )
+    conn = None
+    try:
+        conn = await asyncpg.connect(_dsn())
+        async with conn.transaction():
+            await _insert_depth_chain(conn, tenant, owner, chain)
+            await _insert_depth_chain(conn, tenant, owner, [root, child])
+        principal = (str(tenant), str(owner))
+        boundary = await store.resolve_owner_breadcrumbs(*principal, str(chain[-1]))
+        assert boundary.success
+        assert [f.folder_id for f in boundary.data] == [str(f) for f in chain]
+
+        # A raw SQL writer cannot bypass the invariant.
+        with pytest.raises(asyncpg.CheckViolationError, match="artifact_folder_depth_exceeded"):
+            await conn.execute(
+                "INSERT INTO public.artifact_folders "
+                "(folder_id,tenant_id,owner_user_id,parent_folder_id,name) "
+                "VALUES ($1,$2,$3,$4,$5)",
+                rejected_id, tenant, owner, chain[-1], rejected_name,
+            )
+        rejected = await store.create_owner_folder(
+            *principal, name=rejected_name, parent_folder_id=str(chain[-1]),
+        )
+        assert not rejected.success
+        assert rejected.error == "artifact_folder_conflict_or_unavailable"
+
+        # The moved root would fit at 64, but its child would not.
+        rejected_move = await store.move_owner_folder(
+            *principal, str(root), parent_folder_id=str(chain[62]), expected_revision=1,
+        )
+        assert not rejected_move.success
+        assert rejected_move.error == "artifact_folder_conflict_or_unavailable"
+        original = await conn.fetchrow(
+            "SELECT parent_folder_id,revision FROM public.artifact_folders WHERE folder_id=$1",
+            root,
+        )
+        assert original["parent_folder_id"] is None and original["revision"] == 1
+        assert not await conn.fetchval(
+            "SELECT EXISTS(SELECT 1 FROM public.artifact_folders "
+            "WHERE tenant_id=$1 AND owner_user_id=$2 AND name=$3)",
+            tenant, owner, rejected_name,
+        )
+
+        # Exactly 64 levels remains navigable, with untouched child revision.
+        moved = await store.move_owner_folder(
+            *principal, str(root), parent_folder_id=str(chain[61]), expected_revision=1,
+        )
+        assert moved.success and moved.data == 2
+        breadcrumbs = await store.resolve_owner_breadcrumbs(*principal, str(child))
+        assert breadcrumbs.success
+        assert [f.folder_id for f in breadcrumbs.data] == [
+            str(f) for f in [*chain[:62], root, child]
+        ]
+        assert breadcrumbs.data[-1].revision == 1
+        moved_to_root = await store.move_owner_folder(
+            *principal, str(root), parent_folder_id=None, expected_revision=2,
+        )
+        assert moved_to_root.success and moved_to_root.data == 3
+        restored = await store.resolve_owner_breadcrumbs(*principal, str(child))
+        assert restored.success
+        assert [f.folder_id for f in restored.data] == [str(root), str(child)]
+    finally:
+        try:
+            if conn is not None:
+                try:
+                    await conn.execute(
+                        "DELETE FROM public.artifact_folders WHERE folder_id=ANY($1::uuid[]) "
+                        "OR (tenant_id=$2 AND owner_user_id=$3 AND name=$4)",
+                        [*chain, root, child, rejected_id], tenant, owner, rejected_name,
+                    )
+                finally:
+                    await conn.close()
+        finally:
+            await engine.dispose()
+
+
+@pytest.mark.parametrize("isolation", ["read_committed", "repeatable_read"])
+async def test_concurrent_folder_moves_cannot_exceed_depth(isolation):
+    """Two individually valid moves must not combine into an invalid hierarchy."""
+    tenant = UUID(os.environ["KAREN_TEST_ARTIFACT_TENANT_ID"])
+    owner = UUID(os.environ["KAREN_TEST_ARTIFACT_OWNER_ID"])
+    chain = [uuid4() for _ in range(62)]
+    root, child, incoming = uuid4(), uuid4(), uuid4()
+    first = await asyncpg.connect(_dsn())
+    second = None
+    pending = None
+    try:
+        second = await asyncpg.connect(_dsn())
+        for conn in (first, second):
+            await conn.execute("SET lock_timeout = '5s'")
+            await conn.execute("SET statement_timeout = '10s'")
+        async with first.transaction():
+            await _insert_depth_chain(first, tenant, owner, chain)
+            await _insert_depth_chain(first, tenant, owner, [root, child])
+            await _insert_depth_chain(first, tenant, owner, [incoming])
+        async with second.transaction(isolation=isolation):
+            assert await second.fetchval(
+                "SELECT revision FROM public.artifact_folders WHERE folder_id=$1", incoming,
+            ) == 1
+            async with first.transaction(isolation=isolation):
+                assert await first.fetchval(_MOVE, tenant, owner, root, chain[-1], 1) == 2
+
+                async def competing_move():
+                    try:
+                        async with second.transaction():
+                            await second.fetchval(_MOVE, tenant, owner, incoming, child, 1)
+                    except asyncpg.CheckViolationError as exc:
+                        assert "artifact_folder_depth_exceeded" in str(exc)
+                        return
+                    except asyncpg.SerializationError:
+                        assert isolation == "repeatable_read"
+                        return
+                    pytest.fail("Concurrent move exceeded the hierarchy depth")
+
+                pending = asyncio.create_task(competing_move())
+                for _ in range(100):
+                    if await first.fetchval(
+                        "SELECT cardinality(pg_blocking_pids($1)) > 0", second.get_server_pid(),
+                    ):
+                        break
+                    if pending.done():
+                        pytest.fail("Competing move completed before fence release")
+                    await asyncio.sleep(0.02)
+                else:
+                    pytest.fail("Competing move never contended")
+            await asyncio.wait_for(pending, timeout=12)
+        rows = await first.fetch(
+            "SELECT folder_id,parent_folder_id,revision FROM public.artifact_folders "
+            "WHERE folder_id IN ($1,$2,$3)", root, child, incoming,
+        )
+        assert {row["folder_id"]: (row["parent_folder_id"], row["revision"]) for row in rows} == {
+            root: (chain[-1], 2), child: (root, 1), incoming: (None, 1),
+        }
+    finally:
+        if pending is not None and not pending.done():
+            pending.cancel()
+            await asyncio.gather(pending, return_exceptions=True)
+        if second is not None:
+            await second.close()
+        try:
+            await first.execute(
+                "DELETE FROM public.artifact_folders WHERE folder_id=ANY($1::uuid[])",
+                [*chain, root, child, incoming],
+            )
+        finally:
+            await first.close()

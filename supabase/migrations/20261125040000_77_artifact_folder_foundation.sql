@@ -45,6 +45,12 @@ CREATE FUNCTION public.guard_artifact_folder_identity() RETURNS trigger
 LANGUAGE plpgsql SECURITY INVOKER SET search_path = pg_catalog, public AS $$
 DECLARE
     cycle_found BOOLEAN;
+    parent_root_found BOOLEAN;
+    parent_depth BIGINT := 0;
+    subtree_too_deep BOOLEAN;
+    -- Root is depth one; keep this storage invariant aligned with the
+    -- bounded breadcrumb reader in SupabaseArtifactStore.
+    max_depth CONSTANT INTEGER := 64;
 BEGIN
     IF TG_OP = 'UPDATE' THEN
         IF ROW(NEW.folder_id, NEW.tenant_id, NEW.owner_user_id, NEW.created_at)
@@ -62,6 +68,12 @@ BEGIN
         NEW.updated_at := clock_timestamp();
     ELSIF NEW.revision <> 1 THEN
         RAISE EXCEPTION 'artifact_folder_initial_revision_invalid' USING ERRCODE = '23514';
+    END IF;
+
+    -- Depth proof requires the entire owner hierarchy, not an RLS-filtered
+    -- view. The existing repository admits only this trusted server scope.
+    IF row_security_active('public.artifact_folders'::regclass) THEN
+        RAISE EXCEPTION 'artifact_folder_hierarchy_scope_unavailable' USING ERRCODE = '42501';
     END IF;
 
     INSERT INTO public.artifact_folder_mutation_fences AS fence (tenant_id, owner_user_id)
@@ -86,9 +98,35 @@ BEGIN
             JOIN ancestry a ON f.folder_id = a.parent_folder_id
             WHERE f.tenant_id = NEW.tenant_id AND f.owner_user_id = NEW.owner_user_id
         )
-        SELECT EXISTS (SELECT 1 FROM ancestry WHERE folder_id = NEW.folder_id) INTO cycle_found;
-        IF cycle_found THEN
+        SELECT COALESCE(bool_or(folder_id = NEW.folder_id), FALSE),
+               count(*), COALESCE(bool_or(parent_folder_id IS NULL), FALSE)
+        INTO cycle_found, parent_depth, parent_root_found
+        FROM ancestry;
+        IF cycle_found OR NOT parent_root_found THEN
             RAISE EXCEPTION 'artifact_folder_cycle' USING ERRCODE = '23514';
+        END IF;
+        IF parent_depth >= max_depth THEN
+            RAISE EXCEPTION 'artifact_folder_depth_exceeded' USING ERRCODE = '23514';
+        END IF;
+    END IF;
+
+    -- Creation has no descendants. A move must also fit its deepest
+    -- descendant, including when moved to root. Read after the owner fence
+    -- so concurrent create/move operations cannot validate stale topology.
+    IF TG_OP = 'UPDATE' AND NEW.parent_folder_id IS DISTINCT FROM OLD.parent_folder_id THEN
+        WITH RECURSIVE descendants(folder_id, depth) AS (
+            SELECT NEW.folder_id, 1
+            UNION ALL
+            SELECT f.folder_id, d.depth + 1
+            FROM public.artifact_folders f
+            JOIN descendants d ON f.parent_folder_id = d.folder_id
+            WHERE f.tenant_id = NEW.tenant_id AND f.owner_user_id = NEW.owner_user_id
+              AND d.depth <= max_depth - parent_depth
+        )
+        SELECT EXISTS (SELECT 1 FROM descendants WHERE depth > max_depth - parent_depth)
+        INTO subtree_too_deep;
+        IF subtree_too_deep THEN
+            RAISE EXCEPTION 'artifact_folder_depth_exceeded' USING ERRCODE = '23514';
         END IF;
     END IF;
     RETURN NEW;

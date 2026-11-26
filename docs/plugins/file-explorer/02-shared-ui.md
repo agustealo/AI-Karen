@@ -107,7 +107,12 @@ consumer still reauthorizes the selected content revision.
 
 Organization controls use backend capability preflight, explicit confirmation,
 and independent organization revisions; mutations require fresh authorization
-and matching receipts. The shared component has no direct IO or local storage.
+and matching receipts. The folder hierarchy supports at most 64 levels
+(root folder = level one). The existing database identity trigger enforces
+the limit after acquiring the owner mutation fence, including descendants of
+a moved subtree. Rejected mutations leave organization revisions unchanged
+and use the existing conflict response; they never report successful saves.
+The shared component has no direct IO or local storage.
 Canonical and materialized sources remain identical. Source regression tests
 are not substitutes for authenticated browser acceptance or release certification.
 
