@@ -1,10 +1,11 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import apiClient, { ApiError } from './api';
+import apiClient, { ApiError, captureApiPrincipalScope } from './api';
+import { authService } from '@/lib/auth';
 
 vi.mock('@/lib/auth', () => ({
-  authService: { clearAuth: vi.fn() },
+  authService: { clearAuth: vi.fn(), getCurrentUser: vi.fn(), getAuthenticationRevision: vi.fn() },
 }));
 vi.mock('@/lib/auth-events', () => ({
   dispatchAuthInvalidated: vi.fn(),
@@ -239,5 +240,39 @@ describe('single-attempt authenticated mutations', () => {
 
     await expect(apiClient.get('/api/health')).resolves.toEqual({ status: 'ok' });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("principal-fenced API requests", () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
+  it("does not dispatch a mutation after authentication changes during asynchronous header resolution", async () => {
+    const identity = { tenant_id: "tenant", user_id: "owner" } as ReturnType<typeof authService.getCurrentUser>;
+    vi.mocked(authService.getCurrentUser).mockReturnValue(identity);
+    vi.mocked(authService.getAuthenticationRevision).mockReturnValue(1);
+    const scope = captureApiPrincipalScope("tenant", "owner");
+    expect(scope).not.toBeNull();
+    let release!: (headers: Record<string, string>) => void;
+    const pending = new Promise<Record<string, string>>(resolve => { release = resolve; });
+    const internals = apiClient as unknown as { getAuthHeaders: () => Promise<Record<string, string>> };
+    vi.spyOn(internals, "getAuthHeaders").mockReturnValue(pending);
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    const request = apiClient.patch("/api/communications-center/inbox/example", { operation: "read" }, {}, scope!);
+    vi.mocked(authService.getAuthenticationRevision).mockReturnValue(2);
+    release({ Authorization: "Bearer test-token" });
+    await expect(request).rejects.toThrow("Authenticated request scope changed");
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+  it("discards a delayed response after the current account changes", async () => {
+    vi.mocked(authService.getCurrentUser).mockReturnValue({ tenant_id: "tenant", user_id: "owner" } as ReturnType<typeof authService.getCurrentUser>);
+    vi.mocked(authService.getAuthenticationRevision).mockReturnValue(1);
+    const scope = captureApiPrincipalScope("tenant", "owner")!;
+    let release!: (response: Response) => void;
+    vi.stubGlobal("fetch", vi.fn().mockImplementation(() => new Promise<Response>(resolve => { release = resolve; })));
+    const request = apiClient.get("/api/communications-center/inbox", scope);
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
+    vi.mocked(authService.getCurrentUser).mockReturnValue({ tenant_id: "other", user_id: "other" } as ReturnType<typeof authService.getCurrentUser>);
+    release(new Response(JSON.stringify({ entries: [] }), { status: 200 }));
+    await expect(request).rejects.toThrow("Authenticated request scope changed");
   });
 });

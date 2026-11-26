@@ -135,6 +135,9 @@ jobs:
       - name: Voice Runtime STT and engine-neutral synthesis contracts
         run: pytest tests/core/voice -q
 
+      - name: Legacy event queue tenant isolation and atomic removal
+        run: pytest tests/unit/test_event_bus_isolation.py -q
+
       - name: Verify authentication and training route imports
         run: |
           python -m py_compile src/ai_karen_engine/auth/models.py src/ai_karen_engine/auth/rbac_middleware.py src/ai_karen_engine/auth/session.py src/ai_karen_engine/api_routes/admin/training.py

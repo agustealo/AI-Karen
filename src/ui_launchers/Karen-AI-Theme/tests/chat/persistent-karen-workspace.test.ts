@@ -12,6 +12,8 @@ describe("persistent Karen workspace shell", () => {
     expect(source).toContain("<SidebarProvider>");
     expect(source).toContain("<SessionProvider storagePrincipal={{");
     expect(source).toContain("<RuntimeApprovalProvider>{children}</RuntimeApprovalProvider>");
+    expect(source).toContain("<PersonalCommunicationsInboxProvider tenantId={user.tenant_id} userId={user.user_id}>");
+    expect(source.indexOf("<PersonalCommunicationsInboxProvider")).toBeLessThan(source.indexOf("<RuntimeApprovalProvider>"));
     expect(source).toContain("tenant_id: user.tenant_id");
     expect(source).toContain("user_id: user.user_id");
     expect(source).toContain("</SidebarProvider>");

@@ -19,6 +19,7 @@ vi.mock("@/lib/api", () => ({
 import AgentsPage, { isAgentRunRecord, isAgentRunsResponse, isRuntimeApproval, isRunTransitionsResponse, isRunParticipationResponse } from "@/components/automation/AgentsPage";
 
 import { RuntimeApprovalProvider } from "@/components/approvals/RuntimeApprovalProvider";
+import { isRunToolReceiptsResponse } from "@/lib/governed-tool-receipts";
 
 const render = (ui: React.ReactElement) => renderWithTestingLibrary(ui, { wrapper: RuntimeApprovalProvider });
 
@@ -792,5 +793,145 @@ describe("ARM-05C recorded specialist participation", () => {
     await act(async () => { pending.resolve(evidence); });
     expect(screen.queryByText("researcher · Invocation interrupted")).toBeNull();
     expect(screen.queryByRole("region", { name: "Recorded specialist participation" })).toBeNull();
+  });
+});
+
+
+describe("ARM-05C.8D recorded governed tool evidence", () => {
+  const endpoint = "/api/agent-runtime/my-runs/" + run.run_id + "/tool-receipts";
+  const makeRow = (index: number) => {
+    const tool_call_id = "00000000-0000-4000-8000-" + index.toString(16).padStart(12, "0");
+    return {
+      tool_call_id, receipt_id: "out_tool_" + tool_call_id.replace(/-/g, ""),
+      tool_name: "web_search", tool_version: "1", agent_id: "researcher",
+      step_id: "step-a", policy_decision_id: "policy-a", success: true,
+      error_type: null, result_sha256: "a".repeat(64), recorded_at: "2026-11-26T00:00:00.123456+00:00",
+      execution_scope: "tool_runtime_acknowledgment", independently_verified: false,
+    };
+  };
+  const row = makeRow(1);
+  const failure = { ...makeRow(2), tool_name: "lookup", success: false, error_type: "Timeout", result_sha256: null };
+  const evidence = { run_id: run.run_id, evidence_status: "recorded", receipts: [row, failure],
+    window_limit_reached: false, response_source: "postgres_outcome_records" };
+  const empty = { ...evidence, evidence_status: "empty", receipts: [] };
+  const full = { ...evidence, receipts: Array.from({ length: 100 }, (_, index) => makeRow(index + 1)),
+    window_limit_reached: true };
+
+  function install(read: () => Promise<unknown>) {
+    const fallback = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((path: string) => {
+      if (path === "/api/agent-runtime/my-runs" || path === "/api/admin/agents/runs?include_terminal=true") return Promise.resolve(history([run]));
+      if (path === endpoint) return read();
+      if (path.endsWith("/" + run.run_id)) return Promise.resolve(run);
+      return fallback(path);
+    });
+  }
+
+  it("admits only exact bounded owner-run acknowledgment contracts", () => {
+    for (const valid of [evidence, empty, full]) expect(isRunToolReceiptsResponse(valid)).toBe(true);
+    for (const invalid of [
+      { ...evidence, payload: "private" }, { ...evidence, response_source: "worker" },
+      { ...evidence, evidence_status: "empty" }, { ...empty, window_limit_reached: true },
+      { ...full, window_limit_reached: false }, { ...full, receipts: [...full.receipts, makeRow(101)] },
+      { ...evidence, receipts: [row, row] }, { ...evidence, receipts: [{ ...row, payload: "private" }] },
+      { ...evidence, receipts: [{ ...row, receipt_id: "foreign" }] },
+      { ...evidence, receipts: [{ ...row, tool_call_id: row.tool_call_id + "\n" }] },
+      { ...evidence, receipts: [{ ...row, agent_id: null }] },
+      { ...evidence, receipts: [{ ...row, success: "true" }] },
+      { ...evidence, receipts: [{ ...row, error_type: "contradiction" }] },
+      { ...evidence, receipts: [{ ...row, independently_verified: true }] },
+      { ...evidence, receipts: [{ ...row, result_sha256: "x".repeat(64) }] },
+      { ...evidence, receipts: [{ ...row, recorded_at: "2026-11-26T00:00:00" }] },
+      { ...evidence, receipts: [{ ...row, recorded_at: row.recorded_at + "\n" }] },
+      { ...evidence, receipts: [{ ...row, recorded_at: "2026-02-30T12:00:00Z" }] },
+      { ...evidence, receipts: [{ ...row, recorded_at: "2026-01-01T24:00:00Z" }] },
+      { ...evidence, receipts: [{ ...row, recorded_at: "0000-01-01T00:00:00Z" }] },
+    ]) expect(isRunToolReceiptsResponse(invalid)).toBe(false);
+  });
+
+  it("renders actual success and failure acknowledgments without claiming external success", async () => {
+    install(async () => evidence);
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("web_search: Runtime acknowledged success");
+    expect(screen.getByText("lookup: Runtime reported failure")).toBeTruthy();
+    expect(screen.getByText("Error: Timeout")).toBeTruthy();
+    expect(screen.getByText(/not independently confirmed external outcomes/)).toBeTruthy();
+    expect(screen.getByText(/Result digest:/)).toBeTruthy();
+    expect(mocks.get).toHaveBeenCalledWith(endpoint);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it("labels a saturated bounded window without claiming complete evidence", async () => {
+    install(async () => full);
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Receipt window limit reached; additional receipts may exist.");
+    expect(screen.getAllByText("web_search: Runtime acknowledged success")).toHaveLength(100);
+  });
+
+  it("distinguishes empty, mismatched and failed evidence reads and removes stale receipts on refresh", async () => {
+    let reads = 0;
+    install(async () => {
+      reads++;
+      if (reads === 1) return evidence;
+      if (reads === 2) throw new Error("private database diagnostic");
+      if (reads === 3) return { ...evidence, run_id: "foreign" };
+      return empty;
+    });
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("web_search: Runtime acknowledged success");
+    const refresh = async () => {
+      const button = screen.getByRole("button", { name: "Refresh runtime" }) as HTMLButtonElement;
+      await waitFor(() => expect(button.disabled).toBe(false));
+      fireEvent.click(button);
+    };
+    for (let index = 2; index <= 3; index++) {
+      await refresh();
+      await waitFor(() => expect(reads).toBe(index));
+      await screen.findByText("Governed tool evidence is unavailable. Refresh runtime to retry.");
+      expect(screen.queryByText("private database diagnostic")).toBeNull();
+      expect(screen.queryByText("web_search: Runtime acknowledged success")).toBeNull();
+      expect(screen.queryByText(/No durable governed tool receipts were recorded/)).toBeNull();
+    }
+    await refresh();
+    await screen.findByText(/No durable governed tool receipts were recorded/);
+    expect(screen.queryByText(/Governed tool evidence is unavailable/)).toBeNull();
+  });
+
+  it("ignores delayed evidence from a prior refresh", async () => {
+    const stale = deferred<unknown>();
+    let reads = 0;
+    install(() => ++reads === 1 ? stale.promise : Promise.resolve(empty));
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Loading governed tool receipts…");
+    const refresh = screen.getByRole("button", { name: "Refresh runtime" }) as HTMLButtonElement;
+    await waitFor(() => expect(refresh.disabled).toBe(false));
+    fireEvent.click(refresh);
+    await screen.findByText(/No durable governed tool receipts were recorded/);
+    await act(async () => { stale.resolve(evidence); });
+    expect(screen.queryByText("web_search: Runtime acknowledged success")).toBeNull();
+    expect(screen.getByText(/No durable governed tool receipts were recorded/)).toBeTruthy();
+  });
+
+  it("discards delayed prior-principal evidence and never queries tenant administration", async () => {
+    const pending = deferred<unknown>();
+    install(() => pending.promise);
+    const view = render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Loading governed tool receipts…");
+    mocks.user = { tenant_id: "tenant-B", user_id: "user-B", roles: ["admin"] };
+    view.rerender(<AgentsPage />);
+    await act(async () => { pending.resolve(evidence); });
+    expect(screen.queryByText("web_search: Runtime acknowledged success")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Recorded governed tool receipts" })).toBeNull();
+    mocks.get.mockClear();
+    fireEvent.click(screen.getByRole("button", { name: "Tenant administration" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Reported task outcome");
+    expect(mocks.get).not.toHaveBeenCalledWith(endpoint);
+    expect(screen.queryByRole("region", { name: "Recorded governed tool receipts" })).toBeNull();
   });
 });
