@@ -13,6 +13,7 @@ import json
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import asyncpg
@@ -24,6 +25,7 @@ from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
 )
 from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
     DurableRunLedgerConflict,
+    DurableRunLedgerUnavailable,
     PostgresDurableRunLedger,
 )
 from ai_karen_engine.agent_medusa.execution.run_manager import (
@@ -100,12 +102,33 @@ async def _run_acceptance() -> None:
         ),
         durable_ledger=ledger,
     )
+    class LostAcknowledgementLedger(PostgresDurableRunLedger):
+        """Inject transport failure before or after a genuine SQL commit."""
+
+        commit_before_failure = False
+
+        async def mark_cancelling(self, **kwargs: Any) -> None:
+            if self.commit_before_failure:
+                await super().mark_cancelling(**kwargs)
+            raise DurableRunLedgerUnavailable("injected lost cancellation acknowledgement")
+
+    class ObservedRemoteStore(RedisDistributedRunStore):
+        cancel_publications = 0
+
+        async def request_cancel(
+            self, *, run_id: str, tenant_id: str
+        ) -> dict[str, Any]:
+            self.cancel_publications += 1
+            return await super().request_cancel(run_id=run_id, tenant_id=tenant_id)
+
+    remote_ledger = LostAcknowledgementLedger(postgres=postgres)
+    remote_store = ObservedRemoteStore(
+        settings=remote_settings, redis_manager=redis
+    )
     remote = MedusaRunManager(
         settings=remote_settings,
-        distributed_store=RedisDistributedRunStore(
-            settings=remote_settings, redis_manager=redis
-        ),
-        durable_ledger=ledger,
+        distributed_store=remote_store,
+        durable_ledger=remote_ledger,
     )
     started = asyncio.Event()
     cancelled = asyncio.Event()
@@ -163,24 +186,33 @@ async def _run_acceptance() -> None:
         with pytest.raises(RunTenantMismatchError):
             await remote.cancel(run_id=run_id, tenant_id=tenant_b)
 
-        # Simulate an already committed remote durable request whose Redis
-        # publication was lost. These are genuine SQL and Redis operations,
-        # not mocks of their persistence protocols.
-        await ledger.mark_cancelling(
-            run_id=run_id,
-            tenant_id=tenant_a,
-            requested_at=datetime.now(timezone.utc),
-            audit_event_ref=audit_ref,
-            source="admin_cancel",
-        )
+        # Drive both failure modes through the actual remote cancellation
+        # manager. Only the acknowledgement boundary is fault-injected.
+        with pytest.raises(DurableRunLedgerUnavailable):
+            await remote.cancel(
+                run_id=run_id, tenant_id=tenant_a, audit_event_ref=audit_ref
+            )
+        before_commit = await ledger.get(run_id=run_id, tenant_id=tenant_a)
+        assert before_commit is not None and before_commit["status"] == "running"
+        assert before_commit["audit_event_ref"] is None
+        assert (await remote_store.get(run_id=run_id, tenant_id=tenant_a))[
+            "status"
+        ] == "running"
+        assert remote_store.cancel_publications == 0
+        assert not task.cancelling() and not cancelled.is_set()
+
+        # The exact same reported error after a real SQL commit must not
+        # fabricate requester success or publish a remote Redis signal.
+        remote_ledger.commit_before_failure = True
+        with pytest.raises(DurableRunLedgerUnavailable):
+            await remote.cancel(
+                run_id=run_id, tenant_id=tenant_a, audit_event_ref=audit_ref
+            )
         pending = await ledger.get(run_id=run_id, tenant_id=tenant_a)
         assert pending is not None
         assert pending["status"] == "cancellation_requested"
         assert pending["audit_event_ref"] == audit_ref
-        shared_before = await owner._distributed_store.get(
-            run_id=run_id, tenant_id=tenant_a
-        )
-        assert shared_before["status"] == "running"
+        assert remote_store.cancel_publications == 0
 
         # Recover the lost Redis signal and observe real task interruption,
         # but deliberately hold cleanup beyond the original claim lifetime.

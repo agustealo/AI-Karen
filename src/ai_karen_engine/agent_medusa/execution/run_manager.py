@@ -804,7 +804,8 @@ class MedusaRunManager:
                         not run.shared_registered
                         or self._runs.get(run.run_id) is not run
                         or run.task.done()
-                        or run.status not in {
+                        or run.status
+                        not in {
                             ExecutionRunStatus.RUNNING,
                             ExecutionRunStatus.CANCELLING,
                         }
