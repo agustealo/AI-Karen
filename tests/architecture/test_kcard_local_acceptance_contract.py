@@ -164,6 +164,12 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     assert not inside.exists() and calls == []
     monkeypatch.setattr(sys, "argv", ["-", str(env_file), sha, database, str(output)])
 
+    output.symlink_to(tmp_path / "missing-state", target_is_directory=True)
+    with pytest.raises(SystemExit, match="outside the checkout"):
+        exec(code, {})
+    assert not calls and not (tmp_path / "missing-state").exists()
+    output.unlink()
+
     (checkout / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=invalid\x00secret\n")
     with pytest.raises(SystemExit, match="invalid acceptance configuration"):
         exec(code, {})
@@ -173,6 +179,11 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     migration = checkout / "supabase" / "migrations" / "001.sql"
     migration.unlink()
     with pytest.raises(SystemExit, match="migration inventory is empty"):
+        exec(code, {})
+    assert not output.exists() and not any("createdb" in args for args in calls)
+    calls.clear()
+    migration.write_bytes(b"\xff")
+    with pytest.raises(SystemExit, match="migrations could not be read"):
         exec(code, {})
     assert not output.exists() and not any("createdb" in args for args in calls)
     migration.write_text("SELECT 1;")
