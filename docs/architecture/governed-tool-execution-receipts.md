@@ -131,3 +131,7 @@ registry is introduced.
 Those require governed provider-specific reconciliation/verification
 contracts built on this receipt and the authoritative external state.
 Task `Success` still requires creator approval.
+
+## ARM-05C.8A: ordinary Medusa run evidence (source candidate)
+
+`GET /api/agent-runtime/my-runs/{run_id}/tool-receipts` uses the same verified active principal and durable run ownership/correlation lookup as specialist participation. The existing outcome query adds the backend-derived correlation before applying its limit. A saturated 100-row window is explicitly marked `window_limit_reached`, not asserted exhaustive. The saved-task projection is reused; no new store, tool invocation, approval, or model authority is created. Correlated evidence cannot use the in-memory store. Invalid evidence or storage unavailability fails closed, not as empty. The existing real PostgreSQL proof exercises canonical recorder writes and correlation/owner/tenant filtering before limits; these are controlled test observations, not proof of live tool execution. Browser acceptance must still establish fresh ordinary-prompt execution and linked provider evidence on an approved installation.

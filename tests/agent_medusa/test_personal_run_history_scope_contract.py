@@ -85,3 +85,69 @@ async def test_participation_control_plane_checks_owner_before_read(monkeypatch,
     manager.get.assert_awaited_once_with(
         run_id="run", tenant_id="tenant", require_durable_history=True, user_id="owner",
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["owned", "empty", "foreign_user", "foreign_tenant", "wrong_run", "bad_correlation", "bad_request", "missing", "outage", "saturated"])
+async def test_governed_tool_receipt_control_plane_requires_durable_exact_run(monkeypatch, mode):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.agent_medusa import control_plane as module
+    from ai_karen_engine.agent_medusa.execution.run_manager import RunNotFoundError
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    run = {"run_id": "run", "request_id": "run", "tenant_id": "tenant",
+           "user_id": "owner", "correlation_id": "corr", "status": "completed"}
+    changes = {
+        "foreign_user": {"user_id": "other"}, "foreign_tenant": {"tenant_id": "other"},
+        "wrong_run": {"run_id": "other"}, "bad_correlation": {"correlation_id": None},
+        "bad_request": {"request_id": "other"},
+    }
+    run.update(changes.get(mode, {}))
+    manager = SimpleNamespace(get=AsyncMock(return_value=run))
+    if mode == "missing":
+        manager.get.side_effect = RunNotFoundError("run")
+    receipt = {"outcome_id": "receipt", "tool_success": True, "status": "success",
+               "metadata": {"tool_name": "read_only", "tool_call_id": "call", "agent_id": "researcher",
+                            "step_id": "step", "policy_decision_id": "policy", "private": "never-export"},
+               "private": "never-export"}
+    events = [] if mode == "empty" else [receipt]
+    if mode == "saturated":
+        events = [{**receipt, "outcome_id": f"receipt-{i}"} for i in range(100)]
+    reader = AsyncMock(return_value=events)
+    if mode == "outage":
+        reader.side_effect = OutcomeStoreError("private database diagnostic")
+    monkeypatch.setattr(module, "get_outcome_store", lambda: SimpleNamespace(list_governed_tool_receipts_async=reader))
+    plane = module.AgentMedusaControlPlane(
+        run_manager=manager, registry=SimpleNamespace(), audit_logger=SimpleNamespace(),
+    )
+    kwargs = dict(run_id="run", tenant_id="tenant", user_id="owner")
+    if mode in {"bad_correlation", "bad_request", "outage"}:
+        with pytest.raises(OutcomeStoreError):
+            await plane.read_run_tool_receipts(**kwargs)
+    else:
+        result = await plane.read_run_tool_receipts(**kwargs)
+        if mode in {"owned", "empty", "saturated"}:
+            assert result["run_id"] == "run"
+            assert result["evidence_status"] == ("empty" if mode == "empty" else "recorded")
+            assert result["window_limit_reached"] is (mode == "saturated")
+            if mode == "owned":
+                assert result["receipts"][0]["success"] is True
+                assert result["receipts"][0]["independently_verified"] is False
+                assert result["receipts"][0]["tool_name"] == "read_only"
+                assert "never-export" not in str(result)
+            elif mode == "empty":
+                assert result["receipts"] == []
+            else:
+                assert len(result["receipts"]) == 100
+        else:
+            assert result is None
+    manager.get.assert_awaited_once_with(
+        run_id="run", tenant_id="tenant", require_durable_history=True, user_id="owner",
+    )
+    if mode in {"owned", "empty", "outage", "saturated"}:
+        reader.assert_awaited_once_with(
+            trajectory_id="run", correlation_id="corr", tenant_id="tenant", user_id="owner", limit=100,
+        )
+    else:
+        reader.assert_not_awaited()
