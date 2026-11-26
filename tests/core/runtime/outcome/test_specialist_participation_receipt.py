@@ -195,3 +195,81 @@ async def test_memory_store_cannot_acknowledge_specialist_receipt():
     with pytest.raises(OutcomeStoreError, match="requires durable persistence"):
         await store.save_unique_outcome_async(payload)
     assert store.get_for_trajectory("run-a") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode", ["empty", "recorded", "truncated", "foreign", "bad_phase", "duplicate", "outage"]
+)
+async def test_specialist_participation_read_is_scoped_and_validated(monkeypatch, mode):
+    from contextlib import asynccontextmanager
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ai_karen_engine.core.runtime.outcome import store as module
+
+    original = receipt()
+    newer = replace(original, phase=SpecialistParticipationPhase.COMPLETED)
+    payload = original.to_evidence_payload()
+    rows = [{"outcome_id": payload["outcome_id"], "payload": payload}]
+    if mode == "empty":
+        rows = []
+    elif mode == "truncated":
+        latest = newer.to_evidence_payload()
+        rows.insert(0, {"outcome_id": latest["outcome_id"], "payload": latest})
+    elif mode == "foreign":
+        foreign = replace(original, user_id="other-owner").to_evidence_payload()
+        rows = [{"outcome_id": foreign["outcome_id"], "payload": foreign}]
+    elif mode == "bad_phase":
+        payload["metadata"]["phase"] = "made-up"
+    elif mode == "duplicate":
+        rows.append(dict(rows[0]))
+    session = SimpleNamespace(
+        execute=AsyncMock(return_value=SimpleNamespace(
+            mappings=lambda: SimpleNamespace(all=lambda: rows)
+        ))
+    )
+    if mode == "outage":
+        session.execute.side_effect = RuntimeError("private database failure")
+
+    @asynccontextmanager
+    async def scope(tenant):
+        assert tenant == original.tenant_id
+        yield session
+
+    monkeypatch.setattr(module, "async_transaction_scope", scope)
+    store = module.PostgresOutcomeStore()
+    kwargs = dict(
+        trajectory_id=original.trajectory_id, correlation_id=original.correlation_id,
+        tenant_id=original.tenant_id, user_id=original.user_id, limit=1,
+    )
+    if mode in {"foreign", "bad_phase", "duplicate", "outage"}:
+        with pytest.raises(module.OutcomeStoreError):
+            await store.list_specialist_participation_async(**kwargs)
+    else:
+        result, truncated = await store.list_specialist_participation_async(**kwargs)
+        assert truncated is (mode == "truncated")
+        assert result == (
+            [] if mode == "empty" else
+            [newer.to_evidence_payload()] if mode == "truncated" else
+            [original.to_evidence_payload()]
+        )
+    statement, params = session.execute.await_args.args
+    assert params == {**kwargs, "limit": 2}
+    for predicate in (
+        "tenant_id = CAST(:tenant_id AS uuid)", "user_id = CAST(:user_id AS uuid)",
+        "trajectory_id = :trajectory_id", "correlation_id = :correlation_id",
+        "source = 'runtime.execution'", "agent.specialist.participation",
+        "specialist-participation.v1",
+    ):
+        assert str(statement).index(predicate) < str(statement).index("LIMIT :limit")
+
+
+@pytest.mark.asyncio
+async def test_memory_store_cannot_claim_empty_durable_participation():
+    from ai_karen_engine.core.runtime.outcome.store import InMemoryOutcomeStore, OutcomeStoreError
+
+    with pytest.raises(OutcomeStoreError):
+        await InMemoryOutcomeStore().list_specialist_participation_async(
+            trajectory_id="run", correlation_id="corr", tenant_id="tenant", user_id="owner",
+        )

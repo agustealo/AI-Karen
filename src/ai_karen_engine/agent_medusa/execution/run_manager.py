@@ -547,12 +547,22 @@ class MedusaRunManager:
                 extra={"run_id": run_id, "tenant_id": tenant_id},
             )
 
-    async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
+    async def get(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        require_durable_history: bool = False,
+        user_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Read scoped live ownership or history; strict reads verify remote identity."""
         async with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
                 if run.tenant_id != tenant_id:
                     raise RunTenantMismatchError(run_id)
+                if user_id is not None and run.user_id != user_id:
+                    raise RunNotFoundError(run_id)
                 snapshot = run.snapshot()
                 snapshot["distributed_control"] = await self._distributed_capability(
                     shared_registered=run.shared_registered,
@@ -563,7 +573,7 @@ class MedusaRunManager:
         await self._reconcile_tenant_from_redis(tenant_id)
         if await self._distributed_available():
             try:
-                return await self._distributed_store.get(
+                shared = await self._distributed_store.get(
                     run_id=run_id,
                     tenant_id=tenant_id,
                 )
@@ -573,9 +583,48 @@ class MedusaRunManager:
                 raise RunTenantMismatchError(run_id) from exc
             except DistributedRunStoreUnavailable:
                 pass
+            else:
+                if shared.get("tenant_id") != tenant_id:
+                    raise RunTenantMismatchError(run_id)
+                if user_id is not None and shared.get("user_id") != user_id:
+                    raise RunNotFoundError(run_id)
+                if not require_durable_history:
+                    return shared
+                # Redis owns live coordination, but its snapshot does not
+                # carry the original request ID. Join only exact scoped
+                # identity evidence from the existing PostgreSQL ledger.
+                durable = await self._get_durable(
+                    run_id=run_id, tenant_id=tenant_id, require_available=True
+                )
+                if (
+                    durable is None
+                    or shared.get("run_id") != run_id
+                    or any(
+                        not isinstance(shared.get(key), str)
+                        or not shared[key]
+                        or shared[key] != durable.get(key)
+                        for key in ("run_id", "tenant_id", "user_id", "correlation_id")
+                    )
+                    or not isinstance(durable.get("request_id"), str)
+                    or not durable["request_id"]
+                    or (
+                        "request_id" in shared
+                        and shared["request_id"] != durable["request_id"]
+                    )
+                ):
+                    raise DurableRunLedgerUnavailable(
+                        "medusa_remote_run_identity_unavailable"
+                    )
+                return {**shared, "request_id": durable["request_id"]}
 
-        durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
-        if durable is None:
+        durable = await self._get_durable(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            require_available=require_durable_history,
+        )
+        if durable is None or (
+            user_id is not None and durable.get("user_id") != user_id
+        ):
             raise RunNotFoundError(run_id)
         return durable
 
@@ -819,13 +868,16 @@ class MedusaRunManager:
         *,
         run_id: str,
         tenant_id: str,
+        require_available: bool = False,
     ) -> dict[str, Any] | None:
         if not self._settings.durable_run_ledger_enabled:
+            if require_available:
+                raise DurableRunLedgerUnavailable("medusa_durable_ledger_disabled")
             return None
         try:
             return await self._durable_ledger.get(run_id=run_id, tenant_id=tenant_id)
         except DurableRunLedgerUnavailable:
-            if self._settings.durable_run_ledger_required:
+            if require_available or self._settings.durable_run_ledger_required:
                 raise
             logger.exception(
                 "Medusa durable run lookup unavailable",

@@ -20,9 +20,16 @@ from ai_karen_engine.audit_logging import (
     get_audit_logger,
 )
 
+from ai_karen_engine.core.runtime.outcome.store import (
+    OutcomeStoreError,
+    get_outcome_store,
+)
+
 from .contracts.registration import AgentRegistration
 from .execution.run_manager import (
     MedusaRunManager,
+    RunNotFoundError,
+    RunTenantMismatchError,
     get_medusa_run_manager,
 )
 from .registry import MedusaRegistry, get_medusa_registry
@@ -121,6 +128,64 @@ class AgentMedusaControlPlane:
             tenant_id=tenant_id,
             user_id=user_id,
         )
+
+    async def read_run_participation(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> dict[str, Any] | None:
+        """Project durable specialist evidence after canonical run owner lookup."""
+        if not run_id or not tenant_id or not user_id:
+            return None
+        try:
+            run = await self._run_manager.get(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                require_durable_history=True,
+                user_id=user_id,
+            )
+        except (RunNotFoundError, RunTenantMismatchError):
+            return None
+        if (
+            run.get("run_id") != run_id
+            or run.get("tenant_id") != tenant_id
+            or run.get("user_id") != user_id
+        ):
+            return None
+        correlation_id = run.get("correlation_id")
+        if (
+            run.get("request_id") != run_id
+            or not isinstance(correlation_id, str)
+            or not correlation_id
+        ):
+            raise OutcomeStoreError("Specialist participation run identity unavailable")
+        (
+            receipts,
+            truncated,
+        ) = await get_outcome_store().list_specialist_participation_async(
+            trajectory_id=run_id,
+            correlation_id=correlation_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        return {
+            "run_id": run_id,
+            "evidence_status": "recorded" if receipts else "empty",
+            "receipts": [
+                {
+                    "receipt_id": receipt["outcome_id"],
+                    "step_id": receipt["metadata"]["step_id"],
+                    "specialist_id": receipt["metadata"]["specialist_id"],
+                    "phase": receipt["metadata"]["phase"],
+                    "observed_at": receipt["recorded_at"],
+                }
+                for receipt in receipts
+            ],
+            "truncated": truncated,
+            "response_source": "postgres_outcome_records",
+        }
 
     async def cancel_run(
         self,
