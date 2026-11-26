@@ -7,3 +7,7 @@ class PrivateEvidenceAuthorizationError(ExpressionError):
 
 class ExecutionDeadlineExceeded(EngineUnavailableError):
     """Terminal denial by the original execution duration; never fallback."""
+
+
+class ExecutionAdmissionRejected(EngineUnavailableError):
+    """Terminal local model admission failure; never a provider health failure."""

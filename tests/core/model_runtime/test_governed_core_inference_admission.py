@@ -2314,13 +2314,125 @@ async def test_medusa_final_synthesis_preserves_original_meter_and_provenance(
     assert result.metadata["synthesis"]["source"] == "expression_gateway"
     assert len(attempts) == admission.meter.model_calls == 1
     assert admission.meter.external_requests == 0
-    # The gateway projects a denied model reservation as an unavailable
-    # engine. Verify its public error contract and the actual transport
-    # invariant, rather than assuming an authorization exception type.
-    from ai_karen_engine.core.expression.errors import EngineUnavailableError
+    # A denied reservation is terminal local admission, not a provider error.
+    from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
 
-    with pytest.raises(EngineUnavailableError, match="provider_execution_failed"):
+    with pytest.raises(ExecutionAdmissionRejected, match="budget_exhausted"):
         await assemble(execution)
     assert len(attempts) == 1
     assert admission.meter.model_calls == 1
     assert admission.meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["budget", "deadline_after_reservation", "authorization"])
+async def test_expression_local_admission_denial_never_returns_provider_attempt(
+    monkeypatch, failure,
+):
+    from ai_karen_engine.core.expression.contracts import ExpressionTask
+    from ai_karen_engine.core.expression.errors import (
+        ExecutionAdmissionRejected, ExecutionDeadlineExceeded,
+    )
+    from ai_karen_engine.core.expression.registry import get_engine
+
+    admission = _scope(calls=0 if failure == "budget" else 1)
+    _, _, attempts = _workflow_transport(monkeypatch, admission)
+    engine = get_engine("local", "openai_compatible")
+    if failure == "authorization":
+        admission = replace(admission, tenant_id="foreign-tenant")
+
+    reads = 0
+
+    async def remaining():
+        nonlocal reads
+        reads += 1
+        if failure == "deadline_after_reservation" and reads > 1:
+            return 0
+        return 60000
+
+    task = ExpressionTask(
+        task_id="local-admission", kind="chat",
+        messages=[{"role": "user", "content": "test"}],
+        response_mode="text", required_capabilities=[], forbidden_capabilities=[],
+        preferred_provider="ollama-local", preferred_model="model-a",
+        max_tokens=12, temperature=0.0,
+        execution_admission=admission, remaining_execution_ms=remaining,
+    )
+    expected = {
+        "budget": ExecutionAdmissionRejected,
+        "deadline_after_reservation": ExecutionDeadlineExceeded,
+        "authorization": PermissionError,
+    }[failure]
+    with pytest.raises(expected):
+        await engine.generate(task)
+    assert attempts == []
+    assert admission.meter.model_calls == int(failure == "deadline_after_reservation")
+    assert admission.meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+async def test_workflow_local_budget_denial_does_not_penalize_engine_or_fallback(monkeypatch):
+    from unittest.mock import Mock
+    from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
+    from ai_karen_engine.core.runtime import composition
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope(calls=0)
+    authority, request, attempts = _workflow_transport(
+        monkeypatch, admission, retry_secondary=True,
+    )
+    gateway = composition.get_expression_gateway()
+    failures = Mock(wraps=gateway.circuits.mark_failure)
+    # CircuitBreakers is slotted; replace the instance with a wrapping spy.
+    circuits = Mock(wraps=gateway.circuits)
+    circuits.mark_failure = failures
+    gateway.circuits = circuits
+    with bind_workflow_generation(authority):
+        with pytest.raises(ExecutionAdmissionRejected, match="budget_exhausted"):
+            await WorkflowGenerationRuntime().execute(request)
+    failures.assert_not_called()
+    circuits.mark_success.assert_not_called()
+    assert attempts == []
+    assert admission.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_expression_admitted_deadline_discards_late_transport_result(monkeypatch):
+    from ai_karen_engine.core.expression.contracts import ExpressionTask
+    from ai_karen_engine.core.expression.engines import openai_compatible_engine as module
+    from ai_karen_engine.core.expression.errors import ExecutionDeadlineExceeded
+    from ai_karen_engine.core.expression.registry import get_engine
+
+    admission = _scope(calls=1)
+    _, _, attempts = _workflow_transport(monkeypatch, admission)
+    entered = []
+
+    async def late(endpoint, **kwargs):
+        entered.append(endpoint.provider_id)
+        admission.meter._start_ms -= 61000
+        return ProviderExecutionResult(
+            text="late result", model="model-a", provider_id=endpoint.provider_id,
+            runtime_engine=endpoint.runtime_engine.value,
+        )
+
+    async def remaining():
+        # Leave deadline enforcement to the actual admitted scope, not a
+        # fabricated transport timeout.
+        return 60000
+
+    monkeypatch.setattr(module, "execute_provider_endpoint", late)
+    task = ExpressionTask(
+        task_id="late-result", kind="chat",
+        messages=[{"role": "user", "content": "test"}],
+        response_mode="text", required_capabilities=[], forbidden_capabilities=[],
+        preferred_provider="ollama-local", preferred_model="model-a",
+        max_tokens=12, temperature=0.0,
+        execution_admission=admission, remaining_execution_ms=remaining,
+    )
+    with pytest.raises(ExecutionDeadlineExceeded, match="execution_deadline_exhausted"):
+        await get_engine("local", "openai_compatible").generate(task)
+    assert entered == ["ollama-local"]
+    assert attempts == []
+    assert admission.meter.model_calls == 1

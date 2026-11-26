@@ -7,7 +7,11 @@ from typing import Any
 
 from .base import BaseExpressionEngine
 from ..contracts import ExpressionResult, ExpressionTask
-from ..errors import PrivateEvidenceAuthorizationError
+from ..errors import (
+    ExecutionAdmissionRejected,
+    ExecutionDeadlineExceeded,
+    PrivateEvidenceAuthorizationError,
+)
 from ...model_runtime.provider_execution import (
     execute_provider_endpoint,
     stream_provider_endpoint,
@@ -15,7 +19,11 @@ from ...model_runtime.provider_execution import (
     provider_endpoint_requires_external_permission,
 )
 from ...model_runtime.provider_policy import evaluate_provider_policy
-from ...model_runtime.governed_model_admission import GovernedToolModelAdmission
+from ...model_runtime.governed_model_admission import (
+    GovernedToolModelAdmission,
+    ModelAdmissionBudgetExhausted,
+    ModelAdmissionDeadlineExceeded,
+)
 from ...model_runtime.provider_contracts import NativeRetirementUnverified
 from ...model_runtime.runtime_engine import EndpointKind
 
@@ -115,6 +123,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         # It includes provider setup/queueing and is not an isolated load time.
         provider_first_delta_ms: float | None = None
         await task.require_private_evidence_authorization()
+        transport_entered = False
         try:
             if task.execution_admission is not None:
                 admission = task.execution_admission
@@ -127,6 +136,9 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                 await admission.reserve_transport(endpoint, model=effective_model)
                 async with admission.admitted_execution_deadline():
                     await task.require_remaining_execution_ms()
+                    # Entering the adapter is not proof of network dispatch.
+                    # The transport owner must observe actual I/O separately.
+                    transport_entered = True
                     execution = await execute_provider_endpoint(
                         endpoint, messages=task.messages, model=effective_model,
                         max_tokens=task.max_tokens, temperature=task.temperature,
@@ -188,9 +200,22 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             actual_model = execution.model
             runtime_engine = execution.runtime_engine or "openai_compatible"
             provider_usage = dict(execution.usage or {})
-        except (PrivateEvidenceAuthorizationError, NativeRetirementUnverified, PermissionError):
+        except (
+            PrivateEvidenceAuthorizationError,
+            NativeRetirementUnverified,
+            PermissionError,
+            ExecutionDeadlineExceeded,
+        ):
             raise
+        except ModelAdmissionBudgetExhausted:
+            raise ExecutionAdmissionRejected("governed_model_execution_budget_exhausted") from None
+        except ModelAdmissionDeadlineExceeded:
+            raise ExecutionDeadlineExceeded("governed_model_execution_deadline_exhausted") from None
         except Exception as exc:
+            if task.execution_admission is not None and not transport_entered:
+                # Unexpected local admission errors also fail closed without
+                # exposing internal exception text or inventing provider evidence.
+                raise ExecutionAdmissionRejected("governed_model_admission_unavailable") from None
             # An upstream exception can contain an authenticated URL,
             # credentials, or response body. Keep only its class and a
             # bounded internal error code in the runtime's public receipt.

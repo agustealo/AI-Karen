@@ -31,6 +31,14 @@ from ai_karen_engine.core.model_runtime.runtime_engine import (
 _T = TypeVar("_T")
 
 
+class ModelAdmissionBudgetExhausted(RuntimeError):
+    """The original meter refused a reservation; not provider evidence."""
+
+
+class ModelAdmissionDeadlineExceeded(RuntimeError):
+    """The original execution deadline expired; not a provider timeout."""
+
+
 @dataclass(frozen=True, slots=True, repr=False)
 class GovernedToolModelAdmission:
     """One source of truth for SDK and Core model-attempt scope and reservations."""
@@ -161,7 +169,7 @@ class GovernedToolModelAdmission:
         )
 
     async def reserve_transport(self, endpoint: ProviderEndpoint, *, model: str | None = None) -> None:
-        """Validate first; charge exactly one actual model attempt on original meter."""
+        """Validate first; reserve one model call, not evidence of dispatch."""
         if not isinstance(endpoint, ProviderEndpoint):
             raise PermissionError("governed_model_endpoint_not_eligible")
         external = provider_endpoint_requires_external_permission(endpoint)
@@ -177,7 +185,7 @@ class GovernedToolModelAdmission:
             ):
                 raise PermissionError("governed_external_model_execution_denied")
         if not await self.meter.reserve_model_execution(external=external):
-            raise RuntimeError("governed_model_execution_budget_exhausted")
+            raise ModelAdmissionBudgetExhausted("governed_model_execution_budget_exhausted")
 
     @asynccontextmanager
     async def admitted_execution_deadline(self) -> AsyncIterator[float]:
@@ -193,7 +201,7 @@ class GovernedToolModelAdmission:
         remaining = await self.meter.remaining_admitted_duration_ms()
         deadline = sampled_at + remaining / 1000.0
         if remaining <= 0 or loop.time() >= deadline:
-            raise RuntimeError("governed_model_execution_deadline_exhausted")
+            raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
         scope = asyncio.timeout_at(deadline)
         try:
             async with scope:
@@ -203,10 +211,10 @@ class GovernedToolModelAdmission:
                 self._require_scope()
                 remaining = await self.meter.remaining_admitted_duration_ms()
                 if scope.expired() or remaining <= 0 or loop.time() >= deadline:
-                    raise RuntimeError("governed_model_execution_deadline_exhausted")
+                    raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
         except TimeoutError:
             if scope.expired():
-                raise RuntimeError("governed_model_execution_deadline_exhausted") from None
+                raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted") from None
             raise
 
     async def run_admitted_blocking(
@@ -273,7 +281,7 @@ class GovernedToolModelAdmission:
         """
         self._require_scope()
         if not await self.meter.check_duration():
-            raise RuntimeError("governed_model_execution_deadline_exhausted")
+            raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
         return await self._run_owned_blocking(function)
 
     async def run_native_attempt_sequence(
@@ -295,7 +303,7 @@ class GovernedToolModelAdmission:
         """
         self.require_native_generation(endpoint, model=model)
         if not await self.meter.check_duration():
-            raise RuntimeError("governed_model_execution_deadline_exhausted")
+            raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
         loop = asyncio.get_running_loop()
 
         def invoke(checkpoint: Callable[[], None]) -> _T:
@@ -359,7 +367,7 @@ class GovernedToolModelAdmission:
         """Revalidate and atomically charge the original meter at dispatch."""
         self.require_native_generation(endpoint, model=model)
         if not await self.meter.reserve_model_execution(external=False):
-            raise RuntimeError("governed_model_execution_budget_exhausted")
+            raise ModelAdmissionBudgetExhausted("governed_model_execution_budget_exhausted")
 
     async def reserve_local_embedding(self, *, model: str) -> None:
         """Charge a real local embedding attempt, never a synthetic fallback."""
@@ -371,4 +379,4 @@ class GovernedToolModelAdmission:
             "builtin_transformers", model, external=False,
         )
         if not await self.meter.reserve_model_execution(external=False):
-            raise RuntimeError("governed_model_execution_budget_exhausted")
+            raise ModelAdmissionBudgetExhausted("governed_model_execution_budget_exhausted")

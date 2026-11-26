@@ -9,7 +9,8 @@ from typing import Any
 from .circuit_breakers import ExpressionCircuitBreakers
 from .contracts import ExpressionResult, ExpressionTask
 from .errors import (
-    EngineUnavailableError, ExecutionDeadlineExceeded, PrivateEvidenceAuthorizationError,
+    EngineUnavailableError, ExecutionAdmissionRejected, ExecutionDeadlineExceeded,
+    PrivateEvidenceAuthorizationError,
 )
 from .observability import emit_expression_event
 from .registry import get_engine
@@ -609,6 +610,16 @@ class ExpressionGateway:
                 raise
             except ExecutionDeadlineExceeded:
                 attempt_outcome = "deadline_exhausted"
+                raise
+            except ExecutionAdmissionRejected:
+                attempt_outcome = "admission_rejected"
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="model_admission_rejected",
+                )
                 raise
             except NativeRetirementUnverified:
                 attempt_outcome = "native_retirement_unverified"
