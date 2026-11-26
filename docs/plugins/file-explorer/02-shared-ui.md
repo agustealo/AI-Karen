@@ -227,3 +227,35 @@ preexisting folders are deleted. The generated destination remains for
 inspection. Reset manually using governed controls; never automatically retry
 an ambiguous mutation or delete an unknown object. The isolated stack must
 support a second simultaneous login. No live browser result is claimed.
+
+## KEXP-005D: local composer attachment references
+
+Use the same private local environment as 005A, with an isolated backend,
+a dedicated owner, a dedicated **blank** conversation and at least 13 uniquely
+named active root files on the first page. Do not use actual customer files.
+The real dashboard consumer must expose the registered File Explorer plugin.
+
+```bash
+export KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED=true
+export KAREN_FILE_EXPLORER_ATTACHMENT_ACCEPTANCE=true
+read -r -p 'Disposable conversation UUID: ' KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_ID
+read -r -p 'Disposable conversation title: ' KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_TITLE
+export KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_ID KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_TITLE
+CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium \
+  --grep='KFILE-ATTACHMENT-LOCAL:' --workers=1 --retries=0
+```
+
+The test verifies exact draft references and increasing server revisions,
+duplicate exclusion, capacity 12, rejection of a thirteenth selection,
+reload continuity, explicit send denial with text and references retained,
+and removal/replacement with a fresh inventory. It expects no inference
+or organization writes. The send-denial gesture is exercised only on the
+disposable local stack; a broken admission guard would fail the test.
+Only the disposable draft is intentionally retained for inspection.
+
+Attachment references are not file contents and attached-message execution
+is still unsupported. The controlled composer fences the SDK's synchronous
+optimistic empty callback after a rejected attachment send, without blocking
+later manual clearing. Stale content reauthorization and actual file-byte
+execution require separate proof; this case does not certify them.

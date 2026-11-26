@@ -95,6 +95,7 @@ export function KarenCopilotControlledChat({
     status: draftStatus, synced: draftSynced, failureStatus: draftFailureStatus, prepareSubmission,
     retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
+  const rejectedAttachmentClear = useRef<object | null>(null);
   const onDraftChange = useCallback((value: string) => {
     if (typeof value !== "string" || value.length > MAX_INPUT_CHARS ||
         new TextEncoder().encode(value).length > 262144) {
@@ -106,7 +107,7 @@ export function KarenCopilotControlledChat({
     if (value === readDraftText()) return;
     // An optimistic empty clear dispatched by CopilotKit's input handler during
     // message send must not clobber the authoritative draft or mark it dirty.
-    if (submitPending.current && value === "") return;
+    if ((submitPending.current || rejectedAttachmentClear.current) && value === "") return;
     setError(null);
     setDraftText(value);
   }, [readDraftText, setDraftText]);
@@ -242,6 +243,13 @@ export function KarenCopilotControlledChat({
   const onSubmitMessage = useCallback((value: string) => {
     const text = typeof value === "string" ? value.trim() : "";
     if (attachments.length > 0) {
+      // The SDK synchronously emits onChange("") after onSubmitMessage even
+      // when admission is rejected. Fence only that turn, not later user edits.
+      const rejected = {};
+      rejectedAttachmentClear.current = rejected;
+      queueMicrotask(() => {
+        if (rejectedAttachmentClear.current === rejected) rejectedAttachmentClear.current = null;
+      });
       setError("Sending attached files is not supported yet. Remove the attachments before sending your message.");
       return;
     }

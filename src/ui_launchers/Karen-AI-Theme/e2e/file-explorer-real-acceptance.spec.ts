@@ -741,6 +741,150 @@ test("KFILE-MUTATION-LOCAL: confirmed organization and deletion recovery", async
 });
 
 /**
+ * Dedicated local consumer draft proof. No model execution is authorized.
+ * The fixture must be blank and have 13 uniquely named real root files.
+ * All draft writes go through the mounted consumer composer.
+ */
+test("KFILE-ATTACHMENT-LOCAL: capacity, saved references and blocked submission", async ({ page }) => {
+  test.skip(!enabled || process.env.KAREN_FILE_EXPLORER_ATTACHMENT_ACCEPTANCE !== "true",
+    "Requires explicit local attachment acceptance");
+  test.setTimeout(6 * 60_000);
+  const origin = trustedOrigin();
+  if (origin.protocol !== "http:" || process.env.GITHUB_ACTIONS === "true" ||
+      process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined ||
+      process.env.KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED !== "true") {
+    throw new Error("Attachment acceptance requires an attested isolated local stack");
+  }
+  const conversationId = process.env.KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_ID;
+  const conversationTitle = process.env.KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_TITLE;
+  if (!conversationId || !uuidPattern.test(conversationId) || !conversationTitle || !email || !password) {
+    throw new Error("Explicit sanitized conversation UUID, title and owner credentials required");
+  }
+  const draftPath = "/api/conversations/" + conversationId + "/draft";
+  const draftUrl = new URL(draftPath + "?include_attachments=true", origin).toString();
+  const marker = "KEXP-005D unsent " + randomUUID();
+  type Reference = { source_id: string; revision: string };
+  type Draft = { text: string; revision: number; attachment_references: Reference[] };
+  let runs = 0;
+  let organizationWrites = 0;
+  page.context().on("request", request => {
+    const url = new URL(request.url());
+    if (request.method() === "POST" &&
+        (url.pathname === "/api/copilotkit/agent/default/run" ||
+        ["/api/chat/ag-ui", "/api/chat/stream", "/api/chat"].includes(url.pathname))) runs++;
+    if (url.pathname.startsWith("/api/plugins/file-explorer/") &&
+        ["POST", "PATCH", "PUT", "DELETE"].includes(request.method())) organizationWrites++;
+  });
+  await signInApprovedKaren(page, email, password, { allowLocalLoopback: true });
+  const workspace = page.getByTestId("karen-copilot-consumer-chat");
+  const candidate = workspace.getByTestId("karen-copilot-controlled-chat");
+  const composer = candidate.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
+  const attachments = candidate.getByRole("region", { name: "Draft attachments" });
+  const browse = candidate.getByRole("button", { name: "Browse files", exact: true });
+  async function openConversation() {
+    await expect(workspace).toBeVisible({ timeout: 30_000 });
+    if (await workspace.getAttribute("data-conversation-id") !== conversationId) {
+      await workspace.getByRole("button", { name: "Find conversations" }).click();
+      await workspace.getByPlaceholder("Search conversation titles").fill(conversationTitle!);
+      const match = workspace.getByRole("group", { name: "Matching conversations" })
+        .locator('button[data-conversation-id="' + conversationId + '"]');
+      await expect(match).toHaveCount(1);
+      await match.click();
+    }
+    await expect(workspace).toHaveAttribute("data-conversation-id", conversationId!);
+    await expect(composer).toBeVisible({ timeout: 30_000 });
+  }
+  await openConversation();
+  async function readDraft(): Promise<Draft> {
+    const response = await page.request.get(draftUrl, { maxRedirects: 0 });
+    expect(response.status()).toBe(200);
+    const value = await response.json() as Draft;
+    expect(Number.isSafeInteger(value.revision) && value.revision >= 0).toBe(true);
+    expect(typeof value.text).toBe("string");
+    expect(Array.isArray(value.attachment_references)).toBe(true);
+    return value;
+  }
+  const initial = await readDraft();
+  expect(initial.text, "Only an empty disposable draft can be modified").toBe("");
+  expect(initial.attachment_references).toEqual([]);
+  await expect(composer).toHaveValue("");
+  await expect(attachments).toHaveCount(0);
+  async function saved(text: string, refs: Reference[], previous: number) {
+    await expect.poll(async () => {
+      const current = await readDraft();
+      return { text: current.text, refs: current.attachment_references, advanced: current.revision > previous };
+    }, { timeout: 20_000 }).toEqual({ text, refs, advanced: true });
+    return readDraft();
+  }
+  const inventoryPromise = nextRealPage(page, origin);
+  await browse.click();
+  const http = await inventoryPromise;
+  expect(http.status()).toBe(200);
+  const inventory = inventoryResponse(await http.json());
+  const files = inventory.items.filter(file => inventory.items.filter(item => item.name === file.name).length === 1);
+  expect(files.length, "Seed at least 13 uniquely named real root artifacts").toBeGreaterThanOrEqual(13);
+  const chosen = files.slice(0, 13);
+  const references = chosen.slice(0, 12).map(({ source_id, revision }) => ({ source_id, revision }));
+  const browserRegion = candidate.getByRole("region", { name: "Conversation file browser" });
+  const explorer = browserRegion.getByRole("region", { name: "Shared File Explorer" });
+  const select = (file: Source) => explorer.getByRole("checkbox", { name: "Select " + file.name, exact: true });
+  await expect(browserRegion.getByText("12 additional file references available.", { exact: true })).toBeVisible();
+  await composer.fill(marker);
+  const typed = await saved(marker, [], initial.revision);
+  await select(chosen[0]).check();
+  await browserRegion.getByRole("button", { name: "Attach selected files (1)", exact: true }).click();
+  const first = await saved(marker, references.slice(0, 1), typed.revision);
+  await expect(attachments.getByText("References saved", { exact: true })).toBeVisible();
+  await expect(select(chosen[0])).toHaveCount(0);
+  await expect(browserRegion.getByText("11 additional file references available.", { exact: true })).toBeVisible();
+  for (const file of chosen.slice(1, 12)) await select(file).check();
+  await expect(select(chosen[12])).toBeDisabled();
+  await browserRegion.getByRole("button", { name: "Attach selected files (11)", exact: true }).click();
+  const full = await saved(marker, references, first.revision);
+  await expect(attachments.getByText("12 / 12 file references", { exact: true })).toBeVisible();
+  await expect(attachments.getByText("References saved", { exact: true })).toBeVisible();
+  await expect(browserRegion.getByText("0 additional file references available.", { exact: true })).toBeVisible();
+  await expect(select(chosen[12])).toBeDisabled();
+  await browse.click();
+  await expect(browserRegion).toHaveCount(0);
+  await page.reload();
+  await openConversation();
+  await expect(composer).toHaveValue(marker);
+  await expect(attachments.getByText("References saved", { exact: true })).toBeVisible();
+  for (const ref of references) {
+    await expect(attachments.getByRole("button", { name: "Remove file reference " + ref.source_id })).toBeVisible();
+  }
+  expect(await readDraft()).toEqual(full);
+
+  // The SDK send gesture is explicitly denied while references exist.
+  await composer.press("Enter");
+  await expect(candidate.getByRole("alert")).toContainText("Sending attached files is not supported yet.");
+  await expect(composer).toHaveValue(marker);
+  await expect(attachments.getByText("References saved", { exact: true })).toBeVisible();
+  expect(await readDraft()).toEqual(full);
+  expect(runs).toBe(0);
+
+  await attachments.getByRole("button", { name: "Remove file reference " + references[0].source_id }).click();
+  const removed = await saved(marker, references.slice(1), full.revision);
+  await expect(attachments.getByText("11 / 12 file references", { exact: true })).toBeVisible();
+  const reopened = nextRealPage(page, origin);
+  await browse.click();
+  expect((await reopened).status()).toBe(200);
+  await expect(browserRegion.getByText("1 additional file references available.", { exact: true })).toBeVisible();
+  await expect(select(chosen[0])).toBeEnabled();
+  await select(chosen[12]).check();
+  await expect(select(chosen[0])).toBeDisabled();
+  await browserRegion.getByRole("button", { name: "Attach selected files (1)", exact: true }).click();
+  const replaced = [...references.slice(1), { source_id: chosen[12].source_id, revision: chosen[12].revision }];
+  await saved(marker, replaced, removed.revision);
+  await expect(attachments.getByText("References saved", { exact: true })).toBeVisible();
+  expect(runs, "Draft operations must never execute inference").toBe(0);
+  expect(organizationWrites, "Draft attachment selection must never mutate files").toBe(0);
+  // Retain only this disposable draft for inspection. Never clear an uncertain
+  // receipt or another user's draft automatically.
+});
+
+/**
  * Opt-in real selection-to-analysis evidence. The dedicated acceptance owner
  * must seed a supported, active text/code artifact on the first owner page,
  * enable both canonical plugins, and supply its exact UUID. No route mocking.

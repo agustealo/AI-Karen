@@ -114,3 +114,17 @@ def test_organization_mutations_are_local_opt_in_and_not_protected_dispatch():
     assert 'expect(deleted.receipt).toMatchObject({ deleted: true, folder_id: source.folder_id })' in source
     assert 'expect(childInventory.has_more || childInventory.folders_has_more).toBe(false)' in source
     assert 'browser.newContext({ baseURL: origin.origin, serviceWorkers: "block" })' in source
+
+def test_local_attachment_acceptance_uses_real_consumer_and_is_not_protected_dispatch():
+    source = SPEC.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert 'KFILE-ATTACHMENT-LOCAL:' in source
+    assert 'KAREN_FILE_EXPLORER_ATTACHMENT_ACCEPTANCE !== "true"' in source
+    assert 'KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_ID' in source
+    assert 'KAREN_FILE_EXPLORER_ATTACHMENT_ACCEPTANCE' not in workflow
+    assert 'KFILE-ATTACHMENT-LOCAL' not in workflow
+    assert 'initial.attachment_references).toEqual([])' in source
+    assert 'expect(await readDraft()).toEqual(full)' in source
+    assert 'await composer.press("Enter")' in source
+    assert 'expect(runs, "Draft operations must never execute inference").toBe(0)' in source
+    assert 'expect(organizationWrites, "Draft attachment selection must never mutate files").toBe(0)' in source
