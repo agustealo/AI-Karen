@@ -124,3 +124,99 @@ async def test_cancellation_propagates(configured):
     client.publish.side_effect = asyncio.CancelledError()
     with pytest.raises(asyncio.CancelledError):
         await invalidation.publish_inbox_invalidation(tenant_id=TENANT, user_id=OWNER)
+
+
+def test_wait_config_is_default_off_and_bounded(monkeypatch):
+    settings = RuntimeSettings()
+    assert settings.features.enable_communications_invalidation_wait is False
+    assert settings.timeouts.communications_invalidation_wait_seconds == 10
+    settings.features.enable_communications_invalidation_wait = True
+    assert any("wait requires" in issue for issue in settings.validate())
+    monkeypatch.setenv("KARI_COMMUNICATIONS_INVALIDATION_WAIT_SECONDS", "16")
+    with pytest.raises(ValueError, match="WAIT_SECONDS"):
+        settings.apply_env_overrides()
+
+
+class Subscription:
+    def __init__(self, frames):
+        self.frames = iter(frames)
+        self.subscribe = AsyncMock()
+        self.closed = False
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *args):
+        self.closed = True
+
+    async def get_message(self, **kwargs):
+        return next(self.frames)
+
+
+async def connected():
+    return False
+
+
+@pytest.mark.asyncio
+async def test_wait_requires_real_ack_and_exact_owner_signal(configured):
+    settings, client, manager, _ = configured
+    settings.features.enable_communications_invalidation_wait = True
+    manager.max_connections = 10
+    channel = invalidation.inbox_invalidation_channel(prefix="kari", tenant_id=TENANT, user_id=OWNER)
+    ack = {"type": "subscribe", "channel": channel, "data": 1}
+    signal = {"type": "message", "channel": channel, "data": invalidation.INBOX_INVALIDATION_SIGNAL}
+    sub = Subscription([ack, signal])
+    client.pubsub = Mock(return_value=sub)
+    assert await invalidation.wait_for_inbox_invalidation(
+        tenant_id=TENANT, user_id=OWNER, disconnected=connected,
+    ) is True
+    sub.subscribe.assert_awaited_once_with(channel)
+    assert sub.closed
+    for frames in ([signal], [ack, {**signal, "channel": channel.replace(OWNER, FOREIGN)}],
+                   [ack, {**signal, "data": "private data"}], [ack, ack]):
+        sub = Subscription(frames)
+        client.pubsub.return_value = sub
+        with pytest.raises(invalidation.InboxInvalidationUnavailable):
+            await invalidation.wait_for_inbox_invalidation(
+                tenant_id=TENANT, user_id=OWNER, disconnected=connected,
+            )
+        assert sub.closed
+
+
+@pytest.mark.asyncio
+async def test_wait_cancellation_releases_owner_and_pool_reservation(configured):
+    settings, client, manager, _ = configured
+    settings.features.enable_communications_invalidation_wait = True
+    manager.max_connections = 10
+    channel = invalidation.inbox_invalidation_channel(prefix="kari", tenant_id=TENANT, user_id=OWNER)
+    ack = {"type": "subscribe", "channel": channel, "data": 1}
+    signal = {"type": "message", "channel": channel, "data": invalidation.INBOX_INVALIDATION_SIGNAL}
+    entered = asyncio.Event()
+
+    async def receive(**kwargs):
+        if not entered.is_set():
+            entered.set()
+            return ack
+        await asyncio.Event().wait()
+
+    sub = Subscription([])
+    sub.get_message = receive
+    client.pubsub = Mock(return_value=sub)
+    task = asyncio.create_task(invalidation.wait_for_inbox_invalidation(
+        tenant_id=TENANT, user_id=OWNER, disconnected=connected,
+    ))
+    await entered.wait()
+    with pytest.raises(invalidation.InboxInvalidationUnavailable):
+        await invalidation.wait_for_inbox_invalidation(
+            tenant_id=TENANT, user_id=OWNER, disconnected=connected,
+        )
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert sub.closed
+    replacement = Subscription([ack, signal])
+    client.pubsub.return_value = replacement
+    assert await invalidation.wait_for_inbox_invalidation(
+        tenant_id=TENANT, user_id=OWNER, disconnected=connected,
+    ) is True
+    assert replacement.closed
