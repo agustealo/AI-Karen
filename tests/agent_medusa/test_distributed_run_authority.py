@@ -1077,3 +1077,62 @@ async def test_terminal_publication_waits_for_shared_authority(mode: str) -> Non
             await asyncio.gather(finalizer, return_exceptions=True)
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [0, 1])
+async def test_durable_receipt_retention_acknowledgement_is_exact(result: int) -> None:
+    from types import SimpleNamespace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        _ACK_DURABLE_TERMINAL_SCRIPT,
+    )
+
+    class Client:
+        calls: list[tuple[Any, ...]] = []
+
+        async def ping(self) -> bool:
+            return True
+
+        async def eval(self, *args: Any) -> int:
+            self.calls.append(args)
+            return result
+
+    client = Client()
+    settings = _settings("observer")
+    store = RedisDistributedRunStore(
+        settings=settings,
+        redis_manager=SimpleNamespace(client=client, is_degraded=lambda: False),
+    )
+    receipt = {
+        "run_id": "receipt",
+        "tenant_id": "tenant-a",
+        "owner_worker_id": "owner",
+        "correlation_id": "corr",
+        "user_id": "user",
+        "status": "completed",
+        "completed_at": "2026-11-26T10:00:00+00:00",
+        "error_type": None,
+        "outcome_status": "success",
+    }
+    assert await store.acknowledge_durable_terminal(
+        tenant_id="tenant-a", receipt=receipt
+    ) is bool(result)
+    assert client.calls == [
+        (
+            _ACK_DURABLE_TERMINAL_SCRIPT,
+            2,
+            store._claim_key("receipt"),
+            store._run_key("receipt"),
+            "run_id", "receipt",
+            "tenant_id", "tenant-a",
+            "owner_worker_id", "owner",
+            "correlation_id", "corr",
+            "user_id", "user",
+            "status", "completed",
+            "completed_at", receipt["completed_at"],
+            "error_type", "",
+            "outcome_status", "success",
+            str(settings.run_terminal_retention_seconds),
+        )
+    ]

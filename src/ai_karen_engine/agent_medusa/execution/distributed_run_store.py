@@ -130,13 +130,43 @@ redis.call('HSET', KEYS[2],
   'outcome_status', outcome,
   'terminal_authority', ARGV[9],
   'lease_expires_at', '')
-redis.call('EXPIRE', KEYS[2], retention)
+-- An unacknowledged durable receipt is recovery evidence, not a lease.
+if ARGV[9] == 'durable_arbitrated' then
+  redis.call('PERSIST', KEYS[2])
+else
+  redis.call('EXPIRE', KEYS[2], retention)
+end
 redis.call('EXPIRE', KEYS[3], retention)
 redis.call('DEL', KEYS[1])
 if status == 'cancelled' and ARGV[4] ~= 'cancelled' then
   return 2
 end
 return 1
+"""
+
+
+# Release the retention hold only for the exact committed durable receipt.
+_ACK_DURABLE_TERMINAL_SCRIPT = """
+if redis.call('EXISTS', KEYS[1]) ~= 0 then
+  return 0
+end
+if redis.call('HGET', KEYS[2], 'terminal_authority') ~= 'durable_arbitrated'
+    or redis.call('HGET', KEYS[2], 'lease_expires_at') ~= '' then
+  return 0
+end
+for i = 1, 18, 2 do
+  if redis.call('HGET', KEYS[2], ARGV[i]) ~= ARGV[i + 1] then
+    return 0
+  end
+end
+if redis.call('PTTL', KEYS[2]) ~= -1 then
+  return 0
+end
+local retention = tonumber(ARGV[19])
+if not retention or retention < 1 or retention % 1 ~= 0 then
+  return 0
+end
+return redis.call('EXPIRE', KEYS[2], retention)
 """
 
 
@@ -190,6 +220,10 @@ class DistributedRunStore(Protocol):
         outcome_status: str | None = None,
         durable_arbitrated: bool = False,
     ) -> str: ...
+
+    async def acknowledge_durable_terminal(
+        self, *, tenant_id: str, receipt: dict[str, Any]
+    ) -> bool: ...
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
 
@@ -399,6 +433,46 @@ class RedisDistributedRunStore:
             return "cancelled"
         raise DistributedRunStoreUnavailable("invalid_terminal_result")
 
+    async def acknowledge_durable_terminal(
+        self, *, tenant_id: str, receipt: dict[str, Any]
+    ) -> bool:
+        """Start configured retention only after exact durable confirmation."""
+        keys = (
+            "run_id",
+            "tenant_id",
+            "owner_worker_id",
+            "correlation_id",
+            "user_id",
+            "status",
+            "completed_at",
+            "error_type",
+            "outcome_status",
+        )
+        if receipt.get("status") not in {"completed", "failed", "cancelled", "orphaned"}:
+            return False
+        if any(not receipt.get(key) for key in keys[:7]):
+            return False
+        completed = self._parse_time(receipt["completed_at"])
+        if completed is None:
+            return False
+        expected = {**receipt, "tenant_id": tenant_id, "completed_at": self._iso(completed)}
+        client = await self._client()
+        try:
+            return bool(
+                await client.eval(
+                    _ACK_DURABLE_TERMINAL_SCRIPT,
+                    2,
+                    self._claim_key(str(receipt["run_id"])),
+                    self._run_key(str(receipt["run_id"])),
+                    *(value for key in keys for value in (key, str(expected.get(key) or ""))),
+                    str(self._settings.run_terminal_retention_seconds),
+                )
+            )
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_terminal_retention_unconfirmed"
+            ) from exc
+
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         client = await self._client()
         run_key = self._run_key(run_id)
@@ -470,6 +544,11 @@ class RedisDistributedRunStore:
             record = await client.hgetall(self._run_key(normalized_run_id))
             if not record:
                 stale.append(normalized_run_id)
+                continue
+            if (
+                record.get("tenant_id") != tenant_id
+                or record.get("run_id") != normalized_run_id
+            ):
                 continue
             owner = await client.get(self._claim_key(normalized_run_id))
             snapshot = self._snapshot(

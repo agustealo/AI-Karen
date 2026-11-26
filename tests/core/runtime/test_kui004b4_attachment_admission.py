@@ -31,6 +31,7 @@ from ai_karen_engine.core.runtime.contracts import (
     ExecutionBudgetMeter,
 )
 from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    GENERATED_TEXT_ARTIFACT_CAPABILITY,
     PolicyEvaluationRequest,
     RuntimePolicyEnforcer,
 )
@@ -96,10 +97,16 @@ def controlled_session_witness_issuer(monkeypatch):
     return issuer
 
 
-async def authority(*, grant=True, bind=True, references=None):
+async def authority(*, grant=True, bind=True, references=None, generated=False):
     selected_refs = [selected()] if references is None else [
         dict(item) for item in references
     ]
+    if generated:
+        selected_refs = []
+    permissions = (
+        ["data:read", "artifact:create_own"] if generated and grant
+        else ["data:read"] if grant else []
+    )
     user_id, tenant_id = str(uuid.uuid4()), str(uuid.uuid4())
     context = ChatExecutionContext(
         user_id=user_id,
@@ -110,7 +117,7 @@ async def authority(*, grant=True, bind=True, references=None):
         authenticated_user=UserData(
             user_id=user_id, tenant_id=tenant_id,
             is_active=True, is_verified=True,
-            permissions=["data:read"] if grant else [],
+            permissions=permissions,
         ),
     )
     principal = context.authenticated_user
@@ -133,8 +140,12 @@ async def authority(*, grant=True, bind=True, references=None):
         tenant_id=context.tenant_id,
         session_id=context.session_id,
         correlation_id=context.correlation_id,
-        permissions=["data:read"] if grant else [],
-        requested_capabilities=["data:read"] if grant else [],
+        action=GENERATED_TEXT_ARTIFACT_CAPABILITY if generated else "general_assist",
+        permissions=permissions,
+        requested_capabilities=(
+            [GENERATED_TEXT_ARTIFACT_CAPABILITY] if generated
+            else ["data:read"] if grant else []
+        ),
         attachment_references=selected_refs if grant else [],
         max_model_calls=2,
     ))
@@ -151,7 +162,10 @@ async def authority(*, grant=True, bind=True, references=None):
         context.bind_runtime_model_authority(plan, meter)
         meter.start()
     request = ChatExecutionRequest(
-        messages=[{"role": "user", "content": "Summarize the attachment"}],
+        messages=[{"role": "user", "content": (
+            "Create a text file: a complete deliverable" if generated
+            else "Summarize the attachment"
+        )}],
         context=context,
         attachment_references=selected_refs,
     )
@@ -846,7 +860,7 @@ async def test_private_stream_queue_revocation_denies_release(monkeypatch, bound
 
     monkeypatch.setattr(runtime, "_run_simple", produce)
     stream = runtime._run_simple_stream(
-        request, SimpleNamespace(), plan, meter, _meta=receipt,
+        request, SimpleNamespace(intent="general_assist"), plan, meter, _meta=receipt,
     )
     try:
         if boundary in ("second_delta", "terminal"):
@@ -934,3 +948,285 @@ async def test_revoked_private_execution_cannot_initiate_memory_formation(monkey
     assert receipt["persisted"] == 0
     assert meta["memory_persistence_status"] == "denied_by_policy"
     manager_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"permissions": ["data:read"]},
+    {"permissions": ["data:write"]},
+    {"permissions": ["data:read", "data:write"]},
+    {"permissions": ["artifact:create_own"]},
+    {"action": "general_assist"},
+    {"requested_capabilities": []},
+    {"requested_capabilities": [GENERATED_TEXT_ARTIFACT_CAPABILITY, "memory.write"]},
+    {"requested_capabilities": [GENERATED_TEXT_ARTIFACT_CAPABILITY, "web.search"]},
+    {"attachment_references": [{"artifact_id": str(uuid.uuid4()), "revision_id": str(uuid.uuid4())}]},
+    {"session_id": None},
+    {"max_model_calls": 0},
+    {"execution_topology": {"requires_human_gate": True}},
+    {"execution_topology": {"workflow_id": "untrusted-workflow"}},
+    {"execution_topology": {"graph_required": True}},
+    {"execution_topology": {"requires_parallel_execution": True}},
+    {"execution_topology": {"requires_resumability": True}},
+    {"requested_reasoning_modes": ["soft_reasoning"]},
+])
+async def test_generated_artifact_policy_denies_missing_entitlement_or_wrong_scope(changes):
+    params = dict(
+        user_id=str(uuid.uuid4()), tenant_id=str(uuid.uuid4()),
+        session_id="session", correlation_id="correlation",
+        action=GENERATED_TEXT_ARTIFACT_CAPABILITY,
+        requested_capabilities=[GENERATED_TEXT_ARTIFACT_CAPABILITY],
+        permissions=["data:read", "artifact:create_own"], max_model_calls=1,
+    )
+    decision = await RuntimePolicyEnforcer().evaluate(
+        PolicyEvaluationRequest(**{**params, **changes}),
+    )
+    assert not decision.allowed
+    assert GENERATED_TEXT_ARTIFACT_CAPABILITY in decision.denied_capabilities
+
+
+@pytest.mark.asyncio
+async def test_generated_artifact_requires_original_plan_meter_and_current_write_role(
+    controlled_session_witness_issuer,
+):
+    request, plan, meter = await authority(generated=True)
+    context = request.context
+    policy = vars(context)["_runtime_policy_issuance"][0]
+
+    async def authorize(candidate=plan, budget=meter):
+        await policy.authorize_generated_text_write(
+            context=context, plan=candidate, meter=budget,
+        )
+
+    await authorize()
+    with pytest.raises(PermissionError, match="generated_artifact_authority_denied"):
+        await authorize(candidate=replace(plan))
+    copied_meter = ExecutionBudgetMeter(plan.budget)
+    copied_meter.start()
+    with pytest.raises(PermissionError, match="generated_artifact_authority_denied"):
+        await authorize(budget=copied_meter)
+
+    # The original signed-in account now has read-only data access. A cached
+    # permission list and previously issued plan cannot authorize the write.
+    controlled_session_witness_issuer.revalidate_session_identity.return_value.roles = ["readonly"]
+    with pytest.raises(PermissionError, match="runtime_attachment_read_permission_revoked"):
+        await authorize()
+
+
+@pytest.mark.asyncio
+async def test_generated_artifact_never_inherits_attachment_read_grant():
+    request, plan, meter = await authority()
+    context = request.context
+    policy = vars(context)["_runtime_policy_issuance"][0]
+    with pytest.raises(PermissionError, match="generated_artifact_authority_denied"):
+        await policy.authorize_generated_text_write(
+            context=context, plan=plan, meter=meter,
+        )
+
+
+def test_generated_artifact_standard_user_has_narrow_permission_not_data_write():
+    from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+    manager = get_rbac_manager()
+    user = UserData(user_id=str(uuid.uuid4()), tenant_id=str(uuid.uuid4()), roles=["user"])
+    assert manager.has_permission(user, Permission.DATA_READ)
+    assert manager.has_permission(user, Permission.ARTIFACT_CREATE_OWN)
+    assert not manager.has_permission(user, Permission.DATA_WRITE)
+    assert not manager.has_permission(user, Permission.DATA_DELETE)
+    readonly = UserData(user_id=user.user_id, tenant_id=user.tenant_id, roles=["readonly"])
+    assert not manager.has_permission(readonly, Permission.ARTIFACT_CREATE_OWN)
+
+
+@pytest.mark.asyncio
+async def test_generated_artifact_model_result_bridge_reuses_canonical_ledger(monkeypatch):
+    from ai_karen_engine.core.expression.contracts import ExpressionResult
+    from ai_karen_engine.services.database.repositories.artifact_store import Artifact
+
+    request, plan, meter = await authority(generated=True)
+    ctx = request.context
+    ctx.conversation_id = str(uuid.uuid4())
+    runtime = runtime_with_reader(monkeypatch, None)
+    session_id, lease_token = str(uuid.uuid4()), str(uuid.uuid4())
+    ledger = SimpleNamespace(
+        create_or_get=AsyncMock(return_value=SimpleNamespace(session_id=session_id, state="created")),
+        transition=AsyncMock(return_value=SimpleNamespace(state="receiving")),
+        record_staged=AsyncMock(return_value=SimpleNamespace(state="staged")),
+        claim_commit=AsyncMock(return_value=SimpleNamespace(lease_owner=lease_token)),
+    )
+
+    async def upload(item, *, session_id, lease_token):
+        return RepositoryResult(success=True, data=Artifact(
+            id=session_id, tenant_id=item.tenant_id, user_id=item.user_id,
+            filename=item.filename, mime_type=item.content_type,
+            size_bytes=len(item.data), sha256=hashlib.sha256(item.data).hexdigest(),
+            metadata=item.metadata,
+        ))
+
+    store = SimpleNamespace(upload_reserved_text=AsyncMock(side_effect=upload))
+    repositories = SimpleNamespace(
+        create_upload_session_repository=lambda: ledger,
+        create_artifact_store=lambda: store,
+    )
+    monkeypatch.setattr(runtime, "_artifact_repositories", lambda: repositories)
+    result = ExpressionResult(
+        task_id=f"expr_{ctx.correlation_id}", text="Complete deliverable",
+        provider="local-provider", model="local-model", engine_id="local-engine",
+        engine_mode="local", runtime_engine="local-engine", response_source="provider_runtime",
+        attempts=[], skipped=[], latency_ms=1.0, metadata={"finish_reason": "stop"},
+    )
+    decision = SimpleNamespace(intent=GENERATED_TEXT_ARTIFACT_CAPABILITY)
+    receipt = await runtime._persist_generated_text_result(request, decision, plan, meter, result)
+    assert receipt == {
+        "artifact_id": session_id, "filename": "generated.txt", "mime_type": "text/plain",
+        "size_bytes": len(result.text.encode()),
+        "sha256": hashlib.sha256(result.text.encode()).hexdigest(),
+    }
+    assert ledger.create_or_get.await_args.kwargs["expected_sha256"] == receipt["sha256"]
+    item = store.upload_reserved_text.await_args.args[0]
+    assert item.data == result.text.encode()
+    assert item.metadata["provider"] == result.provider
+    assert item.metadata["request_id"] == ctx.request_id
+    assert item.metadata["policy_decision_id"] == plan.policy_decision_id
+    ledger.create_or_get.return_value = SimpleNamespace(session_id=session_id, state="reconcile_required")
+    with pytest.raises(RuntimeError, match="generated_artifact_reconcile_required"):
+        await runtime._persist_generated_text_result(request, decision, plan, meter, result)
+    store.upload_reserved_text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"degraded": True},
+    {"metadata": {"finish_reason": "length", "output_truncated": True}},
+    {"metadata": {}},
+    {"task_id": "another-task"},
+    {"response_source": "fallback_provider_runtime"},
+])
+async def test_generated_artifact_denies_unverified_model_result_before_storage(monkeypatch, changes):
+    from ai_karen_engine.core.expression.contracts import ExpressionResult
+
+    request, plan, meter = await authority(generated=True)
+    runtime = runtime_with_reader(monkeypatch, None)
+    unavailable = Mock(side_effect=AssertionError("unverified output reached repository"))
+    monkeypatch.setattr(runtime, "_artifact_repositories", unavailable)
+    fields = dict(
+        task_id=f"expr_{request.context.correlation_id}", text="Complete deliverable",
+        provider="local-provider", model="local-model", engine_id="local-engine",
+        engine_mode="local", runtime_engine="local-engine", response_source="provider_runtime",
+        attempts=[], skipped=[], latency_ms=1.0, metadata={"finish_reason": "stop"},
+    )
+    with pytest.raises(PermissionError, match="generated_artifact_result_denied"):
+        await runtime._persist_generated_text_result(
+            request, SimpleNamespace(intent=GENERATED_TEXT_ARTIFACT_CAPABILITY),
+            plan, meter, ExpressionResult(**{**fields, **changes}),
+        )
+    unavailable.assert_not_called()
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("Create a text file: a poem", "a poem"),
+    ("Please generate a plain text file: a short report", "a short report"),
+    ("Can you create a text file: a poem?", None),
+    ("Write a text file:", None),
+    ("Explain how to create a text file: a poem", None),
+    ("Surprise me", None),
+    ("Create a text file: " + "x" * 4000, None),
+])
+def test_generated_artifact_explicit_request_parser(query, expected):
+    from ai_karen_engine.core.cortex.routing_intents import parse_owner_generated_text_request
+
+    assert parse_owner_generated_text_request(query) == expected
+
+
+@pytest.mark.asyncio
+async def test_generated_artifact_inferred_intent_cannot_supply_write_consent(monkeypatch):
+    from ai_karen_engine.core.expression.contracts import ExpressionResult
+
+    request, plan, meter = await authority(generated=True)
+    request.messages = [{"role": "user", "content": "Tell me a story"}]
+    runtime = runtime_with_reader(monkeypatch, None)
+    unavailable = Mock(side_effect=AssertionError("inferred write reached repository"))
+    monkeypatch.setattr(runtime, "_artifact_repositories", unavailable)
+    result = ExpressionResult(
+        task_id=f"expr_{request.context.correlation_id}", text="Story",
+        provider="local-provider", model="local-model", engine_id="local-engine",
+        engine_mode="local", runtime_engine="local-engine", response_source="provider_runtime",
+        attempts=[], skipped=[], latency_ms=1.0, metadata={"finish_reason": "stop"},
+    )
+    with pytest.raises(PermissionError, match="generated_artifact_explicit_request_required"):
+        await runtime._persist_generated_text_result(
+            request, SimpleNamespace(intent=GENERATED_TEXT_ARTIFACT_CAPABILITY),
+            plan, meter, result,
+        )
+    unavailable.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explicit_generated_text_route_is_exclusive(monkeypatch):
+    from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+    from ai_karen_engine.core.cortex.context_stages import build_context_requirements
+    from ai_karen_engine.core.cortex.memory_formation import request_memory_formation
+    from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+    from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
+
+    request, _, _ = await authority(generated=True)
+    request.context.conversation_id = str(uuid.uuid4())
+    request.messages[-1]["content"] = "Create a text file: debug my repository and remember a fictional weather report"
+    cortex = CortexExecutionDecider(force_graph=False)
+    monkeypatch.setattr(cortex, "_analyze_request", AsyncMock(return_value={
+        "intent": "search.weather", "tool_requirements": ["shell"],
+        "plugin_candidates": ["search"], "workflow_required": True,
+        "memory_recall_required": True, "memory_write_requested": True,
+        "required_capabilities": ["web.search", "memory.write"],
+    }))
+    route = resolve_capability_decision(request.messages[-1]["content"])
+    assert route.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY
+    decision = await cortex.decide(request)
+    assert decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY
+    assert decision.required_capabilities == [GENERATED_TEXT_ARTIFACT_CAPABILITY]
+    assert not decision.is_graph_required and not decision.tool_requirements
+    assert not decision.plugin_candidates and not decision.memory_recall_required
+    assert request_memory_formation(request, decision) is decision
+    assert not build_context_requirements(request, decision).requirements
+    request.context.permissions = ["data:read", "artifact:create_own"]
+    runtime = object.__new__(RuntimeDecisionPipeline)
+    policy_request = runtime._build_execution_policy_request(request, decision)
+    assert policy_request.requested_capabilities == [GENERATED_TEXT_ARTIFACT_CAPABILITY]
+    assert policy_request.max_model_calls == 1
+    assert (await RuntimePolicyEnforcer().evaluate(policy_request)).allowed
+    for flag in ("requires_parallel_execution", "requires_resumability", "graph_required"):
+        blocked = replace(decision, **{flag: True})
+        params = runtime._build_execution_policy_request(request, blocked)
+        assert params.execution_topology[flag] is True
+        assert not (await RuntimePolicyEnforcer().evaluate(params)).allowed
+    for flag in ("memory_recall_required", "memory_write_requested", "requires_resumability",
+                 "requires_parallel_execution", "workflow_id", "requires_human_gate"):
+        request.metadata[flag] = True
+        blocked = await cortex.decide(request)
+        assert GENERATED_TEXT_ARTIFACT_CAPABILITY in blocked.forbidden_capabilities
+        assert not (await RuntimePolicyEnforcer().evaluate(
+            runtime._build_execution_policy_request(request, blocked)
+        )).allowed
+        del request.metadata[flag]
+
+
+@pytest.mark.asyncio
+async def test_generated_text_prompt_registry_contract(tmp_path):
+    from ai_karen_engine.core.runtime.prompt import PromptAssemblyRequest, PromptRegistry, PromptRuntimeService
+
+    registry = PromptRegistry(registry_path=tmp_path)
+    definition = registry.get_prompt("karen.artifact.text.create", "v1.0.0")
+    assert "complete requested text file contents" in definition.system_instructions
+    assert not definition.tool_contracts
+    assert definition.metadata["purpose"] == "owner_generated_text"
+    request = PromptAssemblyRequest(
+        prompt_id=definition.prompt_id, prompt_version=definition.version,
+        system_instructions=definition.system_instructions,
+        messages=[{"role": "user", "content": "Create a text file: a report"}],
+    )
+    assembled = await PromptRuntimeService(registry=registry).assemble_prompt(request)
+    assert assembled.messages[-1] == request.messages[-1]
+    assert any(
+        item.get("source") == "prompt_definition"
+        and item["content"] == definition.system_instructions
+        for item in assembled.messages
+    )

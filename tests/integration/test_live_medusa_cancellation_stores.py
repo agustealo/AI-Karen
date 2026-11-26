@@ -750,6 +750,22 @@ async def _terminal_rollback_recovery_acceptance(
         shared = await store.get(**scope)
         assert shared["status"] == "completed"
         assert shared["terminal_authority"] == "durable_arbitrated"
+        client = redis.client
+        assert client is not None
+        run_key = f"{prefix}:run:{run.run_id}"
+        index_key = f"{prefix}:tenant:{tenant_id}"
+        assert await client.pttl(run_key) == -1
+        # Expire the discovery index independently of the retained receipt.
+        # An unrelated/mismatched receipt cannot release the hold.
+        assert not await store.acknowledge_durable_terminal(
+            tenant_id=tenant_id,
+            receipt={**shared, "outcome_status": "partial"},
+        )
+        assert await client.pttl(run_key) == -1
+        await client.pexpire(index_key, 1)
+        await asyncio.sleep(0.02)
+        assert not await client.exists(index_key)
+        assert await client.pttl(run_key) == -1
         pending = await ledger.get(**scope)
         assert pending is not None and pending["status"] == "running"
         await ledger.mark_cancelling(
@@ -762,6 +778,33 @@ async def _terminal_rollback_recovery_acceptance(
             await store.request_cancel(**scope)
         # The injected fault only affects runtime completion; restore the
         # genuine ledger for history recovery, not a new execution attempt.
+        helper = Path(__file__).with_name("medusa_real_store_worker.py")
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",
+            str(helper),
+            run.run_id,
+            tenant_id,
+            f"recovery-worker-{marker}",
+            prefix,
+            "recover_terminal",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+        try:
+            event = await _read_worker_event(process, "recovered_terminal")
+            assert process.pid != os.getpid()
+            recovered = event["receipt"]
+            assert isinstance(recovered, dict)
+            assert recovered["status"] == "completed"
+            assert recovered["outcome_status"] == "success"
+            assert await asyncio.wait_for(process.wait(), timeout=8) == 0
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await asyncio.wait_for(process.wait(), timeout=8)
+        assert 0 < await client.pttl(run_key) <= settings.run_terminal_retention_seconds * 1000
         owner._durable_ledger = ledger
         local = await owner.get(**scope)
         durable = await ledger.get(**scope)
@@ -789,6 +832,21 @@ async def _terminal_rollback_recovery_acceptance(
             assert json.loads(rows[-1]["metadata"])["late_cancellation"] is True
         finally:
             await connection.close()
+        # An acknowledgement is idempotent and cannot extend existing TTL.
+        await client.pexpire(run_key, 100)
+        assert not await store.acknowledge_durable_terminal(
+            tenant_id=tenant_id, receipt=durable
+        )
+        assert 0 < await client.pttl(run_key) <= 100
+        await asyncio.sleep(0.15)
+        assert not await client.exists(run_key)
+        after_expiration = MedusaRunManager(
+            settings=settings, distributed_store=store, durable_ledger=ledger
+        )
+        restored = await after_expiration.get(**scope)
+        assert restored["status"] == "completed"
+        assert restored["outcome_status"] == "success"
+        assert restored["completed_at"] == durable["completed_at"]
     finally:
         if run is not None and run.heartbeat_task is not None:
             run.heartbeat_task.cancel()

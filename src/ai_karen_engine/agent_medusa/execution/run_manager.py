@@ -438,6 +438,21 @@ class MedusaRunManager:
                     status = ExecutionRunStatus.CANCELLED
                     outcome_status = "cancelled"
                     error_type = None
+                if run.durable_registered:
+                    await self._release_terminal_retention(
+                        run.tenant_id,
+                        {
+                            "run_id": run.run_id,
+                            "tenant_id": _canonical_tenant_id(run.tenant_id),
+                            "owner_worker_id": self._settings.worker_id,
+                            "correlation_id": run.correlation_id,
+                            "user_id": run.user_id,
+                            "status": status.value,
+                            "completed_at": completed_at.isoformat(),
+                            "error_type": error_type,
+                            "outcome_status": outcome_status,
+                        },
+                    )
                 async with self._lock:
                     self._publish_terminal_locked(
                         run, status, completed_at, error_type, outcome_status
@@ -835,6 +850,18 @@ class MedusaRunManager:
                     raise RunTenantMismatchError(run_id)
                 if user_id is not None and shared.get("user_id") != user_id:
                     raise RunNotFoundError(run_id)
+                if (
+                    self._settings.durable_run_ledger_enabled
+                    and shared.get("terminal_authority") == "durable_arbitrated"
+                ):
+                    try:
+                        durable = await self._get_durable(
+                            run_id=run_id, tenant_id=tenant_id
+                        )
+                    except DurableRunLedgerUnavailable:
+                        durable = None
+                    if durable is not None:
+                        await self._release_terminal_retention(tenant_id, durable)
                 if not require_durable_history:
                     return shared
                 # Redis owns live coordination, but its snapshot does not
@@ -1220,6 +1247,31 @@ class MedusaRunManager:
         except (TypeError, ValueError):
             return False
 
+    async def _release_terminal_retention(
+        self, tenant_id: str, durable: dict[str, Any]
+    ) -> None:
+        """Best-effort cleanup; failure cannot erase confirmed durable history."""
+        if (
+            not self._settings.distributed_run_control_enabled
+            or durable.get("tenant_id") != _canonical_tenant_id(tenant_id)
+        ):
+            return
+        acknowledge = getattr(
+            self._distributed_store, "acknowledge_durable_terminal", None
+        )
+        if acknowledge is None:
+            return
+        try:
+            await asyncio.wait_for(
+                acknowledge(tenant_id=tenant_id, receipt=durable),
+                timeout=self._settings.run_heartbeat_interval_seconds,
+            )
+        except (DistributedRunStoreUnavailable, TimeoutError, ValueError):
+            logger.warning(
+                "Medusa terminal retention acknowledgement deferred",
+                extra={"run_id": durable.get("run_id"), "tenant_id": tenant_id},
+            )
+
     async def _recover_local_terminal_view(self, run: ExecutionRun) -> None:
         """Repair history from exact receipts; never re-authorize a response."""
         if (
@@ -1276,6 +1328,8 @@ class MedusaRunManager:
                     receipt = shared
             completed_at = self._parse_time(receipt["completed_at"])
             assert completed_at is not None
+            if run.durable_registered and run.shared_registered:
+                await self._release_terminal_retention(run.tenant_id, receipt)
         except (
             DistributedRunNotFound,
             DistributedRunTenantMismatch,
@@ -1428,6 +1482,12 @@ class MedusaRunManager:
                 return
             if changed:
                 reconciled += 1
+            if shared.get("terminal_authority") == "durable_arbitrated":
+                durable = await self._get_durable(
+                    run_id=run_id, tenant_id=tenant_id
+                )
+                if durable is not None:
+                    await self._release_terminal_retention(tenant_id, durable)
 
         if reconciled:
             logger.info(

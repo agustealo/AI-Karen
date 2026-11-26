@@ -638,3 +638,67 @@ async def test_agui_cursor_replay_missing_scoped_run_does_not_synthesize_data(
     assert await lifecycle.ChatRunCoordinator(
         repository=repository,
     ).read_observed_events(context, run_id="other-run", after=5) is None
+
+
+@pytest.mark.asyncio
+async def test_owner_text_http_read_requires_current_permission_and_exact_owner(monkeypatch):
+    from fastapi import HTTPException, Request, Response
+    from ai_karen_engine.api_routes import artifacts
+
+    request = Request({"type": "http", "method": "GET", "path": f"/artifacts/{ARTIFACT}/text", "headers": []})
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+    principal = UserData(tenant_id=TENANT, user_id=USER)
+    audit = []
+    permission = SimpleNamespace(allowed=True)
+    manager = SimpleNamespace(
+        has_permission=lambda *_: permission.allowed,
+        audit_access_attempt=lambda *args, **kwargs: audit.append(kwargs["granted"]),
+    )
+    evidence = VerifiedArtifactText(
+        artifact_id=ARTIFACT, tenant_id=TENANT, user_id=USER,
+        filename="generated.txt", mime_type="text/plain", text=CODE, sha256=DIGEST,
+    )
+    read = AsyncMock(return_value=SimpleNamespace(success=True, data=evidence))
+    monkeypatch.setattr(artifacts, "get_rbac_manager", lambda: manager)
+    monkeypatch.setattr(artifacts, "_get_artifact_store", lambda: SimpleNamespace(read_owner_active_text_bounded=read))
+    # No development or fabricated identity may enter the storage reader.
+    with pytest.raises(HTTPException) as no_witness:
+        await artifacts.read_artifact_text(ARTIFACT, request, Response(), principal)
+    assert no_witness.value.status_code == 403
+    read.assert_not_awaited()
+    revalidate = AsyncMock()
+    monkeypatch.setattr(ChatExecutionContext, "revalidate_runtime_attachment_session", revalidate)
+    response = Response()
+    result = await artifacts.read_artifact_text(ARTIFACT, request, response, principal)
+    assert revalidate.await_count == 2
+    assert result == {
+        "artifact_id": ARTIFACT, "filename": "generated.txt", "mime_type": "text/plain",
+        "text": CODE, "sha256": DIGEST, "size_bytes": len(CODE.encode("utf-8")),
+    }
+    assert response.headers["cache-control"] == "private, no-store"
+    read.assert_awaited_once_with(ARTIFACT, TENANT, USER, max_bytes=65536)
+    permission.allowed = False
+    with pytest.raises(HTTPException) as denied:
+        await artifacts.read_artifact_text(ARTIFACT, request, Response(), principal)
+    assert denied.value.status_code == 403
+    assert read.await_count == 1
+    permission.allowed = True
+    read.return_value = SimpleNamespace(success=False, data=None)
+    with pytest.raises(HTTPException) as archived:
+        await artifacts.read_artifact_text(ARTIFACT, request, Response(), principal)
+    assert archived.value.status_code == 404
+    read.return_value = SimpleNamespace(success=True, data=VerifiedArtifactText(
+        artifact_id=ARTIFACT, tenant_id=TENANT, user_id=ARTIFACT,
+        filename="generated.txt", mime_type="text/plain", text=CODE, sha256=DIGEST,
+    ))
+    with pytest.raises(HTTPException) as foreign:
+        await artifacts.read_artifact_text(ARTIFACT, request, Response(), principal)
+    assert foreign.value.status_code == 404
+    assert audit == [True, True, False, True, True]
+    read.return_value = SimpleNamespace(success=True, data=evidence)
+    revalidate.side_effect = [None, PermissionError("runtime_attachment_session_revoked")]
+    with pytest.raises(HTTPException) as revoked:
+        await artifacts.read_artifact_text(ARTIFACT, request, Response(), principal)
+    assert revoked.value.status_code == 403
