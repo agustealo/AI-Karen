@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@copilotkit/react-core/v2", () => ({
@@ -29,6 +29,13 @@ import {
 } from "@/components/chat/copilotkit/KarenCopilotVerifiedHistory";
 import { KarenCopilotVerifiedRail } from "@/components/chat/copilotkit/KarenCopilotVerifiedRail";
 
+function openDesktopContext() {
+  const button = screen.getByRole("button", { name: "Show response context" });
+  expect(button.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(button);
+  expect(screen.getByRole("button", { name: "Hide response context" }).getAttribute("aria-expanded")).toBe("true");
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -38,13 +45,6 @@ const messages = [
   { id: "user-1", role: "user" },
   { id: "assistant-1", role: "assistant" },
 ];
-
-function openDesktopContext() {
-  const toggle = screen.getByLabelText("Show response context");
-  expect(toggle.getAttribute("aria-expanded")).toBe("false");
-  fireEvent.click(toggle);
-  expect(screen.getByLabelText("Hide response context").getAttribute("aria-expanded")).toBe("true");
-}
 
 describe("CopilotKit canonical intelligence rail", () => {
   it("shows an explicit absence instead of inventing activity when no receipt was saved", () => {
@@ -221,7 +221,12 @@ describe("CopilotKit canonical intelligence rail", () => {
     fireEvent.change(selectors[0], { target: { value: "assistant-old" } });
     expect(screen.getAllByText("older-verified-model")).toHaveLength(2);
     expect(screen.queryByText("latest-verified-model")).toBeNull();
-    fireEvent.change(selectors[1], { target: { value: "assistant-new" } });
+    fireEvent.click(screen.getByRole("button", { name: "Hide response context" }));
+    expect(screen.getAllByText("older-verified-model")).toHaveLength(1);
+    expect(screen.getAllByLabelText("Inspect saved response")).toHaveLength(1);
+    openDesktopContext();
+    expect(screen.getAllByText("older-verified-model")).toHaveLength(2);
+    fireEvent.change(screen.getAllByLabelText("Inspect saved response")[1], { target: { value: "assistant-new" } });
     expect(screen.getAllByText("latest-verified-model")).toHaveLength(2);
     expect(screen.queryByText("older-verified-model")).toBeNull();
   });
@@ -506,40 +511,12 @@ describe("CopilotKit canonical intelligence rail", () => {
       </KarenVerifiedHistoryProvider>,
     );
     const disclosure = screen.getByTestId("karen-copilot-mobile-intelligence");
+    expect(screen.getByRole("button", { name: "Show response context" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(1);
     expect(disclosure.tagName).toBe("DETAILS");
     expect(disclosure.hasAttribute("open")).toBe(false);
     expect(disclosure.querySelector("summary")?.textContent).toContain("Response context");
     expect(disclosure.querySelector('[data-testid="canonical-conversation-rail"]')).not.toBeNull();
-  });
-
-  it("keeps desktop context collapsed until requested and preserves verified mobile context when closed again", () => {
-    const parts = parseKarenVerifiedHistory([{
-      type: "CUSTOM",
-      name: "karen.execution_receipt.v1",
-      messageId: "assistant-1",
-      value: {
-        actual_provider: "local",
-        actual_model: "verified-runtime-model",
-        response_source: "local_inference",
-      },
-    }], messages);
-    render(
-      <KarenVerifiedHistoryProvider parts={parts}>
-        <KarenCopilotVerifiedRail />
-      </KarenVerifiedHistoryProvider>,
-    );
-    const desktop = within(screen.getByTestId("karen-copilot-response-context"));
-    const mobile = within(screen.getByTestId("karen-copilot-mobile-intelligence"));
-    expect(desktop.queryByTestId("canonical-conversation-rail")).toBeNull();
-    expect(mobile.getByText("verified-runtime-model")).toBeTruthy();
-    openDesktopContext();
-    expect(desktop.getByText("verified-runtime-model")).toBeTruthy();
-    expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(2);
-    fireEvent.click(desktop.getByLabelText("Hide response context"));
-    expect(desktop.getByLabelText("Show response context").getAttribute("aria-expanded")).toBe("false");
-    expect(desktop.queryByTestId("canonical-conversation-rail")).toBeNull();
-    expect(mobile.getByText("verified-runtime-model")).toBeTruthy();
-    expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(1);
   });
 
 });
