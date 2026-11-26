@@ -83,12 +83,25 @@ class ChatRunLease:
 
 def draft_revision_from_submission_id(submission_id: Optional[str]) -> Optional[int]:
     """Recognize the reserved original-draft identity; no client authority."""
-    if submission_id is None or not submission_id.startswith("draft-v1-"):
+    if submission_id is None or not submission_id.startswith(("draft-v1-", "draft-v2-")):
         return None
-    match = re.fullmatch(r"draft-v1-([1-9][0-9]{0,15})", submission_id)
+    pattern = (
+        r"draft-v2-([1-9][0-9]{0,15})-[a-f0-9]{64}"
+        if submission_id.startswith("draft-v2-")
+        else r"draft-v1-([1-9][0-9]{0,15})"
+    )
+    match = re.fullmatch(pattern, submission_id)
     if match is None or int(match[1]) > 9007199254740990:
         raise ValueError("invalid_draft_submission_identity")
     return int(match[1])
+
+
+def draft_attachment_digest_from_submission_id(submission_id: Optional[str]) -> Optional[str]:
+    """Read the durable v2 selection digest; it grants no content permission."""
+    if submission_id is None or not submission_id.startswith("draft-v2-"):
+        return None
+    draft_revision_from_submission_id(submission_id)
+    return submission_id.rsplit("-", 1)[1]
 
 
 class DraftSubmissionConflict(Exception):
@@ -144,12 +157,28 @@ class SqlChatRunRepository:
         correlation_id: str,
         submission_id: Optional[str] = None,
         submitted_text: Optional[str] = None,
+        submitted_attachment_references: Optional[list[dict[str, str]]] = None,
     ) -> Optional[ChatRunLease]:
         if submission_id is not None and (
             not isinstance(submission_id, str) or not _RUN_ID_PATTERN.fullmatch(submission_id)
         ):
             raise ValueError("invalid_chat_submission_id")
         draft_revision = draft_revision_from_submission_id(submission_id)
+        attachment_digest = draft_attachment_digest_from_submission_id(submission_id)
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            draft_attachment_selection_digest,
+            validate_draft_attachment_references,
+        )
+        selected = validate_draft_attachment_references(
+            [] if submitted_attachment_references is None else submitted_attachment_references
+        )
+        if (
+            (attachment_digest is None and selected)
+            or (attachment_digest is not None and (
+                not selected or draft_attachment_selection_digest(selected) != attachment_digest
+            ))
+        ):
+            raise DraftSubmissionConflict("composer_draft_submission_conflict")
         if draft_revision is not None and (
             not isinstance(submitted_text, str) or not submitted_text.strip()
             or len(submitted_text) > 10000
@@ -254,6 +283,7 @@ class SqlChatRunRepository:
                     session, tenant_id=tenant, user_id=user,
                     conversation_id=conversation, revision=draft_revision,
                     submitted_text=submitted_text,
+                    **({"attachment_references": selected} if selected else {}),
                 ):
                     raise DraftSubmissionConflict("composer_draft_submission_conflict")
         if attention_enabled and not admitted:

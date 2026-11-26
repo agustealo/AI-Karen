@@ -99,6 +99,17 @@ def validate_draft_attachment_references(value: object) -> list[dict[str, str]]:
     return references
 
 
+def draft_attachment_selection_digest(value: object) -> str:
+    """Digest the exact ordered, validated selection, never document bytes."""
+    references = validate_draft_attachment_references(value)
+    if not references:
+        raise ValueError("composer_attachment_invalid")
+    encoded = json.dumps(
+        references, sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("ascii")
+    return hashlib.sha256(encoded).hexdigest()
+
+
 @dataclass
 class ConversationQuery:
     """Query parameters for conversations."""
