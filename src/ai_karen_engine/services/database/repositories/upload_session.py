@@ -252,6 +252,61 @@ class UploadSessionRepository:
             await session.commit()
             return self._record(row)
 
+    async def consume_write_claim(
+        self, *, tenant_id: str, owner_user_id: str, session_id: str,
+        lease_token: str, observed_bytes: int, observed_sha256: str,
+    ) -> UploadSession | None:
+        """Durably spend the write lease BEFORE any object creation.
+
+        Once dispatched (or its SQL commit becomes uncertain), no second
+        writer can use the same lease. The only next step is readback
+        reconciliation. This operation does not assert Storage success.
+        """
+        identity = self._identity(tenant_id, owner_user_id)
+        session_uuid = str(UUID(session_id))
+        if (
+            type(observed_bytes) is not int or not 1 <= observed_bytes <= 65536
+            or not isinstance(observed_sha256, str)
+            or len(observed_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in observed_sha256)
+        ):
+            raise ValueError("Invalid reserved write content")
+        params = {
+            **identity, "session_id": session_uuid,
+            "lease_token": str(UUID(lease_token)),
+            "observed_bytes": observed_bytes, "observed_sha256": observed_sha256,
+            "storage_key": f"{identity['tenant_id']}/{session_uuid}/content",
+            "reserved_artifact_id": session_uuid,
+        }
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                UPDATE public.artifact_upload_sessions
+                SET state = 'reconcile_required', lease_owner = NULL,
+                    lease_expires_at = NULL, updated_at = now()
+                WHERE session_id = :session_id
+                  AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
+                  AND state = 'committing' AND expires_at > now()
+                  AND lease_owner = :lease_token AND lease_expires_at > now()
+                  AND artifact_id IS NULL AND storage_key = :storage_key
+                  AND received_bytes = expected_bytes
+                  AND expected_bytes = :observed_bytes
+                  AND expected_sha256 = :observed_sha256
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.files
+                      WHERE file_id = :reserved_artifact_id
+                  )
+                RETURNING session_id, tenant_id, owner_user_id, destination_id,
+                          recipe, state, manifest_sha256, expected_bytes,
+                          received_bytes, artifact_id, expected_sha256,
+                          lease_owner, lease_expires_at, storage_key
+            """), params)
+            row = result.first()
+            if row is None:
+                await session.rollback()
+                return None
+            await session.commit()
+            return self._record(row)
+
     async def mark_expired_commit_uncertain(
         self, *, tenant_id: str, owner_user_id: str, session_id: str,
     ) -> UploadSession | None:

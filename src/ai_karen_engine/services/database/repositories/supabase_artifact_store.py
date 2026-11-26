@@ -33,6 +33,7 @@ from ai_karen_engine.services.database.repositories.artifact_store import (
     RepositoryResult,
 )
 from ai_karen_engine.services.database.repositories.observability import instrument_repository
+from ai_karen_engine.services.database.repositories.upload_session import UploadSessionRepository
 from ai_karen_engine.core.logging.redaction import install_signed_storage_httpx_log_filter
 from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
 
@@ -106,17 +107,92 @@ class SupabaseArtifactStore(ArtifactStore):
         Failed compensation is logged for operator reconciliation. This is not
         a durable two-phase commit; U2 will supply a persistent staging ledger.
         """
+        return await self._upload_object_and_metadata(
+            request, artifact_id=str(uuid.uuid4()), reserved=False,
+        )
+
+    @instrument_repository(operation="upload_reserved_text", repository="SupabaseArtifactStore")
+    async def upload_reserved_text(
+        self, request: ArtifactUploadRequest, *, session_id: str, lease_token: str,
+    ) -> RepositoryResult[Artifact]:
+        """Consume the existing ledger claim, write once, and prove readback.
+
+        Only the authenticated runtime may call this internal method. A failed
+        or interrupted reserved write is never automatically compensated or
+        replayed: the ledger already records uncertain finality.
+        """
+        unavailable = "reserved_upload_unavailable"
+        data = request.data
+        if (
+            not all(
+                isinstance(value, str) and self._canonical_uuid_value(value)
+                for value in (session_id, lease_token, request.tenant_id, request.user_id)
+            )
+            or not isinstance(data, bytes)
+            or not 1 <= len(data) <= 65536
+            or request.content_type != "text/plain"
+            or not isinstance(request.filename, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", request.filename) is None
+            or not request.filename.lower().endswith((".txt", ".md"))
+        ):
+            return RepositoryResult(success=False, error=unavailable)
+        try:
+            body = data.decode("utf-8", errors="strict")
+            if not body.strip() or any(
+                ord(char) < 32 and char not in "\\n\\r\\t" for char in body
+            ):
+                return RepositoryResult(success=False, error=unavailable)
+            # Validate serializability before consuming the one-shot claim.
+            json.dumps(request.metadata, allow_nan=False)
+            ledger = UploadSessionRepository(self._session_factory)
+            scope = dict(
+                tenant_id=request.tenant_id, owner_user_id=request.user_id,
+                session_id=session_id,
+            )
+            claimed = await ledger.consume_write_claim(
+                **scope, lease_token=lease_token, observed_bytes=len(data),
+                observed_sha256=hashlib.sha256(data).hexdigest(),
+            )
+            if claimed is None:
+                return RepositoryResult(success=False, error=unavailable)
+            written = await self._upload_object_and_metadata(
+                request, artifact_id=session_id, reserved=True,
+            )
+            if not written.success:
+                return RepositoryResult(success=False, error="reserved_upload_reconcile_required")
+            recovered = await ledger.reconcile_verified_text(
+                **scope, artifact_store=self,
+            )
+            if (
+                recovered is None or recovered.state != "committed"
+                or recovered.artifact_id != session_id
+            ):
+                return RepositoryResult(success=False, error="reserved_upload_reconcile_required")
+            return written
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Reserved artifact write outcome unavailable",
+                extra={"error_type": type(exc).__name__},
+            )
+            return RepositoryResult(success=False, error="reserved_upload_reconcile_required")
+
+    async def _upload_object_and_metadata(
+        self, request: ArtifactUploadRequest, *, artifact_id: str, reserved: bool,
+    ) -> RepositoryResult[Artifact]:
+        """Single canonical object + metadata writer for both upload paths."""
         start = time.perf_counter()
-        artifact_id = str(uuid.uuid4())
         # Storage keys must never contain a client-controlled filename.
         storage_key = self._canonical_object_key(request.tenant_id, artifact_id)
         data = request.data or b""
         digest = hashlib.sha256(data).hexdigest()
         try:
             bucket = self._bucket()
-            bucket.upload(
-                storage_key, data, {"content-type": request.content_type}
-            )
+            options = {"content-type": request.content_type}
+            if reserved:
+                options["upsert"] = "false"
+            bucket.upload(storage_key, data, options)
         except Exception:
             logger.exception("Artifact object upload failed for artifact_id=%s", artifact_id)
             return RepositoryResult(success=False, error="storage_upload_failed")
@@ -167,7 +243,7 @@ class SupabaseArtifactStore(ArtifactStore):
                 await session.commit()
         except Exception:
             logger.exception("Artifact metadata persistence uncertain for artifact_id=%s", artifact_id)
-            if not commit_attempted:
+            if not commit_attempted and not reserved:
                 try:
                     bucket.remove([storage_key])
                 except Exception:
@@ -176,8 +252,8 @@ class SupabaseArtifactStore(ArtifactStore):
                         artifact_id,
                     )
             else:
-                # A commit exception can occur after the database committed.
-                # Never delete a potentially live object's bytes on uncertainty.
+                # Reserved identities are recoverable; never delete their
+                # bytes on failure. A legacy commit can also be ambiguous.
                 logger.error("Artifact commit outcome requires reconciliation artifact_id=%s", artifact_id)
             return RepositoryResult(success=False, error="artifact_commit_failed")
 

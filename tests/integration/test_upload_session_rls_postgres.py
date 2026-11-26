@@ -312,10 +312,19 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
         )
         lease = await repo.claim_commit(**recovery_scope, lease_expires_at=deadline)
         assert lease is not None
-        await repo.transition(
-            **recovery_scope, expected_state="committing", next_state="reconcile_required",
-            lease_token=lease.lease_owner,
+        claim_args = dict(
+            **recovery_scope, lease_token=lease.lease_owner,
+            observed_bytes=len(body.encode()), observed_sha256=content_digest,
         )
+        assert await repo.consume_write_claim(
+            **{**claim_args, "observed_sha256": "c" * 64},
+        ) is None
+        spent = await asyncio.gather(*(
+            repo.consume_write_claim(**claim_args) for _ in range(2)
+        ))
+        assert sum(item is not None for item in spent) == 1
+        assert next(item for item in spent if item is not None).state == "reconcile_required"
+        assert await repo.consume_write_claim(**claim_args) is None
         async with factory() as db:
             await db.execute(text(
                 "INSERT INTO public.files "
