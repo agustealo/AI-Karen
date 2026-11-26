@@ -749,3 +749,21 @@ bash scripts/ci/kui-local-acceptance.sh "$REVIEWED_SHA"
 ```
 
 After acceptance, run `bash scripts/ci/kui-card-studio-local-cleanup.sh "$REVIEWED_SHA"`. Cleanup drops only the disposable `kcard_<12-character-SHA>` database and removes the project containers; it does not alter the canonical Supabase database.
+
+
+### ARM-05C.6B: specialist lifecycle and empty-evidence acceptance
+
+Extend the existing ARM-05C.5B real-host trial by enabling both
+`KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE=true` and
+`KAREN_SPECIALIST_LIFECYCLE_ACCEPTANCE=true`. Use only separately approved,
+sanitized non-admin accounts and pre-existing terminal runs. The two recorded
+run IDs (`KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID` and
+`KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID`) must collectively contain all five
+real durable observation phases. Account A must also own a distinct terminal
+run designated by `KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID` whose
+canonical participation endpoint returns verified empty evidence. The original
+same-tenant two-account denial and signed-out checks still run; B must also be
+denied the empty run. No fixture creation, synthetic backend responses or
+execution mutation is authorized. Run the existing ARM-05C.5B test selector
+in the approved environment. The added mode fails if any required phase or
+empty fixture is missing. Browser proof remains NOT_RUN until actual execution.

@@ -8,7 +8,6 @@ on:
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
       - "src/ai_karen_engine/persistence/repositories/chat_run_repository.py"
       - "src/ai_karen_engine/config/runtime.py"
-      - "supabase/kcomm_02c_attention_marker_candidate.sql"
       - "supabase/migrations/*communications_attention*.sql"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
       - "src/ai_karen_engine/services/privacy_compliance.py"
@@ -19,15 +18,13 @@ on:
       - "tests/api_routes/test_communications_inbox_contract.py"
       - ".github/workflows/kcomm-communications-postgres-proof.yml"
   push:
-    # Temporary isolated branch proof; remove branch filter before promotion.
-    branches: [main, kcomm-02c-terminal-producer-20261126]
+    branches: [main]
     paths:
       - "supabase/migrations/**"
       - "tests/integration/test_communications_inbox_postgres.py"
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
       - "src/ai_karen_engine/persistence/repositories/chat_run_repository.py"
       - "src/ai_karen_engine/config/runtime.py"
-      - "supabase/kcomm_02c_attention_marker_candidate.sql"
       - "supabase/migrations/*communications_attention*.sql"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
       - "src/ai_karen_engine/services/privacy_compliance.py"
@@ -71,31 +68,15 @@ jobs:
           test "${#migrations[@]}" = 1
           test "${migrations[0]}" = "supabase/migrations/20261126144509_77_communications_inbox.sql"
           sha256sum "supabase/migrations/20261126144509_77_communications_inbox.sql"
-      - name: Generate temporary producer migration with pinned Supabase CLI
+      - name: Verify single committed producer migration
         shell: bash
         run: |
           set -euo pipefail
-          cli_dir="$(mktemp -d)"
-          archive="$cli_dir/supabase.tar.gz"
-          curl --fail --silent --show-error --location --retry 2 \
-            https://github.com/supabase/cli/releases/download/v3.4.0/supabase_3.4.0_linux_amd64.tar.gz \
-            -o "$archive"
-          echo "d82f8fc8a1611c45b9422b10378f61df614325f7e25624acda3704544513d6ac  $archive" | sha256sum --check
-          tar -xzf "$archive" -C "$cli_dir" supabase
-          "$cli_dir/supabase" --version
-          "$cli_dir/supabase" migration new --help
-          latest="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1)"
-          test -z "$(find supabase/migrations -maxdepth 1 -name '*communications_attention*.sql' -print)"
-          "$cli_dir/supabase" migration new 78_communications_attention < /dev/null
-          mapfile -t generated < <(find supabase/migrations -maxdepth 1 -name '*_78_communications_attention.sql')
-          test "${#generated[@]}" = 1
-          filename="$(basename "${generated[0]}")"
-          [[ "$filename" > "$latest" ]]
-          cp supabase/kcomm_02c_attention_marker_candidate.sql "${generated[0]}"
-          cmp supabase/kcomm_02c_attention_marker_candidate.sql "${generated[0]}"
-          echo "GENERATED_MIGRATION=$filename"
-          sha256sum "${generated[0]}"
-          echo "CLI-generated producer migration candidate: $filename" >> "$GITHUB_STEP_SUMMARY"
+          test ! -e supabase/kcomm_02c_attention_marker_candidate.sql
+          mapfile -t migrations < <(find supabase/migrations -maxdepth 1 -type f -name '*communications_attention*.sql')
+          test "${#migrations[@]}" = 1
+          test "${migrations[0]}" = "supabase/migrations/20261126150739_78_communications_attention.sql"
+          sha256sum "supabase/migrations/20261126150739_78_communications_attention.sql"
       - name: Prove full canonical migration chain without optional client roles
         shell: bash
         run: |
@@ -146,4 +127,4 @@ jobs:
       - name: Record evidence boundary
         if: always()
         run: |
-          echo "This workflow targets the canonical migration chain, scoped DDL, repository lifecycle and conversation privacy export/erasure against disposable PostgreSQL. Consult job and test results for actual acceptance; producer migration is generated temporarily for proof; no deployed schema, activation or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"
+          echo "This workflow targets the canonical migration chain, scoped DDL, repository lifecycle and conversation privacy export/erasure against disposable PostgreSQL. Consult job and test results for actual acceptance; producer migration is committed; no deployed schema, activation or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"

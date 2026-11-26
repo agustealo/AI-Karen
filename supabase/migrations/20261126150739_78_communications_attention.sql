@@ -1,5 +1,5 @@
--- KCOMM-02C UNVERSIONED REVIEW CANDIDATE. DO NOT DEPLOY.
--- Promote once via Supabase CLI after parent acceptance; no historical backfill.
+-- KCOMM-02C: terminal attention eligibility and revocable source lifetime.
+-- Forward-only migration; no historical backfill. Keep producer disabled until acceptance.
 BEGIN;
 
 ALTER TABLE public.runtime_chat_runs

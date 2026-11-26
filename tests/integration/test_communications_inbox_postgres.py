@@ -248,7 +248,7 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
         assert archive_only["read_at"] is None
         assert archive_only["acknowledged_at"] is None
 
-        # Promote only the test database through the next migration candidate.
+        # Promote only the test database through the canonical producer migration.
         # Keep the already-verified schema-77 assertions above intact.
         for filename in (
             "20261125010000_74_runtime_chat_single_active_run.sql",
@@ -259,7 +259,7 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
                 (ROOT / "supabase/migrations" / filename).read_text(encoding="utf-8")
             )
         await raw.execute(
-            (ROOT / "supabase/kcomm_02c_attention_marker_candidate.sql").read_text(encoding="utf-8")
+            (ROOT / "supabase/migrations/20261126150739_78_communications_attention.sql").read_text(encoding="utf-8")
         )
         assert await raw.fetchval(
             "SELECT communications_attention_eligible_at IS NULL "
