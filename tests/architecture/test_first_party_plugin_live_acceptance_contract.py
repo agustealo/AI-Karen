@@ -38,8 +38,29 @@ def test_plugin_scenario_reuses_exact_main_provenance_and_env_boundary() -> None
     header = job.split("\n    steps:", 1)[0]
     assert "secrets.KAREN_UX_EMAIL" not in header
     assert "secrets.KAREN_UX_PASSWORD" not in header
-    assert job.count("KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}") == 1
-    assert job.count("KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}") == 1
+    # The specialist scenario has its own mutually exclusive browser step.
+    # Both use the same approved account, but neither leaks it to setup or
+    # provenance jobs. Count all references as well as the exact mappings.
+    for title, condition in (
+        (
+            "Verify authenticated workspace browser acceptance",
+            "inputs.scenario != 'specialist-participation'",
+        ),
+        (
+            "Prove protected specialist lifecycle and cross-tenant readback",
+            "inputs.scenario == 'specialist-participation'",
+        ),
+    ):
+        marker = "      - name: " + title + "\n"
+        assert job.count(marker) == 1
+        step = job.split(marker, 1)[1].split("\n      - ", 1)[0]
+        assert "        if: " + condition + "\n" in step
+        env = step.split("        env:\n", 1)[1].split("        run:", 1)[0]
+        for name in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
+            mapping = "          " + name + ": ${{ secrets." + name + " }}"
+            assert env.splitlines().count(mapping) == 1
+    for name in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
+        assert job.count("secrets." + name + " }}") == 2
     assert "actions/upload-artifact" not in job
     assert "docker compose up" not in job
 

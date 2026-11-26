@@ -446,6 +446,7 @@ class MedusaCoordinator:
                         agent_id=step.agent_specialist,
                         message=f"step {step.id} skipped",
                         correlation_id=self._correlation_id(request),
+                        request_id=request.request_id,
                         metadata={"step_id": step.id, "reason_code": reason},
                     )
                 )
@@ -968,6 +969,7 @@ class MedusaCoordinator:
                         agent_id=step.agent_specialist,
                         message=f"step {step.id} started",
                         correlation_id=self._correlation_id(request),
+                        request_id=request.request_id,
                         metadata={"step_id": step.id, "degraded": is_degraded},
                     )
                 )
@@ -997,6 +999,7 @@ class MedusaCoordinator:
                         agent_id=step.agent_specialist,
                         message=f"step {step.id} completed",
                         correlation_id=self._correlation_id(request),
+                        request_id=request.request_id,
                         metadata={"step_id": step.id, "degraded": is_degraded},
                     )
                 )
@@ -1051,6 +1054,7 @@ class MedusaCoordinator:
                                 agent_id=step.agent_specialist,
                                 message=f"step {step.id} interrupted",
                                 correlation_id=self._correlation_id(request),
+                                request_id=request.request_id,
                                 metadata={
                                     "step_id": step.id,
                                     "degraded": is_degraded,
@@ -1108,6 +1112,7 @@ class MedusaCoordinator:
                             agent_id=step.agent_specialist,
                             message=f"step {step.id} failed",
                             correlation_id=self._correlation_id(request),
+                            request_id=request.request_id,
                             metadata={
                                 "step_id": step.id,
                                 "error_type": type(exc).__name__,
