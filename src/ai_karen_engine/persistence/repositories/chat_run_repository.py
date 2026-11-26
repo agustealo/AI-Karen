@@ -470,6 +470,13 @@ class SqlChatRunRepository:
             }
         ):
             raise ValueError("unsupported_chat_projection_custom_event")
+        if event_type == "CUSTOM" and event.get("name") == "karen.execution_receipt.v1":
+            value = event.get("value")
+            if not isinstance(value, Mapping) or (
+                "runtime_request_id" in value
+                and value["runtime_request_id"] != lease.request_id
+            ):
+                raise ValueError("chat_projection_identity_mismatch")
         # The coordinator sanitizes observed projections, but this repository
         # is the final durable write boundary. Reuse the canonical detector to
         # reject any source-bearing presentation from a future direct caller.
