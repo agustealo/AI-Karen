@@ -42,7 +42,7 @@ def _request():
         messages=[{"role": "user", "content": "Research the request"}],
         context=ChatExecutionContext(
             user_id="u-1", tenant_id="t-1", session_id="s-1",
-            conversation_id="c-1", request_id="req-1", correlation_id="corr-1", request_id="req-1",
+            conversation_id="c-1", request_id="req-1", correlation_id="corr-1",
         ),
     )
 
