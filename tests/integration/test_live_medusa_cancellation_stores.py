@@ -273,6 +273,8 @@ async def _run_acceptance() -> None:
             tenant_id=tenant_a, marker=marker
         )
     finally:
+        # Failure before the first cancellation must not strand workload cleanup.
+        release_retirement.set()
         if run is not None and run.heartbeat_task is not None:
             run.heartbeat_task.cancel()
             try:
