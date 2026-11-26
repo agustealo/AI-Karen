@@ -8,7 +8,10 @@ from typing import Any
 
 from .settings import get_logging_settings
 from .formatters import RuntimeJSONFormatter, RuntimeTextFormatter
-from .redaction import install_signed_storage_httpx_log_filter
+from .redaction import (
+    install_request_target_privacy_filter,
+    install_signed_storage_httpx_log_filter,
+)
 
 def setup_sinks():
     """Configure global logging using dictConfig for precision and to prevent duplication."""
@@ -85,6 +88,7 @@ def setup_sinks():
     # Apply configuration
     logging.config.dictConfig(config)
     install_signed_storage_httpx_log_filter()
+    install_request_target_privacy_filter()
 
     # Note: OTEL and Audit forwarding sinks would be initialized here
     if settings.otel_enabled:

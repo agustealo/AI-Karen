@@ -823,6 +823,7 @@ jobs:
       KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID }}
       KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION: ${{ vars.KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION }}
       KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}
+      KAREN_FILE_EXPLORER_REQUIRE_NESTED: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}
       KAREN_PIN_READBACK_ACCEPTANCE: ${{ (inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && '1' || '0' }}
       KAREN_PIN_MUTATION_ACCEPTANCE: ${{ inputs.scenario == 'pins-mutation' && '1' || '0' }}
       KAREN_PIN_MUTATION_DISPOSABLE_APPROVED: ${{ vars.KAREN_PIN_MUTATION_DISPOSABLE_APPROVED }}

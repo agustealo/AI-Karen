@@ -18,6 +18,7 @@ from ai_karen_engine.api_routes.models.unavailable_capabilities import (
 )
 from ai_karen_engine.api_routes.monitoring.metrics import router as metrics_router
 from ai_karen_engine.api_routes.monitoring.probes import router as probe_router
+from ai_karen_engine.core.logging.redaction import install_request_target_privacy_filter
 from ai_karen_engine.platform.observability.http_metrics import (
     ERROR_COUNT,
     REQUEST_COUNT,
@@ -85,6 +86,10 @@ def _register_canonical_routes(app: FastAPI) -> None:
 
 def create_app() -> FastAPI:
     """Construct the canonical AI KAREN ASGI application directly."""
+    # Uvicorn configures access logging before loading the application factory.
+    # Install the existing privacy boundary on this canonical entrypoint,
+    # independently of optional or legacy logging configuration.
+    install_request_target_privacy_filter()
     _validate_environment()
 
     settings = Settings()

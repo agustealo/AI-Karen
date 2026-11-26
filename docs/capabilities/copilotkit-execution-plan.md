@@ -1420,3 +1420,23 @@ completion, content-size or presentation validation to silence the UI.
 ### ARM-11B: ambiguous cancellation acknowledgement acceptance (SOURCE_CANDIDATE)
 
 - Prior exact head 62e1bd4e990707c2e9f92722be9e855b42daf451 executed real PostgreSQL/Redis integration (job 140063997474, 1 passed in 32.71s), including cleanup beyond claim TTL and claim release. Durable Run Contract job 140063998958 stopped on one Black formatting difference; apply the exact formatter correction. Strengthen the same real-store test: drive pre-commit failure and committed-but-lost acknowledgement through the actual remote manager, retain real SQL/Redis and inject only ledger acknowledgement failure. Verify no remote success, zero remote Redis publications, no cancellation for uncommitted intent, existing owner recovery of committed intent, one audit-bound cancellation transition and terminal release. No production recovery algorithm change in this slice. Fresh combined-head CI required; this does not establish recovery for local-only durable runs without a shared heartbeat, terminal-vs-commit arbitration, or native cessation.
+
+
+## KCON-530 / KCON-770 / KEXP-004B.7: Shared Explorer selection reconciliation (2026-11-25, SOURCE_CANDIDATE)
+
+- PR #1309 reconciles the earlier #1307 page feedback and #1308 presentation/search candidates into the existing authenticated Explorer host and canonical extension UI. Hierarchy navigation and organization require fresh backend authorization, independent metadata revisions and verified receipts. No new draft store, content grant, upload, model invocation or attachment transport is introduced.
+- Composer picker derives remaining capacity from the existing persisted-draft reference ceiling, excludes already attached IDs, clears selection on principal/page/capacity changes, and rejects superseded selection confirmations even before React commits a replacement render. The conversation draft CAS remains authoritative. The analysis consumer receives the backend Content Intelligence reference ceiling.
+- Exact-head regression candidates: query and cursor isolation, logout/return to the same principal, invalid search rejection without changing selection, stale confirmation, remaining capacity and revision-bound reference handoff. Current Main Quality and First-Boot acceptance have not executed on the candidate because the merge-gate label was absent. Full acceptance must run against the reconciled head; do not certify earlier branch runs.
+- Keep KCON-530 and KCON-770 unchecked. Real authenticated browser acceptance, attachment content admission, live deployed database/role proof and independent review remain outstanding. Deployment remains on HOLD.
+
+
+### KEXP-009P — source convergence (2026-11-26)
+
+- Explorer head `20fd85a7f8d0a092cc976c34ce8645381a3ab707`: 24/24 workflows passed and exact-head independent automated code review reported no major issues. #1320 merged at `58763e77fdbfd912762425c3b9cac3bd12f6a26a` with identical certified tree; real-store replay fencing and specialist receipts now on main. Main advanced to `75e3e6e346176237491327ba9f464b197d2081e6` through additional consumer chat and communications changes.
+- Reconcile the latest main layout with Explorer's shared MAX_DRAFT_ATTACHMENTS, existing-attachment exclusion and revision-bound reference admission. Preserve both existing ledgers. No attachment send enablement, quota change, new authority or production release. Fresh combined exact-head CI, review, authenticated consumer acceptance and deployment authorization remain required; KCON tasks remain unchecked.
+
+
+### KEXP-009Q — mainline responsive context regression reconciliation (2026-11-26)
+
+- Combined candidate `32ccd455d122eae4ec2f3e9496bc13edbe21863a` DEV_FAST frontend run 45825891166 failed nine assertions (1,470/1,479 passed). Mainline collapses desktop response context by default and compacts model settings; earlier tests assumed both context copies mounted initially and obsolete exact padding. Preserve explicit evidence cardinality, selected-response isolation, responsive controls and original backend authority. Open the desktop disclosure before existing two-copy assertions, add explicit closed/open/close behavioral coverage, and verify compact model disclosure without changing production UI.
+- Reconcile newly advanced main `4686e78b75d47be7c0e81a7d91eb8badf6c18bcb` (owner-scoped specialist participation retrieval) into this candidate. Preserve both ledgers and all nonoverlapping main and Explorer blobs. Fresh exact-head combined CI and review required; browser/deployed acceptance remains NOT_RUN. No authorization to merge or deploy.

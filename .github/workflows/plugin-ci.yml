@@ -26,6 +26,8 @@ on:
       - 'src/ui_launchers/Karen-AI-Theme/tests/plugins/**'
       - 'tests/architecture/test_plugin_store_api_shape_guards.py'
       - 'tests/extensions/**'
+      - 'tests/api/test_file_explorer_inventory_api.py'
+      - 'tests/api/test_content_owner_sources_api.py'
       - 'tests/integration/test_channel_claim_concurrency_postgres.py'
       - 'tests/integration/test_channel_status_batch_benchmark_postgres.py'
       - 'tests/integration/test_plugin_settings_postgres.py'
@@ -90,6 +92,8 @@ on:
       - 'src/ui_launchers/Karen-AI-Theme/tests/plugins/**'
       - 'tests/architecture/test_plugin_store_api_shape_guards.py'
       - 'tests/extensions/**'
+      - 'tests/api/test_file_explorer_inventory_api.py'
+      - 'tests/api/test_content_owner_sources_api.py'
       - 'tests/integration/test_channel_claim_concurrency_postgres.py'
       - 'tests/integration/test_channel_status_batch_benchmark_postgres.py'
       - 'tests/integration/test_plugin_settings_postgres.py'
@@ -271,6 +275,7 @@ jobs:
           pytest \
             tests/extensions/ \
             tests/api/test_content_owner_sources_api.py \
+            tests/api/test_file_explorer_inventory_api.py \
             tests/api_routes/chat/test_conversation_structured_content_response.py \
             tests/core/runtime/test_conversation_runtime_gateway.py \
             tests/core/runtime/test_conversational_plugin_inspection.py \

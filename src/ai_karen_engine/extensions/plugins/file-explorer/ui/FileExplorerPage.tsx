@@ -1,6 +1,7 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { FileText, Folder, FolderOpen, Search, LayoutGrid, List, ChevronRight } from 'lucide-react';
 
 /**
  * Reusable, controlled File Explorer extension UI.
@@ -17,6 +18,7 @@ export interface ExplorerItem {
   revision: string;
   size_bytes: number;
   sha256: string | null;
+  organization_revision?: string;
 }
 
 export interface ExplorerSelection {
@@ -26,6 +28,39 @@ export interface ExplorerSelection {
   kind: 'file' | 'folder';
 }
 
+export type ExplorerOperation = 'file_explorer.folder.create' | 'file_explorer.folder.rename'
+  | 'file_explorer.folder.move' | 'file_explorer.artifact.move' | 'file_explorer.folder.delete';
+export type ExplorerCapability = 'available' | 'denied' | 'unavailable';
+export type ExplorerMutation =
+  | { action: 'create'; name: string }
+  | { action: 'rename'; sourceId: string; expectedRevision: string; name: string }
+  | { action: 'move'; sourceId: string; expectedRevision: string; destinationId: string | null }
+  | { action: 'delete'; sourceId: string; expectedRevision: string };
+export interface ExplorerDestinationBrowser {
+  sourceId: string;
+  expectedRevision: string;
+  parentId: string | null;
+  breadcrumbs: { folder_id: string; name: string }[];
+  folders: { folder_id: string; name: string }[];
+  loading: boolean;
+  error: string | null;
+  canConfirm: boolean;
+  hasMore: boolean;
+  onNavigate: (folderId: string | null) => void;
+  onNext: () => void;
+  onCancel: () => void;
+}
+
+export interface ExplorerManagement {
+  capabilities: Partial<Record<ExplorerOperation, ExplorerCapability>>;
+  capabilityStatus?: 'checking' | 'ready' | 'unavailable';
+  busy: boolean;
+  message: string | null;
+  onMutate: (mutation: ExplorerMutation) => void;
+  onBrowseDestination?: (sourceId: string, expectedRevision: string) => void;
+  destination?: ExplorerDestinationBrowser;
+}
+
 export interface FileExplorerProps {
   authorized?: boolean;
   items?: ExplorerItem[];
@@ -33,17 +68,30 @@ export interface FileExplorerProps {
   error?: string | null;
   selectedSourceIds?: string[];
   multiSelect?: boolean;
+  maxSelection?: number;
   onSelect?: (references: ExplorerSelection[]) => void;
   onRefresh?: () => void;
+  /** Host-owned server filename search, separate from the displayed-page filter. */
+  search?: string;
+  onSearch?: (query: string) => void;
   /** The host owns pagination state and must reject stale/out-of-order responses. */
   hasMore?: boolean;
   nextCursor?: string | null;
   onNextPage?: (cursor: string) => void;
   /** Change this on every authorized page or identity/scope transition. */
   pageKey?: string;
+  management?: ExplorerManagement;
+  hierarchy?: {
+    parentId: string | null;
+    breadcrumbs: { folder_id: string; name: string }[];
+    hasMoreFolders: boolean;
+    nextFolderId: string | null;
+    onNavigate?: (folderId: string | null) => void;
+    onNextFolders?: (folderId: string) => void;
+  };
 }
 
-const MAX_SELECTION = 24;
+const LEGACY_MAX_SELECTION = 12;
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9_.:-]{0,127}$/;
 
 function validSource(value: unknown): value is ExplorerItem {
@@ -80,15 +128,96 @@ function FileExplorerView({
   error = null,
   selectedSourceIds,
   multiSelect = true,
+  maxSelection = LEGACY_MAX_SELECTION,
   onSelect,
   onRefresh,
+  search = '',
+  onSearch,
   hasMore = false,
   nextCursor = null,
   onNextPage,
-}: FileExplorerProps) {
+  hierarchy,
+  management,
+  onPageTransition,
+}: FileExplorerProps & { onPageTransition?: () => void }) {
   const [parentId, setParentId] = useState<string | null>(null);
   const [localSelection, setLocalSelection] = useState<string[]>([]);
   const [filter, setFilter] = useState('');
+  const [layout, setLayout] = useState<'list' | 'grid'>('list');
+  const [sort, setSort] = useState<'name-asc' | 'name-desc' | 'size-asc' | 'size-desc'>('name-asc');
+  const [reviewSelection, setReviewSelection] = useState(false);
+  const [searchDraft, setSearchDraft] = useState(search);
+  const searchId = useId();
+  const [edit, setEdit] = useState<{ action: ExplorerMutation['action']; item?: ExplorerItem } | null>(null);
+  const [name, setName] = useState('');
+  const destination = management?.destination;
+  const busy = management?.busy === true;
+  const editing = edit !== null;
+  const headingId = useId();
+  const capabilityId = useId();
+  const editorRef = useRef<HTMLFormElement>(null);
+  const nameRef = useRef<HTMLInputElement>(null);
+  const openerRef = useRef<HTMLButtonElement | null>(null);
+  const restoreFocus = useRef(false);
+  const destinationHeadingRef = useRef<HTMLParagraphElement>(null);
+  useLayoutEffect(() => {
+    if (edit) {
+      if (edit.action === 'create' || edit.action === 'rename') nameRef.current?.focus();
+      else editorRef.current?.focus();
+    } else if (restoreFocus.current) {
+      restoreFocus.current = false;
+      if (openerRef.current?.isConnected && !openerRef.current.disabled) openerRef.current.focus();
+    }
+  }, [edit]);
+  function closeEditor() {
+    destination?.onCancel();
+    restoreFocus.current = true;
+    setEdit(null);
+  }
+  const can = (operation: ExplorerOperation) => management?.capabilities[operation] === 'available';
+  function openEditor(trigger: HTMLButtonElement, action: ExplorerMutation['action'], item?: ExplorerItem) {
+    if (busy || editing) return;
+    openerRef.current = trigger;
+    setName(action === 'rename' ? item?.name ?? '' : '');
+    if (action === 'move' && item?.organization_revision) {
+      management?.onBrowseDestination?.(item.source_id, item.organization_revision);
+    } else {
+      destination?.onCancel();
+    }
+    setEdit({ action, item });
+  }
+  const editOperation: ExplorerOperation | null = !edit ? null :
+    edit.action === 'create' ? 'file_explorer.folder.create' :
+    edit.action === 'rename' ? 'file_explorer.folder.rename' :
+    edit.action === 'delete' ? 'file_explorer.folder.delete' :
+    edit.item?.kind === 'file' ? 'file_explorer.artifact.move' : 'file_explorer.folder.move';
+  const validName = Boolean(name.trim()) && name === name.trim() &&
+    name.length <= 256 && !/[\x00-\x1f\x7f-\x9f]/.test(name);
+  const canSubmit = Boolean(edit && editOperation && can(editOperation) && !busy &&
+    ((edit.action === 'create' || edit.action === 'rename') ? validName :
+      edit.action === 'move' ? destination?.canConfirm && destination.sourceId === edit.item?.source_id &&
+        destination.expectedRevision === edit.item?.organization_revision : true));
+  function submitEdit(event: React.FormEvent) {
+    event.preventDefault();
+    if (!edit || !management || !canSubmit) return;
+    onPageTransition?.();
+    const item = edit.item;
+    if (edit.action === 'create' && can('file_explorer.folder.create') && name.trim()) {
+      management.onMutate({ action: 'create', name: name.trim() });
+    } else if (item?.organization_revision) {
+      const evidence = { sourceId: item.source_id, expectedRevision: item.organization_revision };
+      if (edit.action === 'rename' && can('file_explorer.folder.rename') && name.trim()) {
+        management.onMutate({ action: 'rename', ...evidence, name: name.trim() });
+      } else if (edit.action === 'delete' && can('file_explorer.folder.delete')) {
+        management.onMutate({ action: 'delete', ...evidence });
+      } else if (edit.action === 'move' && can(item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move')) {
+        if (!destination?.canConfirm || destination.sourceId !== item.source_id ||
+            destination.expectedRevision !== item.organization_revision) return;
+        management.onMutate({ action: 'move', ...evidence, destinationId: destination.parentId });
+      }
+    }
+    setEdit(null);
+  }
   const pageEvidenceValid = typeof hasMore === 'boolean' && (
     hasMore
       ? typeof nextCursor === 'string' && nextCursor.length > 0 &&
@@ -98,19 +227,23 @@ function FileExplorerView({
 
   function clearSelections() {
     setLocalSelection([]);
+    setReviewSelection(false);
     onSelect?.([]);
   }
 
   function refresh() {
+    if (busy || editing) return;
     clearSelections();
+    onPageTransition?.();
     onRefresh?.();
   }
 
   function nextPage() {
-    if (!loading && !error && authorized && pageEvidenceValid && hasMore && nextCursor) {
+    if (!busy && !editing && !loading && !error && authorized && pageEvidenceValid && hasMore && nextCursor) {
       clearSelections();
       setParentId(null);
       setFilter('');
+      onPageTransition?.();
       onNextPage?.(nextCursor);
     }
   }
@@ -131,63 +264,162 @@ function FileExplorerView({
     () => new Map(entries.map((item) => [item.source_id, item])),
     [entries],
   );
-  const currentParent = parentId !== null && byId.get(parentId)?.kind === 'folder'
+  const currentParent = hierarchy ? hierarchy.parentId : (parentId !== null && byId.get(parentId)?.kind === 'folder'
     ? parentId
-    : null;
+    : null);
   const folder = currentParent === null ? null : byId.get(currentParent);
   const visible = useMemo(() => entries
     .filter((item) => item.parent_id === currentParent &&
       item.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()))
     .sort((a, b) => Number(a.kind === 'file') - Number(b.kind === 'file') ||
-      a.name.localeCompare(b.name) || a.source_id.localeCompare(b.source_id)),
-    [entries, currentParent, filter]);
-  const selected = (selectedSourceIds ?? localSelection).filter((id) => byId.has(id));
+      (sort === 'size-asc' ? a.size_bytes - b.size_bytes : sort === 'size-desc' ? b.size_bytes - a.size_bytes : 0) ||
+      (sort === 'name-desc' ? b.name.localeCompare(a.name) : a.name.localeCompare(b.name)) || a.source_id.localeCompare(b.source_id)),
+    [entries, currentParent, filter, sort]);
+  const limit = Number.isSafeInteger(maxSelection) && maxSelection >= 0 && maxSelection <= 200 ? (multiSelect ? maxSelection : Math.min(1, maxSelection)) : 0;
+  const selected = Array.from(new Set(selectedSourceIds ?? localSelection)).filter(id => byId.get(id)?.kind === 'file');
   const selectionSet = new Set(selected);
+  const canSelect = !busy && !editing && !loading && !error && authorized && pageEvidenceValid && inventory !== null;
+  const eligibleVisible = visible.filter(item => item.kind === 'file');
+  const unselectedVisible = eligibleVisible.filter(item => !selectionSet.has(item.source_id));
+  const bulkFits = selected.length + unselectedVisible.length <= limit;
+
+  function navigate(id: string | null) {
+    if (busy || editing) return;
+    clearSelections();
+    setFilter('');
+    if (hierarchy) { onPageTransition?.(); hierarchy.onNavigate?.(id); }
+    else setParentId(id);
+  }
 
   function select(item: ExplorerItem) {
+    if (!canSelect || item.kind !== 'file' || (!selectionSet.has(item.source_id) &&
+        (limit === 0 || (multiSelect && selectionSet.size >= limit)))) return;
     const next = multiSelect
-      ? (selectionSet.has(item.source_id)
-        ? selected.filter((id) => id !== item.source_id)
-        : [...selected, item.source_id].slice(0, MAX_SELECTION))
+      ? (selectionSet.has(item.source_id) ? selected.filter(id => id !== item.source_id) : [...selected, item.source_id])
       : [item.source_id];
+    publishSelection(next);
+  }
+
+  function publishSelection(next: string[]) {
+    if (!canSelect || next.length > limit || new Set(next).size !== next.length ||
+        next.some(id => byId.get(id)?.kind !== 'file')) return;
     if (selectedSourceIds === undefined) setLocalSelection(next);
-    const references = next.flatMap((id) => {
+    const references = next.flatMap(id => {
       const entry = byId.get(id);
       return entry ? [{
-        source_id: entry.source_id,
-        revision: entry.revision,
-        sha256: entry.sha256,
-        kind: entry.kind,
+        source_id: entry.source_id, revision: entry.revision,
+        sha256: entry.sha256, kind: entry.kind,
       }] : [];
     });
     // Selection is a presentation event, not a backend authorization receipt.
     onSelect?.(references);
   }
 
+  const validSearch = Array.from(searchDraft).length <= 160 &&
+    !/[\u0000-\u001f\u007f-\u009f]/u.test(searchDraft) &&
+    !/[\uD800-\uDFFF]/u.test(searchDraft);
+  const searchForm = onSearch && <form aria-label="Search authorized filenames"
+    className="flex flex-wrap items-end gap-2 w-full min-w-0"
+    onSubmit={event => {
+      event.preventDefault();
+      if (busy || editing || loading || !validSearch) return;
+      onPageTransition?.();
+      onSearch(searchDraft);
+    }}>
+    <label htmlFor={searchId} className="flex min-w-0 flex-1 flex-col gap-1 text-sm">
+      {hierarchy ? 'Search filenames in this folder' : 'Search authorized filenames'}
+      <input id={searchId} type="search" value={searchDraft}
+        onChange={event => setSearchDraft(event.target.value)}
+        disabled={busy || editing || loading}
+        aria-invalid={!validSearch} className="min-w-0 rounded border bg-background px-3 py-2"
+        placeholder="Search filenames…" />
+    </label>
+    <button type="submit" disabled={busy || editing || loading || !validSearch}
+      className="rounded border px-3 py-2 text-sm">Search</button>
+    {search && <button type="button" disabled={busy || editing || loading}
+      onClick={() => { setSearchDraft(''); onPageTransition?.(); onSearch(''); }}
+      className="rounded border px-3 py-2 text-sm">Clear search</button>}
+    {!validSearch && <p role="alert" className="w-full text-xs">Use at most 160 characters without control characters.</p>}
+    {search && <p role="status" className="w-full break-words text-xs">Filename results for “{search}”{hierarchy ? ' in this folder. Folder navigation remains visible.' : '.'}</p>}
+  </form>;
   if (!authorized || Boolean(error) || !pageEvidenceValid || (!loading && inventory === null)) {
     return <section role="alert" className="flex flex-col items-start gap-3 rounded-lg border p-6 text-sm text-muted-foreground">
       {loading ? <p role="status">Loading authorized file inventory…</p> :
         <p>File Explorer is unavailable. No authorized file inventory has been supplied by KAREN.</p>}
       {error && <p className="text-destructive">{error}</p>}
+      {error && <p>Refresh to reload authorized inventory from the root.</p>}
+      {error && searchForm}
       {authorized && !pageEvidenceValid && <p className="text-destructive">Invalid host pagination evidence.</p>}
       {(authorized || Boolean(error)) && onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </section>;
   }
 
-  return <section className="flex min-h-[320px] flex-col gap-4 rounded-lg border bg-background p-4" aria-label="Shared File Explorer">
+  return <section className="flex min-h-[320px] min-w-0 flex-col gap-4 rounded-xl border bg-background p-3 sm:p-4" aria-label="Shared File Explorer">
     <header className="flex flex-wrap items-center justify-between gap-3">
       <div>
-        <h2 className="text-lg font-semibold">File Explorer</h2>
+        <h2 className="flex items-center gap-2 text-lg font-semibold tracking-tight"><FolderOpen aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" />File Explorer</h2>
         <p className="text-xs text-muted-foreground">
           References only. File access is checked again by the consuming service.
         </p>
       </div>
-      {onRefresh && <button type="button" className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
+      {onRefresh && <button type="button" disabled={busy || editing} className="rounded border px-3 py-2 text-sm" onClick={refresh}>Refresh</button>}
     </header>
-    <nav aria-label="Folder location" className="flex items-center gap-3 text-sm">
-      <button type="button" className="rounded border px-3 py-2" onClick={() => { setParentId(null); setFilter(''); }}>Root</button>
-      {folder && <>
-        <span aria-hidden="true">/</span>
+    {management && <div className="flex flex-wrap items-center gap-2">
+      <button type="button" aria-describedby={capabilityId} disabled={busy || editing || !can('file_explorer.folder.create')} className="rounded border px-3 py-2 text-sm disabled:opacity-50" onClick={event => openEditor(event.currentTarget, 'create')}>New folder</button>
+      <p id={capabilityId} role="status" className="w-full text-xs text-muted-foreground">
+        {management.capabilityStatus === 'checking' ? 'Checking organization permissions…' :
+          management.capabilityStatus === 'unavailable' ? 'Organization controls unavailable. Refresh to recheck.' :
+          ([
+            ['file_explorer.folder.create', 'Create folder'],
+            ['file_explorer.folder.rename', 'Rename folder'],
+            ['file_explorer.folder.move', 'Move folder'],
+            ['file_explorer.artifact.move', 'Move file'],
+            ['file_explorer.folder.delete', 'Delete empty folder'],
+          ] as [ExplorerOperation, string][]).filter(([operation]) => !can(operation)).map(([operation, label]) =>
+            label + ': ' + (management.capabilities[operation] === 'denied' ? 'permission denied' : 'unavailable')).join(' · ') ||
+          'Organization controls available. Each change is checked again.'}
+      </p>
+      {management.message && <p role="status" className="text-sm">{management.message}</p>}
+      {busy && <p role="status" className="text-sm">Saving organization change…</p>}
+    </div>}
+    {edit && management && <form ref={editorRef} tabIndex={-1} aria-label="Confirm organization change" aria-describedby={headingId}
+      onKeyDown={event => { if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closeEditor(); } }}
+      onSubmit={submitEdit} className="flex flex-col gap-3 rounded-lg border p-3">
+      <h3 id={headingId} className="font-medium">{edit.action === 'create' ? 'Create folder' : edit.action === 'rename' ? 'Rename folder' : edit.action === 'move' ? 'Move ' + (edit.item?.name ?? '') : 'Delete empty folder'}</h3>
+      {(edit.action === 'create' || edit.action === 'rename') && <label className="flex flex-col gap-1 text-sm">Folder name<input ref={nameRef} required maxLength={256} value={name} onChange={event => setName(event.target.value)} className="rounded border bg-background p-2" /></label>}
+      {edit.action === 'move' && <section aria-label="Move destination browser" className="flex flex-col gap-2 rounded border p-2">
+        <p ref={destinationHeadingRef} tabIndex={-1} className="text-sm">Choose a destination folder for {edit.item?.name}.</p>
+        <nav aria-label="Destination location" className="flex flex-wrap gap-2">
+          <button type="button" disabled={!destination || busy} onClick={() => destination?.onNavigate(null)} className="rounded border px-2 py-1">Destination root</button>
+          {destination?.breadcrumbs.map(crumb => <button type="button" key={crumb.folder_id}
+            onClick={() => destination.onNavigate(crumb.folder_id)} disabled={busy}
+            aria-current={crumb.folder_id === destination.parentId ? 'location' : undefined}
+            className="rounded border px-2 py-1">{crumb.name}</button>)}
+        </nav>
+        {destination?.loading && <p role="status">Loading destination folders…</p>}
+        {destination?.error && <p role="alert">{destination.error} Return to destination root to retry.</p>}
+        {destination && !destination.loading && !destination.error && <ul aria-label="Destination folders" className="flex flex-col gap-1">
+          {destination.folders.map(folder => <li key={folder.folder_id}>
+            <button type="button" className="rounded border px-2 py-1 text-left" disabled={busy}
+              onClick={() => { destinationHeadingRef.current?.focus(); destination.onNavigate(folder.folder_id); }} aria-label={'Browse destination ' + folder.name}>{folder.name}</button>
+          </li>)}
+          {destination.folders.length === 0 && <li className="text-sm text-muted-foreground">No eligible subfolders on this page.</li>}
+        </ul>}
+        {destination?.hasMore && <button type="button" disabled={destination.loading || busy} onClick={() => { destinationHeadingRef.current?.focus(); destination.onNext(); }} className="rounded border px-2 py-1">Next destination folder page</button>}
+        <p role="status" className="text-sm">Selected destination: {destination?.canConfirm ? destination.breadcrumbs[destination.breadcrumbs.length - 1]?.name ?? 'Root' : 'Not verified'}</p>
+      </section>}
+      {edit.action === 'delete' && <p className="text-sm">Delete {edit.item?.name}? Only empty folders can be deleted, including no archived files. File contents will not be deleted.</p>}
+      <div className="flex flex-wrap gap-2"><button type="submit" disabled={!canSubmit} className="rounded border px-3 py-2 text-sm">Confirm {edit.action}</button><button type="button" onClick={closeEditor} className="rounded border px-3 py-2 text-sm">Cancel</button></div>
+    </form>}
+    <nav aria-label="Folder location" className="flex min-w-0 flex-wrap items-center gap-2 rounded-lg bg-muted/40 p-2 text-sm">
+      <button type="button" disabled={busy || editing} className="rounded border px-3 py-2" onClick={() => navigate(null)}>Root</button>
+      {hierarchy?.breadcrumbs.map(crumb => <React.Fragment key={crumb.folder_id}>
+        <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+        <button type="button" className="min-w-0 truncate rounded border px-2 py-1" disabled={busy || editing} onClick={() => navigate(crumb.folder_id)}
+          aria-current={crumb.folder_id === hierarchy.parentId ? 'location' : undefined}>{crumb.name}</button>
+      </React.Fragment>)}
+      {!hierarchy && folder && <>
+        <ChevronRight aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
         <span className="truncate">{folder.name}</span>
         <button type="button" className="rounded border px-3 py-2" onClick={() => {
           setParentId(folder.parent_id && byId.has(folder.parent_id) ? folder.parent_id : null);
@@ -195,33 +427,90 @@ function FileExplorerView({
         }}>Up</button>
       </>}
     </nav>
-    <label className="flex flex-col gap-1 text-sm">
-      Filter current folder
-      <input className="rounded border bg-background px-3 py-2" type="search" value={filter}
-        onChange={(event) => setFilter(event.target.value)} placeholder="Find files or folders…" />
-    </label>
+    {searchForm}
+    <div className="flex min-w-0 flex-wrap items-end gap-2">
+      <label className="flex min-w-0 flex-1 basis-48 flex-col gap-1 text-sm">
+        Filter current folder
+        <div className="relative min-w-0">
+          <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-3 h-4 w-4 text-muted-foreground" />
+          <input className="w-full min-w-0 rounded-md border bg-background py-2 pl-9 pr-3 focus-visible:ring-2 focus-visible:ring-ring"
+            type="search" disabled={busy || editing} value={filter} onChange={event => setFilter(event.target.value)} placeholder="Filter this page…" />
+        </div>
+      </label>
+      <label className="flex min-w-0 flex-col gap-1 text-sm">Sort current page
+        <select className="max-w-full rounded-md border bg-background px-2 py-2" disabled={busy || editing} value={sort} onChange={event => {
+          const value = event.target.value;
+          if (value === 'name-asc' || value === 'name-desc' || value === 'size-asc' || value === 'size-desc') setSort(value);
+        }}>
+          <option value="name-asc">Name (A–Z)</option><option value="name-desc">Name (Z–A)</option>
+          <option value="size-asc">Size (smallest)</option><option value="size-desc">Size (largest)</option>
+        </select>
+      </label>
+      <div role="group" aria-label="Explorer layout" className="inline-flex rounded-md border p-1">
+        <button type="button" aria-label="List view" aria-pressed={layout === 'list'} disabled={busy || editing} className={`rounded p-2 focus-visible:ring-2 focus-visible:ring-ring ${layout === 'list' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`} onClick={() => setLayout('list')}><List aria-hidden="true" className="h-4 w-4" /></button>
+        <button type="button" aria-label="Grid view" aria-pressed={layout === 'grid'} disabled={busy || editing} className={`rounded p-2 focus-visible:ring-2 focus-visible:ring-ring ${layout === 'grid' ? 'bg-muted text-foreground' : 'text-muted-foreground'}`} onClick={() => setLayout('grid')}><LayoutGrid aria-hidden="true" className="h-4 w-4" /></button>
+      </div>
+    </div>
+    {filter && <button type="button" disabled={busy || editing} className="self-start rounded border px-3 py-2 text-sm" onClick={() => setFilter('')}>Clear filter</button>}
+    {multiSelect && eligibleVisible.length > 0 && <div className="flex flex-wrap items-center gap-2">
+      <button type="button" className="rounded border px-3 py-2 text-sm disabled:opacity-50"
+        disabled={!canSelect || !bulkFits || unselectedVisible.length === 0}
+        onClick={() => publishSelection([...selected, ...unselectedVisible.map(item => item.source_id)])}>Select visible files ({eligibleVisible.length})</button>
+      {!bulkFits && <p role="status" className="text-xs text-muted-foreground">Selection would exceed the limit. Narrow the filter or deselect references.</p>}
+    </div>}
+    {(hasMore || hierarchy?.hasMoreFolders) && <p className="text-xs text-muted-foreground">More entries are available on later pages. Filtering and sorting apply only to this page.</p>}
     {error && <p role="alert" className="rounded border border-destructive p-3 text-sm text-destructive">{error}</p>}
     {loading ? <p role="status" className="py-8 text-center text-sm">Loading authorized file inventory…</p>
-      : visible.length === 0 ? <p role="status" className="py-8 text-center text-sm text-muted-foreground">No files or folders in this view.</p>
-      : <ul className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3" aria-label="Files and folders">
-        {visible.map((item) => <li key={item.source_id} className="flex min-w-0 items-center gap-2 rounded border p-2">
-          <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
-            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={loading || Boolean(error)}
-            onChange={() => select(item)} />
+      : visible.length === 0 ? <div role="status" className="space-y-2 py-8 text-center text-sm text-muted-foreground">
+        <p className="font-medium text-foreground">{filter ? "No matching references on this page." : search ? "No matching files or folders on this search page." : "No files or folders in this view."}</p>
+        {filter && <p>Clear the filter to see other references on this page.</p>}
+      </div>
+      : <ul className={layout === 'grid' ? 'grid min-w-0 gap-2 sm:grid-cols-2 lg:grid-cols-3' : 'flex min-w-0 flex-col gap-1'} aria-label="Files and folders">
+        {visible.map((item) => <li key={item.source_id} className={`flex min-w-0 flex-wrap items-center gap-3 rounded-lg border p-3 ${selectionSet.has(item.source_id) ? 'border-primary bg-primary/5' : 'border-border hover:bg-muted/40'}`}>
+          {item.kind === 'file' && <input type={multiSelect ? 'checkbox' : 'radio'} name="file-explorer-selection"
+            aria-label={'Select ' + item.name} checked={selectionSet.has(item.source_id)} disabled={busy || editing || loading || Boolean(error) || limit === 0 ||
+              (multiSelect && !selectionSet.has(item.source_id) && selectionSet.size >= limit)}
+            className="h-4 w-4 shrink-0 accent-primary focus-visible:ring-2 focus-visible:ring-ring" onChange={() => select(item)} />}
+          {item.kind === 'folder' ? <Folder aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" /> : <FileText aria-hidden="true" className="h-5 w-5 shrink-0 text-muted-foreground" />}
           {item.kind === 'folder'
             ? <button type="button" className="min-w-0 flex-1 truncate text-left text-sm font-medium underline"
-                onClick={() => { setParentId(item.source_id); setFilter(''); }} aria-label={'Open folder ' + item.name}>
-                📁 {item.name}</button>
+                disabled={busy || editing} onClick={() => navigate(item.source_id)} aria-label={'Open folder ' + item.name}>
+                {item.name}</button>
             : <div className="min-w-0 flex-1">
-                <p className="truncate text-sm" title={item.name}>📄 {item.name}</p>
+                <p className="truncate text-sm" title={item.name}>{item.name}</p>
                 <p className="text-xs text-muted-foreground">{prettyBytes(item.size_bytes)}</p>
               </div>}
+          {management && hierarchy && item.organization_revision && <div className="flex max-w-full flex-wrap gap-1 text-xs">
+            {item.kind === 'folder' && <button type="button" disabled={busy || editing || !can('file_explorer.folder.rename')} aria-describedby={capabilityId} onClick={event => openEditor(event.currentTarget, 'rename', item)} aria-label={'Rename ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Rename</button>}
+            <button type="button" disabled={busy || editing || !can(item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move')} aria-describedby={capabilityId} onClick={event => openEditor(event.currentTarget, 'move', item)} aria-label={'Move ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Move</button>
+            {item.kind === 'folder' && <button type="button" disabled={busy || editing || !can('file_explorer.folder.delete')} aria-describedby={capabilityId} onClick={event => openEditor(event.currentTarget, 'delete', item)} aria-label={'Delete ' + item.name} className="rounded border px-2 py-1 disabled:opacity-50">Delete</button>}
+          </div>}
         </li>)}
       </ul>}
-    <footer className="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
-      <span>{selectionSet.size} selected · {visible.length} shown on this page · Maximum {MAX_SELECTION} selections</span>
+    {!loading && selected.length > 0 && <div className="min-w-0 rounded-lg border p-3">
+      <button type="button" aria-expanded={reviewSelection} className="text-sm font-medium underline"
+        disabled={busy || editing} onClick={() => setReviewSelection(value => !value)}>Review selection ({selected.length})</button>
+      {reviewSelection && <ul aria-label="Selected references" className="mt-2 space-y-2">
+        {selected.map(id => {
+          const entry = byId.get(id)!;
+          return <li key={id} className="flex min-w-0 items-center justify-between gap-2 text-sm">
+            <span className="truncate" title={entry.name}>{entry.name}</span>
+            <button type="button" aria-label={'Remove ' + entry.name + ' from selection'} className="shrink-0 rounded border px-2 py-1"
+              disabled={!canSelect} onClick={() => publishSelection(selected.filter(value => value !== id))}>Remove</button>
+          </li>;
+        })}
+      </ul>}
+    </div>}
+    <footer className="flex flex-wrap items-center justify-between gap-3 border-t pt-3 text-xs text-muted-foreground">
+      <div className="min-w-0 space-y-1">
+        <p role="status">{selectionSet.size} selected · {visible.length} shown on this page · Maximum {limit} selections{limit === 0 ? ' · No selection capacity available.' : selectionSet.size >= limit ? ' · Selection limit reached.' : ''}</p>
+        <p>Changing pages, locations, search or refreshing clears selection.</p>
+      </div>
+      {selectionSet.size > 0 && <button type="button" disabled={busy || editing || loading} onClick={clearSelections} className="rounded border px-3 py-2 text-sm">Clear selection</button>}
+      {hierarchy?.hasMoreFolders && hierarchy.nextFolderId && <button type="button" className="rounded border px-3 py-2 text-sm"
+        disabled={busy || editing || loading || Boolean(error)} onClick={() => { if (!busy && !editing) { clearSelections(); onPageTransition?.(); hierarchy.onNextFolders?.(hierarchy.nextFolderId!); } }}>Next folder page</button>}
       {hasMore && <button type="button" className="rounded border px-3 py-2 text-sm"
-        disabled={loading || Boolean(error) || !pageEvidenceValid} onClick={nextPage}>Next page</button>}
+        disabled={loading || Boolean(error) || !pageEvidenceValid || busy || editing} onClick={nextPage}>{hierarchy ? 'Next file page' : 'Next page'}</button>}
     </footer>
   </section>;
 }
@@ -229,7 +518,23 @@ function FileExplorerView({
 export function SharedFileExplorer(props: FileExplorerProps) {
   // A new host-issued page identity resets local folder/filter/selection state.
   // Authorization and stale-response rejection remain host responsibilities.
-  return <FileExplorerView key={props.pageKey ?? 'initial'} {...props} />;
+  const region = useRef<HTMLDivElement>(null);
+  const pendingFocus = useRef<{ key: string; scope: string } | null>(null);
+  const key = props.pageKey ?? 'initial';
+  const scope = key.slice(0, key.lastIndexOf(':'));
+  useLayoutEffect(() => {
+    const pending = pendingFocus.current;
+    if (!pending) return;
+    if (pending.scope !== scope) { pendingFocus.current = null; return; }
+    if (key !== pending.key && (props.authorized || props.error)) {
+      pendingFocus.current = null;
+      region.current?.focus();
+    }
+  }, [key, scope, props.authorized, props.error]);
+  return <div ref={region} tabIndex={-1} aria-label="File Explorer content" className="min-w-0 max-w-full">
+    <FileExplorerView key={props.pageKey ?? 'initial'} {...props}
+      onPageTransition={() => { pendingFocus.current = { key, scope }; }} />
+  </div>;
 }
 
 export default function FileExplorerPage(props: FileExplorerProps) {

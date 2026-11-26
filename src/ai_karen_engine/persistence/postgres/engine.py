@@ -92,6 +92,7 @@ class PostgresEngine:
             pool_recycle=self._pool.pool_recycle,
             pool_pre_ping=pool_pre_ping,
             echo=echo,
+            hide_parameters=True,
         )
 
         self._async_engine = create_async_engine(
@@ -102,6 +103,7 @@ class PostgresEngine:
             pool_recycle=self._pool.pool_recycle,
             pool_pre_ping=pool_pre_ping,
             echo=echo,
+            hide_parameters=True,
         )
 
         self._session_factory = sessionmaker(

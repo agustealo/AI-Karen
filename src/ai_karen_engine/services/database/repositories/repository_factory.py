@@ -37,9 +37,11 @@ class RepositoryFactory:
         self,
         session_factory,
         storage_client=None,
+        *, hierarchy_transaction=None,
     ):
         self._session_factory = session_factory
         self._storage_client = storage_client
+        self._hierarchy_transaction = hierarchy_transaction
         self._memory: Optional[MemoryRepository] = None
         self._conversation: Optional[ConversationRepository] = None
         self._artifact: Optional[ArtifactStore] = None
@@ -66,6 +68,7 @@ class RepositoryFactory:
             self._artifact = SupabaseArtifactStore(
                 session_factory=self._session_factory,
                 storage_client=self._storage_client,
+                hierarchy_transaction=self._hierarchy_transaction,
             )
             logger.info("Canonical ArtifactStore initialized (Supabase Storage + PostgreSQL)")
         return self._artifact

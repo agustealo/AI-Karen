@@ -177,6 +177,7 @@ class DatabaseServiceFactory:
         """Create canonical DATA-CONVERGE-1 repositories."""
         try:
             from ai_karen_engine.services.database.repositories import RepositoryFactory
+            from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
             from ai_karen_engine.integrations.supabase_client import get_supabase_platform
 
             db_client = self.get_service("database_client")
@@ -197,6 +198,7 @@ class DatabaseServiceFactory:
             factory = RepositoryFactory(
                 session_factory=session_factory,
                 storage_client=storage_client,
+                hierarchy_transaction=async_transaction_scope,
             )
 
             self._services["memory_repository"] = factory.create_memory_repository()

@@ -5,14 +5,15 @@ import { FolderOpen } from "lucide-react";
 import { FileExplorerInventoryHost } from "@/components/plugins/FileExplorerInventoryHost";
 import { PluginHost } from "@/components/plugins/PluginHost";
 
-import type { DraftAttachment } from "./copilotkit/useKarenPersistedDraft";
+import { MAX_DRAFT_ATTACHMENTS, type DraftAttachment } from "./copilotkit/useKarenPersistedDraft";
 
 export function KarenComposerFileExplorer({
-  pluginId, onAttach, disabled = false,
+  pluginId, onAttach, disabled = false, existingAttachments = [],
 }: {
   pluginId: string;
   onAttach?: (references: DraftAttachment[]) => void;
   disabled?: boolean;
+  existingAttachments?: readonly DraftAttachment[];
 }) {
   const [open, setOpen] = useState(false);
   const id = useId();
@@ -29,7 +30,8 @@ export function KarenComposerFileExplorer({
         Select files, then choose Attach selected files to save references in your draft.
         File contents are not read, and attached messages cannot be sent yet.
       </p>
-      <FileExplorerInventoryHost mode="selection" onAttach={onAttach}>
+      <p role="status" className="px-2 pb-2 text-xs text-muted-foreground">{Math.max(0, MAX_DRAFT_ATTACHMENTS - existingAttachments.length)} additional file references available.</p>
+      <FileExplorerInventoryHost mode="selection" onAttach={onAttach} existingAttachments={existingAttachments}>
         {componentProps => <PluginHost pluginId={pluginId} componentProps={componentProps} />}
       </FileExplorerInventoryHost>
     </section>}
