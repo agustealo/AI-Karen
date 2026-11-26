@@ -16,8 +16,8 @@ _TOPIC_ID_PATTERN = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4
 
 
 def _validate_uuid(value: str, name: str) -> uuid.UUID:
-    if not _TOPIC_ID_PATTERN.match(value):
-        raise ValueError(f"{name} must be a valid UUID, got {value!r}")
+    if not isinstance(value, str) or not _TOPIC_ID_PATTERN.fullmatch(value):
+        raise ValueError(f"{name} must be a valid UUID")
     return uuid.UUID(value)
 
 
@@ -69,13 +69,29 @@ class RealtimeTopicFactory:
         prefix = parts[0]
         if prefix != "tenant":
             return None
-        if not _TOPIC_ID_PATTERN.match(parts[1]):
+        if not _TOPIC_ID_PATTERN.fullmatch(parts[1]):
+            return None
+        if uuid.UUID(parts[1]) != self._validated_tenant:
             return None
         kind = parts[2]
-        valid_kinds = {"user", "conversation", "execution", "notifications", "admin"}
-        if kind not in valid_kinds:
-            return None
         if kind in {"user", "conversation", "execution"}:
-            if len(parts) != 4 or not _TOPIC_ID_PATTERN.match(parts[3]):
+            if len(parts) != 4 or not _TOPIC_ID_PATTERN.fullmatch(parts[3]):
                 return None
-        return topic
+            return f"tenant:{self._validated_tenant}:{kind}:{uuid.UUID(parts[3])}"
+        if kind in {"notifications", "admin"} and len(parts) == 3:
+            return f"tenant:{self._validated_tenant}:{kind}"
+        return None
+
+
+def is_private_topic(topic: str) -> bool:
+    """Recognize private-topic syntax; this does not grant subscription access."""
+    if not isinstance(topic, str):
+        return False
+    parts = topic.split(":")
+    if len(parts) not in (3, 4):
+        return False
+    try:
+        factory = RealtimeTopicFactory(parts[1])
+    except ValueError:
+        return False
+    return factory.resolve_topic(topic) is not None

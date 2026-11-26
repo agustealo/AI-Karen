@@ -1,42 +1,39 @@
-"""
-Realtime topic registry.
+"""Compatibility entrypoint for the canonical realtime topic registry.
 
-Centralizes channel naming and tenant scoping so callers never
-compose raw topic strings. All production topics are private and
-tenant-aware.
+Preserves legacy static method signatures. Topic syntax is not authorization;
+the authenticated runtime must still authorize the resource and principal.
 """
 
 from __future__ import annotations
 
-import logging
-
-logger = logging.getLogger(__name__)
+from ai_karen_engine.core.realtime.topics import (
+    RealtimeTopicFactory as CanonicalRealtimeTopicFactory,
+    is_private_topic,
+)
 
 
 class RealtimeTopicFactory:
-    """Factory for canonical private Realtime topics."""
+    """Legacy static API delegating all topic rules to the core registry."""
 
     @staticmethod
     def user_topic(tenant_id: str, user_id: str) -> str:
-        return f"tenant:{tenant_id}:user:{user_id}"
+        return CanonicalRealtimeTopicFactory(tenant_id).user_topic(user_id)
 
     @staticmethod
     def conversation_topic(tenant_id: str, conversation_id: str) -> str:
-        return f"tenant:{tenant_id}:conversation:{conversation_id}"
+        return CanonicalRealtimeTopicFactory(tenant_id).conversation_topic(conversation_id)
 
     @staticmethod
     def execution_topic(tenant_id: str, execution_id: str) -> str:
-        return f"tenant:{tenant_id}:execution:{execution_id}"
+        return CanonicalRealtimeTopicFactory(tenant_id).execution_topic(execution_id)
 
     @staticmethod
     def admin_topic(tenant_id: str) -> str:
-        return f"tenant:{tenant_id}:admin"
+        return CanonicalRealtimeTopicFactory(tenant_id).admin_topic()
 
     @staticmethod
     def is_private(topic: str) -> bool:
-        return topic.startswith("tenant:")
+        return is_private_topic(topic)
 
 
-__all__ = [
-    "RealtimeTopicFactory",
-]
+__all__ = ["RealtimeTopicFactory"]
