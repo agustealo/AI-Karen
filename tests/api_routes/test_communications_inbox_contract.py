@@ -32,6 +32,8 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
     assert get_rbac_manager().has_permission(principal, Permission.COMMUNICATIONS_READ)
     assert get_rbac_manager().has_permission(principal, Permission.COMMUNICATIONS_WRITE)
     audits = []
+    producer = SimpleNamespace(enable_communications_terminal_producer=False)
+    monkeypatch.setattr(service_module, "get_runtime_settings", lambda: SimpleNamespace(features=producer))
     monkeypatch.setattr(service_module.auth_config, "should_bypass_auth", lambda: False)
     monkeypatch.setattr(service_module, "get_audit_logger", lambda: SimpleNamespace(
         log_audit_event=audits.append,
@@ -46,6 +48,10 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
             if self.failure:
                 raise self.failure
             return InboxPage((entry,), None, 1)
+
+        async def reconcile_pending(self, **kwargs):
+            self.calls.append(kwargs)
+            return 2
 
         async def mutate(self, **kwargs):
             self.calls.append(kwargs)
@@ -83,6 +89,11 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
         assert (await client.patch(mutation, json={**payload, "expected_revision": 1})).status_code == 422
         assert (await client.patch(mutation, json={**payload, "operation": "restart"})).status_code == 422
         assert (await client.post(endpoint, json=payload)).status_code == 405
+        assert (await client.post(endpoint + "/reconcile")).status_code == 503
+        producer.enable_communications_terminal_producer = True
+        recovery = await client.post(endpoint + "/reconcile", params={"tenant_id": str(uuid4())})
+        assert recovery.status_code == 200 and recovery.json() == {"admitted_count": 2}
+        assert repo.calls[-1] == {"tenant_id": tenant, "user_id": owner}
         response = await client.patch(mutation, json=payload)
         assert response.status_code == 200 and response.json()["changed"] is False
         assert repo.calls[-1]["operation"] == InboxOperation.ACKNOWLEDGE
@@ -113,6 +124,7 @@ async def test_communications_authenticated_http_contract(monkeypatch, caplog):
             app.dependency_overrides[route.get_current_user] = lambda: unprivileged
             assert (await client.get(endpoint)).status_code == 403
             assert (await client.patch(mutation, json=payload)).status_code == 403
+            assert (await client.post(endpoint + "/reconcile")).status_code == 403
         read_only = UserData(user_id=owner, tenant_id=tenant, permissions=["communications:read"])
         app.dependency_overrides[route.get_current_user] = lambda: read_only
         assert (await client.patch(mutation, json=payload)).status_code == 403
