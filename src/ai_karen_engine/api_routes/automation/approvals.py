@@ -16,6 +16,8 @@ from ai_karen_engine.services.approvals import (
     ApprovalNotFoundError,
     ApprovalScopeError,
     ApprovalStateError,
+    ApprovalWorkflowKind,
+    approval_workflow_kind,
     get_approval_service,
 )
 
@@ -34,6 +36,9 @@ class ApprovalResponse(BaseModel):
     conversation_id: Optional[str] = None
     policy_decision_id: Optional[str] = None
     intent: str
+    workflow_kind: ApprovalWorkflowKind = Field(
+        description="Owning review workflow, not an execution or authorization grant."
+    )
     risk_level: str
     reason_codes: List[str] = Field(default_factory=list)
     status: str
@@ -50,6 +55,7 @@ def _response(record: dict) -> ApprovalResponse:
         conversation_id=record.get("conversation_id"),
         policy_decision_id=record.get("policy_decision_id"),
         intent=record["intent"],
+        workflow_kind=approval_workflow_kind(record["intent"]),
         risk_level=record["risk_level"],
         reason_codes=list(record.get("reason_codes") or []),
         status=record["status"],

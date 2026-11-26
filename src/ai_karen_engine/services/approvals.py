@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 from ai_karen_engine.audit_logging import (
     AuditEventType,
@@ -116,6 +116,49 @@ def serialize_request(
 
 
 _LIFECYCLE_INTENTS = frozenset({"plugin.lifecycle.enable", "plugin.lifecycle.disable"})
+_DOCUMENT_CONSENT_PREFIX = "writing_style.document_consent."
+_DOCUMENT_CONSENT_ISSUE = _DOCUMENT_CONSENT_PREFIX + "issue"
+_PLUGIN_LIFECYCLE_PREFIX = "plugin.lifecycle."
+
+ApprovalWorkflowKind = Literal[
+    "runtime_approval",
+    "document_author_consent",
+    "plugin_lifecycle",
+    "unsupported_specialized",
+]
+
+
+def _is_document_consent_intent(intent: object) -> bool:
+    return isinstance(intent, str) and intent.startswith(_DOCUMENT_CONSENT_PREFIX)
+
+
+def _is_plugin_lifecycle_intent(intent: object) -> bool:
+    return isinstance(intent, str) and intent.startswith(_PLUGIN_LIFECYCLE_PREFIX)
+
+
+def approval_workflow_kind(intent: object) -> ApprovalWorkflowKind:
+    """Describe the owning review workflow, never grant permission to act.
+
+    This is a consumer-facing discriminator for an already scoped ledger
+    record. Current status, expiry, bearer identity, policy, and atomic
+    consumption remain independently enforced by their existing owners.
+    Unknown specialized actions must not be presented as ordinary approvals.
+    """
+    if not isinstance(intent, str) or not intent.strip():
+        return "unsupported_specialized"
+    if _is_document_consent_intent(intent):
+        return (
+            "document_author_consent"
+            if intent == _DOCUMENT_CONSENT_ISSUE
+            else "unsupported_specialized"
+        )
+    if _is_plugin_lifecycle_intent(intent):
+        return (
+            "plugin_lifecycle"
+            if intent in _LIFECYCLE_INTENTS
+            else "unsupported_specialized"
+        )
+    return "runtime_approval"
 
 
 def _require_lifecycle_scope(
@@ -127,16 +170,12 @@ def _require_lifecycle_scope(
     # WS-04A9E: general chat approvals must never issue a first-party
     # document-style consent. They do not bind the independently verified
     # source revision, fresh bearer session, or purpose-separated attestation.
-    if (
-        isinstance(decision.intent, str)
-        and decision.intent.startswith("writing_style.document_consent.")
-    ):
+    if _is_document_consent_intent(decision.intent):
         raise ApprovalScopeError(
             "Document style consent requires source-scoped authenticated approval"
         )
     if (
-        isinstance(decision.intent, str)
-        and decision.intent.startswith("plugin.lifecycle.")
+        _is_plugin_lifecycle_intent(decision.intent)
         and decision.intent not in _LIFECYCLE_INTENTS
     ):
         raise ApprovalScopeError("Unsupported plugin lifecycle approval action")
@@ -321,14 +360,12 @@ class ApprovalService:
                 f"Approval cannot resume from status {record['status']}"
             )
 
-        if str(record.get("intent") or "").startswith(
-            "writing_style.document_consent."
-        ):
+        if _is_document_consent_intent(str(record.get("intent") or "")):
             raise ApprovalStateError(
                 "Document style consent cannot resume through generic chat approval"
             )
 
-        if str(record.get("intent") or "").startswith("plugin.lifecycle."):
+        if _is_plugin_lifecycle_intent(str(record.get("intent") or "")):
             # Generic resume cannot reconstruct an independently verified
             # current manifest/revision: never replay a stored lifecycle plan.
             raise ApprovalStateError(
@@ -409,9 +446,7 @@ class ApprovalService:
         )
         if (
             current is not None
-            and str(current.get("intent") or "").startswith(
-                "writing_style.document_consent."
-            )
+            and _is_document_consent_intent(str(current.get("intent") or ""))
         ):
             raise ApprovalScopeError(
                 "Document author consent requires fresh bearer confirmation"
@@ -1154,9 +1189,7 @@ class ApprovalService:
             tenant_id=request.context.tenant_id,
             user_id=request.context.user_id,
         )
-        if current is not None and str(current.get("intent") or "").startswith(
-            "writing_style.document_consent."
-        ):
+        if current is not None and _is_document_consent_intent(str(current.get("intent") or "")):
             raise ApprovalScopeError(
                 "Document consent requires atomic source-scoped consumption"
             )
