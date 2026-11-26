@@ -149,6 +149,30 @@ describe('File Explorer authenticated UI host', () => {
     expect(screen.getByTestId('key').textContent).not.toBe(firstKey);
   });
 
+  it('rejects callbacks retained from the previous authorized page', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'first-cursor'))
+      .mockResolvedValueOnce(response(FILE_B, true, 'second-cursor'));
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <output>{props.items.map(item => item.name).join(',')}</output>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    const previous = latest;
+    await act(async () => previous.onNextPage('first-cursor'));
+    await waitFor(() => expect(latest.authorized && !latest.loading && latest.items[0]?.source_id === FILE_B).toBe(true));
+    await act(async () => latest.onSelect([latest.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    await act(async () => {
+      previous.onSelect([]);
+      previous.onRefresh();
+      previous.onNextPage('first-cursor');
+    });
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    expect(latest.items.map(item => item.source_id)).toEqual([FILE_B]);
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it('rejects stale and forged selection receipts without partially accepting IDs', async () => {
     mocks.get.mockResolvedValue(response(FILE_A));
     render(<Consumer />);
@@ -1157,6 +1181,51 @@ describe('hierarchy-aware visual controls', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
     expect(onSelect).toHaveBeenLastCalledWith([]);
   });
+  it('reports a genuinely empty authorized inventory through the investigation workspace', async () => {
+    mocks.get.mockResolvedValue({ ...response(FILE_A), items: [] });
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByText('No files or folders in this view.');
+    expect(screen.queryByText('No matching references on this page.')).toBeNull();
+    expect(screen.queryByText('No matching files or folders on this search page.')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('keeps layout and hidden selection changes local to the investigation workspace', async () => {
+    const page = response(FILE_A);
+    page.items = [
+      { ...page.items[0], size_bytes: 20 },
+      { ...response(FILE_B).items[0], size_bytes: 10 },
+    ];
+    mocks.get.mockResolvedValue(page);
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    fireEvent.change(screen.getByLabelText('Sort current page'), { target: { value: 'size-asc' } });
+    expect(screen.getAllByRole('checkbox').map(box => box.getAttribute('aria-label'))).toEqual([
+      'Select beta.txt', 'Select alpha.txt',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Select visible files (2)' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'alpha' } });
+    for (const layout of ['Grid view', 'List view']) {
+      fireEvent.click(screen.getByRole('button', { name: layout }));
+      expect(screen.getByRole('button', { name: layout }).getAttribute('aria-pressed')).toBe('true');
+      expect((screen.getByRole('searchbox', { name: 'Filter current folder' }) as HTMLInputElement).value).toBe('alpha');
+      expect((screen.getByRole('checkbox', { name: 'Select alpha.txt' }) as HTMLInputElement).checked).toBe(true);
+      expect(screen.queryByRole('checkbox', { name: 'Select beta.txt' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Review selection (2)' })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Review selection (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove beta.txt from selection' }));
+    expect(screen.getByRole('button', { name: 'Review selection (1)' })).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: 'Select alpha.txt' }) as HTMLInputElement).checked).toBe(true);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.patch).not.toHaveBeenCalled();
+    expect(mocks.delete).not.toHaveBeenCalled();
+  });
+
   it('distinguishes a filtered page from genuinely empty inventory', () => {
     render(<SharedFileExplorer authorized items={[first]} />);
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'missing' } });
