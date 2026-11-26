@@ -275,6 +275,21 @@ def test_explorer_provenance_rejects_foreign_database_and_web_binding():
         return [f"{key}={value}" for key, value in data.items()]
 
     verify_explorer_runtime("api", api, environment(values), project, database)
+    local_storage = {**values, "SUPABASE_PROJECT_URL": "http://host.docker.internal:54341",
+                     "SUPABASE_SECRET_KEY": "local-fixture-only"}
+    assert verify_explorer_runtime(
+        "api", api, environment(local_storage), project, database, require_local_storage=True,
+    ) == local_storage["SUPABASE_PROJECT_URL"]
+    for key, value in (
+        ("SUPABASE_PROJECT_URL", "https://remote.supabase.co"),
+        ("SUPABASE_URL", "https://remote.supabase.co"),
+        ("SUPABASE_SECRET_KEY", ""),
+    ):
+        with pytest.raises(GuardError):
+            verify_explorer_runtime(
+                "api", api, environment({**local_storage, key: value}), project, database,
+                require_local_storage=True,
+            )
     for key, value in (
         ("DATABASE_URL", "postgresql://test:fixture@example.invalid:54322/" + database),
         ("AUTH_DATABASE_URL", "postgresql://test:fixture@host.docker.internal:54322/postgres"),
@@ -368,6 +383,48 @@ def test_explorer_runner_refuses_unsafe_admission_before_any_browser_execution(t
     for overrides, reason in cases:
         result = subprocess.run(
             ["bash", str(runner), sha], cwd=repo, env={**local, **overrides},
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        assert result.returncode == 2
+        assert reason in result.stderr
+        assert ">>> " not in result.stdout
+    content = {
+        **local,
+        "RUN_FILE_EXPLORER_LOCAL": "0",
+        "RUN_CONTENT_INTELLIGENCE_LOCAL": "1",
+        "KAREN_UX_EMAIL": "owner@example.invalid",
+        "KAREN_UX_PASSWORD": "fixture-only",
+        "KAREN_UX_ISOLATION_EMAIL": "other@example.invalid",
+        "KAREN_UX_ISOLATION_PASSWORD": "fixture-only",
+        "KCARD_COMPOSE_PROJECT": "fixture-project",
+        "KCARD_ACCEPTANCE_ENV_FILE": str(tmp_path / "private.env"),
+        "KAREN_FILE_EXPLORER_ACCEPTANCE": "true",
+        "KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED": "true",
+        "KAREN_CONTENT_INTELLIGENCE_ACCEPTANCE": "true",
+        "KAREN_CONTENT_INTELLIGENCE_DENIAL_ACCEPTANCE": "true",
+        "KAREN_CONTENT_INTELLIGENCE_REVOCATION_ACCEPTANCE": "true",
+        "KAREN_CONTENT_INTELLIGENCE_LOCAL_STORAGE_CONFIRMED": "true",
+        "KAREN_CONTENT_INTELLIGENCE_REVOKED_FIXTURE_ATTESTED": "true",
+        "KAREN_CONTENT_INTELLIGENCE_SOURCE_ID": "10000000-0000-4000-8000-000000000001",
+        "KAREN_CONTENT_INTELLIGENCE_ISOLATION_SOURCE_ID": "10000000-0000-4000-8000-000000000002",
+        "KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID": "10000000-0000-4000-8000-000000000003",
+        "KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION": "a" * 64,
+    }
+    content_cases = (
+        ({"RUN_FILE_EXPLORER_LOCAL": "1"}, "separately from Content Intelligence"),
+        ({"GITHUB_ACTIONS": "true"}, "Explorer requires local execution"),
+        ({"VERCEL_AUTOMATION_BYPASS_SECRET": ""}, "Explorer requires local execution"),
+        ({"KAREN_BASE_URL": "https://example.invalid"}, "Explicit approved local origin"),
+        ({"KAREN_CONTENT_INTELLIGENCE_LOCAL_STORAGE_CONFIRMED": "false"}, "Missing explicit Explorer approval"),
+        ({"KAREN_CONTENT_INTELLIGENCE_REVOKED_FIXTURE_ATTESTED": "false"}, "Missing explicit Explorer approval"),
+        ({"KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION": "invalid"}, "Canonical retired source SHA-256 required"),
+        ({"KAREN_FILE_EXPLORER_DELETE_ACCEPTANCE": "true"}, "Explorer mutation flags are forbidden"),
+        ({"KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID": content["KAREN_CONTENT_INTELLIGENCE_SOURCE_ID"]},
+         "Explorer fixtures must be distinct"),
+    )
+    for overrides, reason in content_cases:
+        result = subprocess.run(
+            ["bash", str(runner), sha], cwd=repo, env={**content, **overrides},
             capture_output=True, text=True, timeout=10, check=False,
         )
         assert result.returncode == 2
