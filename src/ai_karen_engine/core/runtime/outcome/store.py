@@ -6,6 +6,7 @@ import math
 from abc import ABC, abstractmethod
 from datetime import datetime, timezone
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import text
 
@@ -83,6 +84,7 @@ class OutcomeStore(ABC):
         tenant_id: str,
         user_id: str,
         limit: int = 50,
+        correlation_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """List tool-runtime receipts only for the exact principal and run."""
         raise OutcomeStoreError("Governed tool receipts are unavailable")
@@ -209,7 +211,10 @@ class InMemoryOutcomeStore(OutcomeStore):
         tenant_id: str,
         user_id: str,
         limit: int = 50,
+        correlation_id: str | None = None,
     ) -> list[dict[str, Any]]:
+        if correlation_id is not None:
+            raise OutcomeStoreError("Correlated tool evidence requires durable persistence")
         if not trajectory_id or not tenant_id or not user_id:
             raise OutcomeStoreError("Tool receipt scope is required")
         events = [
@@ -873,6 +878,63 @@ class PostgresOutcomeStore(OutcomeStore):
         if result.rowcount != 1:
             raise OutcomeStoreError("Outcome event was not appended")
 
+    @staticmethod
+    def _validate_correlated_tool_receipt(
+        payload: dict[str, Any], *, tenant: str, user_id: str,
+        trajectory_id: str, correlation_id: str,
+    ) -> None:
+        """Reject malformed, contradictory or misattributed persisted evidence."""
+        metadata = payload.get("metadata")
+        if (
+            payload.get("tenant_id") != tenant
+            or payload.get("user_id") != user_id
+            or payload.get("trajectory_id") != trajectory_id
+            or payload.get("correlation_id") != correlation_id
+            or payload.get("source") != "runtime.execution"
+            or not isinstance(metadata, dict)
+            or metadata.get("event_type") != "agent.tool.execution"
+            or metadata.get("receipt_version") != "governed-tool.v1"
+            or metadata.get("execution_scope") != "tool_runtime_acknowledgment"
+            or metadata.get("independently_verified") is not False
+            or payload.get("response_completed") is not False
+            or type(payload.get("tool_success")) is not bool
+            or payload.get("status") != ("success" if payload["tool_success"] else "failure")
+        ):
+            raise OutcomeStoreError("Invalid correlated tool receipt envelope")
+
+        def valid_text(value: Any) -> bool:
+            return (
+                isinstance(value, str) and 0 < len(value) <= 256
+                and value == value.strip() and all(ch.isprintable() for ch in value)
+            )
+
+        for key in ("tool_call_id", "policy_decision_id", "tool_name", "agent_id", "step_id"):
+            if not valid_text(metadata.get(key)):
+                raise OutcomeStoreError("Invalid correlated tool receipt fields")
+        for key in ("tool_version", "error_type"):
+            if metadata.get(key) is not None and not valid_text(metadata[key]):
+                raise OutcomeStoreError("Invalid correlated tool receipt fields")
+        if payload["tool_success"] and metadata.get("error_type") is not None:
+            raise OutcomeStoreError("Contradictory correlated tool receipt")
+        digest = metadata.get("result_sha256")
+        if digest is not None and (
+            not isinstance(digest, str) or len(digest) != 64
+            or any(ch not in "0123456789abcdef" for ch in digest)
+        ):
+            raise OutcomeStoreError("Invalid correlated tool receipt digest")
+        try:
+            call_id = UUID(metadata["tool_call_id"])
+            recorded = datetime.fromisoformat(payload["recorded_at"])
+        except (KeyError, TypeError, ValueError) as exc:
+            raise OutcomeStoreError("Invalid correlated tool receipt fields") from exc
+        if (
+            call_id.version != 4 or str(call_id) != metadata["tool_call_id"]
+            or payload.get("request_id") != str(call_id)
+            or payload.get("outcome_id") != f"out_tool_{call_id.hex}"
+            or recorded.utcoffset() is None
+        ):
+            raise OutcomeStoreError("Invalid correlated tool receipt identity")
+
     async def list_governed_tool_receipts_async(
         self,
         *,
@@ -880,24 +942,36 @@ class PostgresOutcomeStore(OutcomeStore):
         tenant_id: str,
         user_id: str,
         limit: int = 50,
+        correlation_id: str | None = None,
     ) -> list[dict[str, Any]]:
         """Tenant/user/run-filtered receipt read, never an unscoped audit listing."""
         tenant = self._require_tenant(tenant_id)
         if not trajectory_id or not user_id:
             raise OutcomeStoreError("Tool receipt scope is required")
+        if correlation_id is not None and any(
+            not isinstance(value, str) or not value or value != value.strip()
+            or len(value) > 256
+            for value in (tenant, user_id, trajectory_id, correlation_id)
+        ):
+            raise OutcomeStoreError("Exact correlated tool receipt scope required")
         bounded = max(1, min(int(limit), 100))
         try:
             async with async_transaction_scope(tenant) as session:
                 result = await session.execute(
                     text(
                         """
-                        SELECT payload FROM public.outcome_records
+                        SELECT payload, outcome_id FROM public.outcome_records
                         WHERE tenant_id = CAST(:tenant_id AS uuid)
                           AND user_id = CAST(:user_id AS uuid)
                           AND trajectory_id = :trajectory_id
+                          AND (CAST(:correlation_id AS text) IS NULL OR correlation_id = :correlation_id)
                           AND source = 'runtime.execution'
-                          AND payload->'metadata'->>'event_type' = 'agent.tool.execution'
-                          AND payload->'metadata'->>'receipt_version' = 'governed-tool.v1'
+                          AND (
+                            (payload->'metadata'->>'event_type' = 'agent.tool.execution'
+                             AND payload->'metadata'->>'receipt_version' = 'governed-tool.v1')
+                            OR (CAST(:correlation_id AS text) IS NOT NULL
+                                AND LEFT(outcome_id, 9) = 'out_tool_')
+                          )
                         ORDER BY recorded_at DESC, outcome_id DESC
                         LIMIT :limit
                         """
@@ -906,13 +980,25 @@ class PostgresOutcomeStore(OutcomeStore):
                         "tenant_id": tenant,
                         "user_id": user_id,
                         "trajectory_id": trajectory_id,
+                        "correlation_id": correlation_id,
                         "limit": bounded,
                     },
                 )
-                return [
-                    self._payload_from_row(row["payload"])
-                    for row in result.mappings().all()
-                ]
+                receipts = []
+                seen: set[str] = set()
+                for row in result.mappings().all():
+                    payload = self._payload_from_row(row["payload"])
+                    if correlation_id is not None:
+                        self._validate_correlated_tool_receipt(
+                            payload, tenant=tenant, user_id=user_id,
+                            trajectory_id=trajectory_id, correlation_id=correlation_id,
+                        )
+                        identifier = payload["outcome_id"]
+                        if row["outcome_id"] != identifier or identifier in seen:
+                            raise OutcomeStoreError("Invalid correlated tool receipt identity")
+                        seen.add(identifier)
+                    receipts.append(payload)
+                return receipts
         except OutcomeStoreError:
             raise
         except Exception as exc:

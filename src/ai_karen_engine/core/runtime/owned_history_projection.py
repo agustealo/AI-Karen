@@ -440,6 +440,7 @@ def project_owned_history(
             for event in projector.project(ChatStreamChunk(
                 type="complete", content="",
                 correlation_id=replay_trace_id,
+                request_id=attestation[0],
                 metadata=dict(metadata),
             )):
                 if event.get("type") == "CUSTOM":

@@ -114,7 +114,7 @@ describe("CopilotKit canonical conversation hydration", () => {
   });
 
 
-  it("faithfully hydrates a completed backend persona receipt before opening SDK chat", async () => {
+  it.each([undefined, "runtime-request_1"])("faithfully hydrates a completed backend receipt (request identity %s) before opening SDK chat", async (requestId) => {
     const original = {
       actual_provider: "local",
       actual_model: "verified-model",
@@ -122,6 +122,7 @@ describe("CopilotKit canonical conversation hydration", () => {
       runtime_engine: "vllm",
       persona_id: "tenant-persona-1",
       persona_selection_revision: 12,
+      ...(requestId === undefined ? {} : { runtime_request_id: requestId }),
     };
     backend.fetchConversation.mockResolvedValueOnce({
       threadId: CONVERSATION_A,
@@ -146,6 +147,33 @@ describe("CopilotKit canonical conversation hydration", () => {
     expect(backend.agent.subscribe).toHaveBeenCalledTimes(1);
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.queryByTestId("karen-read-only-transcript")).toBeNull();
+  });
+
+  it("preserves bounded attested request identity and rejects malformed supplied identity", () => {
+    const messages = [{ id: "answer-1", role: "assistant" }];
+    const base = {
+      actual_provider: "local", actual_model: "verified-model",
+      response_source: "local_inference",
+    };
+    const event = (value: Record<string, unknown>) => [{
+      type: "CUSTOM", name: "karen.execution_receipt.v1",
+      messageId: "answer-1", value,
+    }];
+    for (const value of [base, ...["x", "runtime-request_1", "x".repeat(128)].map(
+      runtime_request_id => ({ ...base, runtime_request_id }),
+    )]) {
+      expect(parseKarenVerifiedHistory(event(value), messages).get("answer-1"))
+        .toEqual([{ type: "receipt", value }]);
+    }
+    for (const runtime_request_id of [
+      "", "x".repeat(129), "bad/request", "bad\n", "bad\r", "bad\nrequest",
+      "bad request", "é", null, undefined, 123, true, {},
+    ]) {
+      expect(() => parseKarenVerifiedHistory(event({ ...base, runtime_request_id }), messages))
+        .toThrow("Unsupported verified execution receipt");
+    }
+    expect(() => parseKarenVerifiedHistory(event({ ...base, runtime_request_id: "valid", private_key: "secret" }), messages))
+      .toThrow("Unsupported verified execution receipt");
   });
 
   it("accepts only an intact bounded persona identity and integer revision on a saved receipt", () => {
