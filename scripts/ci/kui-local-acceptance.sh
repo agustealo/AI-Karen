@@ -167,7 +167,8 @@ PY
   cd "$ROOT"
   run explorer_provenance_after "${PROVENANCE[@]}" --evidence "$OUT/explorer-after.json"
   run explorer_provenance_continuity check_explorer_continuity \
-    "$OUT/explorer-before.json" "$OUT/explorer-pre-execution.json" "$OUT/explorer-after.json"  [[ "$(git rev-parse HEAD)" == "$ACTUAL_SHA" && -z "$(git status --porcelain)" ]] || {
+    "$OUT/explorer-before.json" "$OUT/explorer-pre-execution.json" "$OUT/explorer-after.json"
+  [[ "$(git rev-parse HEAD)" == "$ACTUAL_SHA" && -z "$(git status --porcelain)" ]] || {
     echo 'Checkout changed during acceptance.' >&2; exit 2;
   }
   printf 'PASS explorer_local_acceptance (four scenarios; independent review still required)\n' | tee -a "$RESULTS"

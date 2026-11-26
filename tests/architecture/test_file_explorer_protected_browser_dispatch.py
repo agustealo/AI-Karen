@@ -157,7 +157,11 @@ def test_local_attachment_readback_preserves_observed_authentication_and_revocat
 
 
 def test_explorer_local_runner_reuses_existing_provenance_and_private_report():
-    runner = (ROOT / "scripts/ci/kui-local-acceptance.sh").read_text()
+    import subprocess
+
+    runner_path = ROOT / "scripts/ci/kui-local-acceptance.sh"
+    subprocess.run(["bash", "-n", str(runner_path)], check=True)
+    runner = runner_path.read_text()
     assert "RUN_FILE_EXPLORER_LOCAL:-0" in runner
     assert "explorer_provenance_pre_execution" in runner
     assert "explorer_provenance_continuity" in runner
