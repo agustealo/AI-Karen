@@ -53,6 +53,7 @@ def _scope(
     provider_constraints: dict | None = None,
     meter_model_calls: int | None = None,
     max_duration_ms: int = 60000,
+    degraded_allowed: bool = True,
 ) -> GovernedToolModelAdmission:
     budget = ExecutionBudget(
         max_model_calls=calls,
@@ -67,6 +68,7 @@ def _scope(
         authorized_session_id="session-a",
         provider_constraints=dict(provider_constraints or {}),
         budget=budget,
+        degraded_allowed=degraded_allowed,
     )
     if meter_model_calls is not None:
         budget.max_model_calls = meter_model_calls
@@ -1609,4 +1611,144 @@ async def test_workflow_authority_revocation_invalidates_copied_task_context():
     start.set()
     with pytest.raises(PermissionError, match="authority_revoked"):
         await task
+    assert admission.meter.model_calls == 0
+
+
+def _workflow_transport(monkeypatch, admission, *, available=True, observed_model="model-a",
+                        preferred_provider="ollama-local", disable_primary=False):
+    from ai_karen_engine.core.expression.gateway import ExpressionGateway
+    from ai_karen_engine.core.expression.settings import EngineConfig, ExpressionSettings
+    from ai_karen_engine.core.model_runtime import provider_registry_service
+    from ai_karen_engine.core.runtime import composition
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationAuthority, WorkflowGenerationRequest,
+    )
+
+    _, attempts, endpoint = _local_manager(monkeypatch, observed_model=observed_model)
+    endpoint = replace(
+        endpoint, default_model="model-a",
+        capabilities=("chat_completion", "text_generation"),
+    )
+    registry = SimpleNamespace(
+        get_provider_endpoint=lambda provider_id: (
+            endpoint if provider_id == endpoint.provider_id else None
+        ),
+        get_provider_status=lambda _: SimpleNamespace(is_available=available),
+        resolve_capable_targets=lambda **_: [endpoint],
+        canonicalize_provider_id=lambda value: value,
+    )
+    monkeypatch.setattr(
+        provider_registry_service, "get_provider_registry_service", lambda: registry,
+    )
+    settings = ExpressionSettings()
+    if disable_primary:
+        settings.engines["local"].enabled = False
+        settings.engines["secondary"] = EngineConfig(enabled=True, type="openai_compatible")
+        settings.engine_fallback_order = ["local", "secondary"]
+    gateway = ExpressionGateway(settings=settings)
+    monkeypatch.setattr(composition, "get_expression_gateway", lambda: gateway)
+    ctx = admission.authenticated_context
+    messages = [{"role": "user", "content": "Explain the workflow result."}]
+    original = ChatExecutionRequest(
+        context=ctx, messages=messages, preferred_provider=preferred_provider,
+        preferred_model="model-a",
+    )
+    decision = ExecutionDecision()
+    authority = WorkflowGenerationAuthority.create(
+        original, decision, admission.plan, admission.meter,
+    )
+    admission.meter.start()
+    request = WorkflowGenerationRequest(
+        request_id=admission.request_id, correlation_id=admission.correlation_id,
+        tenant_id=admission.tenant_id, user_id=admission.user_id,
+        conversation_id=ctx.require_conversation_id(),
+        policy_decision_id=admission.policy_decision_id, messages=messages,
+        authorized_plan={"execution_id": admission.plan.execution_id,
+                         "policy_decision_id": admission.policy_decision_id},
+    )
+    return authority, request, attempts
+
+
+@pytest.mark.asyncio
+async def test_workflow_governed_http_uses_original_meter_and_observed_receipt(monkeypatch):
+    from ai_karen_engine.core.expression.errors import EngineUnavailableError
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope(calls=1)
+    authority, request, attempts = _workflow_transport(monkeypatch, admission)
+    with bind_workflow_generation(authority):
+        result = await WorkflowGenerationRuntime().execute(request)
+        assert result.text == "actual observed output"
+        assert result.actual_provider == "ollama-local"
+        assert result.actual_model == "model-a"
+        assert result.metadata["policy_decision_id"] == admission.policy_decision_id
+        assert admission.meter.model_calls == 1
+        assert admission.meter.external_requests == 0
+        assert attempts[0]["model"] == "model-a"
+        with pytest.raises(EngineUnavailableError):
+            await WorkflowGenerationRuntime().execute(request)
+    assert len(attempts) == 1
+    assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("tenant_id", "forged-tenant"), ("user_id", "forged-user"),
+    ("policy_decision_id", "forged-policy"), ("conversation_id", "forged-conversation"),
+    ("request_id", "forged-request"), ("correlation_id", "forged-correlation"),
+])
+async def test_workflow_forged_scope_never_dispatches(monkeypatch, field, value):
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope()
+    authority, request, attempts = _workflow_transport(monkeypatch, admission)
+    with bind_workflow_generation(authority):
+        with pytest.raises(PermissionError, match="scope_mismatch"):
+            await WorkflowGenerationRuntime().execute(replace(request, **{field: value}))
+    assert attempts == []
+    assert admission.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_workflow_wrong_observed_model_is_not_success(monkeypatch):
+    from ai_karen_engine.core.expression.errors import EngineUnavailableError
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope(calls=1)
+    authority, request, attempts = _workflow_transport(
+        monkeypatch, admission, observed_model="wrong-model",
+    )
+    with bind_workflow_generation(authority):
+        with pytest.raises(EngineUnavailableError):
+            await WorkflowGenerationRuntime().execute(request)
+    assert len(attempts) == 1
+    assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("disable_primary", [False, True])
+async def test_workflow_forbidden_fallback_never_dispatches(monkeypatch, disable_primary):
+    from ai_karen_engine.core.expression.errors import EngineUnavailableError
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope(degraded_allowed=False)
+    authority, request, attempts = _workflow_transport(
+        monkeypatch, admission,
+        preferred_provider="ollama-local" if disable_primary else "missing-provider",
+        disable_primary=disable_primary,
+    )
+    with bind_workflow_generation(authority):
+        with pytest.raises((PermissionError, EngineUnavailableError)):
+            await WorkflowGenerationRuntime().execute(request)
+    assert attempts == []
     assert admission.meter.model_calls == 0

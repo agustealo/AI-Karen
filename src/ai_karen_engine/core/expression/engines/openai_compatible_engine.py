@@ -60,6 +60,16 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                 requested_provider=requested_provider,
             )
 
+        if (
+            task.execution_admission is not None
+            and not task.execution_admission.plan.degraded_allowed
+            and requested_provider.lower() != "auto"
+            and not self._provider_ids_equivalent(
+                requested_provider, endpoint.provider_id, registry,
+            )
+        ):
+            raise PermissionError("governed_model_fallback_not_authorized")
+
         # Endpoint type and configured locality are not sufficient network
         # evidence. Custom and env-overridden "local" endpoints may resolve to
         # remote URLs; require the original RuntimePolicy-bound approval before

@@ -280,7 +280,9 @@ class ExpressionGateway:
 
         for level, engine_id in enumerate(sequence):
             await require_deadline()
-            if (task.execution_admission is not None and attempted_model_engines
+            # A disabled, circuit-open or ineligible primary engine must not
+            # silently turn into an authorized fallback.
+            if (task.execution_admission is not None and level > 0
                     and not task.execution_admission.plan.degraded_allowed):
                 break
             cfg = self.settings.engines.get(engine_id)
