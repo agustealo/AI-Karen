@@ -5,12 +5,18 @@ on:
     paths:
       - "supabase/migrations/*communications_inbox*.sql"
       - "tests/integration/test_communications_inbox_postgres.py"
+      - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
+      - "src/ai_karen_engine/persistence/postgres/transactions.py"
+      - "src/ai_karen_engine/services/privacy_compliance.py"
       - ".github/workflows/kcomm-communications-postgres-proof.yml"
   push:
     branches: [main]
     paths:
       - "supabase/migrations/**"
       - "tests/integration/test_communications_inbox_postgres.py"
+      - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
+      - "src/ai_karen_engine/persistence/postgres/transactions.py"
+      - "src/ai_karen_engine/services/privacy_compliance.py"
       - ".github/workflows/kcomm-communications-postgres-proof.yml"
   workflow_dispatch:
 permissions:
@@ -87,11 +93,11 @@ jobs:
 
           asyncio.run(prepare())
           PY
-      - name: Exercise committed migration with real PostgreSQL
+      - name: Exercise committed migration, repository and privacy lifecycle
         run: |
-          python -m compileall -q tests/integration/test_communications_inbox_postgres.py
+          python -m compileall -q src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py src/ai_karen_engine/services/privacy_compliance.py tests/integration/test_communications_inbox_postgres.py
           pytest tests/integration/test_communications_inbox_postgres.py -q -rs
       - name: Record evidence boundary
         if: always()
         run: |
-          echo "This workflow exercises the committed CLI-generated migration, the full canonical migration chain, and scoped DDL against a second disposable database. No deployed schema, privacy service integration or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"
+          echo "This workflow targets the canonical migration chain, scoped DDL, repository lifecycle and conversation privacy export/erasure against disposable PostgreSQL. Consult job and test results for actual acceptance; no deployed schema or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"
