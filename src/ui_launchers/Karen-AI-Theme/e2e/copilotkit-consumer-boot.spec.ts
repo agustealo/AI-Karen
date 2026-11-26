@@ -248,7 +248,7 @@ async function expectFreshSpecialistIsolation(
   await signOut();
   const seen = new Set([approved.userId]);
   for (const [index, account] of foreignSpecialistAccounts.entries()) {
-    await signInApprovedKaren(page, account.email!, account.password!);
+    await signInApprovedKaren(page, account.email!, account.password!, { allowLocalLoopback: localMode });
     sameOrigin();
     const session = await readAuthorizedSameOriginJson(page, "/api/auth/validate-session");
     const body = session.body as { user?: { user_id?: unknown; tenant_id?: unknown } } | null;
@@ -367,13 +367,21 @@ if (approvedSpecialist && (foreignSpecialistAccounts.some(account => !account.em
       .map(email => email?.trim().toLowerCase())).size !== 3)) {
   throw new Error("Fresh isolation requires three distinct sanitized account credentials");
 }
-if (approvedSpecialist && (!releaseMode || localMode || personalContextAcceptance || kcon770FaultAcceptance || authState ||
+const localSpecialistMode = localMode && !releaseMode &&
+  process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM === "local" &&
+  process.env.KAREN_LOCAL_SEARCH_ACCEPTANCE === "1" &&
+  process.env.KAREN_SANITIZED_ACCOUNT === "true" &&
+  approvedUrl === "http://127.0.0.1:8010";
+const signedSpecialistMode = releaseMode && !localMode &&
+  process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM === "docker";
+if (approvedSpecialist && ((!signedSpecialistMode && !localSpecialistMode) ||
+    personalContextAcceptance || kcon770FaultAcceptance || authState ||
     process.env.KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED !== "true" ||
-    process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
     process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== "true" ||
     process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined ||
+    !expectedRevision || !/^[0-9a-f]{40}$/.test(expectedRevision) ||
     !approvedEmail || !approvedPassword || !validApprovedSpecialist(approvedSpecialist))) {
-  throw new Error("Fresh specialist trial requires explicit signed Docker disposable-account approval and complete configuration");
+  throw new Error("Fresh specialist trial requires explicit signed Docker or sanitized loopback approval and complete configuration");
 }
 
 if (releaseMode && localMode) {
@@ -408,7 +416,7 @@ if (enabled) {
 async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
   // Local dev builds may not expose an attested deployment revision. Release
   // acceptance always requires the exact reviewed SHA and cannot skip it.
-  if (!releaseMode) return;
+  if (!releaseMode && !localSpecialistMode) return;
   const response = await page.context().request.get(
     new URL("/api/deployment-revision", target).toString(),
     { failOnStatusCode: false, maxRedirects: 0, timeout: 20_000 },
@@ -416,6 +424,11 @@ async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
   expect(response.status()).toBe(200);
   const body: unknown = await response.json();
   expect(body).toBeTruthy();
+  if (localSpecialistMode) {
+    expect(response.headers()["content-type"] ?? "").toMatch(/^application\/json(?:;|$)/i);
+    expect(response.headers()["cache-control"] ?? "").toContain("no-store");
+    expect(body).toEqual({ status: "ok", revision: expectedRevision });
+  }
   const revision = body as Record<string, unknown>;
   expect(revision.revision ?? revision.sha ?? revision.commit_sha ?? revision.git_sha)
     .toBe(expectedRevision);
@@ -431,7 +444,10 @@ test.use({
 test.describe("canonical consumer chat cold-load acceptance", () => {
   test.skip(!enabled, "Set KAREN_LOCAL_CHAT_ACCEPTANCE=1 or KAREN_CHAT_BOOT_ACCEPTANCE=1 for real backend/browser proof");
 
-  test(approvedSpecialist ? "ARM-08 fresh ordinary-chat specialist execution survives reload" : "persists a real user message and a real assistant reply", async ({ page }, testInfo) => {
+  const specialistTitle = localSpecialistMode
+    ? "ARM-08 local ordinary-chat specialist execution survives reload"
+    : "ARM-08 fresh ordinary-chat specialist execution survives reload";
+  test(approvedSpecialist ? specialistTitle : "persists a real user message and a real assistant reply", async ({ page }, testInfo) => {
     test.setTimeout(approvedSpecialist ? 12 * 60_000 : personalContextAcceptance ? 18 * 60_000 : 180_000);
     const target = new URL(approvedUrl!);
     const browserErrors: string[] = [];
@@ -914,6 +930,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       await expectFreshSpecialistIsolation(page, target, id!, firstReceipt.runtimeRequestId!, approvedSpecialist);
       expect(observedRunRequests, "Authorization probes must not start inference").toHaveLength(1);
       expect(specialistMutations, "Consumer must not mutate execution authority").toEqual([]);
+      if (localSpecialistMode) {
+        await requireReviewedRevision(page, target);
+        await requireLiveCanonicalBackend(page, target);
+      }
     }
   });
 

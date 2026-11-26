@@ -817,3 +817,26 @@ Consolidation: ARM-05C.8C (#1350) contributes canonical UUIDv4 tool-call/derived
 The trial additionally joins the owner-visible, completed assistant-digest-attested `karen.agent_step.v1` history projection to the actual SDK transport run, exact assistant and runtime request IDs, and durable specialist step. It requires ordered outer invocation entry/completion, rejecting contradictory, stale, foreign or internal-only activity. It compares the attested sequence evidence after reload. The generic event cursor intentionally cannot replay arbitrary agent/tool activity; this trial does not expand that boundary. The governed tool evidence remains independently read from its owner-scoped receipt endpoint, not inferred from an agent-step event.
 
 The run tool envelope uses the exact same pure `src/lib/governed-tool-receipts.ts` wire validator as the Mission Control receipt view (#1352). ARM-08 only adds trial-specific requirements (one successful approved call, matching policy/step, digest and time window). The shared file is byte-identical across the dependent candidates; preserve it once during reconciliation.
+
+
+#### ARM-08 local-only ordinary specialist trial
+
+External deployment quotas and hosted runner availability are not source-integration blockers. The same browser scenario and private report gate also support explicit local loopback acceptance. A local pass is **local execution/readback evidence only**, never signed-release provenance. Use a clean exact reviewed checkout and local production-built API/Web images with matching source labels and deployed revision, local PostgreSQL/Redis and configured installed inference engine. Independently inspect the running image IDs, database/tenant isolation and approved read-only tool before and after the trial; do not point at a shared or production account/database. The browser itself checks the exact uncached frontend revision and canonical backend readiness before credentials and after all isolation probes. No deployment, image build, account provisioning or policy mutation is performed by the browser gate.
+
+In a private shell, configure the same dedicated non-admin A/B/C credentials, explicit approval, exact principal IDs, approved prompt and expected executor/tool variables documented above. Do not place credentials in the checkout or command history. A and B must share a tenant; C must be in a separate tenant. Run from the repository root:
+
+```bash
+export KAREN_CHAT_BOOT_REVISION="$(git rev-parse HEAD)"
+export KAREN_BASE_URL=http://127.0.0.1:8010
+export KAREN_LOCAL_CHAT_ACCEPTANCE=1
+export KAREN_SANITIZED_ACCOUNT=true
+export KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE=true
+# Set KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED=true only after operator approval.
+unset KAREN_CHAT_BOOT_ACCEPTANCE KAREN_E2E_AUTH_STATE VERCEL_AUTOMATION_BYPASS_SECRET
+export RUNNER_TEMP="$(mktemp -d)"
+trap 'rm -rf -- "$RUNNER_TEMP"' EXIT
+cd src/ui_launchers/Karen-AI-Theme
+bash ../../../scripts/ci/run_specialist_browser_acceptance.sh local ordinary-chat
+````
+
+Install pinned frontend dependencies and Chromium before entering credentials. The local runner rejects dirty/wrong revisions, unapproved or non-loopback origins, inherited bypass credentials and partial configuration. It requires exactly one passing local scenario, no skips or retries, and deletes private browser output. Signed Docker and Vercel scenarios keep their existing admission rules; a local report cannot substitute for either. Report local runtime proof separately from image provenance and external deployment status.
