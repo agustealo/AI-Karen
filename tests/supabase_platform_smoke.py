@@ -66,8 +66,11 @@ def test_realtime_contract() -> None:
         publish_conversation_event,
         publish_user_event,
     )
-    assert RealtimeTopicFactory.user_topic("t1", "u1") == "tenant:t1:user:u1"
-    assert RealtimeTopicFactory.is_private("tenant:t1:user:u1") is True
+    tenant_id, user_id = str(uuid.uuid4()), str(uuid.uuid4())
+    topic = RealtimeTopicFactory.user_topic(tenant_id, user_id)
+    assert topic == f"tenant:{tenant_id}:user:{user_id}"
+    assert RealtimeTopicFactory.is_private(topic) is True
+    assert RealtimeTopicFactory.is_private("tenant:t1:user:u1") is False
     assert realtime_events.get("conversation.message.created") is not None
     assert get_realtime_publisher() is None
     assert is_realtime_available() is False
