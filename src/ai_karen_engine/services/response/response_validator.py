@@ -18,9 +18,6 @@ class ValidationResult:
 MENU_LIKE_PATTERNS = [
     re.compile(r"what do you want to hear\??", re.IGNORECASE),
     re.compile(r"which (one|option) (do you want|would you like)", re.IGNORECASE),
-    re.compile(r"^\s*\(?1\)?[.)]\s+.+", re.MULTILINE),
-    re.compile(r"^\s*\(?2\)?[.)]\s+.+", re.MULTILINE),
-    re.compile(r"^\s*\(?3\)?[.)]\s+.+", re.MULTILINE),
 ]
 
 # Generic debug/provider prefix detection
@@ -163,13 +160,9 @@ class ResponseValidator:
 
     def _looks_like_unrequested_menu(self, text: str) -> bool:
         """Detect if text looks like a menu or a list of options."""
-        # A simple check: if more than 2 patterns match or if we have a list-like structure
-        matches = 0
-        for pattern in MENU_LIKE_PATTERNS:
-            if pattern.search(text):
-                matches += 1
-        
-        return matches >= 1
+        # Numbered steps, outlines and research sections are valid direct
+        # answers. Only explicit choice-seeking language is a menu signal.
+        return any(pattern.search(text) for pattern in MENU_LIKE_PATTERNS)
 
     def _looks_like_prompt_echo(self, text: str, contract: Any) -> bool:
         """Detect if the LLM is just echoing the prompt or instructions."""
