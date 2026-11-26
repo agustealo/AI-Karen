@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[2]
 RUNNER = ROOT / "scripts/ci/kui-local-acceptance.sh"
 DEPLOY = ROOT / "scripts/ci/kui-card-studio-local-deployment.sh"
@@ -87,12 +89,11 @@ def test_kcard_negative_local_provenance_cases_fail_closed():
     assert loopback_origin("http://127.0.0.1:8010") == "http://127.0.0.1:8010"
 
 
-def test_disposable_provisioning_generates_all_compose_inputs_without_real_docker(tmp_path, monkeypatch):
+@pytest.mark.parametrize("port", [54342, 55432])
+def test_disposable_provisioning_generates_all_compose_inputs_without_real_docker(tmp_path, monkeypatch, port):
     import json
     import subprocess
     import sys
-
-    import pytest
 
     subprocess.run(["bash", "-n", str(DEPLOY)], check=True)
     body = DEPLOY.read_text().split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
@@ -102,7 +103,6 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     output = tmp_path / "output"
     output.mkdir()
     env_file = output / ".env.production"
-    port = 54342
     (tmp_path / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=fixture-secret\n")
     (tmp_path / "supabase" / "migrations").mkdir(parents=True)
     (tmp_path / "supabase" / "config.toml").write_text(
@@ -164,3 +164,23 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     with pytest.raises(SystemExit, match="endpoint overrides"):
         exec(code, {})
     assert calls == []
+
+
+@pytest.mark.parametrize("content", [
+    "",
+    'project_id = "../other"\n[db]\nport = 54342',
+    'project_id = "fixture"\n[db]\nport = 0',
+    'project_id = "fixture"\n[db]\nport = true',
+    'project_id = "fixture"\n[db]\nport = "54342"',
+    'project_id = "fixture"\n[db]\nport = 65536',
+    "not valid toml",
+])
+def test_local_supabase_config_rejects_invalid_identity(tmp_path, content):
+    from scripts.ci.verify_local_card_studio_acceptance import (
+        GuardError, local_supabase_database_config,
+    )
+
+    config = tmp_path / "config.toml"
+    config.write_text(content)
+    with pytest.raises(GuardError):
+        local_supabase_database_config(config)
