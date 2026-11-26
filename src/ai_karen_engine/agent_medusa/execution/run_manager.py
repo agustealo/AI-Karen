@@ -593,7 +593,8 @@ class MedusaRunManager:
             if (
                 self._runs.get(run.run_id) is not run
                 or run.terminal_pending
-                or run.status not in {
+                or run.status
+                not in {
                     ExecutionRunStatus.RUNNING,
                     ExecutionRunStatus.CANCELLING,
                 }

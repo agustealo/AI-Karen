@@ -796,7 +796,9 @@ class PostgresDurableRunLedger:
                     )
                 if authorize_terminal is not None:
                     if transition_kind != "terminal":
-                        raise ValueError("Terminal authorizer requires terminal transition")
+                        raise ValueError(
+                            "Terminal authorizer requires terminal transition"
+                        )
                     # The existing row lock serializes durable cancellation.
                     # Redis still owns lease acceptance; SQL must not publish
                     # a terminal result until live authority confirms it.
