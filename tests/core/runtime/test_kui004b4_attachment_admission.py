@@ -1198,6 +1198,15 @@ async def test_explicit_generated_text_route_is_exclusive(monkeypatch):
         params = runtime._build_execution_policy_request(request, blocked)
         assert params.execution_topology[flag] is True
         assert not (await RuntimePolicyEnforcer().evaluate(params)).allowed
+    for flag in ("memory_recall_required", "memory_write_requested", "requires_resumability",
+                 "requires_parallel_execution", "workflow_id", "requires_human_gate"):
+        request.metadata[flag] = True
+        blocked = await cortex.decide(request)
+        assert GENERATED_TEXT_ARTIFACT_CAPABILITY in blocked.forbidden_capabilities
+        assert not (await RuntimePolicyEnforcer().evaluate(
+            runtime._build_execution_policy_request(request, blocked)
+        )).allowed
+        del request.metadata[flag]
 
 
 @pytest.mark.asyncio

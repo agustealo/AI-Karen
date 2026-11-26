@@ -5478,6 +5478,14 @@ class ChatRuntime:
             request, decision
         )
         async def authorize_private_evidence() -> bool:
+            if decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY:
+                try:
+                    await issuance[0].authorize_generated_text_write(
+                        context=ctx, plan=plan, meter=meter,
+                    )
+                except Exception:
+                    return False
+                return True
             return await ChatRuntime._private_evidence_authorized(request, plan, meter)
 
         task = ExpressionTask(
@@ -5508,7 +5516,8 @@ class ChatRuntime:
                 "topology": plan.topology.value,
             },
             token_sink=token_sink,
-            local_only=ChatRuntime._attachment_restriction_required(request),
+            local_only=(ChatRuntime._attachment_restriction_required(request)
+                        or decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY),
             authorize_private_evidence_attempt=authorize_private_evidence,
             reserve_additional_model_call=meter.consume_model_call,
             remaining_execution_ms=lambda: meter.remaining_duration_ms(),
@@ -5649,6 +5658,13 @@ class ChatRuntime:
         restricted = ChatRuntime._attachment_restriction_required(request)
 
         async def authorize_delivery() -> None:
+            if decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY:
+                issuer = vars(request.context).get("_runtime_policy_issuance")
+                if not isinstance(issuer, tuple) or len(issuer) != 2:
+                    raise PermissionError("generated_artifact_authority_denied")
+                await issuer[0].authorize_generated_text_write(
+                    context=request.context, plan=plan, meter=meter,
+                )
             if restricted and not await ChatRuntime._private_evidence_authorized(
                 request, plan, meter
             ):

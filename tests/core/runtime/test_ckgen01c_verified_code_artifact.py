@@ -646,7 +646,10 @@ async def test_owner_text_http_read_requires_current_permission_and_exact_owner(
     from ai_karen_engine.api_routes import artifacts
 
     request = Request({"type": "http", "method": "GET", "path": f"/artifacts/{ARTIFACT}/text", "headers": []})
-    principal = SimpleNamespace(tenant_id=TENANT, user_id=USER)
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+    principal = UserData(tenant_id=TENANT, user_id=USER)
     audit = []
     permission = SimpleNamespace(allowed=True)
     manager = SimpleNamespace(
@@ -660,8 +663,16 @@ async def test_owner_text_http_read_requires_current_permission_and_exact_owner(
     read = AsyncMock(return_value=SimpleNamespace(success=True, data=evidence))
     monkeypatch.setattr(artifacts, "get_rbac_manager", lambda: manager)
     monkeypatch.setattr(artifacts, "_get_artifact_store", lambda: SimpleNamespace(read_owner_active_text_bounded=read))
+    # No development or fabricated identity may enter the storage reader.
+    with pytest.raises(HTTPException) as no_witness:
+        await artifacts.read_artifact_text(ARTIFACT, request, Response(), principal)
+    assert no_witness.value.status_code == 403
+    read.assert_not_awaited()
+    revalidate = AsyncMock()
+    monkeypatch.setattr(ChatExecutionContext, "revalidate_runtime_attachment_session", revalidate)
     response = Response()
     result = await artifacts.read_artifact_text(ARTIFACT, request, response, principal)
+    assert revalidate.await_count == 2
     assert result == {
         "artifact_id": ARTIFACT, "filename": "generated.txt", "mime_type": "text/plain",
         "text": CODE, "sha256": DIGEST, "size_bytes": len(CODE.encode("utf-8")),
@@ -685,4 +696,9 @@ async def test_owner_text_http_read_requires_current_permission_and_exact_owner(
     with pytest.raises(HTTPException) as foreign:
         await artifacts.read_artifact_text(ARTIFACT, request, Response(), principal)
     assert foreign.value.status_code == 404
-    assert audit == [True, False, True, True]
+    assert audit == [True, True, False, True, True]
+    read.return_value = SimpleNamespace(success=True, data=evidence)
+    revalidate.side_effect = [None, PermissionError("runtime_attachment_session_revoked")]
+    with pytest.raises(HTTPException) as revoked:
+        await artifacts.read_artifact_text(ARTIFACT, request, Response(), principal)
+    assert revoked.value.status_code == 403

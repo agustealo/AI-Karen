@@ -112,6 +112,9 @@ class CortexExecutionDecider:
                 or meta.get("tool_requirements") or meta.get("plugin_candidates")
                 or meta.get("required_capabilities") or meta.get("requested_agents")
                 or meta.get("reasoning_modes")
+                or meta.get("memory_recall_required") or meta.get("memory_write_requested")
+                or meta.get("requires_resumability") or meta.get("requires_parallel_execution")
+                or meta.get("workflow_id") or meta.get("requires_human_gate")
             ):
                 forbidden.append(GENERATED_TEXT_ARTIFACT_CAPABILITY)
             return ExecutionDecision(
