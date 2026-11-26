@@ -92,3 +92,20 @@ def test_research_handoff_keeps_private_status_guard():
         "Question: What are my private status updates?",
     ])
     assert resolve_capability_decision(handoff).intent != "search.general"
+
+
+@pytest.mark.parametrize("prompt", [
+    "A full research paper", "Write a detailed research paper",
+    "Turn this into a comprehensive research paper",
+])
+def test_typed_research_continuation_requires_live_evidence(prompt):
+    decision = resolve_capability_decision(prompt, research_continuation=True)
+    assert decision.intent == "search.general"
+    assert decision.requires_live_data and not decision.allow_llm_only
+    assert resolve_capability_decision(prompt).intent != "search.general"
+
+
+def test_continuation_flag_does_not_convert_unrelated_request_to_search():
+    assert resolve_capability_decision(
+        "Tell me a joke", research_continuation=True,
+    ).intent != "search.general"

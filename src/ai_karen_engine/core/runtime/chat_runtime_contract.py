@@ -548,6 +548,11 @@ class ChatExecutionRequest:
     persona_snapshot: Optional[PersonaExecutionSnapshot] = field(
         default=None, init=False, repr=False, compare=False,
     )
+    # Runtime-owned read-only continuation. None means no matching task;
+    # empty means an observed prior task without verified retrieval settings.
+    research_continuation_question: Optional[str] = field(
+        default=None, init=False, repr=False, compare=False,
+    )
 
 
 @dataclass

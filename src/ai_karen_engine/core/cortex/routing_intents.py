@@ -56,7 +56,20 @@ def parse_research_handoff_question(query: str) -> Optional[str]:
         for line in lines[3:]
     ):
         return ""
-    return lines[2][len("Question: "):].strip()
+    question = lines[2][len("Question: "):].strip()
+    return question if len(question) <= 4000 else ""
+
+
+def is_research_paper_followup(query: str) -> bool:
+    """Bounded read-only deliverable refinement, not a new action command."""
+    return bool(re.fullmatch(
+        r"(?:please\s+)?(?:(?:write|produce|provide|give me)\s+|"
+        r"(?:expand|turn|develop)\s+(?:this|it|that)\s+into\s+)?"
+        r"(?:a\s+)?(?:(?:full|detailed|comprehensive|complete)\s+)?"
+        r"research paper[?!.]*",
+        " ".join(query.strip().split()),
+        flags=re.IGNORECASE,
+    ))
 
 
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
@@ -611,7 +624,9 @@ def resolve_capability_decision(
     *,
     confidence: float = 0.9,
     has_search_options: bool = False,
+    research_continuation: bool = False,
 ) -> CapabilityDecision:
+    research_continuation = research_continuation and is_research_paper_followup(query)
     handoff_question = parse_research_handoff_question(query)
     if handoff_question is not None:
         query = handoff_question
@@ -696,7 +711,7 @@ def resolve_capability_decision(
 
     # Explicit general search retrieval options route any non-private query
     # to search.general when no other specialized capability matched.
-    if has_search_options and not (private_update or private_happening):
+    if (has_search_options or research_continuation) and not (private_update or private_happening):
         route = CAPABILITY_ROUTES["search.general"]
         return CapabilityDecision(
             intent="search.general",

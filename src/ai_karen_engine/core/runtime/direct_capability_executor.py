@@ -1658,6 +1658,16 @@ class DirectCapabilityExecutor:
                         attempts,
                     )
                 query = handoff_question
+            continuation = getattr(request, "research_continuation_question", None)
+            if continuation is not None:
+                if not continuation:
+                    return self._unavailable(
+                        started, capability, tool_name or preferred_plugin,
+                        "I could not verify the previous research settings. "
+                        "Please restate the topic and any source restrictions.",
+                        attempts,
+                    )
+                query = continuation
         retrieval_options = getattr(request, "search_retrieval_options", None)
         if retrieval_options is not None and (
             not isinstance(retrieval_options, SearchRetrievalOptions)

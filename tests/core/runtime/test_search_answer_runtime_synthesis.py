@@ -221,3 +221,18 @@ async def test_research_handoff_synthesis_uses_only_question_and_fetched_evidenc
     assert "Jamaica history" in messages[-1]["content"]
     assert "https://example.org/history" in messages[-1]["content"]
     assert "untrusted.example" not in messages[-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_research_paper_synthesis_preserves_deliverable_and_prior_topic():
+    runtime, gateway, meter, request, decision, plan, retrieved = _synthesis_inputs(
+        model_text="Jamaica became independent in 1962 (https://example.org/history)."
+    )
+    request.messages[-1]["content"] = "A full research paper"
+    request.research_continuation_question = "History of Jamaica"
+    output = await runtime._synthesize_search_evidence(request, decision, plan, meter, retrieved)
+    assert output is not None
+    prompt = gateway.generate.await_args.args[0].messages[-1]["content"]
+    assert "A full research paper" in prompt
+    assert "Research topic: History of Jamaica" in prompt
+    assert "https://example.org/history" in prompt
