@@ -22,6 +22,21 @@ export class ApiError extends Error {
   }
 }
 
+/** Optional identity fence for principal-owned requests, including retries. */
+export type ApiPrincipalScope = Readonly<{ tenant_id: string; user_id: string; revision: number }>;
+
+export function captureApiPrincipalScope(tenant_id: string, user_id: string): ApiPrincipalScope | null {
+  const user = authService.getCurrentUser();
+  if (!tenant_id || !user_id || user?.tenant_id !== tenant_id || user.user_id !== user_id) return null;
+  return { tenant_id, user_id, revision: authService.getAuthenticationRevision() };
+}
+
+export function isCurrentApiPrincipalScope(scope: ApiPrincipalScope): boolean {
+  const user = authService.getCurrentUser();
+  return user?.tenant_id === scope.tenant_id && user.user_id === scope.user_id
+    && authService.getAuthenticationRevision() === scope.revision;
+}
+
 export interface StreamEvent {
   type: 'status' | 'content' | 'error' | 'complete' | 'agent_step' | 'tool' | 'citation' | 'warning' | 'approval';
   content: string;
@@ -619,9 +634,15 @@ class ApiClient {
     init: RequestInit = {},
     skipAuth: boolean = false,
     responseKind: 'json' | 'blob' = 'json',
+    principalScope?: ApiPrincipalScope,
   ): Promise<T> {
+    const assertScope = () => {
+      if (principalScope && !isCurrentApiPrincipalScope(principalScope)) throw new Error('Authenticated request scope changed');
+    };
     const send = async (baseUrl: string | null): Promise<Response> => {
+      assertScope();
       const authHeaders = skipAuth ? {} : await this.getAuthHeaders();
+      assertScope();
       const requestHeaders = {
         ...authHeaders,
         ...((init.headers as Record<string, string> | undefined) || {}),
@@ -636,11 +657,13 @@ class ApiClient {
       console.log(`[ApiClient] Request: ${url} (Base: ${baseUrl}, Endpoint: ${endpoint})`);
       
       try {
-        return await fetch(url, {
+        const result = await fetch(url, {
           ...init,
           headers: requestHeaders,
           credentials: 'include',
         });
+        assertScope();
+        return result;
       } catch (err) {
         console.error(`[ApiClient] Network error for ${url}:`, err);
         throw err;
@@ -696,6 +719,7 @@ class ApiClient {
               localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
             }
           } catch (refreshError) {
+            assertScope();
             if (this.isTransientError(refreshError)) {
               console.warn('[ApiClient] Token refresh failed due to transient/degraded state. Preserving auth state.');
               // Let it fall through to the normal error handling below, don't clear auth
@@ -746,8 +770,10 @@ class ApiClient {
       }
     }
 
+    assertScope();
     if (!response.ok) {
       const rawText = await response.text().catch(() => '');
+      assertScope();
       let errorData: Record<string, unknown> = {};
       try {
         errorData = JSON.parse(rawText);
@@ -796,8 +822,13 @@ class ApiClient {
     }
 
     if (response.status === 204) return undefined as T;
-    if (responseKind === 'blob') return await response.blob() as T;
+    if (responseKind === 'blob') {
+      const blob = await response.blob();
+      assertScope();
+      return blob as T;
+    }
     const text = await response.text();
+    assertScope();
     return (text ? JSON.parse(text) : undefined) as T;
   }
 
@@ -900,20 +931,20 @@ class ApiClient {
     return response;
   }
 
-  async get<T>(endpoint: string): Promise<T> {
-    return this.request<T>(endpoint);
+  async get<T>(endpoint: string, principalScope?: ApiPrincipalScope): Promise<T> {
+    return this.request<T>(endpoint, {}, false, 'json', principalScope);
   }
 
   async getUnauthenticated<T>(endpoint: string): Promise<T> {
     return this.request<T>(endpoint, {}, true);
   }
 
-  async post<T>(endpoint: string, data?: unknown, init: RequestInit = {}): Promise<T> {
+  async post<T>(endpoint: string, data?: unknown, init: RequestInit = {}, principalScope?: ApiPrincipalScope): Promise<T> {
     return this.request<T>(endpoint, {
       ...init,
       method: 'POST',
       body: data ? JSON.stringify(data) : undefined
-    });
+    }, false, 'json', principalScope);
   }
 
   async put<T>(endpoint: string, data?: unknown, init: RequestInit = {}): Promise<T> {
@@ -924,12 +955,12 @@ class ApiClient {
     });
   }
 
-  async patch<T>(endpoint: string, data?: unknown, init: RequestInit = {}): Promise<T> {
+  async patch<T>(endpoint: string, data?: unknown, init: RequestInit = {}, principalScope?: ApiPrincipalScope): Promise<T> {
     return this.request<T>(endpoint, {
       ...init,
       method: 'PATCH',
       body: data ? JSON.stringify(data) : undefined,
-    });
+    }, false, 'json', principalScope);
   }
 
   async delete<T>(endpoint: string): Promise<T> {
