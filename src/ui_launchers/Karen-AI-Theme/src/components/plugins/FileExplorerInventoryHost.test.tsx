@@ -441,7 +441,9 @@ describe('Content Intelligence document search', () => {
     fireEvent.click(screen.getByText('Select A'));
     fireEvent.change(screen.getByLabelText('Operation'), { target: { value: 'search' } });
     fireEvent.change(screen.getByLabelText('Search terms'), { target: { value: 'vendor' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search selected files' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Search selected files' }));
+    });
   }
 
   it('submits a bounded query and displays revision-bound passages', async () => {
@@ -1022,7 +1024,7 @@ describe('governed server filename search', () => {
     await waitFor(() => expect(latest.authorized).toBe(true));
     await act(async () => latest.onSelect([latest.items[0]]));
     await act(async () => {
-      for (const value of ['x'.repeat(161), 'bad\nquery', '\uD800']) latest.onSearch?.(value);
+      for (const value of ['x'.repeat(161), 'bad\nquery', 'bad\u0000query', '\uD800']) latest.onSearch?.(value);
     });
     expect(latest.selectedSourceIds).toEqual([FILE_A]);
     expect(latest.search).toBe('');
@@ -1077,8 +1079,12 @@ describe('consumer-specific reference capacity', () => {
     </FileExplorerInventoryHost>);
     await waitFor(() => expect(latest.authorized).toBe(true));
     expect(latest.maxSelection).toBe(1);
+    await act(async () => latest.onSelect([latest.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([FILE_A]);
     await act(async () => latest.onSelect(latest.items));
     expect(latest.selectedSourceIds).toEqual([]);
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
   });
   it.each([undefined, null, true, '12', 0, -1, 1.5, 201])('fails closed on invalid Content Intelligence selection evidence %s', async (max_selection) => {
     mocks.get.mockResolvedValue({ ...response(FILE_A), max_selection });
@@ -1173,6 +1179,7 @@ describe('hierarchy-aware visual controls', () => {
     expect(screen.queryByRole('checkbox', { name: 'Select Reports' })).toBeNull();
     const bulk = screen.getByRole('button', { name: 'Select visible files (2)' });
     expect((bulk as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Selection would exceed the limit/)).toBeTruthy();
     fireEvent.click(bulk);
     expect(onSelect).not.toHaveBeenCalled();
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'alpha' } });
@@ -1211,6 +1218,9 @@ describe('hierarchy-aware visual controls', () => {
     for (const layout of ['Grid view', 'List view']) {
       fireEvent.click(screen.getByRole('button', { name: layout }));
       expect(screen.getByRole('button', { name: layout }).getAttribute('aria-pressed')).toBe('true');
+      const otherLayout = layout === 'Grid view' ? 'List view' : 'Grid view';
+      expect(screen.getByRole('button', { name: otherLayout }).getAttribute('aria-pressed')).toBe('false');
+      expect(screen.getByRole('list', { name: 'Files and folders' }).className).toContain(layout === 'Grid view' ? 'grid' : 'flex-col');
       expect((screen.getByRole('searchbox', { name: 'Filter current folder' }) as HTMLInputElement).value).toBe('alpha');
       expect((screen.getByRole('checkbox', { name: 'Select alpha.txt' }) as HTMLInputElement).checked).toBe(true);
       expect(screen.queryByRole('checkbox', { name: 'Select beta.txt' })).toBeNull();
@@ -1227,9 +1237,10 @@ describe('hierarchy-aware visual controls', () => {
   });
 
   it('distinguishes a filtered page from genuinely empty inventory', () => {
-    render(<SharedFileExplorer authorized items={[first]} />);
+    render(<SharedFileExplorer authorized items={[first]} hasMore />);
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'missing' } });
     expect(screen.getByText('No matching references on this page.')).toBeTruthy();
+    expect(screen.getByText(/Filtering and sorting apply only to this page/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
     expect(screen.getByRole('checkbox', { name: 'Select alpha.txt' })).toBeTruthy();
   });
