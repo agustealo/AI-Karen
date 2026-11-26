@@ -32,3 +32,54 @@ validation at delivery, exact owner channel selection, nonbuffered proxy,
 coalesced canonical GET, cleanup, reconnect, and real Redis cross-worker proof.
 Never forward arbitrary broker content or treat it as a user-facing event.
 Do not activate until those boundaries have been verified.
+
+
+## KCOMM-03E2: bounded authenticated wait
+
+Use the existing HTTP ingress rather than an indefinitely held SSE connection.
+GET /api/communications-center/inbox/wait accepts no query parameters and
+returns only {"changed": true|false}, no-store. A false result means an
+acknowledged idle wait, not a durable no-change assertion. A 503 means the
+hint transport is unavailable; normal authenticated inbox GET remains valid.
+
+The service authorizes COMMUNICATIONS_READ before subscribing and after
+closing the subscription, with fresh canonical session authentication on the
+original request. Any session failure, changed principal, permission loss,
+or disabled flag denies the result. Broker content never enters the response.
+Exact owner channel and subscription acknowledgment are required. Disconnect,
+cancellation and malformed/foreign frames end the wait. No queue or new
+Redis connection lifecycle is introduced. A process-local admission set
+limits concurrent waits (one per owner per worker, at most the configured
+limit, with at least two pool connections reserved). This is not a global
+capacity or rate-limit guarantee; real multiworker load/revocation tests
+remain required. The proxy and UI are not yet wired to call this route.
+
+- KARI_ENABLE_COMMUNICATIONS_INVALIDATION_WAIT=false (requires invalidation)
+- KARI_COMMUNICATIONS_INVALIDATION_WAIT_SECONDS=10 (1–15)
+- KARI_COMMUNICATIONS_INVALIDATION_MAX_WAITERS=2 (1–4 per process)
+
+The Redis read window is bounded; canonical auth, driver cleanup and ingress
+deadlines are separate. No claim of lossless delivery, live presence, SSE,
+or production activation. Polling remains mandatory for missed hints and
+privacy cascades.
+
+
+### Disposable Redis process-isolation gate
+
+The existing Communications PostgreSQL proof workflow now additionally starts
+a disposable Redis 7 container on a dynamically assigned loopback port.
+The test uses three independent Python subscriber processes and the canonical
+publisher/manager, exact Redis subscription counts, one intended owner and
+two foreign scopes (different owner, different tenant). It requires a real
+change result for the owner, verified idle results for the other two, and
+subscription count zero after exit. It also checks cancellation and resubscribe
+using real connections. It does not flush or modify existing Redis data, use
+hosted credentials, or change production configuration. This certifies the
+broker boundary only, not authenticated end-to-end HTTP revocation or browser
+delivery. The test must actually run and pass; an opt-out skip is not evidence.
+
+
+The canonical authentication middleware also applies no-store to the wait
+response before it leaves ingress, covering initial authentication rejection
+and dependency rejection as well as successful and post-wait responses.
+No duplicate authentication owner or global cache-policy change is introduced.
