@@ -602,10 +602,10 @@ test("KFILE-MUTATION-LOCAL: confirmed organization and deletion recovery", async
   expect(renamedResult.receipt.folder).toEqual(renamed);
 
   await entries.getByRole("button", { name: "Move " + renamedName, exact: true }).click();
-  const browser = editor.getByRole("region", { name: "Move destination browser" });
-  await browser.getByRole("button", { name: "Browse destination " + fixtureName, exact: true }).click();
-  await browser.getByRole("button", { name: "Browse destination " + destinationName, exact: true }).click();
-  await expect(browser.getByText("Selected destination: " + destinationName, { exact: true })).toBeVisible();
+  const destinationBrowser = editor.getByRole("region", { name: "Move destination browser" });
+  await destinationBrowser.getByRole("button", { name: "Browse destination " + fixtureName, exact: true }).click();
+  await destinationBrowser.getByRole("button", { name: "Browse destination " + destinationName, exact: true }).click();
+  await expect(destinationBrowser.getByText("Selected destination: " + destinationName, { exact: true })).toBeVisible();
   const moved = await confirm("move", "POST", prefix + "/move/folder/" + source.folder_id,
     { destination_id: destination.folder_id, expected_revision: renamed.revision }, 200);
   const movedRevision = (BigInt(renamed.revision) + BigInt(1)).toString();
