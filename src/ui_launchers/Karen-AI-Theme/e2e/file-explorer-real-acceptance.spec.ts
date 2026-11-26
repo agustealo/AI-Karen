@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { type Page, type TestInfo } from "@playwright/test";
+import { type Page, type Request, type TestInfo } from "@playwright/test";
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 
@@ -767,8 +767,13 @@ test("KFILE-ATTACHMENT-LOCAL: capacity, saved references and blocked submission"
   type Draft = { text: string; revision: number; attachment_references: Reference[] };
   let runs = 0;
   let organizationWrites = 0;
+  let observedDraftRequest: Request | undefined;
   page.context().on("request", request => {
     const url = new URL(request.url());
+    // Observe the mounted composer's real authenticated transport. A
+    // Playwright API request alone does not inherit its bearer header.
+    if (url.origin === origin.origin && url.pathname === draftPath &&
+        ["GET", "PUT"].includes(request.method())) observedDraftRequest = request;
     if (request.method() === "POST" &&
         (url.pathname === "/api/copilotkit/agent/default/run" ||
         ["/api/chat/ag-ui", "/api/chat/stream", "/api/chat"].includes(url.pathname))) runs++;
@@ -796,7 +801,16 @@ test("KFILE-ATTACHMENT-LOCAL: capacity, saved references and blocked submission"
   }
   await openConversation();
   async function readDraft(): Promise<Draft> {
-    const response = await page.request.get(draftUrl, { maxRedirects: 0 });
+    await expect.poll(() => Boolean(observedDraftRequest), { timeout: 15_000 }).toBe(true);
+    const headers = await observedDraftRequest!.allHeaders();
+    const authorization = headers.authorization;
+    if (!authorization && !headers.cookie) {
+      throw new Error("Canonical draft transport has no observed authentication");
+    }
+    const response = await page.request.get(draftUrl, {
+      headers: authorization ? { authorization } : undefined,
+      maxRedirects: 0, maxRetries: 0,
+    });
     expect(response.status()).toBe(200);
     const value = await response.json() as Draft;
     expect(Number.isSafeInteger(value.revision) && value.revision >= 0).toBe(true);
@@ -847,6 +861,7 @@ test("KFILE-ATTACHMENT-LOCAL: capacity, saved references and blocked submission"
   await expect(select(chosen[12])).toBeDisabled();
   await browse.click();
   await expect(browserRegion).toHaveCount(0);
+  observedDraftRequest = undefined;
   await page.reload();
   await openConversation();
   await expect(composer).toHaveValue(marker);
@@ -987,10 +1002,13 @@ test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session de
 
     // Replay the same credential that succeeded before logout, on the same
     // independent transport. A login redirect or anonymous 401 is not proof.
+    await replay.clearCookies();
     const revokedInventory = await replay.request.get(endpoint(prefix + "/hierarchy"), owner.options);
     expect([401, 403]).toContain(revokedInventory.status());
+    await replay.clearCookies();
     const revokedDraft = await replay.request.get(draftUrl(aDraft!), owner.options);
     expect([401, 403]).toContain(revokedDraft.status());
+    await replay.clearCookies();
     const revokedRename = await replay.request.patch(endpoint(prefix + "/folders/" + owner.folder.folder_id), {
       ...owner.options, data: { name: owner.folder.name, expected_revision: owner.folder.revision },
     });
@@ -1007,8 +1025,10 @@ test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session de
     await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
     await verifyOwnDraft(bDraft!, other, aSource!);
 
+    await replay.clearCookies();
     const foreignDraft = await replay.request.get(draftUrl(aDraft!), other.options);
     expect(foreignDraft.status()).toBe(404);
+    await replay.clearCookies();
     const foreignRename = await replay.request.patch(endpoint(prefix + "/folders/" + owner.folder.folder_id), {
       ...other.options, data: { name: owner.folder.name, expected_revision: owner.folder.revision },
     });
@@ -1025,6 +1045,7 @@ test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session de
     expect(restored.folder).toEqual(owner.folder);
     expect(restored.file.revision).toBe(owner.file.revision);
     await verifyOwnDraft(aDraft!, restored, bSource!);
+    await replay.clearCookies();
     const stillRevoked = await replay.request.get(endpoint(prefix + "/hierarchy"), owner.options);
     expect([401, 403]).toContain(stillRevoked.status());
   } finally {

@@ -143,3 +143,14 @@ def test_local_isolation_requires_actual_principal_transition_and_revoked_creden
     assert 'expect([403, 409]).toContain(foreignRename.status())' in source
     assert 'expect(restored.folder).toEqual(owner.folder)' in source
     assert 'expect([401, 403]).toContain(stillRevoked.status())' in source
+
+def test_local_attachment_readback_preserves_observed_authentication_and_revocation_is_cookie_free():
+    source = SPEC.read_text(encoding="utf-8")
+    assert 'let observedDraftRequest: Request | undefined' in source
+    assert 'url.origin === origin.origin && url.pathname === draftPath' in source
+    assert 'await observedDraftRequest!.allHeaders()' in source
+    assert 'headers: authorization ? { authorization } : undefined' in source
+    assert 'observedDraftRequest = undefined;\n  await page.reload();' in source
+    for probe in ("revokedInventory", "revokedDraft", "revokedRename",
+                  "foreignDraft", "foreignRename", "stillRevoked"):
+        assert f'await replay.clearCookies();\n    const {probe} = ' in source

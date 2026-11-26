@@ -300,3 +300,52 @@ browser state may be published. A cookie-only transport cannot satisfy this
 specific bearer-replay scenario. No observed local result is claimed.
 This tests draft ownership and session admission, not retired-content
 reauthorization or attachment-byte execution.
+
+## KEXP-005F: consolidated acceptance evidence
+
+The existing canonical browser spec owns four distinct local Explorer cases.
+Run them only against the exact clean integration checkout and a separately
+verified disposable local stack. Do not run them against a hosted preview.
+Prepare the fixture and credential requirements from 005A–005E in the same
+private shell. The mutation fixture must start empty, the attachment draft
+must be blank and the isolation drafts must be separate preseeded fixtures.
+The read-only hierarchy scenario needs its own populated nested fixture on
+the first root page; do not substitute the disposable empty mutation root.
+
+After enabling the explicit flags and supplying the fixture IDs above:
+
+```bash
+git rev-parse HEAD
+test -z "$(git status --porcelain)" || exit 1
+cd src/ui_launchers/Karen-AI-Theme
+CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium \
+  --grep='^KFILE-(LIVE|MUTATION-LOCAL|ATTACHMENT-LOCAL|ISOLATION-LOCAL):' \
+  --workers=1 --retries=0 --forbid-only
+```
+
+Record the exact commit and independently verified stack identity, and require
+**four passed, zero failed, zero skipped, zero retries**. Playwright's zero
+exit code alone is not acceptance: opt-in tests can be skipped. Do not publish
+raw logs, credentials, file names, IDs or request captures. The attachment
+readback forwards the observed same-origin draft bearer (or verified cookie
+transport), not an assumed authenticated API request; on reload it reacquires
+transport evidence. Negative bearer replay clears the independent context's
+cookies before each probe to prevent a session cookie from masking the result.
+
+| Evidence gate | Required proof |
+| --- | --- |
+| Responsive/nested inventory | KFILE-LIVE observed pass |
+| Governed organization, deletion, conflict | KFILE-MUTATION-LOCAL observed pass |
+| Durable reference capacity and denied send | KFILE-ATTACHMENT-LOCAL observed pass |
+| Revoked credential and separate tenant | KFILE-ISOLATION-LOCAL observed pass |
+| Retired/stale reference CAS admission | Chat System Burn real PostgreSQL composer attachment step |
+| Source integration | All current-head required checks, including First-Boot |
+| Review and release | Independent review, verified deployment isolation and explicit release approval |
+
+The PostgreSQL attachment test changes a previously attached source to retired,
+rejects a subsequent CAS save containing it and allows explicit reference
+removal. That is write-time reauthorization proof, not proof of browser
+behavior or authorization to send attached bytes to a model. Attached-message
+execution remains unsupported. No browser acceptance, merge or deployment
+is implied by this ledger or source test coverage.
