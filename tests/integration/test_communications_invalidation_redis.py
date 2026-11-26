@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import socket
 import sys
 import uuid
 from pathlib import Path
@@ -12,6 +13,7 @@ import pytest
 
 from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.realtime.inbox_invalidation import (
+    InboxInvalidationUnavailable,
     inbox_invalidation_channel,
     publish_inbox_invalidation,
     wait_for_inbox_invalidation,
@@ -147,6 +149,119 @@ async def test_real_redis_cross_process_owner_and_tenant_isolation():
                     pass
         await asyncio.gather(*(p.wait() for p in processes), return_exceptions=True)
         await shutdown_redis_manager()
+
+
+@pytest.mark.asyncio
+async def test_real_optional_redis_application_lifecycle(monkeypatch):
+    """Exercise actual pool startup, unavailable transport and clean restart."""
+    if os.environ.get("KAREN_TEST_DISPOSABLE_REDIS") != "1":
+        pytest.skip("Explicit disposable Redis opt-in required")
+    target = _target()
+
+    from fastapi import FastAPI
+
+    from ai_karen_engine.core.runtime.operational_health import OperationalHealthService
+    from ai_karen_engine.platform.memory.redis import get_redis_manager
+    from ai_karen_engine.server.application_runtime import (
+        initialize_application_redis,
+        shutdown_application_redis,
+    )
+
+    for name in (
+        "KARI_ENABLE_MEMORY_SERVICE", "ENABLE_RATE_LIMITING", "AUTH_ENABLE_RATE_LIMITING",
+    ):
+        monkeypatch.setenv(name, "false")
+    settings = get_runtime_settings()
+    monkeypatch.setattr(settings.features, "enable_communications_invalidation", True)
+    monkeypatch.setattr(settings.features, "enable_communications_invalidation_wait", True)
+    monkeypatch.setattr(settings.timeouts, "communications_invalidation_timeout_ms", 1000)
+    monkeypatch.setattr(settings.timeouts, "communications_invalidation_wait_seconds", 10)
+    monkeypatch.setattr(settings.timeouts, "communications_invalidation_max_waiters", 2)
+    health = OperationalHealthService()
+
+    async def healthy_database():
+        # Isolate the Redis dependency in the actual readiness composition.
+        # This test does not establish database health.
+        return {"ready": True}
+
+    monkeypatch.setattr(health, "_database_check", healthy_database)
+    assert health.redis_required() is False
+    assert health.redis_lifecycle_enabled() is True
+    tenant, owner = str(uuid.uuid4()), str(uuid.uuid4())
+
+    # Ensure each cycle starts without a pre-initialized process singleton.
+    await shutdown_redis_manager()
+    app = FastAPI()
+    unavailable = None
+    try:
+        # Hold an ephemeral loopback TCP port without listening: no external
+        # target, no guessed port, no destructive action on the live broker.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as reserved:
+            reserved.bind(("127.0.0.1", 0))
+            monkeypatch.setenv("REDIS_URL", f"redis://127.0.0.1:{reserved.getsockname()[1]}/0")
+            await initialize_application_redis(app)
+            unavailable = app.state.redis_connection_manager
+            assert unavailable is get_redis_manager()
+            assert not await unavailable.is_healthy()
+            readiness = await health.readiness(environment="development")
+            assert readiness.ready is True
+            assert readiness.checks["redis"] == {"ready": True, "status": "not_required"}
+            with pytest.raises(InboxInvalidationUnavailable):
+                await asyncio.wait_for(
+                    wait_for_inbox_invalidation(
+                        tenant_id=tenant, user_id=owner, disconnected=_connected,
+                    ),
+                    timeout=5,
+                )
+            # The same unavailable broker must still gate mandatory readiness.
+            monkeypatch.setenv("AUTH_ENABLE_RATE_LIMITING", "true")
+            mandatory = await health.readiness(environment="development")
+            assert mandatory.ready is False
+            assert mandatory.checks["redis"]["ready"] is False
+            monkeypatch.setenv("AUTH_ENABLE_RATE_LIMITING", "false")
+    finally:
+        await shutdown_application_redis(app)
+        await shutdown_application_redis(app)
+    assert app.state.redis_connection_manager is None
+    assert unavailable is not None and unavailable.client is None
+
+    # A fresh application lifecycle on the real disposable broker recovers
+    # without creating a parallel manager or changing global readiness policy.
+    monkeypatch.setenv("REDIS_URL", target)
+    app = FastAPI()
+    manager = None
+    task = None
+    try:
+        await initialize_application_redis(app)
+        manager = app.state.redis_connection_manager
+        assert manager is get_redis_manager() and manager is not unavailable
+        assert await manager.is_healthy()
+        client = manager.client
+        assert client is not None
+        await initialize_application_redis(app)
+        assert app.state.redis_connection_manager is manager
+        assert manager.client is client
+        channel = inbox_invalidation_channel(
+            prefix=manager.prefix, tenant_id=tenant, user_id=owner,
+        )
+        task = asyncio.create_task(wait_for_inbox_invalidation(
+            tenant_id=tenant, user_id=owner, disconnected=_connected,
+        ))
+        await _wait_for_counts(client, [channel], 1)
+        await publish_inbox_invalidation(tenant_id=tenant, user_id=owner)
+        assert await asyncio.wait_for(task, timeout=5) is True
+        await _wait_for_counts(client, [channel], 0)
+        readiness = await health.readiness(environment="development")
+        assert readiness.ready is True
+        assert readiness.checks["redis"] == {"ready": True, "status": "not_required"}
+    finally:
+        if task is not None and not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+        await shutdown_application_redis(app)
+        await shutdown_application_redis(app)
+    assert app.state.redis_connection_manager is None
+    assert manager is not None and manager.client is None
 
 
 if __name__ == "__main__":
