@@ -1017,6 +1017,32 @@ async def _assert_specialist_participation_reads(
         start, phase=SpecialistParticipationPhase.COMPLETED,
         observed_at=start.observed_at + timedelta(seconds=1),
     )
+    # Explicit test-only observations, not evidence of real invocation.
+    # Skipped steps have no method-entry observation.
+    failed_start = replace(
+        start, step_id="step-b",
+        observed_at=start.observed_at + timedelta(seconds=2),
+    )
+    failed = replace(
+        failed_start, phase=SpecialistParticipationPhase.FAILED,
+        observed_at=start.observed_at + timedelta(seconds=3),
+    )
+    interrupted_start = replace(
+        start, step_id="step-c",
+        observed_at=start.observed_at + timedelta(seconds=4),
+    )
+    interrupted = replace(
+        interrupted_start, phase=SpecialistParticipationPhase.INTERRUPTED,
+        observed_at=start.observed_at + timedelta(seconds=5),
+    )
+    skipped = replace(
+        start, step_id="step-d", phase=SpecialistParticipationPhase.SKIPPED,
+        observed_at=start.observed_at + timedelta(seconds=6),
+    )
+    owned_receipts = (
+        start, completed, failed_start, failed,
+        interrupted_start, interrupted, skipped,
+    )
     other_owner = replace(start, user_id=other_user)
     other_tenant = replace(start, tenant_id=tenant_b, user_id=foreign_user)
     other_run = replace(start, trajectory_id=run_id + "-other")
@@ -1024,7 +1050,7 @@ async def _assert_specialist_participation_reads(
         start, step_id="step-other-correlation", correlation_id=correlation + "-other",
     )
     writer = PostgresOutcomeStore()
-    for receipt in (start, completed, other_owner, other_tenant, other_run, other_correlation):
+    for receipt in (*owned_receipts, other_owner, other_tenant, other_run, other_correlation):
         await writer.save_unique_outcome_async(receipt.to_evidence_payload())
 
     with pytest.raises(OutcomeStoreError):
@@ -1038,7 +1064,7 @@ async def _assert_specialist_participation_reads(
         "trajectory_id": run_id,
         "correlation_id": correlation,
         "source": "runtime.execution",
-        "recorded_at": (start.observed_at + timedelta(seconds=2)).isoformat(),
+        "recorded_at": (skipped.observed_at + timedelta(seconds=1)).isoformat(),
         "metadata": {"event_type": "agent.tool.execution"},
     })
     reader = PostgresOutcomeStore()
@@ -1046,11 +1072,19 @@ async def _assert_specialist_participation_reads(
         trajectory_id=run_id, correlation_id=correlation,
         tenant_id=tenant_a, user_id=subject_id,
     )
-    assert await reader.list_specialist_participation_async(**scope) == (
-        [start.to_evidence_payload(), completed.to_evidence_payload()], False,
+    expected = [receipt.to_evidence_payload() for receipt in owned_receipts]
+    assert {receipt.phase for receipt in owned_receipts} == set(SpecialistParticipationPhase)
+    assert len({receipt.receipt_id for receipt in owned_receipts}) == len(expected)
+    # Reconstructed reader recovers all five observed phases in order.
+    assert await reader.list_specialist_participation_async(**scope) == (expected, False)
+    assert await reader.list_specialist_participation_async(
+        **scope, limit=len(expected),
+    ) == (expected, False)
+    assert await reader.list_specialist_participation_async(**scope, limit=3) == (
+        expected[-3:], True,
     )
     assert await reader.list_specialist_participation_async(**scope, limit=1) == (
-        [completed.to_evidence_payload()], True,
+        [skipped.to_evidence_payload()], True,
     )
     assert await reader.list_specialist_participation_async(
         **{**scope, "user_id": other_user},
