@@ -1589,6 +1589,7 @@ async def test_workflow_serialized_plan_is_not_model_authority():
 @pytest.mark.asyncio
 async def test_workflow_authority_revocation_invalidates_copied_task_context():
     from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
     from ai_karen_engine.core.runtime.workflow_generation import (
         WorkflowGenerationAuthority, WorkflowGenerationRequest,
         WorkflowGenerationRuntime, bind_workflow_generation,
@@ -1598,7 +1599,7 @@ async def test_workflow_authority_revocation_invalidates_copied_task_context():
     authority = WorkflowGenerationAuthority.create(
         ChatExecutionRequest(context=admission.authenticated_context,
                              messages=[{"role": "user", "content": "task"}]),
-        SimpleNamespace(), admission.plan, admission.meter,
+        ExecutionDecision(), admission.plan, admission.meter,
     )
     request = WorkflowGenerationRequest(
         request_id=admission.request_id, correlation_id=admission.correlation_id,
@@ -2123,3 +2124,33 @@ async def test_graph_network_tool_denied_even_when_named_in_plan(monkeypatch):
             await ToolExecutionNode()(state)
     assert admission.meter.tool_calls == 0
     assert attempts == []
+
+
+@pytest.mark.asyncio
+async def test_production_tool_bootstrap_isolates_optional_import_failure(monkeypatch, caplog):
+    import ai_karen_engine.tools as catalog
+    from ai_karen_engine.services.tooling.tool_service import ToolInput, ToolService
+    from ai_karen_engine.tools.text_processing_tool import TextProcessingTool
+
+    real_import = catalog.import_module
+
+    def isolated_import(name, package=None):
+        if name == ".web_search_tool":
+            raise ImportError("private optional dependency diagnostic")
+        return real_import(name, package)
+
+    monkeypatch.setattr(catalog, "import_module", isolated_import)
+    service = ToolService()
+    assert service.registry.get_tool("web_search") is None
+    tool = service.registry.get_tool("text_processing")
+    assert isinstance(tool, TextProcessingTool)
+    assert tool.metadata.workflow_local_compute is True
+    assert "private optional dependency diagnostic" not in caplog.text
+    result = await service.execute_tool(ToolInput(
+        tool_name="text_processing",
+        parameters={"operation": "stats", "text": "one two three"},
+        governed_execution=True,
+        workflow_local_compute=True,
+    ))
+    assert result.success is True
+    assert result.result["word_count"] == 3

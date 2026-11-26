@@ -13,11 +13,8 @@ from ai_karen_engine.core.runtime.contracts import (
     ExecutionContext,
     ExecutionBudgetMeter,
 )
-from ai_karen_engine.tools.http_client_tool import HTTPClientTool
-from ai_karen_engine.tools.filesystem_tool import FileSystemTool
-from ai_karen_engine.tools.text_processing_tool import TextProcessingTool
-from ai_karen_engine.tools.data_analysis_tool import DataAnalysisTool
-from ai_karen_engine.tools.system_resources_tool import SystemResourcesTool
+# Compatibility exports; the package catalog owns production discovery.
+from ai_karen_engine.tools import get_production_tools, register_production_tools  # noqa: F401
 
 logger = logging.getLogger(__name__)
 
@@ -184,30 +181,3 @@ class WebSearchTool(BaseTool):
         )
 
         return result
-
-
-def get_production_tools() -> List[BaseTool]:
-    return [
-        WebSearchTool(),
-        HTTPClientTool(),
-        FileSystemTool(),
-        TextProcessingTool(),
-        DataAnalysisTool(),
-        SystemResourcesTool()
-    ]
-
-
-def register_production_tools(tool_registry):
-    tools = get_production_tools()
-    registered_count = 0
-
-    for tool in tools:
-        try:
-            tool_registry.register_tool(tool)
-            registered_count += 1
-            logger.info(f"Registered production tool: {tool.metadata.name}")
-        except Exception as e:
-            logger.error(f"Failed to register tool {tool.metadata.name}: {e}")
-
-    logger.info(f"Registered {registered_count}/{len(tools)} production tools")
-    return registered_count

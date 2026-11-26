@@ -277,3 +277,24 @@ resumability and nested graph reasoning remain blocked from this adapter.
 The new tests exercise real text processing with the in-memory receipt
 store and controlled HTTP model transport, replay/parameter denial and
 network-tool denial. Live PostgreSQL and host acceptance remain required.
+
+
+### Tool package dependency isolation (KUI-004B4.48C7Z8E17)
+
+E16 Chat System Burn completed its model-runtime group with 239 passed
+and two failures. The revocation regression used a SimpleNamespace
+instead of the typed ExecutionDecision; the fixture now uses the real
+contract. The positive local graph tool test could not register text
+processing: eager package imports failed with a dependency TypeError.
+The existing production catalog is now independently loaded per tool,
+with lazy compatibility exports and one registration function used by
+ToolService. The former web-search factory names re-export that owner.
+An optional tool's import or registration failure cannot hide unrelated
+tools, and failure logs carry only tool identity and exception type.
+
+The new regression deliberately fails the web-search import while proving
+real local text processing through ToolService. This does not certify
+every optional tool's dependencies or explain the underlying TypeError.
+No tool admission guard is relaxed. Medusa generation migration and
+legacy ProviderRuntime retirement remain pending, as do fresh exact-head
+CI, real database evidence and host acceptance.
