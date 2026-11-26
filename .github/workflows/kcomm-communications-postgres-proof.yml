@@ -32,6 +32,46 @@ jobs:
           KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
           KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
         run: bash scripts/ci/start-postgres-container.sh
+      - name: Generate migration locally in isolated CI workspace
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Temporary promotion proof only. No hosted credentials, db push,
+          # branch write, deployment, or production connection.
+          cli_dir="$(mktemp -d)"
+          archive="$cli_dir/supabase.tar.gz"
+          curl --fail --silent --show-error --location --retry 2 \
+            https://github.com/supabase/cli/releases/download/v3.4.0/supabase_3.4.0_linux_amd64.tar.gz \
+            -o "$archive"
+          echo "d82f8fc8a1611c45b9422b10378f61df614325f7e25624acda3704544513d6ac  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$cli_dir" supabase
+          "$cli_dir/supabase" --version
+          "$cli_dir/supabase" migration new --help
+          test -z "$(find supabase/migrations -maxdepth 1 -name '*communications_inbox*.sql' -print)"
+          latest="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1)"
+          "$cli_dir/supabase" migration new 77_communications_inbox < /dev/null
+          mapfile -t generated < <(find supabase/migrations -maxdepth 1 -type f -name '*_77_communications_inbox.sql')
+          test "${#generated[@]}" = 1
+          filename="$(basename "${generated[0]}")"
+          [[ "$filename" > "$latest" ]]
+          cp supabase/kcomm_02a_candidate.sql "${generated[0]}"
+          cmp supabase/kcomm_02a_candidate.sql "${generated[0]}"
+          echo "GENERATED_MIGRATION=$filename"
+          sha256sum "${generated[0]}"
+          echo "CLI-generated migration candidate: $filename" >> "$GITHUB_STEP_SUMMARY"
+      - name: Prove full canonical migration chain without optional client roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="ai-karen-postgres-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'")" = 0
+          test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT count(*) FROM pg_roles WHERE rolname IN ('anon','authenticated')")" = 0
+          while IFS= read -r migration; do
+            echo "Full-chain migration: $(basename "$migration")"
+            docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d ai_karen < "$migration"
+          done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
+          test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.communications_inbox_entries'::regclass")" = t
+          echo "Full migration chain passed with FORCE RLS and no optional client roles."
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -67,4 +107,4 @@ jobs:
       - name: Record evidence boundary
         if: always()
         run: |
-          echo "This workflow exercises candidate DDL with actual dependency migrations, not the entire production migration chain. No deployed schema, privacy service integration or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"
+          echo "This workflow exercises CLI-generated candidate promotion in an isolated checkout, the full canonical migration chain, and scoped candidate DDL against a second disposable database. It does not commit the generated filename or certify deployed schema, privacy service integration or browser acceptance." >> "$GITHUB_STEP_SUMMARY"
