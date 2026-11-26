@@ -149,37 +149,35 @@ class EventBus:
         maintenance; no decoded payload or raw exception is logged.
         """
         try:
-            for _ in range(3):
-                try:
-                    with self._redis.pipeline() as pipe:
-                        pipe.watch(self._list_key)
-                        selected: List[Event] = []
-                        selected_raw = []
-                        for item in pipe.lrange(self._list_key, 0, -1):
-                            try:
-                                event = Event(**json.loads(item))
-                            except (TypeError, ValueError, UnicodeError):
-                                continue
-                            if allowed(event):
-                                selected.append(event)
-                                selected_raw.append(item)
-                        if not selected:
-                            return []
-                        pipe.multi()
-                        for item in selected_raw:
-                            pipe.lrem(self._list_key, 1, item)
-                        removed = pipe.execute()
-                        if removed != [1] * len(selected):
-                            raise EventBusUnavailable("Event queue removal was not confirmed")
-                        return selected
-                except redis.exceptions.WatchError:
-                    continue
+            with self._redis.pipeline() as pipe:
+                pipe.watch(self._list_key)
+                selected: List[Event] = []
+                selected_raw = []
+                for item in pipe.lrange(self._list_key, 0, -1):
+                    try:
+                        event = Event(**json.loads(item))
+                    except (TypeError, ValueError, UnicodeError):
+                        continue
+                    if allowed(event):
+                        selected.append(event)
+                        selected_raw.append(item)
+                if not selected:
+                    return []
+                pipe.multi()
+                for item in selected_raw:
+                    pipe.lrem(self._list_key, 1, item)
+                removed = pipe.execute()
+                if removed != [1] * len(selected):
+                    raise EventBusUnavailable("Event queue removal was not confirmed")
+                return selected
         except EventBusUnavailable:
             raise
         except Exception:
+            # redis-py may raise WatchError both on an aborted transaction and
+            # when EXEC committed but its reply was lost. Never retry either
+            # automatically: the original batch may already be gone.
             logger.warning("event_bus.consume_unavailable")
             raise EventBusUnavailable("Event consumption unavailable") from None
-        raise EventBusUnavailable("Event queue changed during consumption")
 
     def register_hook_handler(self, event_type: str, handler: Callable[[Event], None]) -> None:
         """Register a hook handler for specific event types."""

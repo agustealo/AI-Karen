@@ -7,9 +7,11 @@ it. The durable Communications inbox remains the notification authority.
 
 - Memory selection/removal holds a single queue lock.
 - Redis selection/removal uses WATCH/MULTI and removes only matched list entries,
-  preserving unmatched and malformed entries and existing queue keys. Conflicts
-  are retried three times, then reported unavailable; an ambiguous network result
-  is not a successful consumption receipt.
+  preserving unmatched and malformed entries and existing queue keys. All WATCH
+  errors fail closed without automatic retry because redis-py can report a lost
+  EXEC acknowledgment as WatchError after commit. The consumer receives an
+  unavailable response, not a false empty success. This is not lossless or
+  exactly-once delivery; a durable receipt protocol would be needed for that.
 - Explicit Redis and legacy URL-driven Redis share one implementation. Configured
   Redis failures do not silently fall back to a process-local queue.
 - Unscoped administrative hook events remain enqueueable for compatibility, but

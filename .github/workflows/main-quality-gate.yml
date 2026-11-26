@@ -152,6 +152,9 @@ jobs:
       - name: Enforce durable account session revocation
         run: pytest tests/auth/test_live_session_enforcement.py tests/architecture/test_auth_session_validation_contract.py tests/architecture/test_account_beta_recovery_contract.py -q
 
+      - name: Realtime topic isolation and fail-closed subscription authorization
+        run: pytest tests/unit/core/realtime/test_topics.py tests/unit/core/realtime/test_subscriptions.py -q
+
       - name: Ruff correctness baseline
         run: |
           # Historical formatting/style debt is retired in contained slices.

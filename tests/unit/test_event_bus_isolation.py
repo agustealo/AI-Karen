@@ -92,15 +92,15 @@ def test_redis_outage_does_not_switch_to_memory():
     assert not bus._queue
 
 
-def test_watch_conflict_is_bounded_and_not_reported_as_success():
+def test_watch_conflict_is_not_retried_or_reported_as_success():
     client = Mock()
     client.pipeline.return_value = MagicMock()
     pipe = client.pipeline.return_value.__enter__.return_value
     pipe.watch.side_effect = WatchError()
     bus = RedisEventBus(redis_client=client)
-    with pytest.raises(EventBusUnavailable, match="changed during consumption"):
+    with pytest.raises(EventBusUnavailable, match="consumption unavailable"):
         bus.consume(["user"], "tenant-a")
-    assert pipe.watch.call_count == 3
+    assert pipe.watch.call_count == 1
     pipe.execute.assert_not_called()
 
 
@@ -117,3 +117,35 @@ async def test_route_preserves_scope_and_reports_unavailability(monkeypatch):
     assert error.value.status_code == 503
     assert error.value.headers["Cache-Control"] == "no-store"
     fake.consume.assert_called_once_with(["user"], tenant_id="tenant-a")
+
+
+def test_committed_removal_with_lost_exec_reply_is_not_retried(monkeypatch):
+    """A post-commit WatchError must not turn into an empty successful result."""
+    client = fakeredis.FakeRedis()
+    bus = RedisEventBus(redis_client=client, list_key="lost-reply")
+    publish(bus, "tenant-a")
+    foreign = publish(bus, "tenant-b")
+    original_pipeline = client.pipeline
+    pipeline_calls = []
+
+    def pipeline(*args, **kwargs):
+        real_pipe = original_pipeline(*args, **kwargs)
+        original_execute = real_pipe.execute
+        pipeline_calls.append(real_pipe)
+
+        def execute(*execute_args, **execute_kwargs):
+            original_execute(*execute_args, **execute_kwargs)
+            raise WatchError("connection lost after EXEC") from ConnectionError(
+                "simulated acknowledgment loss"
+            )
+
+        real_pipe.execute = execute
+        return real_pipe
+
+    monkeypatch.setattr(client, "pipeline", pipeline)
+    with pytest.raises(EventBusUnavailable, match="consumption unavailable"):
+        bus.consume(["user"], "tenant-a")
+    assert len(pipeline_calls) == 1
+    monkeypatch.setattr(client, "pipeline", original_pipeline)
+    assert bus.consume(["user"], "tenant-a") == []
+    assert [e.id for e in bus.consume(["user"], "tenant-b")] == [foreign]
