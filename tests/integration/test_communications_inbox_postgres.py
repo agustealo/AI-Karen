@@ -434,6 +434,28 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
                 "FROM runtime_chat_runs WHERE execution_id=$1", uuid.UUID(disabled.execution_id),
             )
             feature.enable_communications_terminal_producer = True
+
+            # The marker shares the source transaction: rollback leaves no
+            # eligible terminal evidence for reconciliation.
+            rollback_run = await admit(conversations[0], "rollback")
+            assert rollback_run is not None
+            async with raw.transaction():
+                await scope(raw, tenant, owner)
+                savepoint = raw.transaction()
+                await savepoint.start()
+                await raw.execute(
+                    "UPDATE runtime_chat_runs SET status='failed', terminal_at=now(), "
+                    "lease_token=NULL, lease_expires_at=NULL, "
+                    "communications_attention_eligible_at=now() WHERE execution_id=$1",
+                    uuid.UUID(rollback_run.execution_id),
+                )
+                await savepoint.rollback()
+            assert await raw.fetchval(
+                "SELECT status='running' AND communications_attention_eligible_at IS NULL "
+                "FROM runtime_chat_runs WHERE execution_id=$1", uuid.UUID(rollback_run.execution_id),
+            )
+            assert await repo.reconcile_pending(**principal) == 0
+
             failed = await admit(conversations[1], "failed")
             assert failed is not None
 

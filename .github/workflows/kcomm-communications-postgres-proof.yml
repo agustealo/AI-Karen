@@ -6,6 +6,10 @@ on:
       - "supabase/migrations/*communications_inbox*.sql"
       - "tests/integration/test_communications_inbox_postgres.py"
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
+      - "src/ai_karen_engine/persistence/repositories/chat_run_repository.py"
+      - "src/ai_karen_engine/config/runtime.py"
+      - "supabase/kcomm_02c_attention_marker_candidate.sql"
+      - "supabase/migrations/*communications_attention*.sql"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
       - "src/ai_karen_engine/services/privacy_compliance.py"
       - "src/ai_karen_engine/services/communications_inbox.py"
@@ -20,6 +24,10 @@ on:
       - "supabase/migrations/**"
       - "tests/integration/test_communications_inbox_postgres.py"
       - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
+      - "src/ai_karen_engine/persistence/repositories/chat_run_repository.py"
+      - "src/ai_karen_engine/config/runtime.py"
+      - "supabase/kcomm_02c_attention_marker_candidate.sql"
+      - "supabase/migrations/*communications_attention*.sql"
       - "src/ai_karen_engine/persistence/postgres/transactions.py"
       - "src/ai_karen_engine/services/privacy_compliance.py"
       - "src/ai_karen_engine/services/communications_inbox.py"
@@ -62,6 +70,31 @@ jobs:
           test "${#migrations[@]}" = 1
           test "${migrations[0]}" = "supabase/migrations/20261126144509_77_communications_inbox.sql"
           sha256sum "supabase/migrations/20261126144509_77_communications_inbox.sql"
+      - name: Generate temporary producer migration with pinned Supabase CLI
+        shell: bash
+        run: |
+          set -euo pipefail
+          cli_dir="$(mktemp -d)"
+          archive="$cli_dir/supabase.tar.gz"
+          curl --fail --silent --show-error --location --retry 2 \
+            https://github.com/supabase/cli/releases/download/v3.4.0/supabase_3.4.0_linux_amd64.tar.gz \
+            -o "$archive"
+          echo "d82f8fc8a1611c45b9422b10378f61df614325f7e25624acda3704544513d6ac  $archive" | sha256sum --check
+          tar -xzf "$archive" -C "$cli_dir" supabase
+          "$cli_dir/supabase" --version
+          "$cli_dir/supabase" migration new --help
+          latest="$(find supabase/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | sort | tail -1)"
+          test -z "$(find supabase/migrations -maxdepth 1 -name '*communications_attention*.sql' -print)"
+          "$cli_dir/supabase" migration new 78_communications_attention < /dev/null
+          mapfile -t generated < <(find supabase/migrations -maxdepth 1 -name '*_78_communications_attention.sql')
+          test "${#generated[@]}" = 1
+          filename="$(basename "${generated[0]}")"
+          [[ "$filename" > "$latest" ]]
+          cp supabase/kcomm_02c_attention_marker_candidate.sql "${generated[0]}"
+          cmp supabase/kcomm_02c_attention_marker_candidate.sql "${generated[0]}"
+          echo "GENERATED_MIGRATION=$filename"
+          sha256sum "${generated[0]}"
+          echo "CLI-generated producer migration candidate: $filename" >> "$GITHUB_STEP_SUMMARY"
       - name: Prove full canonical migration chain without optional client roles
         shell: bash
         run: |
@@ -74,7 +107,8 @@ jobs:
             docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d ai_karen < "$migration"
           done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
           test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.communications_inbox_entries'::regclass")" = t
-          echo "Full migration chain passed with FORCE RLS and no optional client roles."
+          test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='runtime_chat_runs' AND column_name='communications_attention_eligible_at'")" = 1
+          echo "Full migration chain and producer marker passed with FORCE RLS and no optional client roles."
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -111,4 +145,4 @@ jobs:
       - name: Record evidence boundary
         if: always()
         run: |
-          echo "This workflow targets the canonical migration chain, scoped DDL, repository lifecycle and conversation privacy export/erasure against disposable PostgreSQL. Consult job and test results for actual acceptance; no deployed schema or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"
+          echo "This workflow targets the canonical migration chain, scoped DDL, repository lifecycle and conversation privacy export/erasure against disposable PostgreSQL. Consult job and test results for actual acceptance; producer migration is generated temporarily for proof; no deployed schema, activation or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"
