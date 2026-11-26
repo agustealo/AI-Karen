@@ -1,0 +1,191 @@
+export const phases = {
+  started: "Method entered",
+  completed: "Invocation returned",
+  failed: "Invocation failed",
+  interrupted: "Invocation interrupted",
+  skipped: "Invocation skipped",
+} as const;
+type ParticipationRow = {
+  receipt_id: string;
+  step_id: string;
+  specialist_id: string;
+  phase: keyof typeof phases;
+  observed_at: string;
+};
+export type ParticipationReadback = {
+  run_id: string;
+  evidence_status: "recorded" | "empty";
+  receipts: ParticipationRow[];
+  truncated: false;
+  response_source: "postgres_outcome_records";
+};
+
+function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
+    && Object.keys(value).length === keys.length
+    && keys.every(key => Object.prototype.hasOwnProperty.call(value, key));
+}
+
+// Validate the raw wire payload before casting or comparing. Never include
+// unexpected fields or their values in a diagnostic.
+export function parseParticipation(value: unknown, runId: string, expectedStatus: "recorded" | "empty" = "recorded"): ParticipationReadback {
+  if (!hasExactKeys(value, ["run_id", "evidence_status", "receipts", "truncated", "response_source"])
+      || value.run_id !== runId || value.response_source !== "postgres_outcome_records"
+      || value.evidence_status !== expectedStatus || value.truncated !== false
+      || !Array.isArray(value.receipts) || value.receipts.length > 100
+      || (expectedStatus === "empty" ? value.receipts.length !== 0 : value.receipts.length === 0)) {
+    throw new Error("Invalid or unexpected participation envelope");
+  }
+  const ids = new Set<string>();
+  let terminal = false;
+  for (const row of value.receipts) {
+    if (!hasExactKeys(row, ["receipt_id", "step_id", "specialist_id", "phase", "observed_at"])
+        || typeof row.receipt_id !== "string"
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.receipt_id)
+        || ids.has(row.receipt_id)
+        || typeof row.specialist_id !== "string" || !row.specialist_id.trim()
+        || typeof row.step_id !== "string" || !row.step_id.trim()
+        || typeof row.phase !== "string" || !Object.prototype.hasOwnProperty.call(phases, row.phase)
+        || typeof row.observed_at !== "string" || !Number.isFinite(Date.parse(row.observed_at))) {
+      throw new Error("Invalid or unexpected participation receipt");
+    }
+    ids.add(row.receipt_id);
+    terminal ||= row.phase !== "started";
+  }
+  if (expectedStatus === "recorded" && !terminal) throw new Error("Terminal observation fixture required");
+  return value as ParticipationReadback;
+}
+
+export function sameParticipation(left: ParticipationReadback, right: ParticipationReadback): boolean {
+  return left.run_id === right.run_id && left.evidence_status === right.evidence_status
+    && left.receipts.length === right.receipts.length
+    && left.receipts.every((row, index) => {
+      const other = right.receipts[index];
+      return row.receipt_id === other.receipt_id && row.step_id === other.step_id
+        && row.specialist_id === other.specialist_id && row.phase === other.phase
+        && row.observed_at === other.observed_at;
+    });
+}
+
+
+export type ApprovedSpecialist = {
+  tenantId: string;
+  userId: string;
+  provider: string;
+  model: string;
+  engine: string;
+  agent: string;
+  tool: string;
+  prompt: string;
+};
+
+function record(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function bounded(value: unknown, max = 256): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max &&
+    value.trim() === value && !/[\x00-\x1f\x7f]/.test(value);
+}
+
+export function validRuntimeRequestId(value: unknown): value is string {
+  return bounded(value, 128) && !/[^A-Za-z0-9_-]/.test(value);
+}
+
+export function matchesApprovedSpecialistReceipt(value: unknown, approved: ApprovedSpecialist): boolean {
+  return record(value) && validRuntimeRequestId(value.runtime_request_id) &&
+    value.actual_provider === approved.provider && value.actual_model === approved.model &&
+    value.runtime_engine === approved.engine && value.response_source === "deepagents_verified_output" &&
+    value.degraded_mode !== true && (value.fallback_level == null || value.fallback_level === 0);
+}
+
+export function approvedSpecialistIdentity(value: unknown, approved: ApprovedSpecialist): boolean {
+  if (!record(value) || value.valid !== true || value.session_valid !== true ||
+      value.authenticated !== true || !record(value.user)) return false;
+  const user = value.user;
+  return user.user_id === approved.userId && user.tenant_id === approved.tenantId &&
+    Array.isArray(user.roles) && user.roles.length > 0 &&
+    user.roles.every(role => typeof role === "string" &&
+      !/(?:admin|administrator)/i.test(role));
+}
+
+/**
+ * Check exact durable identities and the acknowledged tool/step relationship,
+ * not text that claims an action ran. This is intentionally a one-tool,
+ * successful single-specialist trial; a saturated or degraded run fails.
+ */
+export function verifyFreshSpecialistEvidence(
+  runId: string, approved: ApprovedSpecialist, run: unknown, lifecycle: unknown,
+  participation: unknown, tools: unknown,
+): { stepId: string; toolCallId: string; toolReceiptId: string; participationIds: string[]; transitionIds: string[] } {
+  if (!validRuntimeRequestId(runId) || !record(run) ||
+      run.run_id !== runId || run.request_id !== runId ||
+      run.tenant_id !== approved.tenantId || run.user_id !== approved.userId ||
+      run.status !== "completed" || run.outcome_status !== "success" ||
+      !bounded(run.policy_decision_id)) {
+    throw new Error("Fresh specialist run identity or successful outcome unavailable");
+  }
+  if (!hasExactKeys(lifecycle, ["run_id", "transitions", "truncated", "response_source"]) ||
+      lifecycle.run_id !== runId || lifecycle.truncated !== false ||
+      lifecycle.response_source !== "postgres_durable_run_ledger" ||
+      !Array.isArray(lifecycle.transitions) || lifecycle.transitions.length !== 3) {
+    throw new Error("Exact durable specialist lifecycle unavailable");
+  }
+  const expectedTransitions = [[null, "created"], ["created", "running"], ["running", "completed"]];
+  const transitionIds: string[] = [];
+  let lastTime = -Infinity;
+  let startedAt = NaN;
+  let completedAt = NaN;
+  for (const [index, item] of lifecycle.transitions.entries()) {
+    if (!hasExactKeys(item, ["transition_id", "from_status", "to_status", "event_at", "source"]) ||
+        !bounded(item.transition_id) || transitionIds.includes(item.transition_id) ||
+        item.from_status !== expectedTransitions[index][0] ||
+        item.to_status !== expectedTransitions[index][1] ||
+        item.source !== "runtime" || typeof item.event_at !== "string") {
+      throw new Error("Invalid durable specialist transition");
+    }
+    const time = Date.parse(item.event_at);
+    if (!Number.isFinite(time) || time < lastTime) throw new Error("Invalid durable lifecycle time");
+    if (index === 1) startedAt = time;
+    if (index === 2) completedAt = time;
+    lastTime = time;
+    transitionIds.push(item.transition_id);
+  }
+  const observations = parseParticipation(participation, runId);
+  const entered = observations.receipts.filter(row => row.phase === "started");
+  const returned = observations.receipts.filter(row => row.phase === "completed");
+  if (observations.receipts.length !== 2 || entered.length !== 1 || returned.length !== 1 ||
+      entered[0].specialist_id !== approved.agent || returned[0].specialist_id !== approved.agent ||
+      entered[0].step_id !== returned[0].step_id ||
+      Date.parse(entered[0].observed_at) < startedAt ||
+      Date.parse(returned[0].observed_at) > completedAt ||
+      Date.parse(entered[0].observed_at) > Date.parse(returned[0].observed_at)) {
+    throw new Error("Exact completed specialist invocation unavailable");
+  }
+  if (!hasExactKeys(tools, ["run_id", "evidence_status", "receipts", "window_limit_reached", "response_source"]) ||
+      tools.run_id !== runId || tools.evidence_status !== "recorded" ||
+      tools.window_limit_reached !== false || tools.response_source !== "postgres_outcome_records" ||
+      !Array.isArray(tools.receipts) || tools.receipts.length !== 1) {
+    throw new Error("Exactly one bounded governed tool acknowledgment required");
+  }
+  const row = tools.receipts[0];
+  if (!hasExactKeys(row, ["receipt_id", "tool_call_id", "tool_name", "tool_version", "agent_id",
+      "step_id", "policy_decision_id", "success", "error_type", "result_sha256", "recorded_at",
+      "execution_scope", "independently_verified"]) ||
+      !bounded(row.receipt_id) || !bounded(row.tool_call_id, 128) ||
+      row.tool_name !== approved.tool || row.agent_id !== approved.agent ||
+      row.step_id !== entered[0].step_id || row.policy_decision_id !== run.policy_decision_id ||
+      row.success !== true || row.error_type !== null ||
+      row.execution_scope !== "tool_runtime_acknowledgment" || row.independently_verified !== false ||
+      !(row.tool_version === null || bounded(row.tool_version)) ||
+      !(row.result_sha256 === null || (typeof row.result_sha256 === "string" && /^[0-9a-f]{64}$/.test(row.result_sha256))) ||
+      typeof row.recorded_at !== "string" || !Number.isFinite(Date.parse(row.recorded_at)) ||
+      Date.parse(row.recorded_at) < Date.parse(entered[0].observed_at) ||
+      Date.parse(row.recorded_at) > Date.parse(returned[0].observed_at)) {
+    throw new Error("Invalid or unlinked governed tool acknowledgment");
+  }
+  return {
+    stepId: entered[0].step_id, toolCallId: row.tool_call_id, toolReceiptId: row.receipt_id,
+    participationIds: [entered[0].receipt_id, returned[0].receipt_id], transitionIds,
+  };
+}
