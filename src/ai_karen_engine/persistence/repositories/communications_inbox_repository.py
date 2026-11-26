@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ai_karen_engine.core.realtime.inbox_invalidation import publish_inbox_invalidation
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
 _MAX_PAGE_SIZE = 100
@@ -250,6 +251,8 @@ class CommunicationsInboxRepository:
             count = await self._admit_pending(
                 session, params, conversation_id=conversation_id, limit=limit,
             )
+        if count:
+            await publish_inbox_invalidation(tenant_id=tenant_id, user_id=user_id)
         return count
 
     async def admit_terminal_execution(
@@ -261,7 +264,7 @@ class CommunicationsInboxRepository:
         async with async_transaction_scope(
             params["tenant_id"], user_id=params["user_id"]
         ) as session:
-            await self._admit_pending(session, params, execution_id=execution_id, limit=1)
+            count = await self._admit_pending(session, params, execution_id=execution_id, limit=1)
             result = await session.execute(
                 text(
                     f"SELECT {_COLUMNS} {_SOURCE} WHERE {_ELIGIBLE} "
@@ -272,6 +275,8 @@ class CommunicationsInboxRepository:
             if row is None:
                 raise InboxNotFound("communications_source_not_found")
             entry = _entry(row)
+        if count:
+            await publish_inbox_invalidation(tenant_id=tenant_id, user_id=user_id)
         return entry
 
     async def mutate(
@@ -323,6 +328,7 @@ class CommunicationsInboxRepository:
             if updated is None:
                 raise InboxNotFound("communications_entry_not_found")
             receipt = InboxMutation(_entry(updated), True)
+        await publish_inbox_invalidation(tenant_id=tenant_id, user_id=user_id)
         return receipt
 
     @staticmethod
