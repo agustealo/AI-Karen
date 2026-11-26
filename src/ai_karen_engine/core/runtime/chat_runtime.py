@@ -3014,8 +3014,12 @@ class ChatRuntime:
         from ai_karen_engine.core.memory.signals.semantic_classifier import (
             is_explicit_memory_save_request,
         )
-        return is_explicit_memory_save_request(
-            self._extract_user_message(request.messages)
+        from ai_karen_engine.core.cortex.routing_intents import parse_owner_generated_text_request
+
+        user_text = self._extract_user_message(request.messages)
+        return (
+            parse_owner_generated_text_request(user_text) is None
+            and is_explicit_memory_save_request(user_text)
         )
 
     @staticmethod
@@ -5438,6 +5442,27 @@ class ChatRuntime:
         reasoning_preflight: Optional[Dict[str, Any]] = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Simple conversational path: CORTEX -> ExpressionGateway."""
+        if decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY:
+            from ai_karen_engine.core.cortex.routing_intents import parse_owner_generated_text_request
+
+            latest = request.messages[-1] if request.messages else {}
+            literal = latest.get("content")
+            issuance = vars(request.context).get("_runtime_policy_issuance")
+            if (
+                latest.get("role") != "user"
+                or parse_owner_generated_text_request(literal) is None
+                or request.metadata.get("original_user_input") not in (None, literal)
+                or self._attachment_restriction_required(request)
+                or token_sink is not None or reasoning_preflight is not None
+                or not isinstance(issuance, tuple) or len(issuance) != 2
+            ):
+                raise PermissionError("generated_artifact_authority_denied")
+            await issuance[0].authorize_generated_text_write(
+                context=request.context, plan=plan, meter=meter,
+            )
+            snapshot = await self._freeze_persona_snapshot(request)
+            if snapshot.status not in {"none", "ready"} or snapshot.memory_filter_required:
+                raise PermissionError("generated_artifact_persona_scope_denied")
         if not await meter.consume_model_call():
             raise RuntimeError("Execution budget exhausted: max_model_calls")
 
@@ -6294,10 +6319,28 @@ class ChatRuntime:
                 "language_style": snapshot.language_style,
             }
 
+        generated_text = decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY
+        prompt_service = get_prompt_runtime_service()
+        prompt_id = "karen.artifact.text.create" if generated_text else "karen.chat.default"
+        definition = (
+            prompt_service.get_prompt_definition(prompt_id, "v1.0.0")
+            if generated_text else None
+        )
+        if generated_text:
+            from ai_karen_engine.core.cortex.routing_intents import parse_owner_generated_text_request
+
+            latest = request.messages[-1] if request.messages else {}
+            if (
+                latest.get("role") != "user"
+                or parse_owner_generated_text_request(latest.get("content")) is None
+                or definition is None or not definition.system_instructions
+            ):
+                raise PermissionError("generated_artifact_prompt_denied")
         assembly_request = PromptAssemblyRequest(
             persona=persona_presentation,
-            prompt_id="karen.chat.default",
+            prompt_id=prompt_id,
             prompt_version="v1.0.0",
+            system_instructions=definition.system_instructions if definition else "",
             memory_items=recall_items if decision.memory_recall_required else [],
             continuity_items=(
                 list(continuity_items)
@@ -6334,11 +6377,25 @@ class ChatRuntime:
                    else {}),
             },
             token_budget=decision.token_budget,
-            messages=ChatRuntime._prompt_messages_with_admitted_attachments(request),
+            messages=(
+                [{"role": "user", "content": latest["content"]}]
+                if generated_text else ChatRuntime._prompt_messages_with_admitted_attachments(request)
+            ),
         )
 
         assembly_started = time.perf_counter()
-        result = await get_prompt_runtime_service().assemble_prompt(assembly_request)
+        result = await prompt_service.assemble_prompt(assembly_request)
+        if generated_text and (
+            result.token_estimate > assembly_request.token_budget
+            or not result.messages
+            or result.messages[-1] != assembly_request.messages[-1]
+            or not any(
+                item.get("source") == "prompt_definition"
+                and item.get("content") == definition.system_instructions
+                for item in result.messages
+            )
+        ):
+            raise PermissionError("generated_artifact_prompt_integrity_denied")
         if ChatRuntime._attachment_restriction_required(request):
             expected = [
                 (item.get("role"), item.get("content"))

@@ -8,6 +8,9 @@ from types import MappingProxyType
 from typing import Any, Dict, List, Optional
 
 
+GENERATED_TEXT_ARTIFACT_CAPABILITY = "artifact.text.create"
+
+
 class ExecutionTopology(str, Enum):
     """Canonical execution topology for a single request.
 

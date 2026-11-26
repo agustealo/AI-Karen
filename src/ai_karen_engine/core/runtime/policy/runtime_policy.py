@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, Optional
 from weakref import WeakValueDictionary, finalize
 
 from ai_karen_engine.core.runtime.contracts import (
+    GENERATED_TEXT_ARTIFACT_CAPABILITY,
     AuthorizedExecutionPlan,
     DegradationState,
     ExecutionBudget,
@@ -40,9 +41,6 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
-
-GENERATED_TEXT_ARTIFACT_CAPABILITY = "artifact.text.create"
-
 
 class RuntimeLevel(str, Enum):
     FULL = "FULL"

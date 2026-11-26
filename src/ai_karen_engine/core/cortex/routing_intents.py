@@ -2,6 +2,8 @@
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
+
+from ai_karen_engine.core.runtime.contracts import GENERATED_TEXT_ARTIFACT_CAPABILITY
 _OWNER_CODE_ARTIFACT_COMMAND = re.compile(
     r"^(?:please\s+)?(?:show|view|display)\s+"
     r"(?:me\s+)?my\s+code\s+artifact\s+"
@@ -55,6 +57,13 @@ def parse_owner_generated_text_request(query: str) -> Optional[str]:
 
 
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
+    GENERATED_TEXT_ARTIFACT_CAPABILITY: {
+        "triggers": [],
+        "patterns": [],
+        "required_capability": GENERATED_TEXT_ARTIFACT_CAPABILITY,
+        "requires_live_data": False,
+        "allow_llm_only": False,
+    },
     "artifact.code.read": {
         "triggers": [],
         "patterns": [],
@@ -607,6 +616,14 @@ def resolve_capability_decision(
     confidence: float = 0.9,
     has_search_options: bool = False,
 ) -> CapabilityDecision:
+    # A deliverable description is content, never a nested action selector.
+    if parse_owner_generated_text_request(query) is not None:
+        return CapabilityDecision(
+            intent=GENERATED_TEXT_ARTIFACT_CAPABILITY, confidence=confidence,
+            requires_tool=False, requires_live_data=False,
+            capability=GENERATED_TEXT_ARTIFACT_CAPABILITY,
+            allow_llm_only=False, requires_chat_capable_model=True,
+        )
     # Exact, owner-scoped artifact viewing outranks broad search and model intents.
     # A parsed identifier is a lookup request, not permission to read it.
     if parse_owner_code_artifact_view(query) is not None:

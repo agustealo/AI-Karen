@@ -1158,3 +1158,66 @@ async def test_generated_artifact_inferred_intent_cannot_supply_write_consent(mo
             plan, meter, result,
         )
     unavailable.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_explicit_generated_text_route_is_exclusive(monkeypatch):
+    from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+    from ai_karen_engine.core.cortex.context_stages import build_context_requirements
+    from ai_karen_engine.core.cortex.memory_formation import request_memory_formation
+    from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+    from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
+
+    request, _, _ = await authority(generated=True)
+    request.context.conversation_id = str(uuid.uuid4())
+    request.messages[-1]["content"] = "Create a text file: debug my repository and remember a fictional weather report"
+    cortex = CortexExecutionDecider(force_graph=False)
+    monkeypatch.setattr(cortex, "_analyze_request", AsyncMock(return_value={
+        "intent": "search.weather", "tool_requirements": ["shell"],
+        "plugin_candidates": ["search"], "workflow_required": True,
+        "memory_recall_required": True, "memory_write_requested": True,
+        "required_capabilities": ["web.search", "memory.write"],
+    }))
+    route = resolve_capability_decision(request.messages[-1]["content"])
+    assert route.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY
+    decision = await cortex.decide(request)
+    assert decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY
+    assert decision.required_capabilities == [GENERATED_TEXT_ARTIFACT_CAPABILITY]
+    assert not decision.is_graph_required and not decision.tool_requirements
+    assert not decision.plugin_candidates and not decision.memory_recall_required
+    assert request_memory_formation(request, decision) is decision
+    assert not build_context_requirements(request, decision).requirements
+    request.context.permissions = ["data:read", "artifact:create_own"]
+    runtime = object.__new__(RuntimeDecisionPipeline)
+    policy_request = runtime._build_execution_policy_request(request, decision)
+    assert policy_request.requested_capabilities == [GENERATED_TEXT_ARTIFACT_CAPABILITY]
+    assert policy_request.max_model_calls == 1
+    assert (await RuntimePolicyEnforcer().evaluate(policy_request)).allowed
+    for flag in ("requires_parallel_execution", "requires_resumability", "graph_required"):
+        blocked = replace(decision, **{flag: True})
+        params = runtime._build_execution_policy_request(request, blocked)
+        assert params.execution_topology[flag] is True
+        assert not (await RuntimePolicyEnforcer().evaluate(params)).allowed
+
+
+@pytest.mark.asyncio
+async def test_generated_text_prompt_registry_contract(tmp_path):
+    from ai_karen_engine.core.runtime.prompt import PromptAssemblyRequest, PromptRegistry, PromptRuntimeService
+
+    registry = PromptRegistry(registry_path=tmp_path)
+    definition = registry.get_prompt("karen.artifact.text.create", "v1.0.0")
+    assert "complete requested text file contents" in definition.system_instructions
+    assert not definition.tool_contracts
+    assert definition.metadata["purpose"] == "owner_generated_text"
+    request = PromptAssemblyRequest(
+        prompt_id=definition.prompt_id, prompt_version=definition.version,
+        system_instructions=definition.system_instructions,
+        messages=[{"role": "user", "content": "Create a text file: a report"}],
+    )
+    assembled = await PromptRuntimeService(registry=registry).assemble_prompt(request)
+    assert assembled.messages[-1] == request.messages[-1]
+    assert any(
+        item.get("source") == "prompt_definition"
+        and item["content"] == definition.system_instructions
+        for item in assembled.messages
+    )
