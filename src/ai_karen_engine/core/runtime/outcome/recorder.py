@@ -3,18 +3,27 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, TYPE_CHECKING
 
 from ai_karen_engine.core.runtime.outcome.contracts import (
     ExecutionOutcome,
     ExecutionStatus,
+    SpecialistParticipationPhase,
+    SpecialistParticipationReceipt,
     UserFeedbackType,
     UserOutcome,
 )
-from ai_karen_engine.core.runtime.outcome.store import OutcomeStore
+from ai_karen_engine.core.runtime.outcome.store import OutcomeStore, OutcomeStoreError
 from ai_karen_engine.platform.observability.context import (
     get_correlation_context as get_observability_context,
 )
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import (
+        AuthorizedExecutionPlan,
+        ExecutionBudgetMeter,
+    )
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +192,57 @@ class OutcomeRecorder:
         )
         await self._persist_async(payload)
         return payload
+
+    async def record_specialist_participation_async(
+        self,
+        *,
+        context: ChatExecutionContext,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        step_id: str,
+        specialist_id: str,
+        phase: SpecialistParticipationPhase,
+    ) -> SpecialistParticipationReceipt:
+        """Append an admitted specialist observation, not a task outcome.
+
+        The coordinator owns phase and step provenance. This boundary requires
+        the original authenticated runtime authority, not serialized grants.
+        A receipt is returned only after the strict append has completed.
+        """
+        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+            ChatExecutionContext,
+        )
+        from ai_karen_engine.core.runtime.contracts import (
+            AuthorizedExecutionPlan,
+            ExecutionBudgetMeter,
+        )
+
+        if (
+            not isinstance(context, ChatExecutionContext)
+            or not isinstance(plan, AuthorizedExecutionPlan)
+            or not isinstance(meter, ExecutionBudgetMeter)
+        ):
+            raise PermissionError("specialist_participation_authority_invalid")
+        context.require_authenticated_user()
+        if (
+            not context.is_runtime_model_plan_authorized(plan, meter)
+            or list(plan.allowed_agents) != [specialist_id]
+        ):
+            raise PermissionError("specialist_participation_authority_invalid")
+        if self._store is None:
+            raise OutcomeStoreError("Specialist participation persistence unavailable")
+        receipt = SpecialistParticipationReceipt(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            trajectory_id=context.request_id,
+            correlation_id=context.correlation_id,
+            step_id=step_id,
+            specialist_id=specialist_id,
+            phase=phase,
+            observed_at=datetime.now(timezone.utc),
+        )
+        await self._store.save_unique_outcome_async(receipt.to_evidence_payload())
+        return receipt
 
     async def record_governed_tool_outcome_async(
         self,
