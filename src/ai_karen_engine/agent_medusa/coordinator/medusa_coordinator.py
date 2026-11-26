@@ -353,6 +353,14 @@ class MedusaCoordinator:
                         else "unspecified"
                     )
                 )
+                await self._record_participation(
+                    context=trusted_context,
+                    plan=authorized_plan,
+                    meter=meter,
+                    step=step,
+                    phase=SpecialistParticipationPhase.SKIPPED,
+                    pending=pending_participation,
+                )
                 await request_emitter.emit(
                     AgentEvent(
                         type=AgentEventType.AGENT_SKIPPED,
@@ -778,38 +786,14 @@ class MedusaCoordinator:
         }
 
         async def record_participation(phase: SpecialistParticipationPhase) -> None:
-            # Legacy requests without original authenticated chat authority
-            # remain observational; serialized grants cannot produce receipts.
-            if trusted_context is None:
-                return
-            if pending_participation is not None:
-                pending_participation.add(step.id)
-            try:
-                # A cancellation handler runs after the original cancellation
-                # has been delivered. Bound its append by the same remaining
-                # RuntimePolicy budget, never by a renewed deadline.
-                remaining_seconds = (await meter.remaining_duration_ms()) / 1000.0
-                if remaining_seconds <= 0:
-                    raise OutcomeStoreError(
-                        "Specialist participation acknowledgement unavailable"
-                    )
-                async with asyncio.timeout(remaining_seconds):
-                    await self._outcome_recorder.record_specialist_participation_async(
-                        context=trusted_context,
-                        plan=specialist_plan,
-                        meter=meter,
-                        step_id=step.id,
-                        specialist_id=step.agent_specialist,
-                        phase=phase,
-                    )
-            except OutcomeStoreError:
-                raise
-            except Exception as exc:
-                raise OutcomeStoreError(
-                    "Specialist participation acknowledgement unavailable"
-                ) from exc
-            if pending_participation is not None:
-                pending_participation.discard(step.id)
+            await self._record_participation(
+                context=trusted_context,
+                plan=specialist_plan,
+                meter=meter,
+                step=step,
+                phase=phase,
+                pending=pending_participation,
+            )
 
         await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
         invocation_entered = False
@@ -921,6 +905,48 @@ class MedusaCoordinator:
             raise
         finally:
             await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
+
+    async def _record_participation(
+        self,
+        *,
+        context: Any,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        step: PlanStep,
+        phase: SpecialistParticipationPhase,
+        pending: Optional[set[str]],
+    ) -> None:
+        # Legacy requests without original authenticated chat authority
+        # remain observational; serialized grants cannot produce receipts.
+        if context is None:
+            return
+        if pending is not None:
+            pending.add(step.id)
+        try:
+            # Evidence I/O uses the original wall-clock deadline even after
+            # a quota denial. It cannot renew or authorize execution.
+            remaining_seconds = (await meter.remaining_evidence_duration_ms()) / 1000.0
+            if remaining_seconds <= 0:
+                raise OutcomeStoreError(
+                    "Specialist participation acknowledgement unavailable"
+                )
+            async with asyncio.timeout(remaining_seconds):
+                await self._outcome_recorder.record_specialist_participation_async(
+                    context=context,
+                    plan=plan,
+                    meter=meter,
+                    step_id=step.id,
+                    specialist_id=step.agent_specialist,
+                    phase=phase,
+                )
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            raise OutcomeStoreError(
+                "Specialist participation acknowledgement unavailable"
+            ) from exc
+        if pending is not None:
+            pending.discard(step.id)
 
     @staticmethod
     def _require_durable_tool_receipts(results: List[Any]) -> None:

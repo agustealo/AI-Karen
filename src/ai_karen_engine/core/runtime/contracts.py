@@ -116,10 +116,16 @@ class ExecutionBudgetMeter:
             return False
         self.start()
         assert self._start_ms is not None
-        if time.monotonic() * 1000.0 - self._start_ms >= self._authorized_limits["max_duration_ms"]:
+        if self._remaining_wall_duration_ms() <= 0:
             self._exhausted = True
             return False
         return True
+
+    def _remaining_wall_duration_ms(self) -> float:
+        if self._start_ms is None:
+            return 0.0
+        elapsed_ms = time.monotonic() * 1000.0 - self._start_ms
+        return max(0.0, float(self._authorized_limits["max_duration_ms"]) - elapsed_ms)
 
     async def check_duration(self) -> bool:
         async with self._lock:
@@ -134,9 +140,17 @@ class ExecutionBudgetMeter:
         async with self._lock:
             if not self._within_deadline():
                 return 0.0
-            assert self._start_ms is not None
-            elapsed_ms = time.monotonic() * 1000.0 - self._start_ms
-            return max(0.0, float(self._authorized_limits["max_duration_ms"]) - elapsed_ms)
+            return self._remaining_wall_duration_ms()
+
+    async def remaining_evidence_duration_ms(self) -> float:
+        """Read the existing deadline for audit I/O, not execution authority.
+
+        A spent model/tool quota must not prevent recording its consequences.
+        This read never starts a meter, renews time, or clears exhaustion.
+        All execution reservations retain their original denial semantics.
+        """
+        async with self._lock:
+            return self._remaining_wall_duration_ms()
 
     async def _reserve(self, field: str, limit: int, amount: int = 1) -> bool:
         """Commit an authorized nonnegative reservation exactly once.

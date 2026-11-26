@@ -653,10 +653,9 @@ async def test_scheduler_emits_each_skipped_step_once(exhausted):
     )
     plan = DeepExecutionPlan(request_id=request.request_id, steps=[first, second, third])
     events = []
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock())
     coordinator = object.__new__(MedusaCoordinator)
-    coordinator._outcome_recorder = OutcomeRecorder(
-        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
-    )
+    coordinator._outcome_recorder = OutcomeRecorder(store=store)
     coordinator.registry = SimpleNamespace()
     coordinator.planner = SimpleNamespace(create_plan=AsyncMock(return_value=plan))
     coordinator.active_plans = {}
@@ -679,6 +678,14 @@ async def test_scheduler_emits_each_skipped_step_once(exhausted):
     skipped = [event for event in events if event.type == AgentEventType.AGENT_SKIPPED]
     expected_ids = ["first", "second", "third"] if exhausted else ["second", "third"]
     assert [event.metadata["step_id"] for event in skipped] == expected_ids
+    receipts = [call.args[0] for call in store.save_unique_outcome_async.await_args_list]
+    assert [receipt["metadata"]["step_id"] for receipt in receipts] == expected_ids
+    assert all(receipt["metadata"]["phase"] == "skipped" for receipt in receipts)
+    assert all(receipt["tenant_id"] == "tenant-a" for receipt in receipts)
+    assert all(receipt["user_id"] == "user-a" for receipt in receipts)
+    if exhausted:
+        assert meter.exhausted
+        assert not await meter.reserve_tool_call()
     for event in skipped:
         assert event.correlation_id == "corr-a"
         assert event.agent_id == "researcher"
@@ -831,7 +838,7 @@ async def test_coordinator_records_only_observed_terminal_participation(boundary
             await asyncio.Event().wait()
 
     if boundary == "interrupted_append_timeout":
-        meter.remaining_duration_ms = AsyncMock(return_value=10)
+        meter.remaining_evidence_duration_ms = AsyncMock(return_value=10)
     store.save_unique_outcome_async.side_effect = append
     specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
     emitter = InterruptingEmitter()
@@ -938,4 +945,80 @@ async def test_wave_timeout_during_completion_receipt_cannot_assemble_success():
     assert step.status == StepStatus.COMPLETED
     assert step.output_data == {"result": "observed"}
     coordinator.assembler.assemble.assert_not_awaited()
+    assert request.request_id not in coordinator.active_plans
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["allowed", "foreign", "unregistered", "narrowed"])
+async def test_skip_writer_uses_admitted_scheduler_plan_without_new_child_grant(mode):
+    from ai_karen_engine.core.runtime.outcome.contracts import SpecialistParticipationPhase
+
+    _, root, meter, context = _request(allowed_agents=["researcher", "analyst"])
+    plan = root
+    specialist = "analyst"
+    if mode == "foreign":
+        specialist = "unapproved"
+    elif mode == "unregistered":
+        plan = replace(root)
+    elif mode == "narrowed":
+        plan = replace(root, allowed_agents=["researcher"])
+        context.register_runtime_model_child_plan(plan, meter)
+
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    recorder = OutcomeRecorder(store=store)
+    kwargs = dict(
+        context=context, plan=plan, meter=meter, step_id="skipped-a",
+        specialist_id=specialist, phase=SpecialistParticipationPhase.SKIPPED,
+    )
+    if mode == "allowed":
+        receipt = await recorder.record_specialist_participation_async(**kwargs)
+        assert receipt.phase is SpecialistParticipationPhase.SKIPPED
+        store.save_unique_outcome_async.assert_awaited_once()
+    else:
+        with pytest.raises(PermissionError):
+            await recorder.record_specialist_participation_async(**kwargs)
+        store.save_unique_outcome_async.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["append_failed", "deadline_expired", "legacy"])
+async def test_scheduler_skip_receipt_failure_cannot_assemble_success(mode):
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, _, meter, _ = _request()
+    step = PlanStep(agent_specialist="researcher", status=StepStatus.SKIPPED)
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    if mode == "append_failed":
+        store.save_unique_outcome_async.side_effect = OutcomeStoreError("append failed")
+    elif mode == "deadline_expired":
+        meter.remaining_evidence_duration_ms = AsyncMock(return_value=0)
+    else:
+        request, _, _, _ = _request(authenticated=False, shared=False)
+
+    coordinator = MedusaCoordinator(
+        planner=SimpleNamespace(create_plan=AsyncMock(return_value=plan)),
+        assembler=SimpleNamespace(assemble=AsyncMock()),
+        outcome_recorder=OutcomeRecorder(store=store),
+    )
+    coordinator._execute_step = AsyncMock()
+    if mode == "legacy":
+        await coordinator._handle_request(request)
+        coordinator.assembler.assemble.assert_awaited_once()
+        store.save_unique_outcome_async.assert_not_awaited()
+    else:
+        with pytest.raises(OutcomeStoreError):
+            await coordinator._handle_request(request)
+        coordinator.assembler.assemble.assert_not_awaited()
+        if mode == "append_failed":
+            store.save_unique_outcome_async.assert_awaited_once()
+        else:
+            store.save_unique_outcome_async.assert_not_awaited()
+    coordinator._execute_step.assert_not_awaited()
+    assert step.status is StepStatus.SKIPPED
     assert request.request_id not in coordinator.active_plans
