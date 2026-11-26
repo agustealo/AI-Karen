@@ -23,6 +23,9 @@ services:
       KARI_AUTH_BYPASS: "false"
       AUTH_ENABLE_SESSION_VALIDATION: "true"
       KARI_ENABLE_CARD_STUDIO_CRUD: "true"
+      # Only explicit local fixture credentials; never inherit a cloud project.
+      SUPABASE_PROJECT_URL: "${KCARD_LOCAL_STORAGE_URL:-}"
+      SUPABASE_SECRET_KEY: "${KCARD_LOCAL_STORAGE_SECRET_KEY:-}"
       DB_HOST: "host.docker.internal"
       DB_PORT: "54322"
       DB_USER: "${KCARD_DB_USER:?KCARD_DB_USER is required}"

@@ -62,9 +62,58 @@ def http_json(url: str) -> dict:
     return payload
 
 
+def local_storage_origin(raw: str) -> str:
+    """Only the explicitly configured local Docker host gateway may serve fixture bytes."""
+    try:
+        parsed = urlsplit(raw)
+        port = parsed.port
+        valid = (
+            parsed.scheme == "http" and parsed.hostname == "host.docker.internal"
+            and port is not None and 1 <= port <= 65535
+            and raw == f"http://host.docker.internal:{port}"
+        )
+    except (ValueError, TypeError):
+        valid = False
+    if not valid:
+        raise GuardError("Local Content Intelligence requires a canonical Docker-host Storage origin")
+    return raw
+
+
+def verify_local_storage_gateway(database_container: str, origin: str) -> dict:
+    """Bind the configured Storage endpoint to the running local Supabase project."""
+    port = str(urlsplit(local_storage_origin(origin)).port)
+    databases = docker_json(["docker", "inspect", database_container])
+    if len(databases) != 1:
+        raise GuardError("Local Storage database identity is ambiguous")
+    database = databases[0]
+    name = database.get("Name")
+    if (not isinstance(name, str) or not name.startswith("/supabase_db_")
+            or database.get("State", {}).get("Running") is not True):
+        raise GuardError("Local Storage database identity is invalid")
+    gateway_name = "supabase_kong_" + name.removeprefix("/supabase_db_")
+    gateways = docker_json(["docker", "inspect", gateway_name])
+    if len(gateways) != 1:
+        raise GuardError("Local Storage gateway is ambiguous")
+    gateway = gateways[0]
+    bindings = gateway.get("NetworkSettings", {}).get("Ports", {}).get("8000/tcp")
+    gateway_id = gateway.get("Id")
+    if (
+        gateway.get("Name") != "/" + gateway_name
+        or gateway.get("State", {}).get("Running") is not True
+        or not isinstance(bindings, list) or not bindings
+        or any(not isinstance(binding, dict) or binding.get("HostPort") != port
+               for binding in bindings)
+        or not isinstance(gateway_id, str) or len(gateway_id) != 64
+        or any(ch not in "0123456789abcdef" for ch in gateway_id)
+    ):
+        raise GuardError("Configured local Storage gateway does not match the running project")
+    return {"authority": "local_supabase_gateway", "container_id": gateway_id, "port": port}
+
+
 def verify_explorer_runtime(
-    service: str, container: dict, env: list[str], project: str, database: str
-) -> None:
+    service: str, container: dict, env: list[str], project: str, database: str,
+    *, require_local_storage: bool = False,
+) -> str | None:
     """Bind browser ingress and actual API DSNs to the dedicated local stack."""
     if not all(isinstance(item, str) and "=" in item for item in env):
         raise GuardError("Invalid runtime environment")
@@ -113,11 +162,19 @@ def verify_explorer_runtime(
             valid = False
         if not valid:
             raise GuardError("API connection URL does not target the disposable database")
+    if require_local_storage:
+        origin = local_storage_origin(values.get("SUPABASE_PROJECT_URL", ""))
+        if values.get("SUPABASE_URL") not in (None, "", origin):
+            raise GuardError("Conflicting local Storage origins")
+        if not values.get("SUPABASE_SECRET_KEY", "").strip():
+            raise GuardError("Local Storage credential is unavailable")
+        return origin
+    return None
 
 
 def inspect_container(
     project: str, sha: str, service: str, *, explorer_database: str | None = None,
-    env_path: Path | None = None,
+    env_path: Path | None = None, require_local_storage: bool = False,
 ) -> dict:
     compose = ["docker", "compose", "-p", project]
     if explorer_database is not None:
@@ -159,8 +216,12 @@ def inspect_container(
         }
         if not required.issubset(set(env)):
             raise GuardError("API disposable security flags are incomplete")
+    storage_origin = None
     if explorer_database is not None:
-        verify_explorer_runtime(service, container, env, project, explorer_database)
+        storage_origin = verify_explorer_runtime(
+            service, container, env, project, explorer_database,
+            require_local_storage=require_local_storage,
+        )
     image_id = container.get("Image")
     if not isinstance(image_id, str):
         raise GuardError(f"Missing {service} image identity")
@@ -173,7 +234,10 @@ def inspect_container(
         raise GuardError(f"Built {service} image revision differs")
     if images[0].get("Id") != image_id:
         raise GuardError(f"Built {service} image ID differs")
-    return {"service": service, "container_id": ids[0], "image_id": image_id}
+    evidence = {"service": service, "container_id": ids[0], "image_id": image_id}
+    if storage_origin is not None:
+        evidence["storage_origin"] = storage_origin
+    return evidence
 
 
 def verify_local_supabase_database(env_path: Path, expected_database: str | None = None) -> dict:
@@ -242,8 +306,11 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8010")
     parser.add_argument("--env-file", required=True)
     parser.add_argument("--evidence", required=True)
-    parser.add_argument("--file-explorer", action="store_true")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument("--file-explorer", action="store_true")
+    mode.add_argument("--content-intelligence", action="store_true")
     args = parser.parse_args()
+    artifact_local = args.file_explorer or args.content_intelligence
 
     try:
         if len(args.sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.sha):
@@ -254,7 +321,7 @@ def main() -> int:
             raise GuardError("Acceptance env file is missing or exposed")
 
         database = None
-        if args.file_explorer:
+        if artifact_local:
             if origin != "http://127.0.0.1:8010" or args.project != "kcard-" + args.sha[:12]:
                 raise GuardError("Explorer requires the dedicated exact-revision local stack")
             if "DOCKER_HOST" in os.environ or "DOCKER_CONTEXT" in os.environ:
@@ -266,7 +333,8 @@ def main() -> int:
                 raise GuardError("Explorer requires a local Docker daemon")
             database = "kcard_" + args.sha[:12]
         api = inspect_container(
-            args.project, args.sha, "api", explorer_database=database, env_path=env_path
+            args.project, args.sha, "api", explorer_database=database, env_path=env_path,
+            require_local_storage=args.content_intelligence,
         )
         web = inspect_container(
             args.project, args.sha, "web", explorer_database=database, env_path=env_path
@@ -281,7 +349,8 @@ def main() -> int:
 
         evidence = {
             "decision": "PASS",
-            "scenario": "file-explorer" if args.file_explorer else "card-studio",
+            "scenario": ("content-intelligence" if args.content_intelligence
+                         else "file-explorer" if args.file_explorer else "card-studio"),
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "source_sha": args.sha,
             "project": args.project,
@@ -289,18 +358,24 @@ def main() -> int:
             "containers": {"api": api, "web": web},
             "supabase_database": supabase_database,
         }
+        if args.content_intelligence:
+            evidence["supabase_storage"] = verify_local_storage_gateway(
+                supabase_database["container_id"], api["storage_origin"],
+            )
         evidence_path = Path(args.evidence)
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
         evidence_path.chmod(0o600)
-        print("LOCAL_FILE_EXPLORER_PROVENANCE_PASS" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_PASS")
+        print("LOCAL_CONTENT_INTELLIGENCE_PROVENANCE_PASS" if args.content_intelligence
+              else "LOCAL_FILE_EXPLORER_PROVENANCE_PASS" if args.file_explorer
+              else "LOCAL_CARD_STUDIO_PROVENANCE_PASS")
         return 0
     except GuardError as exc:
-        prefix = "LOCAL_FILE_EXPLORER_PROVENANCE_FAIL" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_FAIL"
+        prefix = "LOCAL_CONTENT_INTELLIGENCE_PROVENANCE_FAIL" if args.content_intelligence else "LOCAL_FILE_EXPLORER_PROVENANCE_FAIL" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_FAIL"
         print(f"{prefix}: {exc}")
         return 1
     except (OSError, ValueError, subprocess.TimeoutExpired):
-        print("LOCAL_FILE_EXPLORER_PROVENANCE_FAIL" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_FAIL")
+        print("LOCAL_CONTENT_INTELLIGENCE_PROVENANCE_FAIL" if args.content_intelligence else "LOCAL_FILE_EXPLORER_PROVENANCE_FAIL" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_FAIL")
         return 1
 
 

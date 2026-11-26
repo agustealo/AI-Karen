@@ -83,6 +83,22 @@ if len(supabase_containers) != 1:
     raise SystemExit('Expected one running canonical local Supabase PostgreSQL on loopback port 54322')
 container = supabase_containers[0]
 
+# Optional read-only Content Intelligence fixtures use the same local Supabase
+# project. Validate before creating a disposable DB or copying credentials.
+local_storage_url = base.get("KCARD_LOCAL_STORAGE_URL", "")
+local_storage_key = base.get("KCARD_LOCAL_STORAGE_SECRET_KEY", "")
+if local_storage_url or local_storage_key:
+    from scripts.ci.verify_local_card_studio_acceptance import (
+        GuardError, local_storage_origin, verify_local_storage_gateway,
+    )
+    if not local_storage_url or not local_storage_key:
+        raise SystemExit("Local Storage fixture URL and key must be supplied together")
+    try:
+        local_storage_origin(local_storage_url)
+        verify_local_storage_gateway(container, local_storage_url)
+    except GuardError:
+        raise SystemExit("Local Storage fixture target is not the running local Supabase gateway") from None
+
 exists = subprocess.run(
     ['docker', 'exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-tAc',
      f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"],
@@ -151,6 +167,10 @@ values = {
     'KCARD_COMPOSE_PROJECT': f'kcard-{sha[:12]}',
     'KCARD_ACCEPTANCE_ENV_FILE': str(env_file),
 }
+if local_storage_url:
+    values["KCARD_LOCAL_STORAGE_URL"] = local_storage_url
+    values["KCARD_LOCAL_STORAGE_SECRET_KEY"] = local_storage_key
+
 def dotenv_value(value: str) -> str:
     if "\n" in value or "\r" in value or "\x00" in value:
         raise SystemExit('Multiline or invalid acceptance configuration')

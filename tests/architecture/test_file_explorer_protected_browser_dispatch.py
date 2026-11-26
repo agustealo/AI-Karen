@@ -374,3 +374,76 @@ def test_explorer_runner_refuses_unsafe_admission_before_any_browser_execution(t
         assert reason in result.stderr
         assert ">>> " not in result.stdout
     assert not (tmp_path / ".local/state/ai-karen").exists()
+
+
+
+def test_content_intelligence_local_evidence_reuses_exact_scenario_validator():
+    import pytest
+    from scripts.ci.verify_local_browser_report import (
+        CONTENT_INTELLIGENCE_PREFIXES, EXPLORER_PREFIXES, EXPLORER_SPEC, validate_report,
+    )
+
+    def report(prefixes):
+        return {
+            "errors": [],
+            "stats": {"expected": len(prefixes), "unexpected": 0, "skipped": 0, "flaky": 0},
+            "suites": [{"specs": [
+                {"title": prefix + " proof", "file": EXPLORER_SPEC, "tests": [{
+                    "projectName": "chromium", "expectedStatus": "passed",
+                    "status": "expected", "results": [{"status": "passed", "retry": 0}],
+                }]} for prefix in prefixes
+            ]}],
+        }
+
+    observed = report(CONTENT_INTELLIGENCE_PREFIXES)
+    validate_report(observed, CONTENT_INTELLIGENCE_PREFIXES, EXPLORER_SPEC)
+    with pytest.raises(ValueError):
+        validate_report(report(EXPLORER_PREFIXES), CONTENT_INTELLIGENCE_PREFIXES, EXPLORER_SPEC)
+    with pytest.raises(ValueError):
+        validate_report(observed, EXPLORER_PREFIXES, EXPLORER_SPEC)
+    observed["suites"][0]["specs"][0]["tests"][0]["results"][0]["status"] = "skipped"
+    with pytest.raises(ValueError):
+        validate_report(observed, CONTENT_INTELLIGENCE_PREFIXES, EXPLORER_SPEC)
+
+
+def test_local_content_storage_rejects_cloud_and_foreign_gateway(monkeypatch):
+    import pytest
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    origin = "http://host.docker.internal:54341"
+    assert verifier.local_storage_origin(origin) == origin
+    for invalid in ("https://test.supabase.co", "http://localhost:54341",
+                    "http://host.docker.internal:54341/", "http://host.docker.internal:54341?q=x",
+                    "http://user@host.docker.internal:54341", "http://host.docker.internal"):
+        with pytest.raises(verifier.GuardError):
+            verifier.local_storage_origin(invalid)
+
+    gateway = {"Name": "/supabase_kong_fixture", "Id": "b" * 64,
+               "State": {"Running": True}, "NetworkSettings": {
+                   "Ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "54341"}]},
+               }}
+    database = {"Name": "/supabase_db_fixture", "State": {"Running": True}}
+    def inspect(args):
+        assert args[:2] == ["docker", "inspect"]
+        if args[2] == "db-id":
+            return [database]
+        assert args[2] == "supabase_kong_fixture"
+        return [gateway]
+
+    monkeypatch.setattr(verifier, "docker_json", inspect)
+    assert verifier.verify_local_storage_gateway("db-id", origin)["container_id"] == "b" * 64
+    gateway["NetworkSettings"]["Ports"]["8000/tcp"][0]["HostPort"] = "54321"
+    with pytest.raises(verifier.GuardError):
+        verifier.verify_local_storage_gateway("db-id", origin)
+
+
+def test_content_local_runner_is_exclusive_and_reuses_private_provenance():
+    runner = (ROOT / "scripts/ci/kui-local-acceptance.sh").read_text()
+    assert "RUN_CONTENT_INTELLIGENCE_LOCAL:-0" in runner
+    assert "Run Explorer acceptance separately from Content Intelligence" in runner
+    assert "KAREN_CONTENT_INTELLIGENCE_REVOKED_FIXTURE_ATTESTED" in runner
+    assert "Explorer mutation flags are forbidden" in runner
+    assert "KCONTENT-(LIVE|DENY-LIVE|REVOKED-LIVE)" in runner
+    assert "PROVENANCE[2]='--content-intelligence'" in runner
+    assert "REPORT+=(--content-intelligence)" in runner
+    assert "PASS content_intelligence_local_acceptance" in runner

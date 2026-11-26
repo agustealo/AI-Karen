@@ -13,6 +13,11 @@ EXPLORER_PREFIXES = (
     "KFILE-ISOLATION-LOCAL:",
 )
 EXPLORER_SPEC = "file-explorer-real-acceptance.spec.ts"
+CONTENT_INTELLIGENCE_PREFIXES = (
+    "KCONTENT-LIVE:",
+    "KCONTENT-DENY-LIVE:",
+    "KCONTENT-REVOKED-LIVE:",
+)
 
 
 def validate_report(
@@ -90,18 +95,22 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("report", type=Path)
     parser.add_argument("--list-only", action="store_true")
+    parser.add_argument("--content-intelligence", action="store_true")
     args = parser.parse_args()
+    prefixes = CONTENT_INTELLIGENCE_PREFIXES if args.content_intelligence else EXPLORER_PREFIXES
+    name = "Content Intelligence" if args.content_intelligence else "Explorer"
     try:
         report = json.loads(args.report.read_text(encoding="utf-8"))
-        validate_report(report, EXPLORER_PREFIXES, EXPLORER_SPEC, list_only=args.list_only)
+        validate_report(report, prefixes, EXPLORER_SPEC, list_only=args.list_only)
     except (OSError, ValueError):
         # Reports may include private metadata and request or assertion details.
-        print("FILE_EXPLORER_BROWSER_EVIDENCE_REJECTED")
+        print("CONTENT_INTELLIGENCE_BROWSER_EVIDENCE_REJECTED" if args.content_intelligence
+              else "FILE_EXPLORER_BROWSER_EVIDENCE_REJECTED")
         return 1
     if args.list_only:
-        print("Four intended Explorer scenarios discovered; NOT_RUN")
+        print(f"{len(prefixes)} intended {name} scenarios discovered; NOT_RUN")
     else:
-        print("Four Explorer scenarios passed exactly once; zero skips, retries or failures")
+        print(f"{len(prefixes)} {name} scenarios passed exactly once; zero skips, retries or failures")
     return 0
 
 

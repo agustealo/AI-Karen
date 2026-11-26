@@ -242,3 +242,49 @@ attestation, protected browser scenario results, and reviewer approval.
 Never log content bytes, filenames, signing tokens, authentication headers,
 or private Storage URLs. File Explorer and Content Intelligence remain
 **Not shipped** until those separate proofs have actually passed.
+
+
+## KEXP-024: Independent local Content Intelligence acceptance
+
+The three existing Content Intelligence browser scenarios can be executed on the
+same exact-SHA disposable local stack as Explorer, without Vercel or a hosted
+provider. This is a distinct read-only invocation of the existing KUI runner,
+not a new workflow or a substitute for any hosted deployment attestation.
+
+Before provisioning, explicitly configure the local project's private
+`KCARD_LOCAL_STORAGE_URL=http://host.docker.internal:<local-api-port>` and
+`KCARD_LOCAL_STORAGE_SECRET_KEY` in the existing private local `.env`. Use only
+an independently approved local Supabase project credential (local service-role
+or secret key), never a cloud credential. The existing provisioner validates the
+configured gateway against the running local database project's Kong container
+and copies only this opt-in pair into the private generated acceptance env.
+No bucket or artifact is created by the runner. Confirm the local project and
+private artifacts bucket are dedicated to this trial; seed real matching
+metadata and Storage objects using the existing governed artifact owner. Confirm
+and record the retired fixture's former eligible state and subsequent revocation.
+
+Use the existing disposable stack and private env path, the exact reviewed SHA,
+loopback `http://127.0.0.1:8010`, two distinct sanitized accounts, and three distinct
+canonical fixture UUIDs. Set `KAREN_LOCAL_CHAT_ACCEPTANCE=1`,
+`KAREN_SANITIZED_ACCOUNT=true`, `KAREN_FILE_EXPLORER_ACCEPTANCE=true`,
+`KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED=true`, and the three existing
+Content Intelligence acceptance flags. Set
+`KAREN_CONTENT_INTELLIGENCE_LOCAL_STORAGE_CONFIRMED=true` and
+`KAREN_CONTENT_INTELLIGENCE_REVOKED_FIXTURE_ATTESTED=true` only after the
+independent fixture checks. Supply the active, isolation and retired source IDs
+and retired SHA-256 described above; keep credentials in the private shell.
+Unset hosted verification flags, Vercel bypass credentials and Explorer mutation
+flags. Run separately from Explorer and Card Studio:
+
+```bash
+RUN_CONTENT_INTELLIGENCE_LOCAL=1 bash scripts/ci/kui-local-acceptance.sh "$EXPECTED_SHA"
+```
+
+The runner verifies exact clean source, loopback web ingress, API database
+identity, running local Storage gateway and image/container/database continuity
+before and after the three scenarios. Discovery must identify exactly three
+Chromium tests; execution must pass each once without retries/skips/failures.
+Reports are private and outside the checkout. The explicit retired-fixture
+attestation remains required; a 403 alone is not a revocation proof. The two
+standalone Storage integration tests still require their separate approved real
+Storage fixtures. No consumer acceptance result is claimed by this source change.
