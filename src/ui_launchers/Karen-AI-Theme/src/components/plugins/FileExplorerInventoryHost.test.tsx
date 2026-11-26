@@ -1237,12 +1237,15 @@ describe('hierarchy-aware visual controls', () => {
   });
 
   it('distinguishes a filtered page from genuinely empty inventory', () => {
-    render(<SharedFileExplorer authorized items={[first]} hasMore />);
+    const onNextPage = vi.fn();
+    render(<SharedFileExplorer authorized items={[first]} hasMore
+      nextCursor="owner-scoped-cursor" onNextPage={onNextPage} />);
     fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'missing' } });
     expect(screen.getByText('No matching references on this page.')).toBeTruthy();
     expect(screen.getByText(/Filtering and sorting apply only to this page/)).toBeTruthy();
     fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
     expect(screen.getByRole('checkbox', { name: 'Select alpha.txt' })).toBeTruthy();
+    expect(onNextPage).not.toHaveBeenCalled();
   });
 });
 
