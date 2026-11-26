@@ -84,3 +84,47 @@ def test_run_manager_blocks_cross_tenant_observation_and_cancellation() -> None:
             await task
 
     asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancel_requested", [False, True])
+async def test_unverified_retirement_never_claims_cancellation_or_success(
+    cancel_requested,
+):
+    from ai_karen_engine.agent_medusa.execution.run_manager import (
+        RunNotCancellableError,
+    )
+
+    manager = MedusaRunManager(settings=_local_settings())
+    task = asyncio.create_task(asyncio.sleep(60))
+    scope = dict(run_id="unresolved", tenant_id="tenant-a")
+    try:
+        await manager.register(
+            **scope, correlation_id="corr", user_id="owner", task=task
+        )
+        if cancel_requested:
+            await manager.cancel(**scope)
+        await manager.mark_retirement_unverified("unresolved")
+        await manager.mark_cancelled("unresolved")
+        assert (
+            await manager.mark_response("unresolved", "success")
+            is ExecutionRunStatus.ORPHANED
+        )
+        snapshot = await manager.get(**scope)
+        assert snapshot["status"] == "orphaned"
+        assert snapshot["error_type"] == "NativeRetirementUnverified"
+        assert snapshot["outcome_status"] is None
+        assert snapshot["cancellable"] is False
+        assert snapshot["distributed_control"]["supported"] is False
+        active = await manager.list_runs(tenant_id="tenant-a", include_terminal=False)
+        assert [row["run_id"] for row in active] == ["unresolved"]
+        with pytest.raises(RunNotCancellableError):
+            await manager.cancel(**scope)
+        with pytest.raises(RuntimeError, match="already active or unresolved"):
+            await manager.register(
+                **scope, correlation_id="corr", user_id="owner", task=task
+            )
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task

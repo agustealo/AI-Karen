@@ -768,3 +768,29 @@ async def test_transition_reader_does_not_turn_database_failure_into_empty_histo
             tenant_id="tenant-1",
             user_id="owner",
         )
+
+
+@pytest.mark.asyncio
+async def test_unverified_retirement_is_owner_fenced_and_survives_manager_recreation():
+    ledger = InMemoryDurableLedger()
+    manager = MedusaRunManager(settings=_settings(), durable_ledger=ledger)
+    task = asyncio.create_task(asyncio.sleep(0))
+    scope = dict(
+        run_id="unresolved",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+    )
+    await manager.register(**scope, correlation_id="corr", user_id="owner", task=task)
+    await task
+    await manager.mark_retirement_unverified("unresolved")
+    await manager.mark_failed("unresolved", RuntimeError("secondary failure"))
+    restarted = MedusaRunManager(settings=_settings(), durable_ledger=ledger)
+    record = await restarted.get(**scope)
+    assert record["status"] == "orphaned"
+    assert record["error_type"] == "NativeRetirementUnverified"
+    assert record["outcome_status"] is None
+    assert record["cancellable"] is False
+    assert [row["to_status"] for row in ledger.transitions] == [
+        "created",
+        "running",
+        "orphaned",
+    ]

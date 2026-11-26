@@ -17,6 +17,7 @@ from ai_karen_engine.core.runtime.contracts import (
     ExecutionBudgetMeter,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision, RiskLevel
+from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
 
 logger = get_logger(__name__)
 
@@ -49,7 +50,7 @@ async def build_runtime_fallback(
     ctx = request.context
     plan = authorized_plan
     if (
-        isinstance(failure, (EngineUnavailableError, PermissionError))
+        isinstance(failure, (EngineUnavailableError, PermissionError, OutcomeStoreError))
         or decision.requires_human_gate
         or decision.risk_level in (RiskLevel.HIGH, RiskLevel.CRITICAL)
         or decision.tool_requirements

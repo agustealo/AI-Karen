@@ -100,6 +100,8 @@ class DeepAgentsResearchSpecialist:
         *,
         execution: SpecialistExecutionContext | None = None,
     ) -> dict[str, Any]:
+        if execution is not None:
+            await execution.acknowledge_invocation_entry()
         del context  # Upstream context is not a new prompt or state authority.
         execution = self._verify_scope(self.registration, execution)
         from ai_karen_engine.config.agent_medusa import get_agent_medusa_runtime_settings
