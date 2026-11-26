@@ -252,21 +252,26 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
                     **contender_scope, lease_expires_at=short_deadline,
                 )
                 assert claim is not None and claim.lease_owner
-            async with factory() as blocker:
+            async with factory() as blocker, factory() as worker:
+                # Pin the actual contender connection before starting the lock
+                # wait. pg_stat_activity snapshots can omit newly opened PIDs.
                 blocker_pid = (await blocker.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+                worker_pid = (await worker.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+                assert worker_pid != blocker_pid
+                contended_repo = UploadSessionRepository(lambda: worker)
                 await blocker.execute(text(
                     "SELECT session_id FROM public.artifact_upload_sessions "
                     "WHERE session_id=:id FOR UPDATE"
                 ), {"id": UUID(contender.session_id)})
                 if operation == "claim":
-                    work = repo.claim_commit(**contender_scope, lease_expires_at=short_deadline)
+                    work = contended_repo.claim_commit(**contender_scope, lease_expires_at=short_deadline)
                 elif operation == "consume":
-                    work = repo.consume_write_claim(
+                    work = contended_repo.consume_write_claim(
                         **contender_scope, lease_token=claim.lease_owner,
                         observed_bytes=42, observed_sha256=digest,
                     )
                 else:
-                    work = repo.transition(
+                    work = contended_repo.transition(
                         **contender_scope, expected_state="committing",
                         next_state="reconcile_required", lease_token=claim.lease_owner,
                     )
@@ -277,9 +282,9 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
                         async with asyncio.timeout(3):
                             while True:
                                 blocked = (await observer.execute(text(
-                                    "SELECT EXISTS (SELECT 1 FROM pg_stat_activity "
-                                    "WHERE :pid = ANY(pg_blocking_pids(pid)))"
-                                ), {"pid": blocker_pid})).scalar_one()
+                                    "SELECT CAST(:blocker AS integer) = ANY("
+                                    "pg_blocking_pids(CAST(:worker AS integer)))"
+                                ), {"blocker": blocker_pid, "worker": worker_pid})).scalar_one()
                                 if blocked:
                                     break
                                 await asyncio.sleep(0.025)
