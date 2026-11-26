@@ -83,6 +83,8 @@ class ExecutionRun:
     cancel_admission_pending: bool = field(default=False, repr=False)
     cancel_signal_sent: bool = field(default=False, repr=False)
     shared_ownership_lost: bool = field(default=False, repr=False)
+    terminal_pending: bool = field(default=False, repr=False)
+    terminal_unconfirmed: bool = field(default=False, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -103,6 +105,7 @@ class ExecutionRun:
             "cancellable": (
                 self.status is ExecutionRunStatus.RUNNING
                 and not self.cancel_admission_pending
+                and not self.terminal_pending
             ),
             "durable": self.durable_registered,
             "response_source": "worker_local_execution",
@@ -249,6 +252,7 @@ class MedusaRunManager:
                     try:
                         await self._distributed_store.mark_terminal(
                             run_id=run_id,
+                            tenant_id=run.tenant_id,
                             worker_id=self._settings.worker_id,
                             status="failed",
                             completed_at=datetime.now(timezone.utc),
@@ -345,7 +349,7 @@ class MedusaRunManager:
             run = self._runs.get(run_id)
             if run is None:
                 return None
-            if run.shared_ownership_lost:
+            if run.shared_ownership_lost or run.terminal_unconfirmed:
                 # The worker has no authority to publish any terminal outcome.
                 # Retain the active task identity until its finalizer observes
                 # local retirement; never infer native cessation from this.
@@ -355,6 +359,8 @@ class MedusaRunManager:
                     self._terminal_order.append(run_id)
                     self._prune_locked()
                 return ExecutionRunStatus.ORPHANED
+            if run.terminal_pending:
+                raise DistributedRunStoreUnavailable("terminal_transition_in_progress")
             if (
                 run.status is ExecutionRunStatus.CANCELLING
                 and status is not ExecutionRunStatus.ORPHANED
@@ -369,23 +375,108 @@ class MedusaRunManager:
                 ExecutionRunStatus.ORPHANED,
             }:
                 return run.status
-            run.status = status
-            run.completed_at = completed_at
-            run.error_type = error_type
-            run.outcome_status = outcome_status
             heartbeat_task = run.heartbeat_task
             run.heartbeat_task = None
-            if run_id not in self._terminal_order:
-                self._terminal_order.append(run_id)
-            self._prune_locked()
+            if run.shared_registered:
+                run.terminal_pending = True
+            else:
+                self._publish_terminal_locked(
+                    run, status, completed_at, error_type, outcome_status
+                )
 
-        if heartbeat_task is not None and heartbeat_task is not asyncio.current_task():
-            heartbeat_task.cancel()
+        if run.shared_registered:
             try:
-                await heartbeat_task
-            except asyncio.CancelledError:
-                pass
+                await self._stop_terminal_heartbeat(heartbeat_task)
 
+                async def authorize(
+                    proposed: str, error: str | None, outcome: str | None
+                ) -> str:
+                    try:
+                        return await asyncio.wait_for(
+                            self._distributed_store.mark_terminal(
+                                run_id=run_id,
+                                tenant_id=run.tenant_id,
+                                worker_id=self._settings.worker_id,
+                                status=proposed,
+                                completed_at=completed_at,
+                                error_type=error,
+                                outcome_status=outcome,
+                            ),
+                            timeout=self._settings.run_lease_ttl_seconds,
+                        )
+                    except asyncio.TimeoutError as exc:
+                        raise DistributedRunStoreUnavailable(
+                            "shared_terminal_commit_unconfirmed"
+                        ) from exc
+
+                if run.durable_registered:
+                    # The ledger holds its existing row lock across the bounded
+                    # shared authorization, including cancellation resolution.
+                    resolved = await self._durable_ledger.mark_terminal(
+                        run_id=run_id,
+                        tenant_id=run.tenant_id,
+                        worker_id=self._settings.worker_id,
+                        status=status.value,
+                        completed_at=completed_at,
+                        error_type=error_type,
+                        outcome_status=outcome_status,
+                        authorize_terminal=authorize,
+                    )
+                else:
+                    resolved = await authorize(status.value, error_type, outcome_status)
+                if resolved != status.value:
+                    if resolved != "cancelled" or status not in {
+                        ExecutionRunStatus.COMPLETED,
+                        ExecutionRunStatus.FAILED,
+                    }:
+                        raise DistributedRunStoreUnavailable(
+                            "shared_terminal_resolution_mismatch"
+                        )
+                    status = ExecutionRunStatus.CANCELLED
+                    outcome_status = "cancelled"
+                    error_type = None
+                async with self._lock:
+                    self._publish_terminal_locked(
+                        run, status, completed_at, error_type, outcome_status
+                    )
+                    run.terminal_pending = False
+                return status
+            except (Exception, asyncio.CancelledError) as exc:
+                # A failed response may follow a committed storage operation.
+                # Never report the proposed result or replay the workload.
+                async with self._lock:
+                    run.terminal_pending = False
+                    run.shared_ownership_lost = isinstance(
+                        exc, (DistributedRunNotFound, DistributedRunOwnershipLost)
+                    )
+                    run.terminal_unconfirmed = not run.shared_ownership_lost
+                    run.status = ExecutionRunStatus.ORPHANED
+                    run.completed_at = None
+                    run.outcome_status = None
+                    run.error_type = (
+                        "WorkerLeaseExpired"
+                        if run.shared_ownership_lost
+                        else "TerminalCommitUnconfirmed"
+                    )
+                    if run.task is not asyncio.current_task():
+                        self._signal_task_once_locked(run)
+                    if run.task.done() or run.task is asyncio.current_task():
+                        if run_id not in self._terminal_order:
+                            self._terminal_order.append(run_id)
+                            self._prune_locked()
+                logger.warning(
+                    "Medusa terminal authority unconfirmed",
+                    extra={
+                        "run_id": run_id,
+                        "tenant_id": run.tenant_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                if isinstance(exc, asyncio.CancelledError):
+                    raise
+                return ExecutionRunStatus.ORPHANED
+
+        await self._stop_terminal_heartbeat(heartbeat_task)
         if run.durable_registered:
             await self._safe_mark_durable_terminal(
                 run=run,
@@ -394,43 +485,31 @@ class MedusaRunManager:
                 error_type=error_type,
                 outcome_status=outcome_status,
             )
-
-        if run.shared_registered:
-            try:
-                await self._distributed_store.mark_terminal(
-                    run_id=run_id,
-                    worker_id=self._settings.worker_id,
-                    status=status.value,
-                    completed_at=completed_at,
-                    error_type=error_type,
-                )
-            except DistributedRunStoreUnavailable:
-                logger.warning(
-                    "Medusa terminal state could not be written to shared coordination",
-                    extra={"run_id": run_id, "status": status.value},
-                )
-            else:
-                set_outcome_status = getattr(
-                    self._distributed_store,
-                    "set_outcome_status",
-                    None,
-                )
-                if set_outcome_status is not None and outcome_status is not None:
-                    try:
-                        await set_outcome_status(
-                            run_id=run_id,
-                            worker_id=self._settings.worker_id,
-                            outcome_status=outcome_status,
-                        )
-                    except DistributedRunStoreUnavailable:
-                        logger.warning(
-                            "Medusa outcome status could not be written to shared coordination",
-                            extra={
-                                "run_id": run_id,
-                                "outcome_status": outcome_status,
-                            },
-                        )
         return status
+
+    def _publish_terminal_locked(
+        self,
+        run: ExecutionRun,
+        status: ExecutionRunStatus,
+        completed_at: datetime,
+        error_type: str | None,
+        outcome_status: str | None,
+    ) -> None:
+        run.status = status
+        run.completed_at = completed_at
+        run.error_type = error_type
+        run.outcome_status = outcome_status
+        if run.run_id not in self._terminal_order:
+            self._terminal_order.append(run.run_id)
+        self._prune_locked()
+
+    @staticmethod
+    async def _stop_terminal_heartbeat(
+        heartbeat_task: asyncio.Task[None] | None,
+    ) -> None:
+        if heartbeat_task is not None and heartbeat_task is not asyncio.current_task():
+            heartbeat_task.cancel()
+            await asyncio.gather(heartbeat_task, return_exceptions=True)
 
     async def _admit_local_cancellation(
         self,
@@ -445,7 +524,7 @@ class MedusaRunManager:
         the late admission cannot change its outcome or signal the retired task.
         """
         async with self._lock:
-            if self._runs.get(run.run_id) is not run:
+            if self._runs.get(run.run_id) is not run or run.terminal_pending:
                 return False
             if run.status is ExecutionRunStatus.CANCELLING:
                 return allow_existing
@@ -482,6 +561,7 @@ class MedusaRunManager:
                     accepted
                     and self._runs.get(run.run_id) is run
                     and run.status is ExecutionRunStatus.RUNNING
+                    and not run.terminal_pending
                 ):
                     run.status = ExecutionRunStatus.CANCELLING
                 else:
@@ -494,6 +574,7 @@ class MedusaRunManager:
             if (
                 self._runs.get(run.run_id) is run
                 and run.status is ExecutionRunStatus.CANCELLING
+                and not run.terminal_pending
             ):
                 self._signal_task_once_locked(run)
 
@@ -509,10 +590,14 @@ class MedusaRunManager:
     async def _record_shared_ownership_loss(self, run: ExecutionRun) -> None:
         """Fence a definitively rejected lease without writing as its owner."""
         async with self._lock:
-            if self._runs.get(run.run_id) is not run or run.status not in {
-                ExecutionRunStatus.RUNNING,
-                ExecutionRunStatus.CANCELLING,
-            }:
+            if (
+                self._runs.get(run.run_id) is not run
+                or run.terminal_pending
+                or run.status not in {
+                    ExecutionRunStatus.RUNNING,
+                    ExecutionRunStatus.CANCELLING,
+                }
+            ):
                 return
             run.shared_ownership_lost = True
             run.status = ExecutionRunStatus.ORPHANED
@@ -845,6 +930,7 @@ class MedusaRunManager:
                         not run.shared_registered
                         or self._runs.get(run.run_id) is not run
                         or run.task.done()
+                        or run.terminal_pending
                         or run.status
                         not in {
                             ExecutionRunStatus.RUNNING,
@@ -1032,7 +1118,9 @@ class MedusaRunManager:
             local_run_ids = {
                 run_id
                 for run_id, run in self._runs.items()
-                if run.tenant_id == tenant_id and not run.shared_ownership_lost
+                if run.tenant_id == tenant_id
+                and not run.shared_ownership_lost
+                and not run.terminal_unconfirmed
             }
 
         reconciled = 0

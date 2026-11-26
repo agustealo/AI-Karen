@@ -563,6 +563,7 @@ async def _retirement_replay_acceptance(
         if retirement == "explicit":
             await owner_store.mark_terminal(
                 run_id=run_id,
+                tenant_id=tenant_id,
                 worker_id=owner_settings.worker_id,
                 status="orphaned",
                 completed_at=datetime.now(timezone.utc),
@@ -629,10 +630,11 @@ async def _retirement_replay_acceptance(
         "terminal",
     ],
 )
-def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
-    change: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("operation", ["heartbeat", "terminal"])
+def test_real_redis_mutation_rechecks_live_authority(
+    change: str, operation: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Race the real Lua mutation against a stale advisory read on isolated keys."""
+    """Inject a change at each real Lua operation's authorization boundary."""
     from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
         DistributedRunNotFound,
         DistributedRunOwnershipLost,
@@ -645,7 +647,7 @@ def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
             client = redis.client
             assert client is not None
             marker = uuid4().hex
-            prefix = f"ci:medusa:heartbeat:{marker}"
+            prefix = f"ci:medusa:{operation}:{marker}"
             settings = _settings(worker=f"owner-{marker}", prefix=prefix)
             store = RedisDistributedRunStore(
                 settings=settings, redis_manager=redis
@@ -675,10 +677,11 @@ def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
                 before = None
                 before_ttls = None
 
-                async def stale_read(key: str):
+                original_eval = client.eval
+
+                async def inject_change() -> None:
                     nonlocal before, before_ttls
-                    snapshot = await original_read(key)
-                    assert key == run_key and before is None
+                    assert before is None
                     if change == "deleted_claim":
                         await client.delete(claim)
                     elif change == "replaced_claim":
@@ -711,19 +714,41 @@ def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
                     before_ttls = [
                         await client.pttl(k) for k in (claim, run_key, index)
                     ]
+                async def stale_read(key: str):
+                    snapshot = await original_read(key)
+                    assert key == run_key
+                    await inject_change()
                     return snapshot
 
+                async def stale_eval(*args):
+                    await inject_change()
+                    return await original_eval(*args)
+
                 with monkeypatch.context() as patch:
-                    patch.setattr(client, "hgetall", stale_read)
+                    if operation == "heartbeat":
+                        patch.setattr(client, "hgetall", stale_read)
+                    else:
+                        patch.setattr(client, "eval", stale_eval)
                     error = (
                         DistributedRunNotFound
                         if change == "deleted_hash"
                         else DistributedRunOwnershipLost
                     )
                     with pytest.raises(error):
-                        await store.heartbeat(
-                            run_id=run_id, worker_id=settings.worker_id
-                        )
+                        if operation == "heartbeat":
+                            await store.heartbeat(
+                                run_id=run_id, worker_id=settings.worker_id
+                            )
+                        else:
+                            await store.mark_terminal(
+                                run_id=run_id,
+                                tenant_id=tenant_id,
+                                worker_id=settings.worker_id,
+                                status="completed",
+                                completed_at=datetime.now(timezone.utc),
+                                error_type=None,
+                                outcome_status="success",
+                            )
                 assert before is not None and before_ttls is not None
                 assert (
                     await client.get(claim),
@@ -738,6 +763,87 @@ def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
                         assert after == -2
                     else:
                         assert 0 < after <= prior
+            finally:
+                await client.delete(claim, run_key, index)
+        finally:
+            await redis.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("cancelling", "proposed", "outcome", "resolved", "resolved_outcome"),
+    [
+        (False, "completed", "success", "completed", "success"),
+        (False, "failed", "timeout", "failed", "timeout"),
+        (True, "completed", "success", "cancelled", "cancelled"),
+        (True, "orphaned", None, "orphaned", ""),
+    ],
+)
+def test_real_redis_terminal_receipt_is_atomic(
+    cancelling: bool,
+    proposed: str,
+    outcome: str | None,
+    resolved: str,
+    resolved_outcome: str,
+) -> None:
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunOwnershipLost,
+    )
+
+    async def scenario() -> None:
+        redis = RedisConnectionManager(redis_url=os.environ["REDIS_URL"])
+        try:
+            assert await redis.initialize(), "Real Redis must be available"
+            client = redis.client
+            assert client is not None
+            marker = uuid4().hex
+            prefix = f"ci:medusa:terminal-receipt:{marker}"
+            settings = _settings(worker=f"owner-{marker}", prefix=prefix)
+            store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+            run_id = f"run-{marker}"
+            tenant_id = str(uuid4())
+            claim = f"{prefix}:claim:{run_id}"
+            run_key = f"{prefix}:run:{run_id}"
+            index = f"{prefix}:tenant:{tenant_id}"
+            await store.register(
+                run_id=run_id,
+                correlation_id=f"corr-{marker}",
+                tenant_id=tenant_id,
+                user_id="ci-owner",
+                worker_id=settings.worker_id,
+                started_at=datetime.now(timezone.utc),
+            )
+            try:
+                if cancelling:
+                    await store.request_cancel(run_id=run_id, tenant_id=tenant_id)
+                completed_at = datetime.now(timezone.utc)
+                error_type = (
+                    "NativeRetirementUnverified" if proposed == "orphaned" else None
+                )
+                args = dict(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    worker_id=settings.worker_id,
+                    status=proposed,
+                    completed_at=completed_at,
+                    error_type=error_type,
+                    outcome_status=outcome,
+                )
+                assert await store.mark_terminal(**args) == resolved
+                receipt = await client.hgetall(run_key)
+                assert receipt["status"] == resolved
+                assert receipt["outcome_status"] == resolved_outcome
+                assert receipt["completed_at"] == completed_at.isoformat()
+                assert receipt["error_type"] == (error_type or "")
+                assert receipt["lease_expires_at"] == ""
+                assert not await client.exists(claim)
+                assert await client.sismember(index, run_id)
+                assert await client.pttl(run_key) > 0
+                assert await client.pttl(index) > 0
+                with pytest.raises(DistributedRunOwnershipLost):
+                    await store.mark_terminal(**args)
+                assert await client.hgetall(run_key) == receipt
             finally:
                 await client.delete(claim, run_key, index)
         finally:

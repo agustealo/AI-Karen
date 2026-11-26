@@ -73,17 +73,29 @@ class SharedFakeRunStore:
         self,
         *,
         run_id: str,
+        tenant_id: str,
         worker_id: str,
         status: str,
         completed_at: datetime,
         error_type: str | None,
-    ) -> None:
-        record = self.records[run_id]
-        if record["worker_id"] != worker_id:
-            raise RuntimeError("ownership changed")
+        outcome_status: str | None = None,
+    ) -> str:
+        record = self.records.get(run_id)
+        if record is None:
+            raise DistributedRunNotFound(run_id)
+        if (
+            record["worker_id"] != worker_id
+            or record["tenant_id"] != tenant_id
+            or self._snapshot(record)["status"] not in {"running", "cancelling"}
+        ):
+            raise DistributedRunOwnershipLost(run_id)
+        if record["status"] == "cancelling" and status != "orphaned":
+            status, error_type, outcome_status = "cancelled", None, "cancelled"
         record["status"] = status
         record["completed_at"] = completed_at.isoformat()
         record["error_type"] = error_type
+        record["outcome_status"] = outcome_status
+        return status
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         record = self.records.get(run_id)
@@ -832,12 +844,11 @@ async def test_observed_lease_loss_fences_local_terminal_results(
                 raise failure("injected definitive lease loss")
             return await super().heartbeat(run_id=run_id, worker_id=worker_id)
 
-        async def mark_terminal(self, **kwargs: Any) -> None:
+        async def mark_terminal(self, **kwargs: Any) -> str:
             self.terminal_writes += 1
-            await super().mark_terminal(**kwargs)
-
-        async def set_outcome_status(self, **kwargs: Any) -> None:
-            self.outcome_writes += 1
+            if kwargs.get("outcome_status") is not None:
+                self.outcome_writes += 1
+            return await super().mark_terminal(**kwargs)
 
     class ObservedLedger:
         terminal_writes = 0
@@ -930,4 +941,131 @@ async def test_observed_lease_loss_fences_local_terminal_results(
             await asyncio.gather(run.heartbeat_task, return_exceptions=True)
         if not task.done():
             task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [-3, -2, -1, 0, 1, 2])
+async def test_terminal_store_publishes_one_scoped_receipt(result: int) -> None:
+    from types import SimpleNamespace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        _MARK_TERMINAL_SCRIPT,
+    )
+
+    class ScriptClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        async def ping(self) -> bool:
+            return True
+
+        async def eval(self, *args: Any) -> int:
+            self.calls.append(args)
+            return result
+
+    client = ScriptClient()
+    settings = _settings("worker-a")
+    store = RedisDistributedRunStore(
+        settings=settings,
+        redis_manager=SimpleNamespace(client=client, is_degraded=lambda: False),
+    )
+    completed_at = datetime.now(timezone.utc)
+    args = dict(
+        run_id="terminal-run",
+        tenant_id="tenant-a",
+        worker_id="worker-a",
+        status="completed",
+        completed_at=completed_at,
+        error_type=None,
+        outcome_status="success",
+    )
+    errors = {
+        -3: ValueError,
+        -2: DistributedRunNotFound,
+        -1: DistributedRunOwnershipLost,
+        0: DistributedRunStoreUnavailable,
+    }
+    if result in errors:
+        with pytest.raises(errors[result]):
+            await store.mark_terminal(**args)
+    else:
+        assert await store.mark_terminal(**args) == (
+            "cancelled" if result == 2 else "completed"
+        )
+    assert client.calls == [
+        (
+            _MARK_TERMINAL_SCRIPT,
+            3,
+            store._claim_key("terminal-run"),
+            store._run_key("terminal-run"),
+            store._tenant_index("tenant-a"),
+            "worker-a",
+            "tenant-a",
+            "terminal-run",
+            "completed",
+            store._iso(completed_at),
+            "",
+            "success",
+            str(settings.run_terminal_retention_seconds),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["cancel", "lost", "unavailable"])
+async def test_terminal_publication_waits_for_shared_authority(mode: str) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingTerminalStore(SharedFakeRunStore):
+        async def mark_terminal(self, **kwargs: Any) -> str:
+            entered.set()
+            await release.wait()
+            if mode == "lost":
+                raise DistributedRunOwnershipLost("injected")
+            if mode == "unavailable":
+                raise DistributedRunStoreUnavailable("injected")
+            return await super().mark_terminal(**kwargs)
+
+    store = BlockingTerminalStore()
+    manager = MedusaRunManager(settings=_settings("owner"), distributed_store=store)
+    task = asyncio.create_task(asyncio.sleep(60))
+    finalizer = None
+    scope = dict(run_id="terminal-race", tenant_id="tenant-a")
+    try:
+        run = await manager.register(
+            **scope, correlation_id="corr", user_id="owner", task=task
+        )
+        if mode == "cancel":
+            await store.request_cancel(**scope)
+        finalizer = asyncio.create_task(manager.mark_response(run.run_id, "success"))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        snapshot = await manager.get(**scope)
+        assert snapshot["status"] == "running"
+        assert snapshot["outcome_status"] is None
+        assert not snapshot["cancellable"]
+        with pytest.raises(DistributedRunStoreUnavailable):
+            await manager.mark_response(run.run_id, "success")
+        release.set()
+        expected = (
+            ExecutionRunStatus.CANCELLED
+            if mode == "cancel"
+            else ExecutionRunStatus.ORPHANED
+        )
+        assert await asyncio.wait_for(finalizer, timeout=2) is expected
+        snapshot = await manager.get(**scope)
+        assert snapshot["status"] == expected.value
+        assert snapshot["outcome_status"] == (
+            "cancelled" if mode == "cancel" else None
+        )
+        assert await manager.mark_response(run.run_id, "success") is expected
+        if mode != "cancel":
+            assert snapshot["completed_at"] is None
+            assert store.records[run.run_id]["status"] == "running"
+    finally:
+        release.set()
+        if finalizer is not None:
+            await asyncio.gather(finalizer, return_exceptions=True)
+        task.cancel()
         await asyncio.gather(task, return_exceptions=True)

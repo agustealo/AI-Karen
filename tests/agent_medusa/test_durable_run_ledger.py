@@ -19,6 +19,7 @@ from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
     DurableRunLedgerConflict,
     DurableRunLedgerUnavailable,
     PostgresDurableRunLedger,
+    TerminalAuthorizer,
     _canonical_tenant_id,
 )
 from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
@@ -136,16 +137,25 @@ class InMemoryDurableLedger:
         completed_at: datetime,
         error_type: str | None,
         outcome_status: str | None = None,
-    ) -> None:
+        authorize_terminal: TerminalAuthorizer | None = None,
+    ) -> str:
         record = self._owned(run_id, tenant_id, worker_id)
         if record["status"] not in {"created", "running", "cancellation_requested"}:
             raise DurableRunLedgerConflict("already terminal")
         previous = record["status"]
+        if authorize_terminal is not None:
+            if previous == "cancellation_requested" and status != "orphaned":
+                status, error_type, outcome_status = "cancelled", None, "cancelled"
+            resolved = await authorize_terminal(status, error_type, outcome_status)
+            if resolved != status:
+                assert resolved == "cancelled" and status in {"completed", "failed"}
+                status, error_type, outcome_status = "cancelled", None, "cancelled"
         record["status"] = status
         record["completed_at"] = completed_at
         record["error_type"] = error_type
         record["outcome_status"] = outcome_status
         self._transition(run_id, previous, status, worker_id, "runtime", completed_at)
+        return status
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None:
         record = self.records.get(run_id)

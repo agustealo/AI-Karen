@@ -7,6 +7,7 @@ PostgreSQL engine, performs no runtime DDL, and never cancels asyncio tasks.
 
 from __future__ import annotations
 
+from collections.abc import Awaitable, Callable
 from datetime import datetime
 from typing import Any, Protocol
 from uuid import NAMESPACE_URL, UUID, uuid5
@@ -21,6 +22,8 @@ logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = {"created", "running", "cancellation_requested"}
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "orphaned"}
+
+TerminalAuthorizer = Callable[[str, str | None, str | None], Awaitable[str]]
 
 
 class DurableRunLedgerUnavailable(RuntimeError):
@@ -90,7 +93,8 @@ class DurableRunLedger(Protocol):
         completed_at: datetime,
         error_type: str | None,
         outcome_status: str | None = None,
-    ) -> None: ...
+        authorize_terminal: TerminalAuthorizer | None = None,
+    ) -> str: ...
 
     async def set_outcome_status(
         self,
@@ -423,12 +427,13 @@ class PostgresDurableRunLedger:
         completed_at: datetime,
         error_type: str | None,
         outcome_status: str | None = None,
-    ) -> None:
+        authorize_terminal: TerminalAuthorizer | None = None,
+    ) -> str:
         """Persist lifecycle and outcome in the same owner-fenced transaction."""
 
         if status not in _TERMINAL_STATUSES:
             raise ValueError(f"Invalid durable Medusa terminal status: {status}")
-        await self._owned_transition(
+        return await self._owned_transition(
             run_id=run_id,
             tenant_id=tenant_id,
             worker_id=worker_id,
@@ -439,6 +444,7 @@ class PostgresDurableRunLedger:
             transition_kind="terminal",
             error_type=error_type,
             outcome_status=outcome_status,
+            authorize_terminal=authorize_terminal,
         )
 
     async def set_outcome_status(
@@ -771,7 +777,8 @@ class PostgresDurableRunLedger:
         transition_kind: str,
         error_type: str | None = None,
         outcome_status: str | None = None,
-    ) -> None:
+        authorize_terminal: TerminalAuthorizer | None = None,
+    ) -> str:
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
@@ -787,6 +794,34 @@ class PostgresDurableRunLedger:
                     raise DurableRunLedgerConflict(
                         f"Run {run_id} cannot transition {current} -> {to_status}"
                     )
+                if authorize_terminal is not None:
+                    if transition_kind != "terminal":
+                        raise ValueError("Terminal authorizer requires terminal transition")
+                    # The existing row lock serializes durable cancellation.
+                    # Redis still owns lease acceptance; SQL must not publish
+                    # a terminal result until live authority confirms it.
+                    if current == "cancellation_requested" and to_status != "orphaned":
+                        to_status, error_type, outcome_status = (
+                            "cancelled",
+                            None,
+                            "cancelled",
+                        )
+                    resolved = await authorize_terminal(
+                        to_status, error_type, outcome_status
+                    )
+                    if resolved != to_status:
+                        if resolved != "cancelled" or to_status not in {
+                            "completed",
+                            "failed",
+                        }:
+                            raise DurableRunLedgerConflict(
+                                "Shared terminal resolution is inconsistent"
+                            )
+                        to_status, error_type, outcome_status = (
+                            "cancelled",
+                            None,
+                            "cancelled",
+                        )
                 params = {
                     "run_id": run_id,
                     "tenant_id": canonical_tenant_id,
@@ -850,6 +885,7 @@ class PostgresDurableRunLedger:
                     source=source,
                     event_at=event_at,
                 )
+            return to_status
         except DurableRunLedgerConflict:
             raise
         except SQLAlchemyError as exc:

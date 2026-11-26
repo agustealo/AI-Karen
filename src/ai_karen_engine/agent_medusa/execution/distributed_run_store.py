@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
+from redis.exceptions import RedisError
+
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
 from ai_karen_engine.platform.memory.redis import (
     RedisConnectionManager,
@@ -85,19 +87,51 @@ return 1
 
 _MARK_TERMINAL_SCRIPT = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then
-  return 0
+  return -1
 end
-if redis.call('HGET', KEYS[2], 'owner_worker_id') ~= ARGV[1] then
-  return 0
+if redis.call('EXISTS', KEYS[2]) == 0 then
+  return -2
+end
+if redis.call('HGET', KEYS[2], 'owner_worker_id') ~= ARGV[1]
+    or redis.call('HGET', KEYS[2], 'tenant_id') ~= ARGV[2]
+    or redis.call('HGET', KEYS[2], 'run_id') ~= ARGV[3] then
+  return -1
+end
+local current = redis.call('HGET', KEYS[2], 'status')
+if current ~= 'running' and current ~= 'cancelling' then
+  return -1
+end
+local status = ARGV[4]
+local error_type = ARGV[6]
+local outcome = ARGV[7]
+local retention = tonumber(ARGV[8])
+if not retention or retention < 1 or retention % 1 ~= 0 then
+  return -3
+end
+if not ((status == 'completed' and (outcome == 'success' or outcome == 'partial' or outcome == 'degraded'))
+    or (status == 'failed' and (outcome == 'error' or outcome == 'timeout' or outcome == ''))
+    or (status == 'cancelled' and outcome == 'cancelled')
+    or (status == 'orphaned' and outcome == '')) then
+  return -3
+end
+if current == 'cancelling' and status ~= 'orphaned' then
+  status = 'cancelled'
+  error_type = ''
+  outcome = 'cancelled'
 end
 redis.call('HSET', KEYS[2],
-  'status', ARGV[2],
-  'updated_at', ARGV[3],
-  'completed_at', ARGV[3],
-  'error_type', ARGV[4],
+  'status', status,
+  'updated_at', ARGV[5],
+  'completed_at', ARGV[5],
+  'error_type', error_type,
+  'outcome_status', outcome,
   'lease_expires_at', '')
-redis.call('EXPIRE', KEYS[2], tonumber(ARGV[5]))
+redis.call('EXPIRE', KEYS[2], retention)
+redis.call('EXPIRE', KEYS[3], retention)
 redis.call('DEL', KEYS[1])
+if status == 'cancelled' and ARGV[4] ~= 'cancelled' then
+  return 2
+end
 return 1
 """
 
@@ -144,19 +178,13 @@ class DistributedRunStore(Protocol):
         self,
         *,
         run_id: str,
+        tenant_id: str,
         worker_id: str,
         status: str,
         completed_at: datetime,
         error_type: str | None,
-    ) -> None: ...
-
-    async def set_outcome_status(
-        self,
-        *,
-        run_id: str,
-        worker_id: str,
-        outcome_status: str,
-    ) -> None: ...
+        outcome_status: str | None = None,
+    ) -> str: ...
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
 
@@ -316,63 +344,53 @@ class RedisDistributedRunStore:
         self,
         *,
         run_id: str,
+        tenant_id: str,
         worker_id: str,
         status: str,
         completed_at: datetime,
         error_type: str | None,
-    ) -> None:
+        outcome_status: str | None = None,
+    ) -> str:
+        """Publish one owner-fenced terminal receipt, returning its lifecycle."""
+
+        if not run_id or not tenant_id or not worker_id:
+            raise ValueError("Medusa terminal identity must not be empty")
         client = await self._client()
-        run_key = self._run_key(run_id)
-        record = await client.hgetall(run_key)
-        if not record:
-            return
-        index_key = self._tenant_index(str(record.get("tenant_id", "")))
-        result = await client.eval(
-            _MARK_TERMINAL_SCRIPT,
-            2,
-            self._claim_key(run_id),
-            run_key,
-            worker_id,
-            status,
-            self._iso(completed_at),
-            error_type or "",
-            str(self._settings.run_terminal_retention_seconds),
-        )
-        if not result:
-            return
-        if record.get("tenant_id"):
-            await client.expire(
-                index_key,
-                self._settings.run_terminal_retention_seconds,
+        try:
+            result = int(
+                await client.eval(
+                    _MARK_TERMINAL_SCRIPT,
+                    3,
+                    self._claim_key(run_id),
+                    self._run_key(run_id),
+                    self._tenant_index(tenant_id),
+                    worker_id,
+                    tenant_id,
+                    run_id,
+                    status,
+                    self._iso(completed_at),
+                    error_type or "",
+                    outcome_status or "",
+                    str(self._settings.run_terminal_retention_seconds),
+                )
             )
-
-    async def set_outcome_status(
-        self,
-        *,
-        run_id: str,
-        worker_id: str,
-        outcome_status: str,
-    ) -> None:
-        """Attach task outcome to the retained shared run receipt."""
-
-        normalized = str(outcome_status or "").strip().lower()
-        if normalized not in {
-            "success",
-            "partial",
-            "degraded",
-            "error",
-            "timeout",
-            "cancelled",
-        }:
-            raise ValueError(f"Invalid Medusa outcome status: {outcome_status}")
-        client = await self._client()
-        run_key = self._run_key(run_id)
-        record = await client.hgetall(run_key)
-        if not record:
+        except (RedisError, TypeError, ValueError) as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_terminal_commit_unconfirmed"
+            ) from exc
+        if result == -2:
             raise DistributedRunNotFound(run_id)
-        if record.get("owner_worker_id") != worker_id:
-            raise RuntimeError(f"Medusa run ownership metadata changed: {run_id}")
-        await client.hset(run_key, mapping={"outcome_status": normalized})
+        if result == -1:
+            raise DistributedRunOwnershipLost(
+                f"Medusa run ownership changed or expired: {run_id}"
+            )
+        if result == -3:
+            raise ValueError("Invalid Medusa terminal transition")
+        if result == 1:
+            return status
+        if result == 2 and status in {"completed", "failed"}:
+            return "cancelled"
+        raise DistributedRunStoreUnavailable("invalid_terminal_result")
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         client = await self._client()
