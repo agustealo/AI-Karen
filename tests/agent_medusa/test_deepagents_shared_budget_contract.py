@@ -238,9 +238,9 @@ async def test_mutated_original_empty_root_permissions_cannot_authorize_handoff(
         request.authorized_plan = asdict(root)
         planner = SimpleNamespace(create_plan=AsyncMock())
         coordinator = object.__new__(MedusaCoordinator)
-    coordinator._outcome_recorder = OutcomeRecorder(
-        store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
-    )
+        coordinator._outcome_recorder = OutcomeRecorder(
+            store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
+        )
         coordinator.planner = planner
         with pytest.raises(
             PermissionError, match="medusa_shared_budget_authority_invalid",

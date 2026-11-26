@@ -99,7 +99,8 @@ class MedusaCoordinator:
         self.lifecycle = lifecycle or MedusaAgentLifecycle()
         self.run_manager = run_manager or get_medusa_run_manager()
         self._outcome_recorder = (
-            outcome_recorder if outcome_recorder is not None
+            outcome_recorder
+            if outcome_recorder is not None
             else OutcomeRecorder(store=get_outcome_store())
         )
         self.active_plans: Dict[str, DeepExecutionPlan] = {}
@@ -458,16 +459,20 @@ class MedusaCoordinator:
                 try:
                     async with asyncio.timeout(remaining_seconds):
                         results = await asyncio.gather(
-                            *wave_tasks, return_exceptions=True,
+                            *wave_tasks,
+                            return_exceptions=True,
                         )
                 except TimeoutError:
                     # A completed sibling can have failed its tool receipt
                     # before a different child exhausted the wave deadline.
                     # Gather cancellation must not erase that evidence failure.
-                    self._require_durable_tool_receipts([
-                        task.exception() for task in wave_tasks
-                        if task.done() and not task.cancelled()
-                    ])
+                    self._require_durable_tool_receipts(
+                        [
+                            task.exception()
+                            for task in wave_tasks
+                            if task.done() and not task.cancelled()
+                        ]
+                    )
                     # Cancellation of an in-flight append does not establish
                     # whether the durable observation was committed.
                     if pending_participation:
@@ -879,12 +884,16 @@ class MedusaCoordinator:
                 invocation_entered = True
             entry_open = True
             try:
-                result = await specialist.run(step.input_data, context, execution=execution)
+                result = await specialist.run(
+                    step.input_data, context, execution=execution
+                )
             finally:
                 entry_open = False
             step.status = StepStatus.COMPLETED
             step.output_data = result
-            if trusted_context is not None and (not entry_acknowledged or entry_violation):
+            if trusted_context is not None and (
+                not entry_acknowledged or entry_violation
+            ):
                 if pending_participation is not None:
                     pending_participation.add(step.id)
                 raise OutcomeStoreError("Specialist invocation entry unacknowledged")
@@ -984,7 +993,9 @@ class MedusaCoordinator:
                     pending_participation.add(step.id)
                 if isinstance(exc, OutcomeStoreError):
                     raise
-                raise OutcomeStoreError("Specialist invocation entry unacknowledged") from exc
+                raise OutcomeStoreError(
+                    "Specialist invocation entry unacknowledged"
+                ) from exc
             if invocation_entered and step.status != StepStatus.COMPLETED:
                 step.status = StepStatus.FAILED
                 step.error = type(exc).__name__
@@ -1021,7 +1032,9 @@ class MedusaCoordinator:
             execution._invocation_entry = None
             primary = sys.exc_info()[1]
             try:
-                await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
+                await self.lifecycle.set_status(
+                    step.agent_specialist, LifecycleStatus.IDLE
+                )
             except Exception:
                 if primary is None:
                     raise
