@@ -254,6 +254,24 @@ def test_base_image_package_retry_preserves_integrity_checks() -> None:
     assert "--fix-missing" not in base
 
 
+def test_disposable_communications_browser_is_opt_in_and_isolated() -> None:
+    workflow = _read(WORKFLOW)
+    smoke = _read(SMOKE)
+    fixture = _read(ROOT / "scripts/ci/communications_browser_fixture.py")
+    runner = _read(ROOT / "scripts/ci/communications_browser_smoke.py")
+    assert "communications_browser:" in workflow
+    assert "default: false" in workflow.split("communications_browser:", 1)[1].split("  push:", 1)[0]
+    assert "kcomm-02e-disposable-browser-proof-" not in workflow
+    assert workflow.count("github.event_name == 'workflow_dispatch' && inputs.communications_browser == true") == 3
+    assert 'COMMS_BROWSER_PROOF="${KAREN_SMOKE_COMMS_BROWSER_PROOF:-false}"' in smoke
+    assert "Communications fixture proof must not contact a live model" in smoke
+    assert "Refusing non-disposable database target" in fixture
+    assert "Only explicitly isolated loopback origin allowed" in runner
+    assert "API host binding is not the isolated smoke container" in runner
+    assert "Exactly one passing browser scenario without skips or retries required" in runner
+    assert "DISPOSABLE COMMUNICATIONS SIGNED-SESSION LIFECYCLE PROOF PASSED" in runner
+
+
 def test_canonical_factory_installs_request_target_privacy_before_ingress():
     source = _read(ROOT / "src/ai_karen_engine/app.py")
     tree = ast.parse(source)

@@ -37,6 +37,15 @@ LIVE_MODEL_PROVIDER="${KAREN_SMOKE_LIVE_MODEL_PROVIDER:-lmstudio-desktop}"
 LIVE_MODEL_NAME="${KAREN_SMOKE_LIVE_MODEL_NAME:-}"
 LIVE_MODEL_TIMEOUT_SECONDS="${KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS:-90}"
 OLLAMA_SETTINGS_ONLY="${KAREN_SMOKE_ONLY_OLLAMA_SETTINGS:-false}"
+COMMS_BROWSER_PROOF="${KAREN_SMOKE_COMMS_BROWSER_PROOF:-false}"
+if [[ "${COMMS_BROWSER_PROOF}" != "true" && "${COMMS_BROWSER_PROOF}" != "false" ]]; then
+  echo "Invalid disposable Communications browser proof flag" >&2
+  exit 1
+fi
+if [[ "${COMMS_BROWSER_PROOF}" == "true" && -n "${LIVE_MODEL_BASE_URL}" ]]; then
+  echo "Communications fixture proof must not contact a live model" >&2
+  exit 1
+fi
 if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" && ( -z "${LIVE_MODEL_BASE_URL}" || ( "${LIVE_MODEL_PROVIDER}" != "ollama" && "${LIVE_MODEL_PROVIDER}" != "ollama-local" ) ) ]]; then
   echo "Ollama Settings-only proof requires a real Ollama endpoint and provider" >&2
   exit 1
@@ -124,6 +133,15 @@ api_env=(
   -e REDIS_HOST="${REDIS_CONTAINER}"
   -e REDIS_PORT=6379
 )
+
+if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then
+  api_env+=(
+    -e KAREN_SMOKE_COMMS_BROWSER_PROOF=true
+    -e KARI_ENABLE_AG_UI_BRIDGE=true
+    -e KARI_ENABLE_AG_UI_DURABLE_RUNS=true
+    -e KARI_ENABLE_COMMUNICATIONS_TERMINAL_PRODUCER=true
+  )
+fi
 
 if [[ -n "${LIVE_MODEL_BASE_URL}" ]]; then
   container_model_url="$("${PYTHON_BIN}" - "${LIVE_MODEL_BASE_URL}" <<'PY'
@@ -886,6 +904,13 @@ PY
   echo "PRODUCTION LIVE-MODEL CROSS-SESSION NAME RECALL PROOF PASSED"
 
   echo "PRODUCTION LIVE-MODEL TWO-TURN CHAT PROOF PASSED"
+fi
+
+if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then
+  tenant_id="$(printf '%s' "${me_after_restart}" | "${PYTHON_BIN}" -c 'import json,sys,uuid; print(uuid.UUID(json.load(sys.stdin)["tenant_id"]))')"
+  "${PYTHON_BIN}" scripts/ci/communications_browser_smoke.py \
+    --api-container "${API_CONTAINER}" --network "${NETWORK}" \
+    --api-url "${BASE_URL}" --tenant-id "${tenant_id}"
 fi
 
 echo "PRODUCTION FIRST-RUN SMOKE PASSED"

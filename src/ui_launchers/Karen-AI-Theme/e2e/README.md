@@ -821,3 +821,20 @@ Supply KAREN_UX_EMAIL, KAREN_UX_PASSWORD, KAREN_UX_ACCOUNT_B_EMAIL, KAREN_UX_ACC
 
 
 KCOMM-03A uses bounded authenticated **read** refresh while the inbox is open (30 seconds, focus, online and visibility return). This is not WebSocket/Supabase push delivery. Refresh does not POST reconciliation or replay mutations, cannot bypass an uncertain outcome, and stops on hidden/inactive or unmounted views. The existing simulated realtime client and tenant-wide notification topic are not authorized personal-inbox transports.
+
+
+### Disposable signed-session Communications acceptance (KCOMM-02E)
+
+Run the existing **Production First-Boot Smoke** workflow on an approved source
+revision with its explicit `communications_browser` dispatch input enabled.
+The default remains false; ordinary PR and mainline boot checks do not claim
+browser acceptance. No hosted deployment credentials or live model endpoint
+are used. The proof uses disposable production images, isolated PostgreSQL,
+loopback HTTP ingress, distinct signed user accounts and the existing runtime
+ledger/reconciliation owners. It rejects skipped or retried browser tests.
+
+Historical execution: [run 45852298782](https://github.com/agustealo/AI-Karen/actions/runs/45852298782),
+source `1dffc88011bff58852b1fe8b353b5242cdafb019`, one passing Chromium
+scenario with zero skips/retries. The controlled terminal repository fixture
+does not establish real model inference failure, multiworker push delivery or
+hosted production acceptance. A new source revision needs a fresh opt-in run.

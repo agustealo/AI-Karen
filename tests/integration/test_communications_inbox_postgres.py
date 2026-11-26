@@ -280,7 +280,7 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
             InboxNotFound, InboxOperation,
         )
         from ai_karen_engine.services.privacy_compliance import DataEraser, DataExporter
-        from ai_karen_engine.persistence.repositories import chat_run_repository
+        from ai_karen_engine.persistence.repositories import chat_run_repository, communications_inbox_repository
 
         new_run, foreign_run, foreign_conversation, historical_run = (uuid.uuid4() for _ in range(4))
         await raw.execute(
@@ -321,6 +321,17 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
         repo = CommunicationsInboxRepository()
         principal = {"tenant_id": str(tenant), "user_id": str(owner)}
         foreign_principal = {"tenant_id": str(tenant), "user_id": str(other_owner)}
+        invalidations = []
+
+        async def observe_committed_change(*, tenant_id, user_id):
+            # A separate scoped read transaction must see the committed change.
+            scope = {"tenant_id": tenant_id, "user_id": user_id}
+            page = await repo.list_entries(**scope, inbox_filter=InboxFilter.ALL)
+            invalidations.append((scope, {e.entry_id: e.revision for e in page.entries}))
+
+        monkeypatch.setattr(
+            communications_inbox_repository, "publish_inbox_invalidation", observe_committed_change,
+        )
         try:
             with pytest.raises(InboxNotFound):
                 await repo.admit_terminal_execution(
@@ -331,6 +342,9 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
                 repo.admit_terminal_execution(**principal, execution_id=str(new_run)),
             )
             assert first == second
+            assert len(invalidations) == 1
+            assert invalidations[0][0] == principal
+            assert invalidations[0][1][first.entry_id] == 1
             foreign = await repo.admit_terminal_execution(
                 **foreign_principal, execution_id=str(foreign_run),
             )
@@ -338,6 +352,9 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
                 await repo.admit_terminal_execution(
                     **principal, execution_id=str(foreign_run),
                 )
+            assert len(invalidations) == 2
+            assert invalidations[1][0] == foreign_principal
+            assert invalidations[1][1] == {foreign.entry_id: 1}
             page = await repo.list_entries(
                 **principal, limit=1, inbox_filter=InboxFilter.ALL,
             )
@@ -376,12 +393,16 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
                     operation=InboxOperation.READ, expected_revision=99,
                 )
             assert (await repo.list_entries(**principal)).active_unread_count == 0
+            assert len(invalidations) == 3
+            assert invalidations[2][0] == principal
+            assert invalidations[2][1][first.entry_id] == 2
             # Redelivery after archival must not recreate an active entry.
             replay = await repo.admit_terminal_execution(
                 **principal, execution_id=str(active_run),
             )
             assert replay.entry_id == str(orphan["entry_id"])
             assert replay.archived_at is not None
+            assert len(invalidations) == 3
             async with transactions.async_transaction_scope(**principal) as session:
                 exported = await DataExporter(db_client=object())._export_conversations(
                     session, str(owner), str(tenant), False,
