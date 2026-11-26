@@ -234,7 +234,7 @@ class RuntimeReasoningBridge:
             model_in_registered_inventory=model_registered,
         )
 
-    def activate(
+    async def activate(
         self,
         *,
         objective: str,
@@ -288,12 +288,15 @@ class RuntimeReasoningBridge:
 
             required = SoftExplorationConfig.paper_2025().maximum_total_model_calls
             self._validate_soft_budget(required, admission)
-            composed = self._compose_soft_reasoning(
-                objective=objective,
-                evidence=evidence,
-                preferred_provider=preferred_provider,
-                preferred_model=preferred_model,
-                execution_admission=admission,
+            composed = await admission.run_admitted_preparation(
+                lambda checkpoint: self._compose_soft_reasoning(
+                    objective=objective,
+                    evidence=evidence,
+                    preferred_provider=preferred_provider,
+                    preferred_model=preferred_model,
+                    execution_admission=admission,
+                    preparation_checkpoint=checkpoint,
+                )
             )
             self._validate_soft_budget(composed.maximum_total_model_calls, admission)
             reserved_model_calls = composed.reserved_model_calls
@@ -350,6 +353,7 @@ class RuntimeReasoningBridge:
         preferred_provider: str | None,
         preferred_model: str | None,
         execution_admission: GovernedToolModelAdmission,
+        preparation_checkpoint: Callable[[], None],
     ) -> ComposedSoftReasoning:
         from ai_karen_engine.core.runtime.soft_reasoning_composition import (
             SoftReasoningCompositionUnavailable,
@@ -362,6 +366,7 @@ class RuntimeReasoningBridge:
                 preferred_provider=preferred_provider,
                 preferred_model=preferred_model,
                 execution_admission=execution_admission,
+                preparation_checkpoint=preparation_checkpoint,
             )
         except SoftReasoningCompositionUnavailable as exc:
             raise ReasoningActivationError(

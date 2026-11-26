@@ -106,7 +106,8 @@ def _bound_scope(plan):
     return context, meter
 
 
-def test_soft_reasoning_activation_injects_runtime_composed_strategy(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_soft_reasoning_activation_injects_runtime_composed_strategy(monkeypatch) -> None:
     import ai_karen_engine.core.runtime.reasoning_bridge as bridge_module
 
     monkeypatch.setattr(
@@ -117,7 +118,7 @@ def test_soft_reasoning_activation_injects_runtime_composed_strategy(monkeypatch
 
     plan = _plan()
     context, meter = _bound_scope(plan)
-    activation = RuntimeReasoningBridge().activate(
+    activation = await RuntimeReasoningBridge().activate(
         objective="Solve the problem",
         evidence=["evidence"],
         decision=_decision(),
@@ -141,7 +142,8 @@ def test_soft_reasoning_activation_injects_runtime_composed_strategy(monkeypatch
 
 
 @pytest.mark.parametrize("model_calls", [10, 30])
-def test_soft_reasoning_activation_fails_closed_when_budget_is_too_small(monkeypatch, model_calls) -> None:
+@pytest.mark.asyncio
+async def test_soft_reasoning_activation_fails_closed_when_budget_is_too_small(monkeypatch, model_calls) -> None:
     import ai_karen_engine.core.runtime.reasoning_bridge as bridge_module
 
     monkeypatch.setattr(
@@ -160,7 +162,7 @@ def test_soft_reasoning_activation_fails_closed_when_budget_is_too_small(monkeyp
         ReasoningActivationError,
         match="requires a model-call budget of at least 31",
     ) as exc_info:
-        RuntimeReasoningBridge().activate(
+        await RuntimeReasoningBridge().activate(
             objective="Solve the problem",
             evidence=[],
             decision=_decision(model_calls=model_calls),
@@ -173,7 +175,8 @@ def test_soft_reasoning_activation_fails_closed_when_budget_is_too_small(monkeyp
     assert exc_info.value.code == "soft_reasoning_model_budget_insufficient"
 
 
-def test_reasoning_activation_rejects_mode_not_authorized_by_plan() -> None:
+@pytest.mark.asyncio
+async def test_reasoning_activation_rejects_mode_not_authorized_by_plan() -> None:
     decision = ExecutionDecision(
         topology=ExecutionTopology.REASONING,
         reasoning_modes=["soft_exploration"],
@@ -189,7 +192,7 @@ def test_reasoning_activation_rejects_mode_not_authorized_by_plan() -> None:
     )
 
     with pytest.raises(ReasoningActivationError) as exc_info:
-        RuntimeReasoningBridge().activate(
+        await RuntimeReasoningBridge().activate(
             objective="Solve",
             evidence=[],
             decision=decision,
@@ -201,7 +204,8 @@ def test_reasoning_activation_rejects_mode_not_authorized_by_plan() -> None:
     assert exc_info.value.code == "reasoning_mode_not_authorized"
 
 
-def test_reasoning_activation_rejects_empty_cortex_mode_set() -> None:
+@pytest.mark.asyncio
+async def test_reasoning_activation_rejects_empty_cortex_mode_set() -> None:
     decision = ExecutionDecision(
         topology=ExecutionTopology.REASONING,
         reasoning_modes=[],
@@ -216,7 +220,7 @@ def test_reasoning_activation_rejects_empty_cortex_mode_set() -> None:
     )
 
     with pytest.raises(ReasoningActivationError) as exc_info:
-        RuntimeReasoningBridge().activate(
+        await RuntimeReasoningBridge().activate(
             objective="Solve",
             evidence=[],
             decision=decision,
@@ -228,7 +232,8 @@ def test_reasoning_activation_rejects_empty_cortex_mode_set() -> None:
     assert exc_info.value.code == "reasoning_mode_not_requested"
 
 
-def test_reasoning_activation_rejects_empty_policy_mode_set() -> None:
+@pytest.mark.asyncio
+async def test_reasoning_activation_rejects_empty_policy_mode_set() -> None:
     decision = ExecutionDecision(
         topology=ExecutionTopology.REASONING,
         reasoning_modes=["causal"],
@@ -243,7 +248,7 @@ def test_reasoning_activation_rejects_empty_policy_mode_set() -> None:
     )
 
     with pytest.raises(ReasoningActivationError) as exc_info:
-        RuntimeReasoningBridge().activate(
+        await RuntimeReasoningBridge().activate(
             objective="Solve",
             evidence=[],
             decision=decision,
@@ -276,7 +281,8 @@ def test_execution_decision_canonicalizes_reasoning_mode_aliases_once() -> None:
 
 
 @pytest.mark.parametrize("replacement", ["missing", "fresh_meter", "cloned_plan"])
-def test_soft_activation_rejects_unbound_authority_before_composition(monkeypatch, replacement):
+@pytest.mark.asyncio
+async def test_soft_activation_rejects_unbound_authority_before_composition(monkeypatch, replacement):
     from dataclasses import replace
     import ai_karen_engine.core.runtime.reasoning_bridge as bridge_module
 
@@ -293,7 +299,7 @@ def test_soft_activation_rejects_unbound_authority_before_composition(monkeypatc
     else:
         plan = replace(plan)
     with pytest.raises(ReasoningActivationError) as exc_info:
-        RuntimeReasoningBridge().activate(
+        await RuntimeReasoningBridge().activate(
             objective="Solve", evidence=[], decision=_decision(), plan=plan,
             preferred_provider=None, preferred_model=None,
             authenticated_context=context, execution_meter=meter,
@@ -313,7 +319,7 @@ async def test_soft_activation_cannot_reuse_spent_model_budget(monkeypatch):
         lambda: pytest.fail("spent budget reached model preparation"),
     )
     with pytest.raises(ReasoningActivationError) as exc_info:
-        RuntimeReasoningBridge().activate(
+        await RuntimeReasoningBridge().activate(
             objective="Solve", evidence=[], decision=_decision(), plan=plan,
             preferred_provider=None, preferred_model=None,
             authenticated_context=context, execution_meter=meter,
@@ -345,3 +351,56 @@ def test_native_borrow_rejects_replacement_without_loading(monkeypatch, replacem
     with pytest.raises(ProviderNotAvailable, match="identity_drift"):
         with runtime.borrow_generation_components("/local/model-a", expected=original):
             pytest.fail("replaced identity admitted")
+
+
+@pytest.mark.asyncio
+async def test_live_preparation_is_owned_across_repeated_cancellation(monkeypatch):
+    import asyncio
+    import threading
+
+    import ai_karen_engine.core.runtime.reasoning_bridge as bridge_module
+
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    retired = threading.Event()
+    plan = _plan()
+    context, meter = _bound_scope(plan)
+
+    class BlockingComposer:
+        def compose_paper_2025(self, **kwargs):
+            assert threading.get_ident() != loop_thread
+            checkpoint = kwargs["preparation_checkpoint"]
+            try:
+                checkpoint()
+                loop.call_soon_threadsafe(entered.set)
+                if not release.wait(5):
+                    raise RuntimeError("test preparation release deadline")
+                checkpoint()
+                pytest.fail("cancelled preparation published")
+            finally:
+                retired.set()
+
+    loop_thread = threading.get_ident()
+    monkeypatch.setattr(bridge_module, "get_runtime_soft_reasoning_composer", BlockingComposer)
+    task = asyncio.create_task(RuntimeReasoningBridge().activate(
+        objective="Solve", evidence=[], decision=_decision(), plan=plan,
+        preferred_provider=None, preferred_model=None,
+        authenticated_context=context, execution_meter=meter,
+    ))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        assert not retired.is_set()
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=3)
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert retired.is_set()
+    assert meter.model_calls == 0

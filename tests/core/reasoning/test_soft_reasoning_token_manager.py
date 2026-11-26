@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from contextlib import nullcontext
+from types import SimpleNamespace
+
+import pytest
+
+from ai_karen_engine.core.model_runtime.provider_contracts import GenerationFailed
 
 from ai_karen_engine.core.runtime.soft_reasoning_token import (
     DEFAULT_SOFT_REASONING_MARKER,
@@ -37,17 +42,26 @@ class FakeTokenizer:
 
 
 class FakeModel:
-    def __init__(self) -> None:
+    def __init__(self, size: int) -> None:
         self.resize_calls: list[int] = []
+        self.input_size = size
+        self.output_size = size
+
+    def get_input_embeddings(self):
+        return SimpleNamespace(weight=SimpleNamespace(shape=(self.input_size, 8)))
+
+    def get_output_embeddings(self):
+        return SimpleNamespace(weight=SimpleNamespace(shape=(self.output_size, 8)))
 
     def resize_token_embeddings(self, size: int) -> None:
         self.resize_calls.append(size)
+        self.input_size = self.output_size = size
 
 
 class FakeRuntime:
     def __init__(self, *, existing: bool = False) -> None:
-        self.model = FakeModel()
         self.tokenizer = FakeTokenizer(existing=existing)
+        self.model = FakeModel(len(self.tokenizer))
 
     def generation_components(self):
         return self.model, self.tokenizer, nullcontext()
@@ -128,3 +142,29 @@ def test_marker_lookup_resize_and_verification_share_generation_lock():
         "lock", "lookup", "add", "lookup", "resize", "lookup", "unlock",
         "lock", "lookup", "unlock",
     ]
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_failed_resize_never_admits_existing_marker(partial):
+    runtime = FakeRuntime()
+    manager = SoftReasoningTokenManager()
+
+    def failed_resize(size):
+        if partial:
+            runtime.model.input_size = size
+        raise RuntimeError("native resize failed")
+
+    runtime.model.resize_token_embeddings = failed_resize
+    with pytest.raises(GenerationFailed, match="Failed to prepare"):
+        manager.ensure(runtime)
+    assert runtime.tokenizer.convert_tokens_to_ids(DEFAULT_SOFT_REASONING_MARKER) == 2
+    with pytest.raises(GenerationFailed, match="embedding_capacity_unverified"):
+        manager.ensure(runtime)
+    assert runtime.tokenizer.add_calls == 1
+
+
+def test_existing_marker_requires_output_capacity():
+    runtime = FakeRuntime(existing=True)
+    runtime.model.output_size = 2
+    with pytest.raises(GenerationFailed, match="embedding_capacity_unverified"):
+        SoftReasoningTokenManager().ensure(runtime)

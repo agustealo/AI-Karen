@@ -76,7 +76,7 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(
     )
     activation_calls = []
 
-    def activate(**kwargs):
+    async def activate(**kwargs):
         activation_calls.append(kwargs)
         return activation
 

@@ -249,6 +249,19 @@ class GovernedToolModelAdmission:
                     worker.exception()  # observe a late failure without logging payloads
                 raise
 
+    async def run_admitted_preparation(
+        self, function: Callable[[Callable[[], None]], _T], /,
+    ) -> _T:
+        """Own non-inference preparation on the original authorized deadline.
+
+        The trusted Runtime caller must validate the concrete target before
+        loading it. This path does not authorize or charge model inference.
+        """
+        self._require_scope()
+        if not await self.meter.check_duration():
+            raise RuntimeError("governed_model_execution_deadline_exhausted")
+        return await self._run_owned_blocking(function)
+
     async def run_native_attempt_sequence(
         self,
         endpoint: ProviderEndpoint,

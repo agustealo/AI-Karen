@@ -110,7 +110,12 @@ class RuntimeSoftReasoningComposer:
         preferred_provider: str | None = None,
         preferred_model: str | None = None,
         execution_admission: GovernedToolModelAdmission | None = None,
+        preparation_checkpoint: Callable[[], None] | None = None,
     ) -> ComposedSoftReasoning:
+        if execution_admission is not None and preparation_checkpoint is None:
+            raise SoftReasoningCompositionUnavailable("owned specialist preparation required")
+        if preparation_checkpoint is not None:
+            preparation_checkpoint()
         selection = self._select_transformers(preferred_provider)
         target = None
         endpoint = None
@@ -128,6 +133,8 @@ class RuntimeSoftReasoningComposer:
                 raise SoftReasoningCompositionUnavailable(
                     "the selected canonical local model does not match preferred_model"
                 )
+        if preparation_checkpoint is not None:
+            preparation_checkpoint()
         runtime = self._models.resolve_runtime(selection)
         if execution_admission is not None:
             from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
@@ -135,8 +142,7 @@ class RuntimeSoftReasoningComposer:
             if not isinstance(runtime, TransformersRuntime) or target is None:
                 raise SoftReasoningCompositionUnavailable("native runtime identity unavailable")
             # Never let generation_components silently load a fallback model.
-            # Owned asynchronous preparation is the next lifecycle slice.
-            if not runtime.warm(target, exact_only=True):
+            if not runtime.warm(target, exact_only=True, checkpoint=preparation_checkpoint):
                 raise SoftReasoningCompositionUnavailable("authorized local model unavailable")
         if not callable(getattr(runtime, "generation_components", None)) or not callable(
             getattr(runtime, "runtime_capabilities", None)
@@ -146,15 +152,17 @@ class RuntimeSoftReasoningComposer:
             )
 
         pinned = None
-        checkpoint: Callable[[], None] | None = None
+        checkpoint: Callable[[], None] | None = preparation_checkpoint
         reserved = 0
         started = False
         if execution_admission is not None:
             if target is None or endpoint is None:
                 raise SoftReasoningCompositionUnavailable("native target unavailable")
-            with runtime.borrow_generation_components(target) as components:
+            with runtime.borrow_generation_components(target, checkpoint=preparation_checkpoint) as components:
                 pinned = components
                 marker = self._tokens.ensure(runtime)
+                if preparation_checkpoint is not None:
+                    preparation_checkpoint()
         else:
             marker = self._tokens.ensure(runtime)
 
@@ -233,6 +241,9 @@ class RuntimeSoftReasoningComposer:
                 endpoint, model=target, function=execute, on_reserved=record_reservation,
             )
 
+        if preparation_checkpoint is not None:
+            preparation_checkpoint()
+        checkpoint = None  # never reuse a retired preparation worker's checkpoint
         maximum_total_model_calls = config.maximum_total_model_calls
         return ComposedSoftReasoning(
             strategy=SoftReasoner(
