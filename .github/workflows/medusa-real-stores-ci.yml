@@ -57,6 +57,7 @@ jobs:
       DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_medusa_ci
       REDIS_URL: redis://127.0.0.1:6379/0
       KAREN_MEDUSA_REAL_STORES_ACCEPTANCE: "1"
+      KAREN_MEDUSA_REDIS_RESTART_ACCEPTANCE: "1"
     steps:
       - uses: actions/checkout@v4
         with:
@@ -78,4 +79,4 @@ jobs:
         if: always()
         run: |
           echo "This CI uses disposable real PostgreSQL/Redis services and distinct manager and OS worker process proofs." >> "$GITHUB_STEP_SUMMARY"
-          echo "Real OS process termination, lease expiration and replacement metadata are tested; surviving-worker restart and approved target-host acceptance remain NOT_RUN." >> "$GITHUB_STEP_SUMMARY"
+          echo "The private Redis scenario exercises SIGKILL/restart with AOF always, volatile-only eviction/OOM, SQL rollback recovery and allkeys eviction as a negative control. Only a successful test job establishes this evidence; host power loss and approved target-host acceptance remain NOT_RUN." >> "$GITHUB_STEP_SUMMARY"
