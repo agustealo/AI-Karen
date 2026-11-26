@@ -50,3 +50,14 @@ describe("topics", () => {
     );
   });
 });
+
+
+it("normalizes UUIDs and rejects extra or trailing segments", () => {
+  const tenant = "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA";
+  const resource = "BBBBBBBB-BBBB-BBBB-BBBB-BBBBBBBBBBBB";
+  expect(userTopic(tenant, resource)).toBe(`tenant:${tenant.toLowerCase()}:user:${resource.toLowerCase()}`);
+  expect(resolveTopic(`tenant:${tenant}:notifications:${resource}`)).toBeNull();
+  expect(resolveTopic(`tenant:${tenant}:admin:${resource}`)).toBeNull();
+  expect(resolveTopic(`tenant:${tenant}:user:${resource}\n`)).toBeNull();
+  expect(new TopicRegistry(tenant).resolve(`tenant:${resource}:user:${resource}`)).toBeNull();
+});
