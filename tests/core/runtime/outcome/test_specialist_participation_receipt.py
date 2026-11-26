@@ -177,3 +177,21 @@ async def test_transactional_append_requires_new_row(rowcount):
     else:
         await PostgresOutcomeStore.append_in_transaction(session, payload)
     session.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_memory_store_cannot_acknowledge_specialist_receipt():
+    from ai_karen_engine.core.runtime.outcome.store import (
+        InMemoryOutcomeStore,
+        OutcomeStoreError,
+    )
+
+    store = InMemoryOutcomeStore()
+    payload = receipt().to_evidence_payload()
+    with pytest.raises(OutcomeStoreError, match="requires durable persistence"):
+        store.save_outcome(payload)
+    with pytest.raises(OutcomeStoreError, match="requires durable persistence"):
+        await store.save_outcome_async(payload)
+    with pytest.raises(OutcomeStoreError, match="requires durable persistence"):
+        await store.save_unique_outcome_async(payload)
+    assert store.get_for_trajectory("run-a") == []
