@@ -341,3 +341,75 @@ async def test_valid_original_shared_budget_reaches_existing_planner_without_res
     assert planner.create_plan.await_args.kwargs["budget"] is meter.budget
     assert request.runtime_budget_meter is meter
     assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["degraded", "error", "cancelled"])
+async def test_final_synthesis_controls_trajectory_terminal_state(outcome):
+    import asyncio
+
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan, PlanStep, StepStatus,
+    )
+    from ai_karen_engine.agent_medusa.contracts.runtime_response import (
+        RuntimeResponse, ResponseStatus,
+    )
+
+    request, _, meter, _ = _request()
+    step = PlanStep(id="research", agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.planner = SimpleNamespace(create_plan=AsyncMock(return_value=plan))
+    coordinator.registry = SimpleNamespace()
+    coordinator.active_plans = {}
+    coordinator.trajectories = {}
+    coordinator._global_sinks = []
+
+    async def execute_step(*args):
+        step.status = StepStatus.COMPLETED
+        return {"finding": "observed"}
+
+    async def assemble(**kwargs):
+        trajectory = coordinator.trajectories[request.request_id]
+        assert trajectory.status == "running"
+        assert trajectory.completed_at is None
+        assert coordinator.active_plans[request.request_id] is plan
+        assert kwargs["execution"].budget_meter is meter
+        assert kwargs["metadata"]["trajectory"]["completed_at"] is None
+        if outcome == "error":
+            raise RuntimeError("synthesis_failure")
+        if outcome == "cancelled":
+            raise asyncio.CancelledError()
+        return RuntimeResponse(
+            request_id=request.request_id,
+            status=ResponseStatus.DEGRADED,
+            content="Verified partial answer",
+        )
+
+    coordinator._execute_step = execute_step
+    coordinator.assembler = SimpleNamespace(assemble=AsyncMock(side_effect=assemble))
+    if outcome == "error":
+        with pytest.raises(RuntimeError, match="synthesis_failure"):
+            await coordinator._handle_request(request)
+    elif outcome == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await coordinator._handle_request(request)
+    else:
+        response = await coordinator._handle_request(request)
+        assert response.status is ResponseStatus.DEGRADED
+        assert response.metadata["trajectory"]["status"] == "degraded"
+        assert response.metadata["trajectory"]["completed_at"] is not None
+    trajectory = coordinator.trajectories[request.request_id]
+    assert trajectory.status == outcome
+    assert trajectory.completed_at is not None
+    assert request.request_id not in coordinator.active_plans
+
+
+def test_medusa_safe_error_does_not_log_upstream_exception_content(caplog):
+    from ai_karen_engine.agent_medusa.contracts.safe_error import to_safe_response
+
+    secret = "sk-private-upstream-value"
+    response = to_safe_response(RuntimeError(secret), correlation_id="corr-a")
+    assert secret not in caplog.text
+    assert secret not in repr(response.to_dict())
+    assert "RuntimeError" in [getattr(record, "error_type", "") for record in caplog.records]

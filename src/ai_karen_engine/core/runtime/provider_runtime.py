@@ -7,14 +7,17 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, AsyncIterator, Sequence, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, AsyncIterator, TYPE_CHECKING
 
 import asyncio
 import inspect
 
 from ai_karen_engine.config.runtime_provider_manager import RuntimeProviderManager
 from ai_karen_engine.core.model_runtime.llm_adapter import ProviderNotAvailable, GenerationFailed
-from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
+from ai_karen_engine.core.model_runtime.provider_contracts import (
+    NativeRetirementUnverified,
+    ProviderProcessingError as ProviderProcessingError,
+)
 from ai_karen_engine.core.model_runtime.provider_policy import (
     BUILTIN_EXPRESSION_ENGINES,
     EXTERNAL_PROVIDER_OPTIONS,
@@ -167,20 +170,6 @@ def _is_simple_chat_request(message: str) -> bool:
 
     return False
 
-
-class ProviderProcessingError(RuntimeError):
-    def __init__(self, provider_name: str, errors: Sequence[BaseException]):
-        self.provider_name = provider_name
-        self.errors = list(errors)
-        self.last_error: Optional[BaseException] = self.errors[-1] if self.errors else None
-        unique_messages: List[str] = []
-        for error in self.errors:
-            message = type(error).__name__
-            if message and message not in unique_messages:
-                unique_messages.append(message)
-        attempts = len(self.errors) or 1
-        summary = "; ".join(unique_messages) if unique_messages else "unknown error"
-        super().__init__(f"{provider_name} failed after {attempts} attempts: {summary}")
 
 class ProviderRuntime:
     """

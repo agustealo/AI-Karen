@@ -8,7 +8,7 @@ by UI, reasoning strategies, or provider-specific aliases.
 """
 
 from dataclasses import dataclass
-from typing import Any, Iterator, List, Protocol, Union, runtime_checkable
+from typing import Any, Iterator, List, Protocol, Sequence, Union, runtime_checkable
 
 
 class LLMError(RuntimeError):
@@ -17,6 +17,24 @@ class LLMError(RuntimeError):
 
 class ProviderNotAvailable(LLMError):
     """The selected provider/runtime cannot currently execute the request."""
+
+
+class ProviderProcessingError(LLMError):
+    """Retry exhaustion with a safe display message and internal causal errors.
+
+    Retain the original exceptions for internal classification/backoff only.
+    Never serialize their messages, reprs, or traceback as a public receipt.
+    """
+
+    def __init__(self, provider_name: str, errors: Sequence[BaseException]):
+        self.provider_name = provider_name
+        self.errors = list(errors)
+        self.last_error = self.errors[-1] if self.errors else None
+        types = list(dict.fromkeys(type(error).__name__ for error in self.errors))
+        summary = "; ".join(types) if types else "unknown error"
+        super().__init__(
+            f"{provider_name} failed after {len(self.errors) or 1} attempts: {summary}"
+        )
 
 
 class NativeRetirementUnverified(ProviderNotAvailable):
@@ -131,5 +149,6 @@ __all__ = [
     "ModelRuntimeCapabilities",
     "NativeRetirementUnverified",
     "ProviderNotAvailable",
+    "ProviderProcessingError",
     "ProviderRuntime",
 ]

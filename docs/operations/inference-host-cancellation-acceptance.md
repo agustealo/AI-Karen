@@ -377,3 +377,27 @@ status relative to synthesis, duplicate ProviderProcessingError classes
 (including raw exception string exposure in the legacy router), legacy
 executor test/telemetry migration and deletion, full exact-head quality
 and physical-host acceptance. No production merge or deployment.
+
+
+### Provider error authority and Medusa terminal synthesis (KUI-004B4.48C7Z8E21)
+
+E20's head was mergeable against the unchanged base; 26 workflows were
+registered, four successful and no failures at initial inspection.
+The two ProviderProcessingError classes are consolidated into the existing
+provider-neutral contract. Legacy imports re-export the same class,
+preserving original causal exceptions for internal classification while
+excluding upstream error strings from the wrapper's display message.
+Ordinary Medusa error logging no longer attaches raw exception traces.
+
+The coordinator now registers a running observational trajectory before
+specialist execution, keeps the active plan through final synthesis,
+and completes the trajectory using the returned response status rather
+than preliminary step aggregation. Failure and cancellation also close
+the trajectory and clean up the active plan. This is not a replacement
+for the durable run ledger: distributed cancellation races and durable
+terminal acknowledgement still need independent verification.
+
+Regression coverage checks alias identity and redaction, running status
+during final synthesis, degraded/error/cancelled terminal outcomes, and
+safe Medusa log projection. The targeted suites are included in Chat
+System Burn. No full CI, deployment or legacy executor deletion claimed.
