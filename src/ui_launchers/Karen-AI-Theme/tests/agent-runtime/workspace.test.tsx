@@ -1,5 +1,5 @@
 import React from "react";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as renderWithTestingLibrary, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
@@ -18,9 +18,13 @@ vi.mock("@/lib/api", () => ({
 
 import AgentsPage, { isAgentRunRecord, isAgentRunsResponse, isRuntimeApproval, isRunTransitionsResponse, isRunParticipationResponse } from "@/components/automation/AgentsPage";
 
+import { RuntimeApprovalProvider } from "@/components/approvals/RuntimeApprovalProvider";
+
+const render = (ui: React.ReactElement) => renderWithTestingLibrary(ui, { wrapper: RuntimeApprovalProvider });
+
 const run = { run_id: "run-123456789", status: "running" };
 const history = (runs: unknown[]) => ({ runs, total: runs.length, generated_at: "2026-11-25T00:00:00Z" });
-const approval = { approval_id: "approval-A", intent: "Review operation", risk_level: "high", status: "pending", reason_codes: [], expires_at: "2099-01-01T00:00:00Z" };
+const approval = { approval_id: "approval-A", workflow_kind: "runtime_approval", intent: "Review operation", risk_level: "high", status: "pending", reason_codes: [], expires_at: "2099-01-01T00:00:00Z" };
 const catalog = { agents: [], total: 0, eligibility_verified: false, selection_authority: "cortex_runtime_policy", execution_authority: "chat_runtime", orchestrator: "agent_medusa" };
 
 function deferred<T>() {
@@ -54,6 +58,8 @@ describe("runtime projection validation", () => {
     expect(isRuntimeApproval(approval)).toBe(true);
     expect(isRuntimeApproval({ ...approval, expires_at: "invalid" })).toBe(false);
     expect(isRuntimeApproval({ ...approval, reason_codes: [42] })).toBe(false);
+    expect(isRuntimeApproval({ ...approval, workflow_kind: undefined })).toBe(false);
+    expect(isRuntimeApproval({ ...approval, workflow_kind: "unknown" })).toBe(false);
   });
 
   it("opens personal scope for admins and loads tenant scope only after explicit selection", async () => {
@@ -157,6 +163,50 @@ describe("runtime projection validation", () => {
       if (original) Object.defineProperty(navigator, "clipboard", original);
       else Reflect.deleteProperty(navigator, "clipboard");
     }
+  });
+
+  it("preserves the decision lock across workspace unmount and return", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const decision = deferred<unknown>();
+    let reads = 0;
+    mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
+      ? Promise.resolve(++reads === 1 ? [approval] : [{ ...approval, status: "approved" }]) : fallback(path));
+    mocks.post.mockReturnValue(decision.promise);
+    const view = render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: "Review approval" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+    view.rerender(<p>Other workspace</p>);
+    view.rerender(<AgentsPage />);
+    const review = await screen.findByRole("button", { name: "Review approval" }) as HTMLButtonElement;
+    expect(review.disabled).toBe(true);
+    fireEvent.click(review);
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(reads).toBe(1);
+    await act(async () => { decision.resolve({ ...approval, status: "approved" }); });
+    await screen.findByText("Decision recorded: approved. Karen must still revalidate and resume the original request.");
+    expect(screen.queryByRole("button", { name: "Review approval" })).toBeNull();
+    expect(reads).toBe(2);
+  });
+
+  it("routes specialized approvals and withholds generic decisions", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
+    const consentId = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    mocks.get.mockImplementation((path: string) => path === "/api/approvals/" ? Promise.resolve([
+      { ...approval, approval_id: consentId, workflow_kind: "document_author_consent", intent: "writing_style.document_consent.issue" },
+      { ...approval, approval_id: "plugin", workflow_kind: "plugin_lifecycle", intent: "plugin.lifecycle.enable" },
+      { ...approval, approval_id: "unknown", workflow_kind: "unsupported_specialized", intent: "specialized workflow" },
+      { ...approval, approval_id: "approved", status: "approved" },
+      { ...approval, approval_id: "expired", expires_at: "2000-01-01T00:00:00Z" },
+    ]) : fallback(path));
+    render(<AgentsPage />);
+    const link = await screen.findByRole("link", { name: "Review document author consent" });
+    expect(link.getAttribute("href")).toBe("/approvals/document-consent/" + consentId);
+    expect(screen.getByText(/Plugin lifecycle decisions require the governed plugin workflow/)).toBeTruthy();
+    expect(screen.getByText(/No supported review workflow is available/)).toBeTruthy();
+    expect(screen.getByText(/Authorization expired/)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Review approval" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review rejection" })).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 
   it("does not submit a second approval while the first decision is unresolved", async () => {

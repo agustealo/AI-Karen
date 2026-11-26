@@ -16,7 +16,8 @@ import {
 import useAuth from "@/lib/useAuth";
 import { apiClient } from "@/lib/api";
 import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalog";
-import { useRuntimeApprovals } from "@/components/approvals/useRuntimeApprovals";
+import { canDecideRuntimeApproval } from "@/components/approvals/useRuntimeApprovals";
+import { useRuntimeApprovalContext } from "@/components/approvals/RuntimeApprovalProvider";
 export { isRuntimeApproval, type RuntimeApproval } from "@/components/approvals/useRuntimeApprovals";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
@@ -322,8 +323,8 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
   const {
     approvals, approvalsError, decidingApprovalId, pendingApprovalDecision,
     setPendingApprovalDecision, isLoadingApprovals, approvalDecisionError,
-    approvalDecisionUncertain, loadApprovals, decideApproval,
-  } = useRuntimeApprovals(isAuthenticated, setActionMessage);
+    approvalDecisionMessage, approvalDecisionUncertain, loadApprovals, decideApproval,
+  } = useRuntimeApprovalContext();
   const [cancellationError, setCancellationError] = useState("");
   const [cancellationUncertain, setCancellationUncertain] = useState(false);
   const cancellationUncertainRef = useRef(false);
@@ -546,8 +547,8 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
 
   useEffect(() => {
     if (isAuthLoading) return;
-    void refresh();
-  }, [isAuthLoading, refresh]);
+    void Promise.all([loadCatalog(), loadRuns(true)]);
+  }, [isAuthLoading, loadCatalog, loadRuns]);
 
   const cancelRun = useCallback(
     async (runId: string) => {
@@ -654,7 +655,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             {[
               { label: "Active executions", icon: Activity, value: runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : activeRuns.length, hint: isLoadingRuns && runsGeneratedAt ? "Refreshing snapshot" : "Visible run history" },
               { label: "Completed executions", icon: CheckCircle2, value: runsError ? "Unavailable" : !runsGeneratedAt ? "Loading" : runs.filter((run) => ["completed", "succeeded"].includes(run.status.toLowerCase())).length, hint: isLoadingRuns && runsGeneratedAt ? "Refreshing snapshot" : "Visible run history" },
-              { label: "Approval requests", icon: ShieldCheck, value: approvalsError ? "Unavailable" : isLoadingApprovals ? "Loading" : approvals.length, hint: "Your approval inbox" },
+              { label: "Approval requests", icon: ShieldCheck, value: approvalsError ? "Unavailable" : isLoadingApprovals ? "Loading" : approvals.filter((approval) => approval.status === "pending" && Date.parse(approval.expires_at) > Date.now()).length, hint: "Pending in returned records" },
               { label: "Registered specialists", icon: Users, value: catalogError ? "Unavailable" : isLoadingCatalog ? "Loading" : catalog?.total ?? "Unavailable", hint: "Eligibility decided per request" },
             ].map(({ label, icon: Icon, value, hint }) => (
               <Card key={label} className="min-w-0">
@@ -802,6 +803,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
       <section id="mission-approvals" aria-label="Needs your review" className="scroll-mt-4 space-y-3" data-testid="agent-runtime-approvals">
         <h3 className="text-lg font-semibold">Needs your review</h3>
         <p className="text-sm text-muted-foreground">These requests come from Karen&apos;s authorized approval service. A decision alone does not execute an action.</p>
+        {approvalDecisionMessage && <p role="status" className="text-sm">{approvalDecisionMessage}</p>}
         {approvalDecisionError && <p role="alert" className="text-sm text-destructive">{approvalDecisionError}</p>}
         {approvalsError && <p role="alert" className="text-sm text-destructive">{approvalsError}</p>}
         {!isAuthenticated ? <p className="text-sm text-muted-foreground">Sign in to review authorized approval requests.</p> : isLoadingApprovals ? <p role="status" className="text-sm text-muted-foreground">Loading approval requests…</p> : approvalsError ? <p className="text-sm text-muted-foreground">Approval requests are unavailable. Refresh runtime to try again.</p> : approvals.length === 0 ? (
@@ -810,7 +812,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
           <div key={approval.approval_id} className="rounded-lg border p-4 space-y-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h4 className="font-medium">{approval.intent}</h4>
-              <Badge variant="outline">{approval.risk_level} risk</Badge>
+              <div className="flex flex-wrap gap-2"><Badge variant="outline">{approval.risk_level} risk</Badge><Badge variant="secondary">{approval.status}</Badge></div>
             </div>
             <p className="text-sm text-muted-foreground">Expires {formatTimestamp(approval.expires_at)}</p>
             {approval.conversation_id && (
@@ -821,12 +823,22 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
             <div className="flex flex-wrap gap-2">
               {approval.conversation_id && onOpenConversation && <Button size="sm" variant="outline" onClick={() => void onOpenConversation(approval.conversation_id!)}>Open original conversation</Button>}
               {onAskKaren && <Button size="sm" variant="outline" onClick={onAskKaren}>Open Karen chat</Button>}
-              <Button size="sm" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
-                onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "approved" })}>Review approval</Button>
-              <Button size="sm" variant="outline" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
-                onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "rejected" })}>Review rejection</Button>
+              {canDecideRuntimeApproval(approval) && <>
+                <Button size="sm" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
+                  onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "approved" })}>Review approval</Button>
+                <Button size="sm" variant="outline" disabled={decidingApprovalId !== null || approvalDecisionUncertain || isLoadingApprovals}
+                  onClick={() => setPendingApprovalDecision({ approvalId: approval.approval_id, decision: "rejected" })}>Review rejection</Button>
+              </>}
+              {approval.workflow_kind === "document_author_consent" && ["pending", "approved"].includes(approval.status) && Date.parse(approval.expires_at) > Date.now() && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(approval.approval_id) && (
+                <Button asChild size="sm" variant="outline"><a href={`/approvals/document-consent/${approval.approval_id}`}>Review document author consent</a></Button>
+              )}
             </div>
-            {pendingApprovalDecision?.approvalId === approval.approval_id && (
+            {approval.workflow_kind === "document_author_consent" && <p className="text-sm text-muted-foreground">Document author consent requires separate authenticated review. Generic approval actions are unavailable.</p>}
+            {approval.workflow_kind === "plugin_lifecycle" && <p className="text-sm text-muted-foreground">Plugin lifecycle decisions require the governed plugin workflow. Open the original conversation if available.</p>}
+            {approval.workflow_kind === "unsupported_specialized" && <p className="text-sm text-muted-foreground">No supported review workflow is available for this request.</p>}
+            {approval.status === "approved" && <p className="text-sm text-muted-foreground">Decision recorded. Execution is not implied.</p>}
+            {Date.parse(approval.expires_at) <= Date.now() && <p className="text-sm text-muted-foreground">Authorization expired. Refresh to verify current status.</p>}
+            {canDecideRuntimeApproval(approval) && pendingApprovalDecision?.approvalId === approval.approval_id && (
               <section aria-label="Confirm approval decision" className="rounded-lg border border-primary/50 bg-muted/40 p-3 space-y-2">
                 <p className="font-medium">Confirm {pendingApprovalDecision.decision === "approved" ? "approval" : "rejection"}</p>
                 <p className="text-sm">Request: {approval.intent}. Risk: {approval.risk_level}. Expires: {formatTimestamp(approval.expires_at)}.</p>

@@ -3,7 +3,11 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { apiClient } from "@/lib/api";
 
+const workflowKinds = ["runtime_approval", "document_author_consent", "plugin_lifecycle", "unsupported_specialized"] as const;
+export type ApprovalWorkflowKind = typeof workflowKinds[number];
+
 export interface RuntimeApproval {
+  workflow_kind: ApprovalWorkflowKind;
   approval_id: string;
   conversation_id?: string | null;
   intent: string;
@@ -23,10 +27,16 @@ function nonemptyString(value: unknown): value is string {
 
 export function isRuntimeApproval(value: unknown): value is RuntimeApproval {
   return isObject(value) && nonemptyString(value.approval_id) && nonemptyString(value.intent)
+    && workflowKinds.some((kind) => value.workflow_kind === kind)
     && nonemptyString(value.risk_level) && nonemptyString(value.status)
     && (value.conversation_id == null || typeof value.conversation_id === "string")
     && Array.isArray(value.reason_codes) && value.reason_codes.every((reason) => typeof reason === "string")
     && nonemptyString(value.expires_at) && Number.isFinite(Date.parse(value.expires_at));
+}
+
+export function canDecideRuntimeApproval(approval: RuntimeApproval, now = Date.now()): boolean {
+  return approval.workflow_kind === "runtime_approval" && approval.status === "pending"
+    && Date.parse(approval.expires_at) > now;
 }
 
 /**
@@ -36,13 +46,14 @@ export function isRuntimeApproval(value: unknown): value is RuntimeApproval {
  * reads; visibility discovery and uncertain mutation reconciliation stay here.
  * No approval decision executes the underlying request.
  */
-export function useRuntimeApprovals(isAuthenticated: boolean, onDecisionMessage: (message: string) => void) {
+export function useRuntimeApprovals(isAuthenticated: boolean) {
   const [approvals, setApprovals] = useState<RuntimeApproval[]>([]);
   const [approvalsError, setApprovalsError] = useState("");
   const [decidingApprovalId, setDecidingApprovalId] = useState<string | null>(null);
   const [pendingApprovalDecision, setPendingApprovalDecision] = useState<{ approvalId: string; decision: "approved" | "rejected" } | null>(null);
   const [isLoadingApprovals, setIsLoadingApprovals] = useState(true);
   const [approvalDecisionError, setApprovalDecisionError] = useState("");
+  const [approvalDecisionMessage, setApprovalDecisionMessage] = useState("");
   const [approvalDecisionUncertain, setApprovalDecisionUncertain] = useState(false);
   const approvalDecisionInFlightRef = useRef(false);
   const approvalReadRevision = useRef(0);
@@ -98,8 +109,8 @@ export function useRuntimeApprovals(isAuthenticated: boolean, onDecisionMessage:
   const decideApproval = useCallback(async (approvalId: string, decision: "approved" | "rejected") => {
     if (!approvalLive.current || !isAuthenticated || approvalDecisionInFlightRef.current || decidingApprovalId !== null || isLoadingApprovals || approvalsError || approvalDecisionUncertain) return;
     const approval = approvals.find((item) => item.approval_id === approvalId);
-    if (!approval || approval.status !== "pending" || Date.parse(approval.expires_at) <= Date.now()) {
-      setApprovalDecisionError("This approval is unavailable or expired. Refresh the list before deciding.");
+    if (!approval || !canDecideRuntimeApproval(approval)) {
+      setApprovalDecisionError("This approval is unavailable, expired, or requires a specialized review. Refresh the list before deciding.");
       setPendingApprovalDecision(null);
       return;
     }
@@ -108,14 +119,15 @@ export function useRuntimeApprovals(isAuthenticated: boolean, onDecisionMessage:
     setDecidingApprovalId(approvalId);
     setPendingApprovalDecision(null);
     setApprovalDecisionError("");
+    setApprovalDecisionMessage("");
     try {
       const result = await apiClient.post<unknown>(
         `/api/approvals/${encodeURIComponent(approvalId)}/decision`,
         { decision },
       );
       if (!approvalLive.current) return;
-      if (!isRuntimeApproval(result) || result.approval_id !== approvalId) throw new Error("Approval response could not be verified. Refresh before deciding again.");
-      onDecisionMessage(
+      if (!isRuntimeApproval(result) || result.approval_id !== approvalId || result.workflow_kind !== approval.workflow_kind || result.intent !== approval.intent) throw new Error("Approval response could not be verified. Refresh before deciding again.");
+      setApprovalDecisionMessage(
         result.status === decision
           ? `Decision recorded: ${decision}. Karen must still revalidate and resume the original request.`
           : `Approval status: ${result.status}. No action has been executed by this decision.`,
@@ -129,11 +141,11 @@ export function useRuntimeApprovals(isAuthenticated: boolean, onDecisionMessage:
       approvalDecisionInFlightRef.current = false;
       setDecidingApprovalId(null);
     }
-  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError, approvalDecisionUncertain, isAuthenticated, onDecisionMessage]);
+  }, [loadApprovals, approvals, decidingApprovalId, isLoadingApprovals, approvalsError, approvalDecisionUncertain, isAuthenticated]);
 
   return {
     approvals, approvalsError, decidingApprovalId, pendingApprovalDecision,
     setPendingApprovalDecision, isLoadingApprovals, approvalDecisionError,
-    approvalDecisionUncertain, loadApprovals, decideApproval,
+    approvalDecisionMessage, approvalDecisionUncertain, loadApprovals, decideApproval,
   };
 }
