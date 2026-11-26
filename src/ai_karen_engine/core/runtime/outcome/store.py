@@ -86,6 +86,12 @@ class OutcomeStore(ABC):
         """Read exact receipts for one principal. No unscoped fallback."""
         raise OutcomeStoreError("Scoped receipt lookup is not available")
 
+    def list_scoped_model_operational_outcomes(
+        self, tenant_id: str, *, user_id: str, task_type: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        """Read model-attributed execution evidence before applying the bound."""
+        raise OutcomeStoreError("Scoped model operational evidence unavailable")
+
     def list_scoped_ml_predictor_outcomes(
         self, tenant_id: str, *, user_id: str, limit: int,
     ) -> list[dict[str, Any]]:
@@ -259,6 +265,32 @@ class InMemoryOutcomeStore(OutcomeStore):
             and row.get("source") == source
             and row.get("outcome_id") in wanted
         ]
+
+    def list_scoped_model_operational_outcomes(
+        self, tenant_id: str, *, user_id: str, task_type: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        PostgresOutcomeStore._validate_model_operational_scope(
+            tenant_id, user_id, task_type, limit,
+        )
+        from copy import deepcopy
+
+        rows = [
+            row for row in self._records
+            if row.get("tenant_id") == tenant_id
+            and row.get("user_id") == user_id
+            and row.get("source") == "runtime.execution"
+            and not PostgresOutcomeStore._is_specialist_participation(row)
+            and isinstance(row.get("metadata"), dict)
+            and row["metadata"].get("task_type") == task_type
+            and row["metadata"].get("model_attribution") == "single_provider_model"
+        ]
+        rows.sort(
+            key=lambda row: (
+                str(row.get("recorded_at") or ""), str(row.get("outcome_id") or ""),
+            ),
+            reverse=True,
+        )
+        return deepcopy(rows[:limit])
 
     def list_scoped_ml_predictor_outcomes(
         self, tenant_id: str, *, user_id: str, limit: int,
@@ -1031,6 +1063,56 @@ class PostgresOutcomeStore(OutcomeStore):
                        "error_type": type(exc).__name__},
             )
             raise OutcomeStoreError("Scoped outcome receipts unavailable") from exc
+
+    @staticmethod
+    def _validate_model_operational_scope(
+        tenant_id: str, user_id: str, task_type: str, limit: int,
+    ) -> None:
+        if (
+            any(not isinstance(value, str) or not value.strip()
+                or value != value.strip()
+                for value in (tenant_id, user_id, task_type))
+            or tenant_id == "default"
+            or type(limit) is not int or not 1 <= limit <= 1000
+        ):
+            raise OutcomeStoreError("Exact scoped model operational query required")
+
+    def list_scoped_model_operational_outcomes(
+        self, tenant_id: str, *, user_id: str, task_type: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        self._validate_model_operational_scope(tenant_id, user_id, task_type, limit)
+        try:
+            with transaction_scope(tenant_id) as session:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT payload FROM public.outcome_records
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND user_id = CAST(:user_id AS uuid)
+                          AND source = 'runtime.execution'
+                          AND payload->'metadata'->>'task_type' = :task_type
+                          AND payload->'metadata'->>'model_attribution'
+                              = 'single_provider_model'
+                          AND payload->'metadata'->>'event_type'
+                              IS DISTINCT FROM 'agent.specialist.participation'
+                          AND payload->'metadata'->>'receipt_version'
+                              IS DISTINCT FROM 'specialist-participation.v1'
+                        ORDER BY recorded_at DESC, outcome_id DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {"tenant_id": tenant_id, "user_id": user_id,
+                     "task_type": task_type, "limit": limit},
+                ).mappings().all()
+            return [self._payload_from_row(row["payload"]) for row in rows]
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.scoped_model_operational_read_failed",
+                extra={"tenant_id": tenant_id, "error_type": type(exc).__name__},
+            )
+            raise OutcomeStoreError("Scoped model operational evidence unavailable") from exc
 
     def list_scoped_ml_predictor_outcomes(
         self, tenant_id: str, *, user_id: str, limit: int,
