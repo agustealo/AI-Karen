@@ -84,6 +84,7 @@ async def test_participation_control_plane_checks_owner_before_read(monkeypatch,
         store.list_specialist_participation_async.assert_not_awaited()
     manager.get.assert_awaited_once_with(
         run_id="run", tenant_id="tenant", require_durable_history=True, user_id="owner",
+        require_durable_identity=True,
     )
 
 
@@ -144,6 +145,7 @@ async def test_governed_tool_receipt_control_plane_requires_durable_exact_run(mo
             assert result is None
     manager.get.assert_awaited_once_with(
         run_id="run", tenant_id="tenant", require_durable_history=True, user_id="owner",
+        require_durable_identity=True,
     )
     if mode in {"owned", "empty", "outage", "saturated"}:
         reader.assert_awaited_once_with(
@@ -151,3 +153,86 @@ async def test_governed_tool_receipt_control_plane_requires_durable_exact_run(mo
         )
     else:
         reader.assert_not_awaited()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["tool", "participation"])
+@pytest.mark.parametrize(
+    "mode",
+    ["match", "disabled", "outage", "absent", "foreign_owner",
+     "foreign_tenant", "wrong_run", "wrong_request", "wrong_correlation",
+     "caller_not_owner"],
+)
+async def test_evidence_read_checks_durable_identity_even_for_cached_run(monkeypatch, kind, mode):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.agent_medusa import control_plane as module
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+        DurableRunLedgerUnavailable,
+    )
+    from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
+    from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
+
+    identity = dict(run_id="run", request_id="run", tenant_id="tenant",
+                    user_id="owner", correlation_id="corr")
+    changed = {
+        "foreign_owner": {"user_id": "other"},
+        "foreign_tenant": {"tenant_id": "other"},
+        "wrong_run": {"run_id": "other"},
+        "wrong_request": {"request_id": "other"},
+        "wrong_correlation": {"correlation_id": "other"},
+    }
+    durable = {**identity, **changed.get(mode, {})}
+    ledger = SimpleNamespace(
+        register=AsyncMock(), mark_running=AsyncMock(),
+        get=AsyncMock(return_value=None if mode == "absent" else durable),
+    )
+    if mode == "outage":
+        ledger.get.side_effect = DurableRunLedgerUnavailable("private failure")
+    manager = MedusaRunManager(
+        settings=AgentMedusaRuntimeSettings(
+            distributed_run_control_enabled=False,
+            durable_run_ledger_enabled=mode != "disabled",
+            durable_run_ledger_required=mode != "disabled",
+            worker_id="evidence-test",
+        ),
+        durable_ledger=ledger,
+    )
+    task = asyncio.create_task(asyncio.sleep(60))
+    try:
+        await manager.register(**identity, task=task)
+        assert (await manager.get(run_id="run", tenant_id="tenant"))["user_id"] == "owner"
+        tool_reader = AsyncMock(return_value=[])
+        participation_reader = AsyncMock(return_value=([], False))
+        monkeypatch.setattr(
+            module, "get_outcome_store", lambda: SimpleNamespace(
+                list_governed_tool_receipts_async=tool_reader,
+                list_specialist_participation_async=participation_reader,
+            ),
+        )
+        plane = module.AgentMedusaControlPlane(
+            run_manager=manager, registry=SimpleNamespace(), audit_logger=SimpleNamespace(),
+        )
+        read = plane.read_run_tool_receipts if kind == "tool" else plane.read_run_participation
+        scope = dict(run_id="run", tenant_id="tenant",
+                     user_id="other" if mode == "caller_not_owner" else "owner")
+        if mode == "match":
+            result = await read(**scope)
+            assert result["evidence_status"] == "empty"
+            (tool_reader if kind == "tool" else participation_reader).assert_awaited_once()
+        elif mode == "caller_not_owner":
+            assert await read(**scope) is None
+        else:
+            with pytest.raises(DurableRunLedgerUnavailable):
+                await read(**scope)
+        if mode != "match":
+            tool_reader.assert_not_awaited()
+            participation_reader.assert_not_awaited()
+        if mode in {"disabled", "caller_not_owner"}:
+            ledger.get.assert_not_awaited()
+        else:
+            ledger.get.assert_awaited_once_with(run_id="run", tenant_id="tenant")
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task

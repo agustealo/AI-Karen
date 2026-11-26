@@ -131,7 +131,11 @@ class AgentMedusaControlPlane:
         )
 
     async def _owned_evidence_correlation(
-        self, *, run_id: str, tenant_id: str, user_id: str,
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
     ) -> str | None:
         """Only a durable exact run owner may read execution evidence."""
         if not run_id or not tenant_id or not user_id:
@@ -142,6 +146,7 @@ class AgentMedusaControlPlane:
                 tenant_id=tenant_id,
                 require_durable_history=True,
                 user_id=user_id,
+                require_durable_identity=True,
             )
         except (RunNotFoundError, RunTenantMismatchError):
             return None
@@ -169,7 +174,9 @@ class AgentMedusaControlPlane:
     ) -> dict[str, Any] | None:
         """Project durable specialist evidence after canonical run owner lookup."""
         correlation_id = await self._owned_evidence_correlation(
-            run_id=run_id, tenant_id=tenant_id, user_id=user_id,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
         if correlation_id is None:
             return None
@@ -200,19 +207,28 @@ class AgentMedusaControlPlane:
         }
 
     async def read_run_tool_receipts(
-        self, *, run_id: str, tenant_id: str, user_id: str,
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
     ) -> dict[str, Any] | None:
         """Read only recorded governed acknowledgments for a durable owned run."""
         correlation_id = await self._owned_evidence_correlation(
-            run_id=run_id, tenant_id=tenant_id, user_id=user_id,
+            run_id=run_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
         if correlation_id is None:
             return None
         # A saturated window may have older records; never imply completeness.
         limit = 100
         events = await get_outcome_store().list_governed_tool_receipts_async(
-            trajectory_id=run_id, correlation_id=correlation_id,
-            tenant_id=tenant_id, user_id=user_id, limit=limit,
+            trajectory_id=run_id,
+            correlation_id=correlation_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            limit=limit,
         )
         return {
             "run_id": run_id,
