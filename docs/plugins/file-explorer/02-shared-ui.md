@@ -183,7 +183,7 @@ browser acceptance. Live Storage, governed mutation execution and composer
 attachment handoff still need separately authorized observed acceptance.
 
 
-## KEXP-005B: governed local folder organization acceptance
+## KEXP-005B/C: governed local folder organization and deletion acceptance
 
 Run the existing private browser spec with the separate case
 `KFILE-MUTATION-LOCAL:` only on an isolated disposable local stack. Verify
@@ -195,6 +195,9 @@ as 005A, plus:
 
 ```bash
 export KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE=true
+# Only after verifying actual backend/database/Storage isolation:
+export KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED=true
+export KAREN_FILE_EXPLORER_DELETE_ACCEPTANCE=true
 read -r -p 'Disposable root folder UUID: ' KAREN_FILE_EXPLORER_MUTATION_FIXTURE_ID
 export KAREN_FILE_EXPLORER_MUTATION_FIXTURE_ID
 CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
@@ -207,10 +210,20 @@ bypass secrets before login; loopback alone does not prove isolated backend
 configuration. It binds the fixture name to the supplied UUID and requires
 an empty initial inventory. It checks cancel/focus restoration, two confirmed
 creates, revision-bound rename, destination-bound move, exact server receipts,
-reload and independent destination readback. It verifies exactly four
-organization write requests. No protected workflow dispatch is changed.
-No files, ACLs or existing folders are changed; only generated empty child
-folders are renamed or moved. The synthetic children remain for inspection.
-Reset the disposable fixture manually using the normal governed controls;
-never automatically retry an ambiguous mutation or delete an unknown object.
-No live browser result is claimed by this source change.
+reload and independent destination readback. The combined case requires
+explicit deletion opt-in and operator attestation of stack isolation before
+login; that attestation is not automated infrastructure verification.
+
+005C verifies nonempty deletion returns 409 with unchanged inventory,
+cancel/focus restoration, a real concurrent rename in a second authenticated
+context, stale deletion rejection with refreshed inventory and visible conflict
+feedback, and fresh explicit deletion of the generated empty child with
+a matching receipt and authoritative absence. Exactly eight organization writes
+are expected across both contexts, including two rejected deletes. No request
+interception, direct mutation API or automatic retries are used.
+
+No protected workflow dispatch is changed. No files, ACLs, fixture root or
+preexisting folders are deleted. The generated destination remains for
+inspection. Reset manually using governed controls; never automatically retry
+an ambiguous mutation or delete an unknown object. The isolated stack must
+support a second simultaneous login. No live browser result is claimed.

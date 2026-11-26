@@ -462,13 +462,17 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
  * Explicitly local, disposable organization proof. Never included in the
  * protected read-only KFILE-LIVE dispatch. The operator must verify that the
  * local web/API/database stack is isolated from production before opting in.
- * Only creates and moves synthetic empty folders inside one named fixture.
- * No delete, automatic retry, upload or existing-file mutation.
+ * Only changes synthetic child folders inside one named fixture.
+ * No automatic retry, upload or existing-file mutation.
  */
-test("KFILE-MUTATION-LOCAL: confirmed create, rename and move", async ({ page }) => {
+test("KFILE-MUTATION-LOCAL: confirmed organization and deletion recovery", async ({ page, browser }) => {
   test.skip(!enabled || process.env.KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE !== "true",
     "Requires explicit local disposable mutation acceptance");
   test.setTimeout(6 * 60_000);
+  if (process.env.KAREN_FILE_EXPLORER_DELETE_ACCEPTANCE !== "true" ||
+      process.env.KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED !== "true") {
+    throw new Error("Explicit deletion opt-in and isolated backend attestation required");
+  }
   const origin = trustedOrigin();
   if (origin.protocol !== "http:" || !["localhost", "127.0.0.1"].includes(origin.hostname) ||
       process.env.KAREN_LOCAL_CHAT_ACCEPTANCE !== "1" ||
@@ -487,13 +491,16 @@ test("KFILE-MUTATION-LOCAL: confirmed create, rename and move", async ({ page })
   const destinationName = "kexp-destination-" + nonce;
   const prefix = "/api/plugins/file-explorer";
   const writes: string[] = [];
-  page.on("request", request => {
-    const url = new URL(request.url());
-    if (url.origin === origin.origin && url.pathname.startsWith(prefix + "/") &&
-        ["POST", "PATCH", "DELETE", "PUT"].includes(request.method())) {
-      writes.push(request.method() + " " + url.pathname);
-    }
-  });
+  function observeWrites(actor: Page) {
+    actor.on("request", request => {
+      const url = new URL(request.url());
+      if (url.origin === origin.origin && url.pathname.startsWith(prefix + "/") &&
+          ["POST", "PATCH", "DELETE", "PUT"].includes(request.method())) {
+        writes.push(request.method() + " " + url.pathname);
+      }
+    });
+  }
+  observeWrites(page);
   await signInApprovedKaren(page, email, password, { allowLocalLoopback: true });
   const rootWait = nextRealPage(page, origin);
   await enterWorkspace(page);
@@ -516,8 +523,8 @@ test("KFILE-MUTATION-LOCAL: confirmed create, rename and move", async ({ page })
   expect(initial.has_more || initial.folders_has_more).toBe(false);
   await verifyDisplayedInventory(page, initial);
 
-  function inventoryWait(parent: string) {
-    return page.waitForResponse(response => {
+  function inventoryWait(parent: string, actor: Page = page) {
+    return actor.waitForResponse(response => {
       const url = new URL(response.url());
       return url.origin === origin.origin && url.pathname === prefix + "/hierarchy" &&
         response.request().method() === "GET" && url.searchParams.get("parent_folder_id") === parent &&
@@ -525,25 +532,36 @@ test("KFILE-MUTATION-LOCAL: confirmed create, rename and move", async ({ page })
         !url.searchParams.has("search");
     }, { timeout: 45_000 });
   }
-  async function confirm(action: "create" | "rename" | "move", method: "POST" | "PATCH",
-    path: string, payload: Record<string, unknown>, status: number) {
+  async function confirm(action: "create" | "rename" | "move" | "delete",
+    method: "POST" | "PATCH" | "DELETE", path: string,
+    payload: Record<string, unknown>, status: number, parent: string = fixtureId!,
+    actor: Page = page) {
+    const actorExplorer = actor.getByRole("region", { name: "Shared File Explorer" });
+    const actorEditor = actorExplorer.getByRole("form", { name: "Confirm organization change" });
     const [http, reload] = await Promise.all([
-      page.waitForResponse(response => {
+      actor.waitForResponse(response => {
         const url = new URL(response.url());
         return url.origin === origin.origin && url.pathname === path && response.request().method() === method;
       }, { timeout: 45_000 }),
-      inventoryWait(fixtureId!),
-      editor.getByRole("button", { name: "Confirm " + action, exact: true }).click(),
+      inventoryWait(parent, actor),
+      actorEditor.getByRole("button", { name: "Confirm " + action, exact: true }).click(),
     ]);
     expect(http.status()).toBe(status);
     expect(http.request().postDataJSON()).toEqual(payload);
     const receipt = await http.json();
-    expect(typeof receipt.request_id === "string" && Boolean(receipt.request_id)).toBe(true);
-    expect(typeof receipt.correlation_id === "string" && Boolean(receipt.correlation_id)).toBe(true);
+    if (status === 409) {
+      expect(receipt.detail).toBe("Folder nonempty, unavailable or revision conflicting");
+    } else {
+      expect(typeof receipt.request_id === "string" && Boolean(receipt.request_id)).toBe(true);
+      expect(typeof receipt.correlation_id === "string" && Boolean(receipt.correlation_id)).toBe(true);
+    }
     expect(reload.status()).toBe(200);
-    const inventory = inventoryResponse(await reload.json(), fixtureId);
-    await verifyDisplayedInventory(page, inventory);
-    await expect(explorer.getByText("Organization change confirmed. Reloading inventory.", { exact: true })).toBeVisible();
+    const inventory = inventoryResponse(await reload.json(), parent);
+    await verifyDisplayedInventory(actor, inventory);
+    await expect(actorExplorer.getByText(status === 409
+      ? "Organization conflict. Review the refreshed inventory before trying again."
+      : "Organization change confirmed. Reloading inventory.", { exact: true })).toBeVisible();
+    await expect(actorEditor).toHaveCount(0);
     return { receipt, inventory };
   }
   const createButton = explorer.getByRole("button", { name: "New folder", exact: true });
@@ -596,6 +614,16 @@ test("KFILE-MUTATION-LOCAL: confirmed create, rename and move", async ({ page })
     organization_revision: movedRevision,
   });
   expect(moved.inventory.folders.some(folder => folder.folder_id === source.folder_id)).toBe(false);
+  const currentDestination = moved.inventory.folders.find(folder => folder.folder_id === destination.folder_id);
+  if (!currentDestination) throw new Error("Destination missing from authoritative inventory");
+  // A confirmed nonempty deletion must not cascade or modify either folder.
+  await entries.getByRole("button", { name: "Delete " + destinationName, exact: true }).click();
+  await expect(editor).toBeFocused();
+  await expect(editor.getByText("Delete " + destinationName + "? Only empty folders can be deleted, including no archived files. File contents will not be deleted.", { exact: true })).toBeVisible();
+  const nonempty = await confirm("delete", "DELETE", prefix + "/folders/" + destination.folder_id,
+    { expected_revision: currentDestination.revision }, 409);
+  expect(nonempty.inventory.folders).toEqual(moved.inventory.folders);
+  expect(nonempty.inventory.items).toEqual([]);
   const [destinationHttp] = await Promise.all([
     inventoryWait(destination.folder_id),
     entries.getByRole("button", { name: "Open folder " + destinationName, exact: true }).click(),
@@ -608,13 +636,108 @@ test("KFILE-MUTATION-LOCAL: confirmed create, rename and move", async ({ page })
   }]);
   expect(readback.items.length).toBe(0);
   await verifyDisplayedInventory(page, readback);
+  const deleteButton = entries.getByRole("button", { name: "Delete " + renamedName, exact: true });
+  await deleteButton.click();
+  await expect(editor).toBeFocused();
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await expect(deleteButton).toBeFocused();
+  expect(writes).toHaveLength(5);
+
+  // Retain the first browser's observed revision while another authenticated
+  // context renames the generated child using the same governed UI.
+  await deleteButton.click();
+  const concurrentName = "kexp-conflict-" + nonce;
+  const second = await browser.newContext({ baseURL: origin.origin, serviceWorkers: "block" });
+  let currentChild: Folder;
+  try {
+    const other = await second.newPage();
+    observeWrites(other);
+    await signInApprovedKaren(other, email, password, { allowLocalLoopback: true });
+    const [otherRootHttp] = await Promise.all([nextRealPage(other, origin), enterWorkspace(other)]);
+    expect(otherRootHttp.status()).toBe(200);
+    const otherRoot = inventoryResponse(await otherRootHttp.json());
+    expect(otherRoot.folders.filter(folder => folder.name === fixtureName).map(folder => folder.folder_id))
+      .toEqual([fixtureId]);
+    const otherEntries = other.getByRole("region", { name: "Shared File Explorer" })
+      .getByRole("list", { name: "Files and folders" });
+    const [otherFixtureHttp] = await Promise.all([
+      inventoryWait(fixtureId, other),
+      otherEntries.getByRole("button", { name: "Open folder " + fixtureName, exact: true }).click(),
+    ]);
+    expect(otherFixtureHttp.status()).toBe(200);
+    const otherFixture = inventoryResponse(await otherFixtureHttp.json(), fixtureId);
+    expect(otherFixture.folders).toEqual(nonempty.inventory.folders);
+    expect(otherFixture.items).toEqual([]);
+    const [otherDestinationHttp] = await Promise.all([
+      inventoryWait(destination.folder_id, other),
+      otherEntries.getByRole("button", { name: "Open folder " + destinationName, exact: true }).click(),
+    ]);
+    expect(otherDestinationHttp.status()).toBe(200);
+    const otherDestination = inventoryResponse(await otherDestinationHttp.json(), destination.folder_id);
+    expect(otherDestination.folders).toEqual(readback.folders);
+    expect(otherDestination.items).toEqual([]);
+    await otherEntries.getByRole("button", { name: "Rename " + renamedName, exact: true }).click();
+    await other.getByRole("form", { name: "Confirm organization change" })
+      .getByRole("textbox", { name: "Folder name" }).fill(concurrentName);
+    const changed = await confirm("rename", "PATCH", prefix + "/folders/" + source.folder_id,
+      { name: concurrentName, expected_revision: movedRevision }, 200, destination.folder_id, other);
+    const observed = changed.inventory.folders.find(folder => folder.folder_id === source.folder_id);
+    if (!observed) throw new Error("Concurrent rename missing from inventory");
+    currentChild = observed;
+    expect(currentChild).toEqual({
+      folder_id: source.folder_id, parent_folder_id: destination.folder_id,
+      name: concurrentName, revision: (BigInt(movedRevision) + BigInt(1)).toString(),
+    });
+    expect(changed.receipt.folder).toEqual(currentChild);
+  } finally {
+    await second.close();
+  }
+  // A real stale confirmation must return conflict and must not automatically
+  // issue a new delete using the refreshed revision.
+  const stale = await confirm("delete", "DELETE", prefix + "/folders/" + source.folder_id,
+    { expected_revision: movedRevision }, 409, destination.folder_id);
+  expect(stale.inventory.folders).toEqual([currentChild]);
+  expect(stale.inventory.items).toEqual([]);
+  expect(writes).toHaveLength(7);
+  await expect(entries.getByRole("button", { name: "Delete " + renamedName, exact: true })).toHaveCount(0);
+
+  const [childHttp] = await Promise.all([
+    inventoryWait(source.folder_id),
+    entries.getByRole("button", { name: "Open folder " + concurrentName, exact: true }).click(),
+  ]);
+  expect(childHttp.status()).toBe(200);
+  const childInventory = inventoryResponse(await childHttp.json(), source.folder_id);
+  expect(childInventory.folders).toEqual([]);
+  expect(childInventory.items).toEqual([]);
+  expect(childInventory.has_more || childInventory.folders_has_more).toBe(false);
+  const [backHttp] = await Promise.all([
+    inventoryWait(destination.folder_id),
+    explorer.getByRole("navigation", { name: "Folder location" })
+      .getByRole("button", { name: destinationName, exact: true }).click(),
+  ]);
+  expect(backHttp.status()).toBe(200);
+  const beforeDelete = inventoryResponse(await backHttp.json(), destination.folder_id);
+  expect(beforeDelete.folders).toEqual([currentChild]);
+  expect(beforeDelete.items).toEqual([]);
+  await entries.getByRole("button", { name: "Delete " + concurrentName, exact: true }).click();
+  const deleted = await confirm("delete", "DELETE", prefix + "/folders/" + source.folder_id,
+    { expected_revision: currentChild.revision }, 200, destination.folder_id);
+  expect(deleted.receipt).toMatchObject({ deleted: true, folder_id: source.folder_id });
+  expect(deleted.inventory.folders).toEqual([]);
+  expect(deleted.inventory.items).toEqual([]);
+  expect(deleted.inventory.has_more || deleted.inventory.folders_has_more).toBe(false);
   expect(writes).toEqual([
     "POST " + prefix + "/folders", "POST " + prefix + "/folders",
     "PATCH " + prefix + "/folders/" + source.folder_id,
     "POST " + prefix + "/move/folder/" + source.folder_id,
+    "DELETE " + prefix + "/folders/" + destination.folder_id,
+    "PATCH " + prefix + "/folders/" + source.folder_id,
+    "DELETE " + prefix + "/folders/" + source.folder_id,
+    "DELETE " + prefix + "/folders/" + source.folder_id,
   ]);
-  // Leave evidence in the disposable fixture. Do not guess at cleanup after
-  // a failed or uncertain receipt. The operator resets the local fixture.
+  // Keep the generated destination for inspection; never guess at cleanup
+  // after a failed or uncertain receipt. The operator resets locally.
 });
 
 /**

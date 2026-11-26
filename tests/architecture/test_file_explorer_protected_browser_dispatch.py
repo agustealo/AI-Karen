@@ -101,3 +101,16 @@ def test_organization_mutations_are_local_opt_in_and_not_protected_dispatch():
     assert 'expect(writes).toEqual([' in source
     assert 'KFILE-MUTATION-LOCAL' not in workflow
     assert 'KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE' not in workflow
+
+    assert 'KAREN_FILE_EXPLORER_DELETE_ACCEPTANCE !== "true"' in source
+    assert 'KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED !== "true"' in source
+    assert 'KAREN_FILE_EXPLORER_DELETE_ACCEPTANCE' not in workflow
+    assert 'KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED' not in workflow
+    assert 'const nonempty = await confirm("delete", "DELETE"' in source
+    assert 'const stale = await confirm("delete", "DELETE"' in source
+    assert '{ expected_revision: movedRevision }, 409, destination.folder_id' in source
+    assert '{ expected_revision: currentChild.revision }, 200, destination.folder_id' in source
+    assert 'expect(writes).toHaveLength(7)' in source
+    assert 'expect(deleted.receipt).toMatchObject({ deleted: true, folder_id: source.folder_id })' in source
+    assert 'expect(childInventory.has_more || childInventory.folders_has_more).toBe(false)' in source
+    assert 'browser.newContext({ baseURL: origin.origin, serviceWorkers: "block" })' in source
