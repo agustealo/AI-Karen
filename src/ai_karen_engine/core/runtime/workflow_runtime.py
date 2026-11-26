@@ -47,6 +47,7 @@ class WorkflowRuntime:
         plan: Optional[AuthorizedExecutionPlan] = None,
         *,
         budget_meter: ExecutionBudgetMeter | None = None,
+        trajectory_id: str | None = None,
     ) -> Tuple[str, Dict[str, Any]]:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
@@ -59,7 +60,9 @@ class WorkflowRuntime:
             return result
 
         orchestrator = await self._get_orchestrator()
-        authority = self._generation_authority(request, decision, plan, budget_meter)
+        authority = self._generation_authority(
+            request, decision, plan, budget_meter, trajectory_id=trajectory_id,
+        )
         try:
             with bind_workflow_generation(authority):
                 final_state = await orchestrator.process(
@@ -89,6 +92,7 @@ class WorkflowRuntime:
         plan: Optional[AuthorizedExecutionPlan] = None,
         *,
         budget_meter: ExecutionBudgetMeter | None = None,
+        trajectory_id: str | None = None,
     ) -> AsyncIterator[_SharedChatStreamChunk]:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
@@ -208,7 +212,9 @@ class WorkflowRuntime:
             session_id=conversation_id,
             config=config,
         )
-        authority = self._generation_authority(request, decision, plan, budget_meter)
+        authority = self._generation_authority(
+            request, decision, plan, budget_meter, trajectory_id=trajectory_id,
+        )
         try:
             while True:
                 try:
@@ -244,12 +250,15 @@ class WorkflowRuntime:
     def _generation_authority(
         request: ChatExecutionRequest, decision: ExecutionDecision | None,
         plan: AuthorizedExecutionPlan | None, meter: ExecutionBudgetMeter | None,
+        *, trajectory_id: str | None = None,
     ) -> WorkflowGenerationAuthority | None:
         # Compatibility graph inspection can run without a model grant.
         # The synthesis port itself denies any model execution in that case.
         if decision is None or plan is None or meter is None:
             return None
-        return WorkflowGenerationAuthority.create(request, decision, plan, meter)
+        return WorkflowGenerationAuthority.create(
+            request, decision, plan, meter, trajectory_id=trajectory_id,
+        )
 
     @staticmethod
     def _project_medusa_event(

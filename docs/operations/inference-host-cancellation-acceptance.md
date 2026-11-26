@@ -223,3 +223,31 @@ binding before it may be certified. No claim of authorized graph tool
 success, safe executor deletion or consumer readiness is made. Restore
 graph tool and reasoning capability through canonical receipt-backed
 execution and test both positive and denied paths.
+
+
+### Receipt bridge and graph trajectory identity (KUI-004B4.48C7Z8E15)
+
+The E13 Chat System Burn model-runtime group passed 230 tests and the
+legacy reference inventory step succeeded before that run was superseded.
+The inventory identifies an actual remaining executor import in
+`agent_medusa/specialists/bridges.py` (CanonicalGenerationExecutor).
+ProviderRuntime retirement remains blocked on that consumer and its
+regressions; response-source strings alone are not executor imports.
+
+The existing ToolBridge now validates the original authenticated chat
+plan/meter when a trusted ChatExecutionContext is present, denies forged
+scope or fresh meters before dispatch, checks eligibility before budget
+reservation, rechecks live authority before dispatch and after durable
+receipt persistence. The existing non-chat compatibility contract remains
+unchanged in this slice; it is not certified by the chat grant. No new
+receipt store or execution gate is introduced. ChatRuntime passes its
+actual trajectory identifier to WorkflowRuntime on both chat paths; the
+host-owned workflow binding now supplies this identifier to the model
+execution receipt, never from checkpoint metadata.
+
+Raw graph tool calls remain blocked: the Medusa-specific actor/step
+receipt contract, parameter admission, replay protection, remote-effect
+reconciliation and safe model-visible evidence projection must be wired
+before restoring graph execution. Nested graph reasoning and the legacy
+specialist generation adapter remain open. This is a prerequisite repair,
+not a claim of completed graph functionality or production acceptance.

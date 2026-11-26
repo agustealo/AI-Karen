@@ -163,7 +163,8 @@ class ToolBridge:
         ):
             raise PermissionError("Authorized execution plan belongs to another principal")
         if execution is not None and (
-            execution.tenant_id != tenant_id
+            execution.authorized_plan is not authorized_plan
+            or execution.tenant_id != tenant_id
             or execution.user_id != user_id
             or execution.policy_decision_id != policy_decision_id
             or execution.trajectory_id != trajectory_id
@@ -171,14 +172,36 @@ class ToolBridge:
         ):
             raise PermissionError("Specialist execution context does not match tool identity")
 
-        # A17: enforce the budget and authorization before any tool invocation.
-        if execution is not None and execution.budget_meter is not None:
-            if not await execution.budget_meter.consume_tool_call():
-                raise PermissionError("ExecutionBudget exhausted: tool calls")
+        # A chat-originated action must retain the original authenticated
+        # plan and meter, not merely equal serialized claims. Non-chat
+        # compatibility callers retain their existing contract for now.
+        admission = None
+        if execution is not None and execution.authenticated_chat_context is not None:
+            from ai_karen_engine.core.model_runtime.governed_model_admission import (
+                GovernedToolModelAdmission,
+            )
+
+            context = execution.authenticated_chat_context
+            admission = GovernedToolModelAdmission(
+                plan=authorized_plan, meter=execution.budget_meter,
+                user_id=user_id, tenant_id=tenant_id,
+                session_id=execution.session_id, policy_decision_id=policy_decision_id,
+                request_id=context.request_id or "",
+                correlation_id=execution.correlation_id,
+                authenticated_context=context,
+            )
+            admission._require_scope()
+
+        # Denied eligibility is not an executed tool attempt.
         if not await self._authorize(tool_name, authorized_plan):
             raise PermissionError(
                 f"Tool '{tool_name}' not authorized by plan {authorized_plan.policy_decision_id}"
             )
+        if admission is not None:
+            admission._require_scope()
+        if execution is not None and execution.budget_meter is not None:
+            if not await execution.budget_meter.consume_tool_call():
+                raise PermissionError("ExecutionBudget exhausted: tool calls")
 
         from ai_karen_engine.services.tooling.tool_service import get_tool_service, ToolInput
         from ..contracts.events import AgentEvent, AgentEventType
@@ -201,6 +224,14 @@ class ToolBridge:
                 correlation_id=correlation_id,
                 metadata={"tool": tool_name, "step_id": step_id, "tool_call_id": tool_call_id},
             ))
+
+        # Event delivery may suspend execution; recheck live authority
+        # immediately before dispatch, not only before the event emission.
+        if admission is not None:
+            admission._require_scope()
+            if not await admission.meter.check_duration():
+                raise PermissionError("ExecutionBudget exhausted: duration")
+            admission._require_scope()
 
         result = None
         error_type = None
@@ -278,6 +309,10 @@ class ToolBridge:
             ),
             result_sha256=result_sha256,
         )
+        # A real acknowledgment must still be persisted if authority changes
+        # during the invocation. Do not release its data after revocation.
+        if admission is not None:
+            admission._require_scope()
         if error_type is not None:
             raise RuntimeError(
                 "Governed tool invocation failed; receipt persisted"

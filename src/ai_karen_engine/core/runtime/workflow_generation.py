@@ -52,11 +52,13 @@ class WorkflowGenerationAuthority:
     decision: ExecutionDecision
     admission: GovernedToolModelAdmission
     active: bool = True
+    trajectory_id: str | None = None
 
     @classmethod
     def create(
         cls, request: ChatExecutionRequest, decision: ExecutionDecision,
         plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter,
+        *, trajectory_id: str | None = None,
     ) -> "WorkflowGenerationAuthority":
         ctx = request.context
         admission = GovernedToolModelAdmission(
@@ -67,7 +69,11 @@ class WorkflowGenerationAuthority:
             authenticated_context=ctx,
         )
         admission._require_scope()
-        return cls(request, decision, admission)
+        if trajectory_id is not None and (
+            not isinstance(trajectory_id, str) or not trajectory_id.strip()
+        ):
+            raise PermissionError("workflow_trajectory_identity_invalid")
+        return cls(request, decision, admission, trajectory_id=trajectory_id)
 
     def require_live(self) -> None:
         if not self.active:
@@ -225,6 +231,8 @@ class WorkflowGenerationRuntime:
             metadata={
                 **metadata, "policy_decision_id": admission.policy_decision_id,
                 "prompt_hash": assembled.prompt_hash,
+                **({"trajectory_id": authority.trajectory_id}
+                   if authority.trajectory_id is not None else {}),
             },
         )
 

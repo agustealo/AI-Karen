@@ -809,7 +809,9 @@ class ChatRuntime:
                     request, decision, plan, meter
                 )
             elif grounded is None and not self._is_explicit_save_turn(request) and decision.is_graph_required and decision.topology.value != "reasoning":
-                text, provider_meta = await self._run_graph(request, decision, plan, meter)
+                text, provider_meta = await self._run_graph(
+                    request, decision, plan, meter, trajectory_id=trajectory.trajectory_id,
+                )
             elif grounded is None and not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
         except asyncio.CancelledError:
@@ -1647,6 +1649,7 @@ class ChatRuntime:
                             plan,
                             meter,
                             _meta=provider_meta,
+                            trajectory_id=trajectory.trajectory_id,
                         )
                         if decision.is_graph_required and decision.topology.value != "reasoning"
                         else self._run_simple_stream(
@@ -5528,6 +5531,7 @@ class ChatRuntime:
         decision: ExecutionDecision,
         plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
+        *, trajectory_id: str | None = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Graph-required path: routed exclusively through WorkflowRuntime."""
         text, response_metadata = await get_workflow_runtime().run(
@@ -5535,6 +5539,7 @@ class ChatRuntime:
             decision,
             plan,
             budget_meter=meter,
+            **({"trajectory_id": trajectory_id} if trajectory_id is not None else {}),
         )
         return text, self._normalize_graph_meta(response_metadata, request)
 
@@ -5545,9 +5550,11 @@ class ChatRuntime:
         plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
         _meta: Optional[Dict[str, Any]] = None,
+        *, trajectory_id: str | None = None,
     ) -> AsyncIterator[ChatStreamChunk]:
         workflow_stream = get_workflow_runtime().stream(
             request, decision, plan, budget_meter=meter,
+            **({"trajectory_id": trajectory_id} if trajectory_id is not None else {}),
         )
         try:
             async for chunk in workflow_stream:

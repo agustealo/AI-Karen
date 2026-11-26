@@ -54,6 +54,8 @@ def _scope(
     meter_model_calls: int | None = None,
     max_duration_ms: int = 60000,
     degraded_allowed: bool = True,
+    user: str = "user-a",
+    allowed_tools: tuple[str, ...] = (),
 ) -> GovernedToolModelAdmission:
     budget = ExecutionBudget(
         max_model_calls=calls,
@@ -63,10 +65,11 @@ def _scope(
     plan = AuthorizedExecutionPlan(
         execution_id=f"execution-{uuid4().hex}",
         policy_decision_id="policy-a",
-        authorized_user_id="user-a",
+        authorized_user_id=user,
         authorized_tenant_id=tenant,
         authorized_session_id="session-a",
         provider_constraints=dict(provider_constraints or {}),
+        allowed_tools=list(allowed_tools),
         budget=budget,
         degraded_allowed=degraded_allowed,
     )
@@ -75,7 +78,7 @@ def _scope(
     meter = ExecutionBudgetMeter(budget)
     budget.max_model_calls = calls
     principal = UserData(
-        user_id="user-a",
+        user_id=user,
         tenant_id=tenant,
         roles=["user"],
         permissions=[],
@@ -83,7 +86,7 @@ def _scope(
         is_verified=True,
     )
     context = ChatExecutionContext(
-        user_id="user-a",
+        user_id=user,
         tenant_id=tenant,
         session_id="session-a",
         request_id="request-a",
@@ -101,6 +104,7 @@ def _scope(
             "authorized_session_id": context.session_id,
             "correlation_id": context.correlation_id,
             "max_model_calls": plan.budget.max_model_calls,
+            "allowed_tools": list(allowed_tools),
         },
     )
     # These tests exercise admission using an original issuer-returned
@@ -114,7 +118,7 @@ def _scope(
     return GovernedToolModelAdmission(
         plan=plan,
         meter=meter,
-        user_id="user-a",
+        user_id=user,
         tenant_id=tenant,
         session_id="session-a",
         policy_decision_id="policy-a",
@@ -1922,3 +1926,94 @@ async def test_raw_graph_tools_denied_before_tool_service_invocation():
     empty = await node({"tool_calls": []})
     assert empty["tool_results"] == []
     assert empty["tool_execution_metadata"]["executed_tools"] == 0
+
+
+@pytest.mark.asyncio
+async def test_authenticated_tool_bridge_retains_original_meter_and_durable_receipt(monkeypatch):
+    from ai_karen_engine.agent_medusa.contracts.specialist_execution import SpecialistExecutionContext
+    from ai_karen_engine.agent_medusa.specialists import bridges
+    from ai_karen_engine.core.runtime.outcome.store import InMemoryOutcomeStore
+    from ai_karen_engine.services.tooling import tool_service
+
+    admission = _scope(tenant=str(uuid4()), user=str(uuid4()), allowed_tools=("search",))
+    ctx = admission.authenticated_context
+    store = InMemoryOutcomeStore()
+    calls = []
+
+    class Service:
+        def get_tool_metadata(self, name):
+            return SimpleNamespace(version="test")
+
+        async def execute_tool(self, request):
+            calls.append(request)
+            assert request.governed_execution is True
+            return SimpleNamespace(
+                success=True, error=None, metadata={}, request_id=request.request_id,
+                result={"observation": "actual tool result"},
+            )
+
+    monkeypatch.setattr(tool_service, "get_tool_service", lambda: Service())
+    monkeypatch.setattr(bridges, "get_outcome_store", lambda: store)
+    execution = SpecialistExecutionContext(
+        authorized_plan=admission.plan,
+        tenant_id=ctx.tenant_id, user_id=ctx.user_id, session_id=ctx.session_id,
+        policy_decision_id=admission.policy_decision_id,
+        trajectory_id="actual-runtime-trajectory", correlation_id=ctx.correlation_id,
+        step_id="step-a", budget_meter=admission.meter,
+        authenticated_chat_context=ctx,
+    )
+
+    async def invoke(scope, tool_name="search"):
+        return await bridges.ToolBridge().execute(
+            tool_name=tool_name, parameters={},
+            authorized_plan=scope.authorized_plan,
+            tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+            policy_decision_id=admission.policy_decision_id,
+            trajectory_id=execution.trajectory_id, agent_id="researcher",
+            step_id=execution.step_id, execution=scope,
+        )
+
+    for invalid in (
+        replace(execution, budget_meter=None),
+        replace(execution, budget_meter=ExecutionBudgetMeter(admission.plan.budget)),
+        replace(execution, authorized_plan=replace(admission.plan)),
+        replace(execution, correlation_id="forged-correlation"),
+    ):
+        with pytest.raises(PermissionError):
+            await invoke(invalid)
+    with pytest.raises(PermissionError, match="not authorized"):
+        await invoke(execution, tool_name="unauthorized")
+    assert calls == []
+    assert admission.meter.tool_calls == 0
+
+    result = await invoke(execution)
+    assert result["success"] is True
+    assert result["receipt_id"].startswith("out_tool_")
+    assert len(calls) == 1
+    assert admission.meter.tool_calls == 1
+    receipts = await store.list_governed_tool_receipts_async(
+        trajectory_id=execution.trajectory_id, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+    )
+    assert len(receipts) == 1
+    assert receipts[0]["outcome_id"] == result["receipt_id"]
+    assert receipts[0]["metadata"]["independently_verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_workflow_receipt_uses_host_trajectory_not_checkpoint_metadata(monkeypatch):
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationAuthority, WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope(calls=1)
+    authority, request, attempts = _workflow_transport(monkeypatch, admission)
+    authority = WorkflowGenerationAuthority.create(
+        authority.request, authority.decision, admission.plan, admission.meter,
+        trajectory_id="runtime-owned-trajectory",
+    )
+    request = replace(request, request_context={"trajectory_id": "forged-trajectory"})
+    with bind_workflow_generation(authority):
+        result = await WorkflowGenerationRuntime().execute(request)
+    assert result.metadata["trajectory_id"] == "runtime-owned-trajectory"
+    assert len(attempts) == 1
+    assert "forged-trajectory" not in json.dumps(attempts[0]["messages"])
