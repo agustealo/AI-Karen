@@ -9,6 +9,9 @@ on:
       - "src/ai_karen_engine/api_routes/admin/tenants.py"
       - "src/ai_karen_engine/services/admin/admin_tenant_service.py"
       - "src/ai_karen_engine/database/tenant_manager.py"
+      - "src/ai_karen_engine/database/integration_manager.py"
+      - "src/ai_karen_engine/api_routes/system/database.py"
+      - "src/ai_karen_engine/auth/rbac_middleware.py"
       - "src/ai_karen_engine/services/admin/admin_user_service.py"
       - "tests/unit/api_routes/test_admin_user_route_imports.py"
       - "tests/unit/api_routes/test_admin_user_http_contract.py"
@@ -53,6 +56,9 @@ on:
       - "src/ai_karen_engine/api_routes/admin/tenants.py"
       - "src/ai_karen_engine/services/admin/admin_tenant_service.py"
       - "src/ai_karen_engine/database/tenant_manager.py"
+      - "src/ai_karen_engine/database/integration_manager.py"
+      - "src/ai_karen_engine/api_routes/system/database.py"
+      - "src/ai_karen_engine/auth/rbac_middleware.py"
       - "src/ai_karen_engine/services/admin/admin_user_service.py"
       - "tests/unit/api_routes/test_admin_user_route_imports.py"
       - "tests/unit/api_routes/test_admin_user_http_contract.py"
@@ -137,6 +143,9 @@ jobs:
             src/ai_karen_engine/api_routes/admin/tenants.py \
             src/ai_karen_engine/services/admin/admin_tenant_service.py \
             src/ai_karen_engine/database/tenant_manager.py \
+            src/ai_karen_engine/database/integration_manager.py \
+            src/ai_karen_engine/api_routes/system/database.py \
+            src/ai_karen_engine/auth/rbac_middleware.py \
             src/ai_karen_engine/api_routes/auth/privacy.py \
             src/ai_karen_engine/server/client_identity.py \
             src/ai_karen_engine/server/public_origin.py \

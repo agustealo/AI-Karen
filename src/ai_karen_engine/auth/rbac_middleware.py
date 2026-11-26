@@ -755,6 +755,23 @@ def require_permission(permission: Union[Permission, str]) -> Callable:
     return dependency
 
 
+def require_platform_tenant_permission(permission: Permission):
+    """Platform tenant operations must not be enabled for tenant-local admins."""
+    async def dependency(
+        current_user: UserData = Depends(require_permission(permission)),
+    ):
+        rbac = get_rbac_manager()
+        if not current_user.get("user_id") or not rbac.has_super_admin_role(current_user):
+            rbac.audit_access_attempt(
+                current_user, permission, "admin.tenants", False,
+                additional_context={"reason": "platform_tenant_role_required"},
+            )
+            raise HTTPException(status_code=403, detail="Platform tenant administration required")
+        return current_user
+
+    return dependency
+
+
 def require_scopes(*permissions: Union[Permission, str]) -> Callable:
     targets = [_ensure_permission(permission) for permission in permissions]
 

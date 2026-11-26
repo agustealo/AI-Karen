@@ -133,3 +133,92 @@ def test_openapi_exposes_canonical_filter_enums():
     for name, definition in (("role", "UserRole"), ("status", "UserStatus")):
         param = next(item for item in params if item["name"] == name)
         assert definition in str(param["schema"])
+
+
+@pytest.mark.parametrize("roles,status", [(["user"], 403), (["admin"], 403), (["super_admin"], 201)])
+def test_legacy_tenant_creation_uses_shared_platform_guard_and_audit(monkeypatch, roles, status):
+    from datetime import datetime, timezone
+    from types import SimpleNamespace
+
+    from ai_karen_engine.api_routes.system import database
+    from ai_karen_engine.auth import rbac_middleware
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.database.integration_manager import DatabaseIntegrationManager
+    from ai_karen_engine.services.admin import admin_tenant_service
+
+    calls = []
+    audit = []
+
+    class TenantManagerProbe:
+        async def create_tenant(self, **kwargs):
+            calls.append(kwargs)
+            config = kwargs["config"]
+            return SimpleNamespace(
+                id="tenant-created", name=config.name, slug=config.slug,
+                subscription_tier=config.subscription_tier,
+                created_at=datetime.now(timezone.utc),
+            )
+
+    manager = DatabaseIntegrationManager()
+    manager._initialized = True
+    manager.tenant_manager = TenantManagerProbe()
+    monkeypatch.setattr(admin_tenant_service, "get_audit_logger", lambda: SimpleNamespace(
+        log_audit_event=audit.append,
+    ))
+    app = FastAPI()
+    app.include_router(database.router)
+    app.dependency_overrides[rbac_middleware.resolve_current_user] = lambda: UserData.from_dict({
+        "user_id": "platform-operator", "tenant_id": "tenant-a", "roles": roles,
+    })
+    app.dependency_overrides[database.get_db_manager] = lambda: manager
+    payload = {
+        "name": "Tenant", "slug": "tenant", "admin_email": "new@example.test",
+        "admin_password": "StrongPassword1!", "admin_full_name": "Tenant Admin",
+    }
+    with TestClient(app) as client:
+        response = client.post("/tenants", json=payload)
+    assert response.status_code == status
+    assert payload["admin_password"] not in response.text
+    if status == 201:
+        assert len(calls) == len(audit) == 1
+        assert calls[0]["admin_password"] == payload["admin_password"]
+        assert calls[0]["admin_full_name"] == payload["admin_full_name"]
+        assert calls[0]["admin_email"] == payload["admin_email"]
+        assert audit[0].user_id == "platform-operator"
+        assert audit[0].tenant_id == "tenant-created"
+        assert payload["admin_password"] not in repr(audit[0])
+    else:
+        assert calls == audit == []
+
+
+def test_legacy_tenant_creation_requires_explicit_credentials():
+    from ai_karen_engine.api_routes.system.database import TenantCreateRequest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        TenantCreateRequest(name="Tenant", slug="tenant", admin_email="new@example.test")
+
+
+def test_legacy_tenant_creation_redacts_unexpected_error_even_in_dev(monkeypatch):
+    from ai_karen_engine.api_routes.system import database
+    from ai_karen_engine.auth import rbac_middleware
+    from ai_karen_engine.auth.models import UserData
+
+    class Manager:
+        async def create_tenant(self, **kwargs):
+            raise RuntimeError("private-database-detail " + kwargs["admin_password"])
+
+    app = FastAPI()
+    app.include_router(database.router)
+    app.dependency_overrides[rbac_middleware.resolve_current_user] = lambda: UserData.from_dict({
+        "user_id": "platform-operator", "tenant_id": "tenant-a", "roles": ["super_admin"],
+    })
+    app.dependency_overrides[database.get_db_manager] = lambda: Manager()
+    monkeypatch.setattr(database, "DEV_MODE", True)
+    with TestClient(app) as client:
+        response = client.post("/tenants", json={
+            "name": "Tenant", "slug": "tenant", "admin_email": "new@example.test",
+            "admin_password": "StrongPassword1!", "admin_full_name": "Tenant Admin",
+        })
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Tenant creation failed"}

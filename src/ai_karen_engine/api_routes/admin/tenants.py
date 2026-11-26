@@ -8,30 +8,12 @@ from pydantic import BaseModel, SecretStr
 
 from ai_karen_engine.auth.rbac_middleware import (
     Permission,
-    get_rbac_manager,
-    require_permission,
+    require_platform_tenant_permission,
 )
 from ai_karen_engine.services.admin.admin_tenant_service import AdminTenantService
 from ai_karen_engine.database.tenant_manager import TenantConfig, TenantManager
 
 logger = logging.getLogger(__name__)
-
-def require_platform_tenant_permission(permission: Permission):
-    """Platform tenant operations must not be enabled for tenant-local admins."""
-    async def dependency(
-        current_user: Dict[str, Any] = Depends(require_permission(permission)),
-    ):
-        rbac = get_rbac_manager()
-        if not rbac.has_super_admin_role(current_user):
-            rbac.audit_access_attempt(
-                current_user, permission, "admin.tenants", False,
-                additional_context={"reason": "platform_tenant_role_required"},
-            )
-            raise HTTPException(status_code=403, detail="Platform tenant administration required")
-        return current_user
-
-    return dependency
-
 
 router = APIRouter(prefix="/admin/tenants", tags=["admin-tenants"])
 
