@@ -6,13 +6,17 @@ bytes. The authenticated runtime must supply principal-derived tenant/user IDs.
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Callable
+from typing import TYPE_CHECKING, Callable
 from uuid import UUID, uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
+
+if TYPE_CHECKING:
+    from .artifact_store import ArtifactStore
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,6 +34,7 @@ class UploadSession:
     expected_sha256: str | None = None
     lease_owner: str | None = None
     lease_expires_at: datetime | None = None
+    storage_key: str | None = None
 
 
 class UploadSessionConflict(ValueError):
@@ -71,6 +76,7 @@ class UploadSessionRepository:
             expected_sha256=data["expected_sha256"],
             lease_owner=data["lease_owner"],
             lease_expires_at=data["lease_expires_at"],
+            storage_key=data["storage_key"],
         )
 
     async def create_or_get(
@@ -128,7 +134,7 @@ class UploadSessionRepository:
             result = await session.execute(text("""
                 SELECT session_id, tenant_id, owner_user_id, destination_id,
                        recipe, state, manifest_sha256, expected_bytes,
-                       received_bytes, artifact_id, expected_sha256, lease_owner, lease_expires_at
+                       received_bytes, artifact_id, expected_sha256, lease_owner, lease_expires_at, storage_key
                 FROM public.artifact_upload_sessions
                 WHERE tenant_id = :tenant_id AND owner_user_id = :owner_user_id
                   AND idempotency_key_hash = :idempotency_key_hash
@@ -186,7 +192,7 @@ class UploadSessionRepository:
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,
                           received_bytes, artifact_id, expected_sha256,
-                          lease_owner, lease_expires_at
+                          lease_owner, lease_expires_at, storage_key
             """), params)
             row = result.first()
             if row is None:
@@ -211,14 +217,19 @@ class UploadSessionRepository:
             or lease_expires_at <= datetime.utcnow()
         ):
             raise ValueError("Expected future naive UTC lease deadline")
+        session_uuid = str(UUID(session_id))
+        # Reserve the canonical file identity before any external side effect.
+        # The future writer must use this exact key, not allocate a second ID.
         params = {
-            **identity, "session_id": str(UUID(session_id)),
+            **identity, "session_id": session_uuid,
             "lease_owner": str(uuid4()), "lease_expires_at": lease_expires_at,
+            "storage_key": f"{identity['tenant_id']}/{session_uuid}/content",
         }
         async with self._session_factory() as session:
             result = await session.execute(text("""
                 UPDATE public.artifact_upload_sessions
                 SET state = 'committing', lease_owner = :lease_owner,
+                    storage_key = :storage_key,
                     lease_expires_at = LEAST(expires_at, :lease_expires_at),
                     updated_at = now()
                 WHERE session_id = :session_id
@@ -226,12 +237,13 @@ class UploadSessionRepository:
                   AND state = 'staged' AND expires_at > now()
                   AND :lease_expires_at > now()
                   AND artifact_id IS NULL AND lease_owner IS NULL
+                  AND storage_key IS NULL
                   AND received_bytes = expected_bytes
                   AND expected_sha256 IS NOT NULL
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,
                           received_bytes, artifact_id, expected_sha256,
-                          lease_owner, lease_expires_at
+                          lease_owner, lease_expires_at, storage_key
             """), params)
             row = result.first()
             if row is None:
@@ -258,7 +270,7 @@ class UploadSessionRepository:
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,
                           received_bytes, artifact_id, expected_sha256,
-                          lease_owner, lease_expires_at
+                          lease_owner, lease_expires_at, storage_key
             """), params)
             row = result.first()
             if row is None:
@@ -292,6 +304,8 @@ class UploadSessionRepository:
             raise ValueError("Illegal upload state transition")
         if next_state == "committed" and not artifact_id:
             raise ValueError("Committed upload requires artifact_id")
+        if next_state == "committed" and artifact_id != session_uuid:
+            raise ValueError("Artifact must match reserved session identity")
         if next_state != "committed" and artifact_id is not None:
             raise ValueError("Artifact binding is allowed only at commit")
         if expected_state == "committing":
@@ -329,6 +343,8 @@ class UploadSessionRepository:
                       OR (
                           received_bytes = expected_bytes
                           AND expected_sha256 IS NOT NULL
+                          AND artifact_id IS NULL
+                          AND storage_key = tenant_id::text || '/' || session_id::text || '/content'
                           AND EXISTS (
                               SELECT 1 FROM public.files AS artifact
                               WHERE artifact.file_id = :artifact_id
@@ -337,12 +353,125 @@ class UploadSessionRepository:
                                 AND artifact.deleted_at IS NULL
                                 AND artifact.bytes = expected_bytes
                                 AND artifact.sha256 = expected_sha256
+                                AND artifact.storage_uri = 'supabase://artifacts/' || storage_key
+                              FOR SHARE OF artifact
                           )
                       )
                   )
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,
-                          received_bytes, artifact_id, expected_sha256, lease_owner, lease_expires_at
+                          received_bytes, artifact_id, expected_sha256, lease_owner, lease_expires_at, storage_key
+            """), params)
+            row = result.first()
+            if row is None:
+                await session.rollback()
+                return None
+            await session.commit()
+            return self._record(row)
+
+
+
+    async def reconcile_verified_text(
+        self, *, tenant_id: str, owner_user_id: str, session_id: str,
+        artifact_store: ArtifactStore,
+    ) -> UploadSession | None:
+        """Recover only a reserved, independently read-back inert text artifact.
+
+        The authenticated runtime must supply the canonical store and verified
+        principal. This adapter never creates, overwrites, executes or deletes
+        an object. Missing evidence leaves the session uncertain. Expired
+        upload sessions may be reconciled, but never restarted by this method.
+        """
+        from .artifact_store import VerifiedArtifactText
+
+        identity = self._identity(tenant_id, owner_user_id)
+        session_uuid = str(UUID(session_id))
+        storage_key = f"{identity['tenant_id']}/{session_uuid}/content"
+        params = {**identity, "session_id": session_uuid, "storage_key": storage_key}
+        # Do not hold the ledger transaction across a potentially slow read.
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT session_id, tenant_id, owner_user_id, destination_id,
+                       recipe, state, manifest_sha256, expected_bytes,
+                       received_bytes, artifact_id, expected_sha256,
+                       lease_owner, lease_expires_at, storage_key
+                FROM public.artifact_upload_sessions
+                WHERE session_id = :session_id
+                  AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
+                  AND state = 'reconcile_required'
+                  AND artifact_id IS NULL AND lease_owner IS NULL
+                  AND lease_expires_at IS NULL AND storage_key = :storage_key
+                  AND received_bytes = expected_bytes
+                  AND expected_sha256 IS NOT NULL
+                  AND expected_bytes BETWEEN 1 AND 65536
+            """), params)
+            row = result.first()
+            if row is None:
+                return None
+            pending = self._record(row)
+
+        result = await artifact_store.read_owner_active_text_bounded(
+            session_uuid, identity["tenant_id"], identity["owner_user_id"],
+            max_bytes=pending.expected_bytes,
+        )
+        proof = result.data
+        if not result.success or not isinstance(proof, VerifiedArtifactText):
+            return None
+        if not isinstance(proof.text, str):
+            return None
+        try:
+            raw = proof.text.encode("utf-8")
+        except UnicodeError:
+            return None
+        if (
+            proof.artifact_id != session_uuid
+            or proof.tenant_id != identity["tenant_id"]
+            or proof.user_id != identity["owner_user_id"]
+            or proof.mime_type != "text/plain"
+            or not isinstance(proof.filename, str)
+            or not proof.filename.lower().endswith((".txt", ".md"))
+            or len(raw) != pending.expected_bytes
+            or proof.sha256 != pending.expected_sha256
+            or hashlib.sha256(raw).hexdigest() != pending.expected_sha256
+        ):
+            return None
+        params.update(
+            reserved_artifact_id=session_uuid,
+            observed_bytes=len(raw), observed_sha256=proof.sha256,
+            observed_filename=proof.filename,
+        )
+        # Recheck the reservation, manifest and active file metadata at the
+        # transition. Concurrent recovery can publish at most one binding.
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                UPDATE public.artifact_upload_sessions
+                SET state = 'committed', artifact_id = :reserved_artifact_id,
+                    updated_at = now()
+                WHERE session_id = :session_id
+                  AND tenant_id = :tenant_id AND owner_user_id = :owner_user_id
+                  AND state = 'reconcile_required'
+                  AND artifact_id IS NULL AND lease_owner IS NULL
+                  AND lease_expires_at IS NULL AND storage_key = :storage_key
+                  AND received_bytes = expected_bytes
+                  AND expected_bytes = :observed_bytes
+                  AND expected_sha256 = :observed_sha256
+                  AND EXISTS (
+                      SELECT 1 FROM public.files AS artifact
+                      WHERE artifact.file_id = :reserved_artifact_id
+                        AND artifact.tenant_id = :tenant_id
+                        AND artifact.owner_user_id = :owner_user_id
+                        AND artifact.deleted_at IS NULL
+                        AND artifact.bytes = :observed_bytes
+                        AND artifact.sha256 = :observed_sha256
+                        AND artifact.name = :observed_filename
+                        AND artifact.mime_type = 'text/plain'
+                        AND artifact.storage_uri = 'supabase://artifacts/' || :storage_key
+                      FOR SHARE OF artifact
+                  )
+                RETURNING session_id, tenant_id, owner_user_id, destination_id,
+                          recipe, state, manifest_sha256, expected_bytes,
+                          received_bytes, artifact_id, expected_sha256,
+                          lease_owner, lease_expires_at, storage_key
             """), params)
             row = result.first()
             if row is None:

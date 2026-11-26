@@ -74,6 +74,7 @@ def record():
         "expected_sha256": None,
         "lease_owner": None,
         "lease_expires_at": None,
+        "storage_key": None,
     }
 
 
@@ -142,7 +143,7 @@ async def test_illegal_or_unproven_commit_is_denied():
 async def test_committed_transition_requires_active_owner_matched_artifact():
     db = FakeSession({**record(), "state": "committing"})
     repo = UploadSessionRepository(lambda: db)
-    artifact_id = str(uuid4())
+    artifact_id = SESSION
     await repo.transition(
         tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
         expected_state="committing", next_state="committed",
@@ -158,6 +159,8 @@ async def test_committed_transition_requires_active_owner_matched_artifact():
     assert "artifact.sha256 = expected_sha256" in statement
     assert "expected_sha256 IS NOT NULL" in statement
     assert "expected_sha256 IS NULL" not in statement
+    assert "artifact.storage_uri = 'supabase://artifacts/' || storage_key" in statement
+    assert "FOR SHARE OF artifact" in statement
     assert "lease_owner = :lease_token" in statement
     assert "lease_expires_at > now()" in statement
 
@@ -248,6 +251,46 @@ async def test_commit_requires_lease_before_database_access():
         await repo.transition(
             tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
             expected_state="committing", next_state="committed",
-            artifact_id=str(uuid4()),
+            artifact_id=SESSION,
         )
     assert db.statements == []
+
+
+
+@pytest.mark.asyncio
+async def test_commit_rejects_unreserved_artifact_before_database_access():
+    db = FakeSession(record())
+    repo = UploadSessionRepository(lambda: db)
+    with pytest.raises(ValueError, match="reserved session identity"):
+        await repo.transition(
+            tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+            expected_state="committing", next_state="committed",
+            artifact_id=str(uuid4()), lease_token=SESSION,
+        )
+    assert db.statements == []
+
+
+@pytest.mark.asyncio
+async def test_readback_failure_never_rewrites_uncertain_session():
+    from unittest.mock import AsyncMock
+
+    db = FakeSession({
+        **record(), "state": "reconcile_required",
+        "expected_sha256": DIGEST, "received_bytes": 42,
+        "storage_key": f"{TENANT}/{SESSION}/content",
+    })
+    repo = UploadSessionRepository(lambda: db)
+    store = SimpleNamespace(
+        read_owner_active_text_bounded=AsyncMock(return_value=SimpleNamespace(
+            success=False, data=None,
+        )),
+    )
+    assert await repo.reconcile_verified_text(
+        tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+        artifact_store=store,
+    ) is None
+    store.read_owner_active_text_bounded.assert_awaited_once_with(
+        SESSION, TENANT, OWNER, max_bytes=42,
+    )
+    assert len(db.statements) == 1
+    assert not db.committed

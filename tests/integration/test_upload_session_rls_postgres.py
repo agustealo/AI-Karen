@@ -186,7 +186,7 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
                 expected_sha256=expected_digest,
                 expires_at=datetime.utcnow() + timedelta(hours=1),
             )
-            candidate_id = str(uuid4())
+            candidate_id = item.session_id
             async with factory() as db:
                 await db.execute(text(
                     "INSERT INTO public.files "
@@ -203,12 +203,14 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
                 await db.execute(text(
                     "UPDATE public.artifact_upload_sessions "
                     "SET state='committing', received_bytes=expected_bytes, "
-                    "lease_owner=:lease, lease_expires_at=now()+interval '10 minutes' "
+                    "lease_owner=:lease, lease_expires_at=now()+interval '10 minutes', "
+                    "storage_key=:storage_key "
                     "WHERE session_id=:session AND tenant_id=CAST(:tenant AS uuid) "
                     "AND owner_user_id=CAST(:owner AS uuid)"
                 ), {
                     "session": UUID(item.session_id),
                     "tenant": tenant, "owner": owner, "lease": key_token,
+                    "storage_key": f"{tenant}/{candidate_id}/content",
                 })
                 await db.commit()
             return item, candidate_id
@@ -265,6 +267,7 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
         ))
         winners = [claim for claim in claims if claim is not None]
         assert len(winners) == 1 and winners[0].lease_owner
+        assert winners[0].storage_key == f"{tenant}/{staged_session.session_id}/content"
         assert await repo.transition(
             **scope, expected_state="committing", next_state="reconcile_required",
             lease_token=str(uuid4()),
@@ -284,5 +287,71 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
         assert uncertain is not None and uncertain.state == "reconcile_required"
         assert uncertain.lease_owner is None
         assert await repo.claim_commit(**scope, lease_expires_at=deadline) is None
+
+        # Recovery is deliberately read-only with respect to Storage. The
+        # real PostgreSQL check below uses a bounded-reader double, not live
+        # object bytes. Real reader integrity is tested in the existing suite.
+        import hashlib
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+        from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
+
+        body = "verified generated text"
+        content_digest = hashlib.sha256(body.encode()).hexdigest()
+        pending = await repo.create_or_get(
+            tenant_id=tenant, owner_user_id=owner, destination_id="explorer",
+            recipe="store_only", idempotency_key_hash=uuid4().hex + uuid4().hex,
+            manifest_sha256=digest, expected_bytes=len(body.encode()),
+            expected_sha256=content_digest,
+            expires_at=datetime.utcnow() + timedelta(hours=1),
+        )
+        recovery_scope = dict(tenant_id=tenant, owner_user_id=owner, session_id=pending.session_id)
+        await repo.transition(**recovery_scope, expected_state="created", next_state="receiving")
+        await repo.record_staged(
+            **recovery_scope, observed_bytes=len(body.encode()), observed_sha256=content_digest,
+        )
+        lease = await repo.claim_commit(**recovery_scope, lease_expires_at=deadline)
+        assert lease is not None
+        await repo.transition(
+            **recovery_scope, expected_state="committing", next_state="reconcile_required",
+            lease_token=lease.lease_owner,
+        )
+        async with factory() as db:
+            await db.execute(text(
+                "INSERT INTO public.files "
+                "(file_id, tenant_id, owner_user_id, name, mime_type, bytes, "
+                "storage_uri, sha256, metadata, created_at) VALUES "
+                "(:id, CAST(:tenant AS uuid), CAST(:owner AS uuid), "
+                "'generated.txt', 'text/plain', :size, :uri, "
+                ":digest, '{}'::jsonb, now())"
+            ), {
+                "id": pending.session_id, "tenant": tenant, "owner": owner,
+                "size": len(body.encode()), "digest": content_digest,
+                "uri": f"supabase://artifacts/{lease.storage_key}",
+            })
+            await db.commit()
+        def reader(source_id=pending.session_id, source_text=body):
+            return SimpleNamespace(read_owner_active_text_bounded=AsyncMock(
+                return_value=SimpleNamespace(success=True, data=VerifiedArtifactText(
+                    artifact_id=source_id, tenant_id=tenant, user_id=owner,
+                    filename="generated.txt", mime_type="text/plain",
+                    sha256=content_digest, text=source_text,
+                )),
+            ))
+        assert await repo.reconcile_verified_text(
+            **recovery_scope, artifact_store=reader(source_id=str(uuid4())),
+        ) is None
+        assert await repo.reconcile_verified_text(
+            **recovery_scope, artifact_store=reader(source_text="x" * len(body)),
+        ) is None
+        denied_reader = reader()
+        assert await repo.reconcile_verified_text(
+            **{**recovery_scope, "owner_user_id": foreign_owner}, artifact_store=denied_reader,
+        ) is None
+        denied_reader.read_owner_active_text_bounded.assert_not_awaited()
+        recovered = await repo.reconcile_verified_text(**recovery_scope, artifact_store=reader())
+        assert recovered is not None and recovered.state == "committed"
+        assert recovered.artifact_id == pending.session_id
+        assert await repo.reconcile_verified_text(**recovery_scope, artifact_store=reader()) is None
     finally:
         await engine.dispose()
