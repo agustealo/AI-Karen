@@ -779,9 +779,7 @@ async def test_unverified_retirement_is_owner_fenced_and_survives_manager_recrea
         run_id="unresolved",
         tenant_id="11111111-1111-1111-1111-111111111111",
     )
-    await manager.register(
-        **scope, correlation_id="corr", user_id="owner", task=task
-    )
+    await manager.register(**scope, correlation_id="corr", user_id="owner", task=task)
     await task
     await manager.mark_retirement_unverified("unresolved")
     await manager.mark_failed("unresolved", RuntimeError("secondary failure"))

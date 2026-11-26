@@ -88,7 +88,9 @@ def test_run_manager_blocks_cross_tenant_observation_and_cancellation() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("cancel_requested", [False, True])
-async def test_unverified_retirement_never_claims_cancellation_or_success(cancel_requested):
+async def test_unverified_retirement_never_claims_cancellation_or_success(
+    cancel_requested,
+):
     from ai_karen_engine.agent_medusa.execution.run_manager import (
         RunNotCancellableError,
     )
