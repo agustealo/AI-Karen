@@ -794,5 +794,12 @@ async def test_redis_heartbeat_uses_single_fenced_mutation(result: int) -> None:
     ) == timedelta(seconds=settings.run_lease_ttl_seconds)
     # Every identity and active-state check precedes the first mutation.
     first_write = _HEARTBEAT_RUN_SCRIPT.index("redis.call('EXPIRE'")
-    for guard in ("'GET', KEYS[1]", "'EXISTS', KEYS[2]", "'owner_worker_id'", "'tenant_id'", "'run_id'", "status ~= 'running' and status ~= 'cancelling'"):
+    for guard in (
+        "'GET', KEYS[1]",
+        "'EXISTS', KEYS[2]",
+        "'owner_worker_id'",
+        "'tenant_id'",
+        "'run_id'",
+        "status ~= 'running' and status ~= 'cancelling'",
+    ):
         assert _HEARTBEAT_RUN_SCRIPT.index(guard) < first_write

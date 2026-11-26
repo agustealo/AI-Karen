@@ -565,3 +565,132 @@ async def _retirement_replay_acceptance(
         if run.heartbeat_task is not None:
             run.heartbeat_task.cancel()
             await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "deleted_claim",
+        "replaced_claim",
+        "deleted_hash",
+        "replaced_owner",
+        "changed_tenant",
+        "changed_run_id",
+        "terminal",
+    ],
+)
+def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
+    change: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Race the real Lua mutation against a stale advisory read on isolated keys."""
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunNotFound,
+        DistributedRunOwnershipLost,
+    )
+
+    async def scenario() -> None:
+        redis = RedisConnectionManager(redis_url=os.environ["REDIS_URL"])
+        try:
+            assert await redis.initialize(), "Real Redis must be available"
+            client = redis.client
+            assert client is not None
+            marker = uuid4().hex
+            prefix = f"ci:medusa:heartbeat:{marker}"
+            settings = _settings(worker=f"owner-{marker}", prefix=prefix)
+            store = RedisDistributedRunStore(
+                settings=settings, redis_manager=redis
+            )
+            run_id = f"run-{marker}"
+            tenant_id = str(uuid4())
+            claim = f"{prefix}:claim:{run_id}"
+            run_key = f"{prefix}:run:{run_id}"
+            index = f"{prefix}:tenant:{tenant_id}"
+            await store.register(
+                run_id=run_id,
+                correlation_id=f"corr-{marker}",
+                tenant_id=tenant_id,
+                user_id="ci-owner",
+                worker_id=settings.worker_id,
+                started_at=datetime.now(timezone.utc),
+            )
+            try:
+                assert not await store.heartbeat(
+                    run_id=run_id, worker_id=settings.worker_id
+                )
+                await store.request_cancel(run_id=run_id, tenant_id=tenant_id)
+                assert await store.heartbeat(
+                    run_id=run_id, worker_id=settings.worker_id
+                )
+                original_read = client.hgetall
+                before = None
+                before_ttls = None
+
+                async def stale_read(key: str):
+                    nonlocal before, before_ttls
+                    snapshot = await original_read(key)
+                    assert key == run_key and before is None
+                    if change == "deleted_claim":
+                        await client.delete(claim)
+                    elif change == "replaced_claim":
+                        await client.set(claim, "foreign-owner", ex=3)
+                    elif change == "deleted_hash":
+                        await client.delete(run_key)
+                    elif change == "replaced_owner":
+                        await client.hset(
+                            run_key, mapping={"owner_worker_id": "foreign-owner"}
+                        )
+                    elif change == "changed_tenant":
+                        await client.hset(
+                            run_key, mapping={"tenant_id": str(uuid4())}
+                        )
+                    elif change == "changed_run_id":
+                        await client.hset(run_key, mapping={"run_id": "other-run"})
+                    else:
+                        await client.hset(
+                            run_key, mapping={"status": "completed"}
+                        )
+                    # Shorten surviving TTLs so even an expiry-only mutation
+                    # would violate the rejected-operation invariant.
+                    for key_to_check in (claim, run_key, index):
+                        await client.pexpire(key_to_check, 3000)
+                    before = (
+                        await client.get(claim),
+                        await original_read(run_key),
+                        await client.smembers(index),
+                    )
+                    before_ttls = [
+                        await client.pttl(k) for k in (claim, run_key, index)
+                    ]
+                    return snapshot
+
+                with monkeypatch.context() as patch:
+                    patch.setattr(client, "hgetall", stale_read)
+                    error = (
+                        DistributedRunNotFound
+                        if change == "deleted_hash"
+                        else DistributedRunOwnershipLost
+                    )
+                    with pytest.raises(error):
+                        await store.heartbeat(
+                            run_id=run_id, worker_id=settings.worker_id
+                        )
+                assert before is not None and before_ttls is not None
+                assert (
+                    await client.get(claim),
+                    await original_read(run_key),
+                    await client.smembers(index),
+                ) == before
+                after_ttls = [
+                    await client.pttl(k) for k in (claim, run_key, index)
+                ]
+                for prior, after in zip(before_ttls, after_ttls, strict=True):
+                    if prior == -2:
+                        assert after == -2
+                    else:
+                        assert 0 < after <= prior
+            finally:
+                await client.delete(claim, run_key, index)
+        finally:
+            await redis.close()
+
+    asyncio.run(scenario())
