@@ -14,6 +14,7 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
     GenerationFailed,
     LLMProviderBase,
     ModelRuntimeCapabilities,
+    NativeRetirementUnverified,
     ProviderNotAvailable,
 )
 
@@ -125,7 +126,7 @@ class TransformersRuntime(LLMProviderBase):
             except BaseException as exc:
                 TransformersRuntime._native_retirement_hold.set()
                 logger.error("native_device_retirement_failed")
-                raise ProviderNotAvailable("native_device_retirement_unverified") from exc
+                raise NativeRetirementUnverified() from exc
 
     def __init__(
         self,
@@ -273,7 +274,7 @@ class TransformersRuntime(LLMProviderBase):
                                     # fence insufficient to certify retirement.
                                     TransformersRuntime._native_retirement_hold.set()
                                     logger.error("native_pipeline_placement_unverified")
-                                    raise ProviderNotAvailable("native_device_retirement_unverified")
+                                    raise NativeRetirementUnverified()
                                 checkpoint()
                             checkpoint()
                         self._require_native_retirement_ready()
@@ -282,6 +283,8 @@ class TransformersRuntime(LLMProviderBase):
                         self._model_name = self._resolve_model_name(resolved_path)
                     logger.info("Transformers pipeline warmed for %s", self._model_name)
                     return True
+                except NativeRetirementUnverified:
+                    raise
                 except Exception as exc:
                     # Cancellation is terminal, not a failed load candidate.
                     self._require_native_retirement_ready()

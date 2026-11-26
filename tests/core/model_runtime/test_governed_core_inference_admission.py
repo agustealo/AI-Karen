@@ -1522,3 +1522,36 @@ async def test_native_attempt_sequence_retains_worker_and_stops_later_attempts()
     assert retired.is_set()
     assert observed == ["first"]
     assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_late_native_retirement_failure_survives_repeated_cancellation():
+    from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
+
+    admission = _scope(calls=1)
+    await admission.reserve_local_embedding(model="local-embedding-model")
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+
+    def worker(checkpoint):
+        loop.call_soon_threadsafe(entered.set)
+        if not release.wait(5):
+            raise RuntimeError("test worker release deadline")
+        raise NativeRetirementUnverified()
+
+    task = asyncio.create_task(admission.run_admitted_blocking(worker))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done()
+    finally:
+        release.set()
+        await asyncio.wait_for(asyncio.gather(task, return_exceptions=True), timeout=3)
+    with pytest.raises(NativeRetirementUnverified):
+        await task
+    assert admission.meter.model_calls == 1

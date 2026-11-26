@@ -19,6 +19,13 @@ class ProviderNotAvailable(LLMError):
     """The selected provider/runtime cannot currently execute the request."""
 
 
+class NativeRetirementUnverified(ProviderNotAvailable):
+    """Native work may remain active; no fallback or terminal receipt is safe."""
+
+    def __init__(self) -> None:
+        super().__init__("native_device_retirement_unverified")
+
+
 class GenerationFailed(LLMError):
     """The provider was selected but generation failed."""
 
@@ -122,6 +129,7 @@ __all__ = [
     "LLMError",
     "LLMProviderBase",
     "ModelRuntimeCapabilities",
+    "NativeRetirementUnverified",
     "ProviderNotAvailable",
     "ProviderRuntime",
 ]

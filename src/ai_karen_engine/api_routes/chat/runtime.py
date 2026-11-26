@@ -31,6 +31,7 @@ from ai_karen_engine.persistence.repositories.chat_run_repository import (
     SqlChatRunRepository,
     draft_revision_from_submission_id,
 )
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.chat_run_lifecycle import (
     ChatRunConflict,
     ChatRunCancellationRequested,
@@ -874,6 +875,21 @@ async def _ag_ui_sse(
                 yield await frame(event)
             if projection.terminal:
                 break
+    except NativeRetirementUnverified:
+        # This is a diagnostic only. Do not append a terminal event to a
+        # still-unresolved run, or project an acknowledged cancellation.
+        event = {
+            "type": "RUN_ERROR",
+            "code": "CHAT_NATIVE_RETIREMENT_UNVERIFIED",
+            "message": "Native execution retirement is unverified. Check run status before retrying.",
+        }
+        projection.project(ChatStreamChunk(
+            type=ChatStreamEventType.ERROR,
+            content=event["message"],
+            correlation_id=runtime_request.context.correlation_id,
+            metadata={"error_code": event["code"]},
+        ))
+        yield f"data: {json.dumps(event, ensure_ascii=False, allow_nan=False)}\n\n"
     except ChatRunCancellationRequested:
         async for packet in error_frames(
             "CHAT_STREAM_CANCELLED", "This chat run was cancelled.",

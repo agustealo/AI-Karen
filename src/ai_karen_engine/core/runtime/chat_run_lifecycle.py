@@ -15,6 +15,7 @@ from typing import Any, Optional
 
 from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.logging import get_structured_logger
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatStreamChunk,
@@ -411,6 +412,11 @@ class ChatRunCoordinator:
                     "status": "cancelled",
                 },
             )
+            raise
+        except NativeRetirementUnverified:
+            # Do not release the unresolved admission fence. Lease expiry
+            # will project interruption/orphaning, never cancellation success.
+            await close_upstream(strict=True)
             raise
         except BaseException as exc:
             # Connection cancellation must not become a successful assistant

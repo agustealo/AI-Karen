@@ -16,7 +16,9 @@ from contextvars import copy_context
 from dataclasses import dataclass
 from typing import Any, TypeVar
 
-from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+from ai_karen_engine.core.model_runtime.provider_contracts import (
+    NativeRetirementUnverified, ProviderNotAvailable,
+)
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint, ProviderEndpointType
 from ai_karen_engine.core.model_runtime.provider_execution import (
     provider_endpoint_requires_external_permission,
@@ -246,7 +248,11 @@ class GovernedToolModelAdmission:
                     except Exception:
                         break
                 if not worker.cancelled():
-                    worker.exception()  # observe a late failure without logging payloads
+                    failure = worker.exception()
+                    if isinstance(failure, NativeRetirementUnverified):
+                        # Never replace uncertain device cessation with a
+                        # confirmed caller cancellation or deadline outcome.
+                        raise failure
                 raise
 
     async def run_admitted_preparation(

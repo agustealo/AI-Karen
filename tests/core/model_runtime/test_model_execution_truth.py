@@ -944,7 +944,7 @@ def test_governed_pipeline_placement_fences_even_before_publication(monkeypatch,
     if failure == "constructor":
         assert runtime.warm("selected-model", exact_only=True, checkpoint=checkpoint) is False
     else:
-        expected = "execution_cancelled" if failure == "cancelled" else "retirement_hold"
+        expected = "execution_cancelled" if failure == "cancelled" else "retirement_unverified"
         with pytest.raises(ProviderNotAvailable, match=expected):
             runtime.warm("selected-model", exact_only=True, checkpoint=checkpoint)
     assert events == ["placement", "fence"]

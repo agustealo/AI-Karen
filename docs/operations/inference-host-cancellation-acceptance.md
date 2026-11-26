@@ -124,3 +124,16 @@ which preserves caller cancellation but may obscure the unverified device
 retirement from the chat lifecycle. Propagate that failure without enabling
 fallback or resolving the orphan fence before certifying recovery. Actual
 process-death plus device recovery acceptance remains NOT_RUN.
+
+
+### Unverified retirement propagation (KUI-004B4.48C7Z8E9)
+
+The typed `NativeRetirementUnverified` failure preserves the distinction
+between caller cancellation and failed native cessation. The canonical worker
+join rethrows a late retirement failure even after repeated cancellation.
+Reasoning strategy/executor and runtime fallback boundaries propagate that
+failure instead of producing a normal result. The chat stream coordinator
+leaves its existing unresolved lease fence intact; the AG-UI diagnostic is
+not a durable terminal event. These source contracts do not certify hardware
+quiescence or authorize a process restart. Full cross-adapter and real device
+acceptance remain required.

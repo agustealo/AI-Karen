@@ -16,6 +16,7 @@ from .registry import get_engine
 from ai_karen_engine.core.errors.response_validation import validate_response_text
 from ai_karen_engine.core.expression.settings import get_expression_settings
 from ai_karen_engine.core.logging.events import RoutingEvents
+from ..model_runtime.provider_contracts import NativeRetirementUnverified
 from ..model_runtime.provider_policy import evaluate_provider_policy
 
 logger = logging.getLogger(__name__)
@@ -600,6 +601,9 @@ class ExpressionGateway:
                 raise
             except ExecutionDeadlineExceeded:
                 attempt_outcome = "deadline_exhausted"
+                raise
+            except NativeRetirementUnverified:
+                attempt_outcome = "native_retirement_unverified"
                 raise
             except Exception as exc:
                 self.circuits.mark_failure(f"expression.engine.{engine_id}")

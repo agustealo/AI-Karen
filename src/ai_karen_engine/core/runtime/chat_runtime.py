@@ -46,6 +46,7 @@ from ai_karen_engine.core.runtime.direct_capability_executor import (
     get_direct_capability_executor,
 )
 from ai_karen_engine.core.runtime.workflow_runtime import get_workflow_runtime
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.runtime_fallback import build_runtime_fallback
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     ApprovalRequiredResponse,
@@ -816,6 +817,8 @@ class ChatRuntime:
             await self._observe_request_cancellation(
                 trajectory, decision, request, plan, meter, start,
             )
+            raise
+        except NativeRetirementUnverified:
             raise
         except Exception as exc:
             # A source revoked during provider generation is the same
@@ -1735,15 +1738,22 @@ class ChatRuntime:
             # suspended at its previous yield. Close it deterministically;
             # otherwise the model or graph may continue running after the
             # canonical request cancellation has been observed.
+            retirement_unverified = False
             try:
                 close_stream = getattr(gen, "aclose", None)
                 if callable(close_stream):
                     await close_stream()
+            except NativeRetirementUnverified:
+                retirement_unverified = True
+                raise
             finally:
-                await self._observe_request_cancellation(
-                    trajectory, decision, request, plan, meter, stream_start,
-                    request_id=request_id, conversation_id=conversation_id,
-                )
+                if not retirement_unverified:
+                    await self._observe_request_cancellation(
+                        trajectory, decision, request, plan, meter, stream_start,
+                        request_id=request_id, conversation_id=conversation_id,
+                    )
+            raise
+        except NativeRetirementUnverified:
             raise
         except Exception as exc:
             if str(exc) == "memory_source_revoked_or_unverifiable":
@@ -1803,6 +1813,8 @@ class ChatRuntime:
                     trajectory, decision, request, plan, meter, stream_start,
                     request_id=request_id, conversation_id=conversation_id,
                 )
+                raise
+            except NativeRetirementUnverified:
                 raise
             except Exception as fallback_exc:
                 if str(fallback_exc) == "memory_source_revoked_or_unverifiable":
@@ -5408,7 +5420,10 @@ class ChatRuntime:
                 await authorize_delivery()
                 await events.put(("delta", delta))
 
+        retirement_failure: NativeRetirementUnverified | None = None
+
         async def produce() -> None:
+            nonlocal retirement_failure
             try:
                 result = await self._run_simple(
                     request, decision, plan, meter, memory_recall_meta,
@@ -5416,6 +5431,14 @@ class ChatRuntime:
                     reasoning_preflight=reasoning_preflight,
                 )
                 await events.put(("complete", result))
+            except NativeRetirementUnverified as exc:
+                retirement_failure = exc
+                # When the consumer has stopped, do not wait on a queue
+                # that no longer has a reader. The join preserves the failure.
+                owner = asyncio.current_task()
+                if owner is not None and owner.cancelling():
+                    raise
+                await events.put(("error", exc))
             except Exception as exc:
                 # Never log the exception text or issue a new model attempt
                 # here. ChatRuntime's outer stream owns error/fallback policy.
@@ -5495,6 +5518,9 @@ class ChatRuntime:
                 await worker
             except asyncio.CancelledError:
                 pass
+            finally:
+                if retirement_failure is not None:
+                    raise retirement_failure
 
     async def _run_graph(
         self,

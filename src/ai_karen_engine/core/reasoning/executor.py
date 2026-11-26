@@ -12,6 +12,7 @@ import uuid
 from typing import Any, List, Optional, Sequence
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningAssessment,
     ReasoningBudget,
@@ -109,6 +110,8 @@ class ReasoningExecutor:
             self._emit_observability(result, started_at, plan, context, effective_modes)
             return result
 
+        except NativeRetirementUnverified:
+            raise
         except BudgetExhaustedError:
             return self._budget_exhausted_result(reasoning_id, started_at)
         except ValueError as exc:
@@ -346,6 +349,8 @@ class ReasoningExecutor:
             )
             try:
                 result = await strategy.execute(request, context, evidence, remaining)
+            except NativeRetirementUnverified:
+                raise
             except Exception as exc:
                 logger.error("Strategy %s failed: %s", strategy.strategy_id, exc)
                 continue

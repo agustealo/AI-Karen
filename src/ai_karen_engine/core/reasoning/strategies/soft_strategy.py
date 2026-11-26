@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Callable, List
 
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningAssessment,
     ReasoningBudget,
@@ -111,6 +112,8 @@ class SoftReasoner(ReasoningStrategyEngine):
             else:
                 # Explicit research-only composition retains compatibility.
                 trace = await asyncio.to_thread(self._engine.explore, prompt, **kwargs)
+        except NativeRetirementUnverified:
+            raise
         except SoftReasoningUnavailable as exc:
             return self._failed(
                 str(exc),
