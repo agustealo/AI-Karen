@@ -1026,3 +1026,88 @@ def test_generated_artifact_standard_user_has_narrow_permission_not_data_write()
     assert not manager.has_permission(user, Permission.DATA_DELETE)
     readonly = UserData(user_id=user.user_id, tenant_id=user.tenant_id, roles=["readonly"])
     assert not manager.has_permission(readonly, Permission.ARTIFACT_CREATE_OWN)
+
+
+@pytest.mark.asyncio
+async def test_generated_artifact_model_result_bridge_reuses_canonical_ledger(monkeypatch):
+    from ai_karen_engine.core.expression.contracts import ExpressionResult
+    from ai_karen_engine.services.database.repositories.artifact_store import Artifact
+
+    request, plan, meter = await authority(generated=True)
+    ctx = request.context
+    ctx.conversation_id = str(uuid.uuid4())
+    runtime = runtime_with_reader(monkeypatch, None)
+    session_id, lease_token = str(uuid.uuid4()), str(uuid.uuid4())
+    ledger = SimpleNamespace(
+        create_or_get=AsyncMock(return_value=SimpleNamespace(session_id=session_id, state="created")),
+        transition=AsyncMock(return_value=SimpleNamespace(state="receiving")),
+        record_staged=AsyncMock(return_value=SimpleNamespace(state="staged")),
+        claim_commit=AsyncMock(return_value=SimpleNamespace(lease_owner=lease_token)),
+    )
+
+    async def upload(item, *, session_id, lease_token):
+        return RepositoryResult(success=True, data=Artifact(
+            id=session_id, tenant_id=item.tenant_id, user_id=item.user_id,
+            filename=item.filename, mime_type=item.content_type,
+            size_bytes=len(item.data), sha256=hashlib.sha256(item.data).hexdigest(),
+            metadata=item.metadata,
+        ))
+
+    store = SimpleNamespace(upload_reserved_text=AsyncMock(side_effect=upload))
+    repositories = SimpleNamespace(
+        create_upload_session_repository=lambda: ledger,
+        create_artifact_store=lambda: store,
+    )
+    monkeypatch.setattr(runtime, "_artifact_repositories", lambda: repositories)
+    result = ExpressionResult(
+        task_id=f"expr_{ctx.correlation_id}", text="Complete deliverable",
+        provider="local-provider", model="local-model", engine_id="local-engine",
+        engine_mode="local", runtime_engine="local-engine", response_source="provider_runtime",
+        attempts=[], skipped=[], latency_ms=1.0, metadata={"finish_reason": "stop"},
+    )
+    decision = SimpleNamespace(intent=GENERATED_TEXT_ARTIFACT_CAPABILITY)
+    receipt = await runtime._persist_generated_text_result(request, decision, plan, meter, result)
+    assert receipt == {
+        "artifact_id": session_id, "filename": "generated.txt", "mime_type": "text/plain",
+        "size_bytes": len(result.text.encode()),
+        "sha256": hashlib.sha256(result.text.encode()).hexdigest(),
+    }
+    assert ledger.create_or_get.await_args.kwargs["expected_sha256"] == receipt["sha256"]
+    item = store.upload_reserved_text.await_args.args[0]
+    assert item.data == result.text.encode()
+    assert item.metadata["provider"] == result.provider
+    assert item.metadata["request_id"] == ctx.request_id
+    assert item.metadata["policy_decision_id"] == plan.policy_decision_id
+    ledger.create_or_get.return_value = SimpleNamespace(session_id=session_id, state="reconcile_required")
+    with pytest.raises(RuntimeError, match="generated_artifact_reconcile_required"):
+        await runtime._persist_generated_text_result(request, decision, plan, meter, result)
+    store.upload_reserved_text.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"degraded": True},
+    {"metadata": {"finish_reason": "length", "output_truncated": True}},
+    {"metadata": {}},
+    {"task_id": "another-task"},
+    {"response_source": "fallback_provider_runtime"},
+])
+async def test_generated_artifact_denies_unverified_model_result_before_storage(monkeypatch, changes):
+    from ai_karen_engine.core.expression.contracts import ExpressionResult
+
+    request, plan, meter = await authority(generated=True)
+    runtime = runtime_with_reader(monkeypatch, None)
+    unavailable = Mock(side_effect=AssertionError("unverified output reached repository"))
+    monkeypatch.setattr(runtime, "_artifact_repositories", unavailable)
+    fields = dict(
+        task_id=f"expr_{request.context.correlation_id}", text="Complete deliverable",
+        provider="local-provider", model="local-model", engine_id="local-engine",
+        engine_mode="local", runtime_engine="local-engine", response_source="provider_runtime",
+        attempts=[], skipped=[], latency_ms=1.0, metadata={"finish_reason": "stop"},
+    )
+    with pytest.raises(PermissionError, match="generated_artifact_result_denied"):
+        await runtime._persist_generated_text_result(
+            request, SimpleNamespace(intent=GENERATED_TEXT_ARTIFACT_CAPABILITY),
+            plan, meter, ExpressionResult(**{**fields, **changes}),
+        )
+    unavailable.assert_not_called()

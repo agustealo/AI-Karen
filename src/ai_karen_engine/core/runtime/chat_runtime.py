@@ -69,7 +69,10 @@ from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
 from ai_karen_engine.platform.observability import get_observability_emitter
 from ai_karen_engine.platform.observability.contracts import EventType as RuntimeEventType
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
-from ai_karen_engine.core.expression.contracts import ExpressionTask
+from ai_karen_engine.core.expression.contracts import ExpressionResult, ExpressionTask
+from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    GENERATED_TEXT_ARTIFACT_CAPABILITY,
+)
 from ai_karen_engine.services.approvals import (
     ApprovalError,
     get_approval_service,
@@ -160,16 +163,18 @@ class ChatRuntime:
         self._emitter = get_observability_emitter()
 
     @staticmethod
-    def _attachment_artifact_store() -> Any:
-        """Use the canonical repository factory, not a second Storage client."""
+    def _artifact_repositories() -> Any:
+        """Resolve the canonical data-layer factory, never another Storage client."""
         from ai_karen_engine.database.factory import DatabaseServiceFactory
 
-        factory = DatabaseServiceFactory()
-        factory.create_canonical_repositories()
-        store = factory.get_service("artifact_store")
-        if store is None:
+        repositories = DatabaseServiceFactory().create_canonical_repositories()
+        if repositories is None:
             raise AttachmentAdmissionDenied("attachment_store_unavailable")
-        return store
+        return repositories
+
+    @staticmethod
+    def _attachment_artifact_store() -> Any:
+        return ChatRuntime._artifact_repositories().create_artifact_store()
 
     async def _admit_attachments(
         self, request: ChatExecutionRequest,
@@ -867,6 +872,7 @@ class ChatRuntime:
                 fallback = (
                     None
                     if ChatRuntime._attachment_restriction_required(request)
+                    or decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY
                     or isinstance(exc, AttachmentAdmissionDenied)
                     or str(exc) == "memory_source_revoked_or_unverifiable"
                     else await build_runtime_fallback(
@@ -1796,6 +1802,7 @@ class ChatRuntime:
                 # delivered to the client by a different provider/model.
                 if (
                     _stream_fallback_allowed(streamed_text)
+                    and decision.intent != GENERATED_TEXT_ARTIFACT_CAPABILITY
                     and not ChatRuntime._attachment_restriction_required(request)
                     and not isinstance(exc, AttachmentAdmissionDenied)
                     and str(exc) != "memory_source_revoked_or_unverifiable"
@@ -5233,6 +5240,174 @@ class ChatRuntime:
         except Exception:
             return False
 
+    async def _persist_generated_text_result(
+        self,
+        request: ChatExecutionRequest,
+        decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        result: ExpressionResult,
+    ) -> Dict[str, Any]:
+        """Persist one complete direct-model deliverable through the existing ledger.
+
+        This internal boundary does not accept model-supplied paths, principals,
+        permissions or idempotency identities. Uncertain writes never replay.
+        """
+        from ai_karen_engine.core.expression.gateway import MODEL_GENERATION_RESPONSE_SOURCES
+        from ai_karen_engine.services.database.repositories.artifact_store import (
+            Artifact, ArtifactUploadRequest,
+        )
+
+        ctx = request.context
+        if not isinstance(result, ExpressionResult):
+            raise PermissionError("generated_artifact_result_denied")
+        metadata = result.metadata or {}
+        if (
+            decision.intent != GENERATED_TEXT_ARTIFACT_CAPABILITY
+            or result.task_id != f"expr_{ctx.correlation_id}"
+            or result.response_source not in (
+                MODEL_GENERATION_RESPONSE_SOURCES - {"fallback_provider_runtime"}
+            )
+            or result.degraded
+            or metadata.get("fallback_level", 0) != 0
+            or metadata.get("output_truncated") is True
+            or metadata.get("finish_reason") != "stop"
+            or not all(
+                isinstance(value, str) and value.strip() and len(value) <= 256
+                for value in (result.provider, result.model, result.runtime_engine or result.engine_id)
+            )
+            or not isinstance(result.text, str) or not result.text.strip()
+            or not ctx.request_id or not ctx.correlation_id
+            or self._attachment_restriction_required(request)
+        ):
+            raise PermissionError("generated_artifact_result_denied")
+        raw = result.text.encode("utf-8", errors="strict")
+        if not 1 <= len(raw) <= 65536 or any(
+            ord(char) < 32 and char not in "\n\r\t" for char in result.text
+        ):
+            raise PermissionError("generated_artifact_content_denied")
+        digest = hashlib.sha256(raw).hexdigest()
+        tenant_id, user_id = ctx.tenant_id, ctx.user_id
+        request_id, correlation_id = ctx.request_id, ctx.correlation_id
+        provenance = {
+            "kind": "generated_text", "version": 1,
+            "request_id": request_id, "correlation_id": correlation_id,
+            "policy_decision_id": plan.policy_decision_id, "execution_id": plan.execution_id,
+            "task_id": result.task_id, "provider": result.provider, "model": result.model,
+            "runtime_engine": result.runtime_engine or result.engine_id,
+            "response_source": result.response_source, "sha256": digest,
+        }
+        issuance = vars(ctx).get("_runtime_policy_issuance")
+        if not isinstance(issuance, tuple) or len(issuance) != 2:
+            raise PermissionError("generated_artifact_authority_denied")
+        policy = issuance[0]
+
+        async def authorize() -> None:
+            if (
+                request.context is not ctx
+                or (ctx.tenant_id, ctx.user_id, ctx.request_id, ctx.correlation_id)
+                != (tenant_id, user_id, request_id, correlation_id)
+                or self._attachment_restriction_required(request)
+            ):
+                raise PermissionError("generated_artifact_authority_denied")
+            await policy.authorize_generated_text_write(context=ctx, plan=plan, meter=meter)
+
+        await authorize()
+        remaining_ms = await meter.remaining_duration_ms()
+        if remaining_ms <= 0:
+            raise PermissionError("generated_artifact_deadline")
+        deadline = datetime.datetime.utcnow() + datetime.timedelta(milliseconds=remaining_ms)
+        async with asyncio.timeout(remaining_ms / 1000):
+            snapshot = await self._freeze_persona_snapshot(request)
+            if snapshot.status not in {"none", "ready"} or snapshot.memory_filter_required:
+                raise PermissionError("generated_artifact_persona_scope_denied")
+            gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+            await gateway.ensure_conversation(
+                ctx, first_user_message=self._extract_user_message(request.messages),
+                persona_scope_id=None,
+            )
+            await gateway.require_owned_conversation(ctx)
+            conversation_id = ctx.require_conversation_id()
+            for identifier in (tenant_id, user_id, conversation_id):
+                if str(uuid.UUID(identifier)) != identifier:
+                    raise PermissionError("generated_artifact_identity_denied")
+            if not await meter.consume_tool_call():
+                raise PermissionError("generated_artifact_budget_denied")
+            provenance["conversation_id"] = conversation_id
+            filename = "generated.txt"
+            manifest = hashlib.sha256(json.dumps(
+                {"filename": filename, "mime_type": "text/plain", "provenance": provenance},
+                sort_keys=True, separators=(",", ":"), allow_nan=False,
+            ).encode()).hexdigest()
+            idempotency = hashlib.sha256(json.dumps(
+                ["generated_text_v1", tenant_id, user_id, conversation_id, request_id],
+                separators=(",", ":"),
+            ).encode()).hexdigest()
+            repositories = self._artifact_repositories()
+            ledger = repositories.create_upload_session_repository()
+            store = repositories.create_artifact_store()
+            await authorize()
+            if ctx.require_conversation_id() != conversation_id:
+                raise PermissionError("generated_artifact_identity_denied")
+            pending = await ledger.create_or_get(
+                tenant_id=tenant_id, owner_user_id=user_id,
+                destination_id="explorer", recipe="store_only",
+                idempotency_key_hash=idempotency, manifest_sha256=manifest,
+                expected_bytes=len(raw), expected_sha256=digest, expires_at=deadline,
+            )
+            scope = dict(tenant_id=tenant_id, owner_user_id=user_id, session_id=pending.session_id)
+            if pending.state != "created":
+                raise RuntimeError("generated_artifact_reconcile_required")
+            if await ledger.transition(
+                **scope, expected_state="created", next_state="receiving",
+            ) is None:
+                raise RuntimeError("generated_artifact_reconcile_required")
+            if await ledger.record_staged(
+                **scope, observed_bytes=len(raw), observed_sha256=digest,
+            ) is None:
+                raise RuntimeError("generated_artifact_reconcile_required")
+            await authorize()
+            lease = await ledger.claim_commit(**scope, lease_expires_at=deadline)
+            if lease is None or not lease.lease_owner:
+                raise RuntimeError("generated_artifact_reconcile_required")
+            await authorize()
+            if ctx.require_conversation_id() != conversation_id:
+                raise PermissionError("generated_artifact_identity_denied")
+            saved = await store.upload_reserved_text(
+                ArtifactUploadRequest(
+                    tenant_id=tenant_id, user_id=user_id, conversation_id=conversation_id,
+                    kind="generated_text", filename=filename, content_type="text/plain",
+                    data=raw, metadata=dict(provenance),
+                ),
+                session_id=pending.session_id, lease_token=lease.lease_owner,
+            )
+            artifact = saved.data
+            if (
+                not saved.success or not isinstance(artifact, Artifact)
+                or artifact.id != pending.session_id
+                or artifact.tenant_id != tenant_id or artifact.user_id != user_id
+                or artifact.filename != filename or artifact.mime_type != "text/plain"
+                or artifact.size_bytes != len(raw) or artifact.sha256 != digest
+                or artifact.deleted_at is not None or artifact.metadata != provenance
+            ):
+                raise RuntimeError("generated_artifact_reconcile_required")
+            await authorize()
+            if ctx.require_conversation_id() != conversation_id:
+                raise PermissionError("generated_artifact_identity_denied")
+            await gateway.require_owned_conversation(ctx)
+            if not await meter.check_duration():
+                raise PermissionError("generated_artifact_deadline")
+            logger.info(
+                "generated_artifact_persisted",
+                extra={"request_id": request_id, "correlation_id": correlation_id,
+                       "artifact_id": artifact.id, "size_bytes": artifact.size_bytes},
+            )
+            return {
+                "artifact_id": artifact.id, "filename": artifact.filename,
+                "mime_type": artifact.mime_type, "size_bytes": artifact.size_bytes,
+                "sha256": artifact.sha256,
+            }
+
     async def _run_simple(
         self,
         request: ChatExecutionRequest,
@@ -5386,6 +5561,12 @@ class ChatRuntime:
             total_latency_ms=result.latency_ms
             + float(prompt_telemetry.get("assembly_duration_ms") or 0.0),
         )
+        if decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY:
+            if token_sink is not None or reasoning_preflight is not None:
+                raise PermissionError("generated_artifact_delivery_scope_denied")
+            normalized["artifacts"] = [
+                await self._persist_generated_text_result(request, decision, plan, meter, result)
+            ]
         return result.text, normalized
 
     async def _run_simple_stream(
@@ -5430,7 +5611,11 @@ class ChatRuntime:
             try:
                 result = await self._run_simple(
                     request, decision, plan, meter, memory_recall_meta,
-                    token_sink=send_token,
+                    # Generated files require terminal model evidence before delivery.
+                    token_sink=(
+                        None if decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY
+                        else send_token
+                    ),
                     reasoning_preflight=reasoning_preflight,
                 )
                 await events.put(("complete", result))
