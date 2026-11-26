@@ -783,3 +783,21 @@ C must prove its own recorded evidence, reload and signed-out denial. Use the
 same private test selector and approved origin; no new fixture creation,
 execution mutation, synthetic response or credential artifacts. Actual browser
 proof remains NOT_RUN until the authorized run succeeds.
+
+### ARM-05C.7A: protected specialist acceptance dispatch
+
+After the lifecycle and cross-tenant source candidates are merged, use the
+existing **KAREN Browser Acceptance** workflow, scenario
+`specialist-participation`, on the exact reviewed current main SHA. Configure
+`KAREN_SPECIALIST_ACCEPTANCE_URL` in the existing protected environment for an
+independently verifiable immutable Vercel deployment. Provide the already
+approved A/B/C credentials and four distinct terminal-run IDs as protected
+secrets using the names documented above, plus the existing Vercel access
+credentials. No fixture creation or execution mutation is authorized. The
+shared deployment fixture establishes only a same-origin protection cookie.
+The workflow independently reattests frontend revision and backend readiness
+before and after the readback; it does not attest the backend image SHA.
+It selects exactly the real lifecycle test with all three required flags,
+rejects any skipped or retried result, and deletes temporary private reports
+without publishing browser diagnostics. A successful dispatch is necessary
+before marking live specialist readback verified.

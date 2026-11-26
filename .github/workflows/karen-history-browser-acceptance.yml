@@ -29,6 +29,7 @@ on:
           - pins-readback
           - pins-mutation
           - card-studio
+          - specialist-participation
       target_sha:
         description: Exact reviewed 40-character main commit SHA for protected acceptance
         type: string
@@ -748,7 +749,7 @@ jobs:
   # KUI: protected settings, navigation, and file-explorer browser acceptance.
   # Reuse the approved main/deployment/credential boundary, not a second runner.
   authenticated-settings-visual-acceptance:
-    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'card-studio' || inputs.scenario == 'file-explorer' || inputs.scenario == 'plugin-surfaces' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation' || inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'settings' || inputs.scenario == 'navigation' || inputs.scenario == 'card-studio' || inputs.scenario == 'file-explorer' || inputs.scenario == 'plugin-surfaces' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation' || inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation' || inputs.scenario == 'specialist-participation') && github.ref == 'refs/heads/main'
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     environment: karen-sanitized-browser-acceptance
@@ -756,7 +757,7 @@ jobs:
       contents: read
     env:
       TARGET_SHA: ${{ inputs.target_sha }}
-      KAREN_BASE_URL: ${{ (inputs.scenario == 'card-studio' && vars.KAREN_CARD_STUDIO_ACCEPTANCE_URL) || ((inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && vars.KAREN_PIN_ACCEPTANCE_URL) || ((inputs.scenario == 'plugin-surfaces' || inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario == 'settings' || inputs.scenario == 'navigation') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
+      KAREN_BASE_URL: ${{ (inputs.scenario == 'specialist-participation' && vars.KAREN_SPECIALIST_ACCEPTANCE_URL) || (inputs.scenario == 'card-studio' && vars.KAREN_CARD_STUDIO_ACCEPTANCE_URL) || ((inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && vars.KAREN_PIN_ACCEPTANCE_URL) || ((inputs.scenario == 'plugin-surfaces' || inputs.scenario == 'file-explorer' || inputs.scenario == 'content-intelligence' || inputs.scenario == 'content-intelligence-denial' || inputs.scenario == 'content-intelligence-revocation') && vars.KAREN_FILE_EXPLORER_ACCEPTANCE_URL) || ((inputs.scenario == 'settings' || inputs.scenario == 'navigation') && vars.KAREN_SETTINGS_ACCEPTANCE_URL) || '' }}
       KAREN_VERCEL_ACCEPTANCE_TARGET: ${{ inputs.deployment_target }}
       KAREN_SETTINGS_VISUAL_ACCEPTANCE: ${{ (inputs.scenario == 'settings' || inputs.scenario == 'navigation') && 'true' || 'false' }}
       KAREN_PLUGIN_SURFACES_ACCEPTANCE: ${{ inputs.scenario == 'plugin-surfaces' && 'true' || 'false' }}
@@ -875,6 +876,9 @@ jobs:
           test -n "$KAREN_BASE_URL" || { echo "::error::Missing approved immutable browser acceptance deployment URL"; exit 1; }
           python scripts/ci/verify_vercel_deployment.py
           python scripts/ci/verify_deployment_revision.py
+          if [[ "${{ inputs.scenario }}" == "specialist-participation" ]]; then
+            python -m scripts.ci.verify_backend_target --base-url "$KAREN_BASE_URL"
+          fi
 
       - uses: actions/setup-node@v5
         with:
@@ -889,6 +893,7 @@ jobs:
         run: npx playwright install --with-deps chromium
 
       - name: Verify authenticated workspace browser acceptance
+        if: inputs.scenario != 'specialist-participation'
         shell: bash
         env:
           KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
@@ -965,6 +970,77 @@ jobs:
               --project=chromium --reporter=list --retries=0
           fi
 
+      - name: Prove protected specialist lifecycle and cross-tenant readback
+        if: inputs.scenario == 'specialist-participation'
+        shell: bash
+        env:
+          KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE: "true"
+          KAREN_SPECIALIST_LIFECYCLE_ACCEPTANCE: "true"
+          KAREN_SPECIALIST_CROSS_TENANT_ACCEPTANCE: "true"
+          KAREN_E2E_CAPTURE_VIDEO: "false"
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          KAREN_UX_ACCOUNT_B_EMAIL: ${{ secrets.KAREN_UX_ACCOUNT_B_EMAIL }}
+          KAREN_UX_ACCOUNT_B_PASSWORD: ${{ secrets.KAREN_UX_ACCOUNT_B_PASSWORD }}
+          KAREN_UX_ACCOUNT_C_EMAIL: ${{ secrets.KAREN_UX_ACCOUNT_C_EMAIL }}
+          KAREN_UX_ACCOUNT_C_PASSWORD: ${{ secrets.KAREN_UX_ACCOUNT_C_PASSWORD }}
+          KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID: ${{ secrets.KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID }}
+          KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID: ${{ secrets.KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID }}
+          KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID: ${{ secrets.KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID }}
+          KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID: ${{ secrets.KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID }}
+          VERCEL_AUTOMATION_BYPASS_SECRET: ${{ secrets.VERCEL_AUTOMATION_BYPASS_SECRET }}
+        run: |
+          set -euo pipefail
+          umask 077
+          for name in KAREN_UX_EMAIL KAREN_UX_PASSWORD KAREN_UX_ACCOUNT_B_EMAIL KAREN_UX_ACCOUNT_B_PASSWORD KAREN_UX_ACCOUNT_C_EMAIL KAREN_UX_ACCOUNT_C_PASSWORD KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID VERCEL_AUTOMATION_BYPASS_SECRET; do
+            test -n "${!name}" || { echo "::error::Missing protected specialist fixture configuration"; exit 1; }
+          done
+          private_dir="$(mktemp -d "${RUNNER_TEMP:?}/specialist-acceptance.XXXXXXXX")"
+          trap 'rm -rf -- "$private_dir"' EXIT
+          # Never publish private Playwright diagnostics or even a failed report.
+          # An ephemeral report is used solely to reject skipped/no-op success.
+          if ! PLAYWRIGHT_JSON_OUTPUT_FILE="$private_dir/report.json" \
+            npx playwright test e2e/automation-two-account-acceptance.spec.ts \
+              --config=e2e/playwright.config.ts --project=chromium \
+              --grep='ARM-05C.5B real participation receipts survive reload and deny a second account' \
+              --workers=1 --retries=0 --forbid-only --reporter=json \
+              --output="$private_dir/artifacts" >"$private_dir/runner.log" 2>&1; then
+            echo "::error::Protected specialist browser acceptance failed (private diagnostics suppressed)"
+            exit 1
+          fi
+          if ! python - "$private_dir/report.json" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+
+          report = json.loads(Path(sys.argv[1]).read_text())
+          stats = report.get("stats", {})
+          if stats.get("expected") != 1 or any(
+              stats.get(key, 0) for key in ("unexpected", "skipped", "flaky")
+          ):
+              raise SystemExit(1)
+          observed = []
+          def collect(suites):
+              for suite in suites:
+                  for spec in suite.get("specs", []):
+                      for test in spec.get("tests", []):
+                          observed.append((spec.get("title"), test.get("status"),
+                                           test.get("expectedStatus"),
+                                           [r.get("status") for r in test.get("results", [])]))
+                  collect(suite.get("suites", []))
+          collect(report.get("suites", []))
+          if observed != [(
+              "ARM-05C.5B real participation receipts survive reload and deny a second account",
+              "expected", "passed", ["passed"],
+          )]:
+              raise SystemExit(1)
+          PY
+          then
+            echo "::error::Exactly one passing real specialist scenario is required"
+            exit 1
+          fi
+          echo "Protected specialist readback: one passing scenario, zero skips"
+
       - name: Reattest deployed provenance and current main after browser proof
         working-directory: .
         shell: bash
@@ -979,6 +1055,9 @@ jobs:
           set -euo pipefail
           python scripts/ci/verify_vercel_deployment.py
           python scripts/ci/verify_deployment_revision.py
+          if [[ "${{ inputs.scenario }}" == "specialist-participation" ]]; then
+            python -m scripts.ci.verify_backend_target --base-url "$KAREN_BASE_URL"
+          fi
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           main_sha="$(gh api "repos/$GITHUB_REPOSITORY/branches/main" --jq '.commit.sha')"
           test "$main_sha" = "$TARGET_SHA" || { echo "::error::Reviewed main moved during acceptance"; exit 1; }

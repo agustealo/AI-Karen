@@ -409,3 +409,49 @@ def test_kcon490_real_personal_followup_dispatch_requires_verified_live_backend(
     assert "page.route(" not in source
     assert "route.fulfill(" not in source
 
+
+
+def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_credentials() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job = workflow.split("  authenticated-settings-visual-acceptance:", 1)[1]
+    assert "          - specialist-participation" in workflow
+    assert "inputs.scenario == 'specialist-participation'" in job
+    assert "github.ref == 'refs/heads/main'" in job
+    assert "environment: karen-sanitized-browser-acceptance" in job
+    assert "vars.KAREN_SPECIALIST_ACCEPTANCE_URL" in job
+    assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in job
+    assert job.count("python scripts/ci/verify_vercel_deployment.py") == 2
+    assert job.count("python scripts/ci/verify_deployment_revision.py") == 2
+    assert job.count("python -m scripts.ci.verify_backend_target") == 2
+    title = "Prove protected specialist lifecycle and cross-tenant readback"
+    step = job.split("      - name: " + title, 1)[1].split("\n      - name:", 1)[0]
+    assert "if: inputs.scenario == 'specialist-participation'" in step
+    assert "if: inputs.scenario != 'specialist-participation'" in job
+    for flag in ("PARTICIPATION", "LIFECYCLE", "CROSS_TENANT"):
+        assert f'KAREN_SPECIALIST_{flag}_ACCEPTANCE: "true"' in step
+    for name in (
+        "KAREN_UX_ACCOUNT_B_EMAIL", "KAREN_UX_ACCOUNT_B_PASSWORD",
+        "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD",
+        "KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID",
+    ):
+        assert name + ": " + chr(36) + "{{ secrets." + name + " }}" in step
+        assert job.count(name) == step.count(name)
+    assert "--grep='ARM-05C.5B real participation receipts survive reload and deny a second account'" in step
+    assert "--retries=0" in step and "--workers=1" in step
+    assert 'stats.get("expected") != 1' in step
+    assert '"unexpected", "skipped", "flaky"' in step
+    assert '"expected", "passed", ["passed"]' in step
+    assert "umask 077" in step and "mktemp -d" in step
+    assert "trap 'rm -rf --" in step
+    assert "upload-artifact" not in job
+    assert job.index("python scripts/ci/verify_vercel_deployment.py") < job.index(title)
+    assert job.index(title) < job.rindex("python scripts/ci/verify_vercel_deployment.py")
+    spec = (
+        ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/automation-two-account-acceptance.spec.ts"
+    ).read_text(encoding="utf-8")
+    assert 'from "./fixtures/verified-search-deployment"' in spec
+    assert 'trace: "off", screenshot: "off", video: "off"' in spec
+    assert "page.route(" not in spec
