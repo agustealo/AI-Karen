@@ -704,6 +704,72 @@ describe("ARM-05C recorded specialist participation", () => {
     expect(screen.queryByText(/No durable specialist participation was recorded/)).toBeNull();
   });
 
+  it("clears old participation after a rejected refresh and recovers only from a fresh verified read", async () => {
+    const empty = { ...evidence, evidence_status: "empty", receipts: [], truncated: false };
+    const recovered = { ...evidence, truncated: false };
+    let rejectOutage!: (error: Error) => void;
+    const failingRead = () => new Promise<never>((_resolve, reject) => { rejectOutage = reject; });
+    let reads = 0;
+    installParticipation(() => {
+      reads += 1;
+      if (reads === 1) return Promise.resolve(evidence);
+      if (reads === 2) return failingRead();
+      if (reads === 3) return Promise.resolve(empty);
+      return Promise.resolve(recovered);
+    });
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("researcher · Invocation interrupted");
+
+    const refresh = async () => {
+      const button = screen.getByRole("button", { name: "Refresh runtime" }) as HTMLButtonElement;
+      await waitFor(() => expect(button.disabled).toBe(false));
+      fireEvent.click(button);
+    };
+    await refresh();
+    await screen.findByText("Loading recorded participation…");
+    expect(screen.queryByText("researcher · Invocation interrupted")).toBeNull();
+    await act(async () => { rejectOutage(new Error("private database diagnostic")); });
+    await screen.findByText("Specialist participation evidence is unavailable. Refresh runtime to retry.");
+    expect(screen.queryByText(/No durable specialist participation was recorded/)).toBeNull();
+    expect(screen.queryByText("private database diagnostic")).toBeNull();
+    expect(screen.queryByText("researcher · Invocation interrupted")).toBeNull();
+
+    await refresh();
+    await screen.findByText(/No durable specialist participation was recorded/);
+    expect(screen.queryByText(/Specialist participation evidence is unavailable/)).toBeNull();
+    expect(screen.queryByText("researcher · Invocation interrupted")).toBeNull();
+
+    await refresh();
+    await screen.findByText("researcher · Invocation interrupted");
+    expect(screen.queryByText(/No durable specialist participation was recorded/)).toBeNull();
+    expect(screen.queryByText(/Specialist participation evidence is unavailable/)).toBeNull();
+    expect(screen.queryByText(/earlier receipts are omitted/)).toBeNull();
+    expect(reads).toBe(4);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it("does not allow an older pending participation read to overwrite a newer refresh", async () => {
+    const stale = deferred<unknown>();
+    const fresh = { ...evidence, evidence_status: "empty", receipts: [], truncated: false };
+    let reads = 0;
+    installParticipation(() => ++reads === 1 ? stale.promise : Promise.resolve(fresh));
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Loading recorded participation…");
+    expect(reads).toBe(1);
+    const refresh = screen.getByRole("button", { name: "Refresh runtime" }) as HTMLButtonElement;
+    await waitFor(() => expect(refresh.disabled).toBe(false));
+    fireEvent.click(refresh);
+    await screen.findByText(/No durable specialist participation was recorded/);
+    expect(reads).toBe(2);
+    await act(async () => { stale.resolve(evidence); });
+    expect(screen.getByText(/No durable specialist participation was recorded/)).toBeTruthy();
+    expect(screen.queryByText("researcher · Invocation interrupted")).toBeNull();
+    expect(screen.queryByText(/earlier receipts are omitted/)).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it("does not use the owner-only endpoint in tenant administration", async () => {
     installParticipation(async () => evidence);
     render(<AgentsPage />);
