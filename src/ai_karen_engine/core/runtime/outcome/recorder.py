@@ -224,9 +224,17 @@ class OutcomeRecorder:
         ):
             raise PermissionError("specialist_participation_authority_invalid")
         context.require_authenticated_user()
+        # A scheduler skip observes non-invocation under the already admitted
+        # parent plan. It must not register a new executable child grant just
+        # to record why an allowed specialist was not invoked.
+        specialist_allowed = (
+            specialist_id in plan.allowed_agents
+            if phase is SpecialistParticipationPhase.SKIPPED
+            else list(plan.allowed_agents) == [specialist_id]
+        )
         if (
             not context.is_runtime_model_plan_authorized(plan, meter)
-            or list(plan.allowed_agents) != [specialist_id]
+            or not specialist_allowed
         ):
             raise PermissionError("specialist_participation_authority_invalid")
         if self._store is None:

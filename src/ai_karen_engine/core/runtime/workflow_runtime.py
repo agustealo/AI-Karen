@@ -16,6 +16,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 )
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
 from ai_karen_engine.core.runtime.workflow_generation import (
     WorkflowGenerationAuthority, bind_workflow_generation,
 )
@@ -160,9 +161,10 @@ class WorkflowRuntime:
                             next_event.cancel()
                             await asyncio.gather(next_event, return_exceptions=True)
 
+                # Resolve execution errors before secondary transport errors.
+                content, metadata = await run_task
                 if dropped_event:
                     raise RuntimeError("Medusa agent progress event stream overflow")
-                content, metadata = await run_task
                 yield _SharedChatStreamChunk(
                     type="content",
                     content=content,
@@ -171,6 +173,22 @@ class WorkflowRuntime:
                 )
             except (asyncio.CancelledError, NativeRetirementUnverified):
                 raise
+            except OutcomeStoreError:
+                logger.error(
+                    "deepagents_receipt_reconciliation_required",
+                    extra={"correlation_id": ctx.correlation_id},
+                )
+                yield _SharedChatStreamChunk(
+                    type="error",
+                    content="Execution evidence could not be confirmed. Verify the recorded run before retrying.",
+                    correlation_id=ctx.correlation_id,
+                    metadata={
+                        "error_code": "AGENT_RECEIPT_RECONCILIATION_REQUIRED",
+                        "error_type": "OutcomeStoreError",
+                        "recoverable": False,
+                        "reconciliation_required": True,
+                    },
+                )
             except Exception:
                 logger.exception(
                     "deepagents_primary_execution_failed",
@@ -638,6 +656,11 @@ class WorkflowRuntime:
         result = await coordinator.handle_request(agent_request)
         if result.status not in {ResponseStatus.SUCCESS, ResponseStatus.PARTIAL,
                                  ResponseStatus.DEGRADED}:
+            if (
+                result.metadata.get("reconciliation_required") is True
+                and result.metadata.get("recoverable") is False
+            ):
+                raise OutcomeStoreError("Authorized Medusa receipt reconciliation required")
             raise RuntimeError("Authorized Medusa agent execution failed")
         if not isinstance(result.content, str) or not result.content.strip():
             raise RuntimeError("Authorized Medusa agent returned no content")

@@ -27,6 +27,8 @@ class SpecialistBase:
         ActionExecutionGate. Specialists must NOT select providers or bypass
         the action gate.
         """
+        if execution is not None:
+            await execution.acknowledge_invocation_entry()
         self.logger.info(f"Specialist {self.contract.agent_id} starting execution")
         try:
             return await self._process(input_data, context or {}, execution=execution)

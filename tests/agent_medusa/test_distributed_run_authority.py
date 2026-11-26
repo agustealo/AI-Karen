@@ -697,3 +697,27 @@ async def test_slow_postgres_recovery_read_cannot_block_lease_heartbeat() -> Non
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.asyncio
+async def test_unverified_retirement_stops_heartbeat_and_retires_shared_claim():
+    shared = SharedFakeRunStore()
+    owner = MedusaRunManager(settings=_settings("owner"), distributed_store=shared)
+    observer = MedusaRunManager(
+        settings=_settings("observer"), distributed_store=shared
+    )
+    task = asyncio.create_task(asyncio.sleep(0))
+    scope = dict(run_id="unresolved", tenant_id="tenant-a")
+    run = await owner.register(
+        **scope, correlation_id="corr", user_id="owner", task=task
+    )
+    await task
+    heartbeat = run.heartbeat_task
+    assert heartbeat is not None
+    await owner.mark_retirement_unverified("unresolved")
+    assert heartbeat.done()
+    assert run.heartbeat_task is None
+    observed = await observer.get(**scope)
+    assert observed["status"] == "orphaned"
+    assert observed["error_type"] == "NativeRetirementUnverified"
+    assert observed["cancellable"] is False

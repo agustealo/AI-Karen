@@ -352,27 +352,42 @@ export function KarenCopilotConsumerChat({
         modelControls={
           <section data-testid="karen-copilot-model-discovery"
             aria-label="Conversation model preferences"
-            className="shrink-0 border-b border-border/60 bg-background/80 px-3 py-3 sm:px-4">
-            <fieldset disabled={runBusy} className="min-w-0 disabled:opacity-60">
-              <legend className="sr-only">Model preferences</legend>
-              <KarenComposerRuntimeCatalog
-                selection={modelRequest}
-                onSelectionChange={handleModelRequest}
-                onOpenProviders={onOpenProviderSettings}
-              />
-            </fieldset>
-            {modelRequest && (
-              <p role="status" data-testid="karen-pending-model-preference"
-                className="mt-2 text-xs text-muted-foreground">
-                Requested for upcoming messages: {modelRequest.provider} / {modelRequest.model}.
-                Karen determines and reports the actual executor.
-              </p>
-            )}
-            {runBusy && (
-              <p role="status" className="mt-2 text-xs text-muted-foreground">
-                Model changes are unavailable while Karen is processing this message.
-              </p>
-            )}
+            className="shrink-0 border-b border-border/60 bg-background/80 px-3 py-1.5 sm:px-4">
+            <details className="group">
+              <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between gap-2 text-xs text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring">
+                <span className="truncate">
+                  <span className="font-medium text-foreground">Model:</span>{" "}
+                  {modelRequest
+                    ? `${modelRequest.provider} / ${modelRequest.model}`
+                    : "Automatic (Karen default)"}
+                </span>
+                <span className="shrink-0 rounded-md border border-border/70 px-2 py-0.5 text-[11px] font-medium text-foreground">
+                  Model settings
+                </span>
+              </summary>
+              <div className="mt-2 border-t border-border/50 pt-3 pb-1">
+                <fieldset disabled={runBusy} className="min-w-0 disabled:opacity-60">
+                  <legend className="sr-only">Model preferences</legend>
+                  <KarenComposerRuntimeCatalog
+                    selection={modelRequest}
+                    onSelectionChange={handleModelRequest}
+                    onOpenProviders={onOpenProviderSettings}
+                  />
+                </fieldset>
+                {modelRequest && (
+                  <p role="status" data-testid="karen-pending-model-preference"
+                    className="mt-2 text-xs text-muted-foreground">
+                    Requested for upcoming messages: {modelRequest.provider} / {modelRequest.model}.
+                    Karen determines and reports the actual executor.
+                  </p>
+                )}
+                {runBusy && (
+                  <p role="status" className="mt-2 text-xs text-muted-foreground">
+                    Model changes are unavailable while Karen is processing this message.
+                  </p>
+                )}
+              </div>
+            </details>
           </section>
         }
         preferredProvider={modelRequest?.provider ?? null}

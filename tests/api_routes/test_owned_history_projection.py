@@ -513,3 +513,49 @@ def test_replay_failure_diagnostics_are_allowlisted_without_raw_exception_data()
     assert UnreplayableHistory("history_byte_limit").safe_reason_code == "history_byte_limit"
     assert UnreplayableHistory("access token or user content").safe_reason_code == "unknown"
     assert UnreplayableHistory("supported", "extra").safe_reason_code == "unknown"
+
+
+def test_attested_degraded_direct_search_restores_without_409_and_withholds_raw_sources():
+    assistant = Message(
+        id="m-search-degraded",
+        tenant_id=TENANT,
+        conversation_id=THREAD,
+        role="assistant",
+        content="Retrieved evidence: Python history from Wikipedia.",
+        metadata={
+            "source": "chat_runtime",
+            "request_id": "req-degraded-1",
+            "response_source": "tool",
+            "runtime_engine": "direct_capability",
+            "degraded_mode": True,
+            "sources": [
+                {
+                    "url": "https://en.wikipedia.org/wiki/History_of_Python",
+                    "title": "History of Python",
+                    "snippet": "Python was conceived in the late 1980s.",
+                }
+            ],
+            "citations": [],
+            "structured_content": {
+                "mode": "general",
+                "query": "history of python",
+                "status": "ok",
+                "insights": ["Pipeline completed with degraded internet capability."],
+                "provider": "searxng",
+                "crawl_provider": "crawl4ai",
+                "search_providers": ["searxng"],
+            },
+        },
+    )
+    digest = canonical_message_digest(assistant)
+    projected = project_owned_history(
+        saved([assistant]),
+        attestations={"m-search-degraded": ("req-degraded-1", digest)},
+    )
+    assert len(projected["messages"]) == 1
+    assert projected["messages"][0]["content"] == assistant.content
+    assert not any(ev.get("name") == "karen.presentation.v1" for ev in projected["replayEvents"])
+
+    # Without completed-run attestation, degraded search metadata still fails closed.
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(saved([assistant]), attestations={})

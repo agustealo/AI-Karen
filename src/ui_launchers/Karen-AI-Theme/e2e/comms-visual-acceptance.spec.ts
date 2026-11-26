@@ -60,7 +60,7 @@ function validateTarget(): URL {
 }
 
 async function openCommunications(page: Page): Promise<void> {
-  const navName = "Activity & notifications";
+  const navName = "Activity";
   let navigation = page.getByRole("button", { name: navName, exact: true });
   if (!(await navigation.first().isVisible().catch(() => false))) {
     const trigger = page.locator('[data-sidebar="trigger"]').first();
@@ -114,8 +114,8 @@ test("KUI-COMMS: live identity-scoped evidence and five responsive viewports", a
   }
 
   const root = page.getByTestId("comms-center");
-  await expect(root.getByRole("heading", { name: "Activity & Notifications" })).toBeVisible();
-  await expect(root.locator("header [role=\"status\"]")).toContainText("Live snapshot");
+  await expect(root.getByRole("heading", { name: "Your communications & activity" })).toBeVisible();
+  await expect(root.locator("header [role=\"status\"]")).toContainText("Snapshot received");
   await expect(root.getByTestId("comms-metric-audit")).not.toHaveText("—");
   await expect(root.getByTestId("comms-metric-alerts")).not.toHaveText("—");
 
@@ -195,7 +195,17 @@ test("KUI-COMMS: live identity-scoped evidence and five responsive viewports", a
   await root.getByRole("button", { name: "Refresh" }).click();
   const refreshed = await refreshRequest;
   expect(refreshed.status()).toBe(200);
-  await expect(root.getByRole("status")).toContainText("Live snapshot");
+  await expect(root.locator("header [role=\"status\"]")).toContainText("Snapshot received");
+
+  // Navigation only: the Communications Center must reuse the authorized
+  // Agent Runtime approval workspace, without submitting any decision.
+  await root.getByRole("button", { name: "Open approval workspace" }).click();
+  const agentWorkspace = page.getByTestId("agent-runtime-page");
+  await expect(agentWorkspace).toBeVisible();
+  await expect(agentWorkspace.getByTestId("agent-runtime-approvals")).toBeVisible();
+  await expect(root).not.toBeVisible();
+  await openCommunications(page);
+  await expect(root.getByRole("heading", { name: "Your communications & activity" })).toBeVisible();
 });
 
 

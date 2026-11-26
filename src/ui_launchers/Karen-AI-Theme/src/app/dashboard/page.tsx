@@ -345,7 +345,11 @@ function DashboardWorkspace() {
       tasks: <TasksPage />,
       jobs: <JobsPage />,
       cronJobs: <CronJobsPage />,
-      commsCenter: <CommsCenterPage />,
+      commsCenter: <CommsCenterPage
+        onOpenAgents={() => setActiveMainView("agents")}
+        onOpenTasks={() => setActiveMainView("tasks")}
+        onOpenChat={() => setActiveMainView("chat")}
+      />,
       account: <AccountPage />,
       growth: <GrowthPage />,
     }),

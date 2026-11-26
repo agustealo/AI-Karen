@@ -101,7 +101,7 @@ async def test_authorized_recovery_uses_exact_original_plan_and_meter():
         "high_risk", "tool_intent", "plugin_intent",
         "authorized_tool", "authorized_plugin",
         "disallowed_degraded", "different_meter_budget",
-        "gateway_exhausted", "permission_denied",
+        "gateway_exhausted", "permission_denied", "receipt_uncertain",
     ],
 )
 async def test_recovery_must_never_invent_execution_authority(case):
@@ -149,6 +149,10 @@ async def test_recovery_must_never_invent_execution_authority(case):
         failure = EngineUnavailableError("all_model_engines_failed")
     elif case == "permission_denied":
         failure = PermissionError("not authorized")
+    elif case == "receipt_uncertain":
+        from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+        failure = OutcomeStoreError("receipt acknowledgement uncertain")
 
     class Runtime:
         async def _run_simple(self, *_args, **_kwargs):

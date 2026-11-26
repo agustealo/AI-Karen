@@ -698,17 +698,23 @@ export function KarenCopilotControlledChat({
             </p>
           </section>
         )}
-        {fileExplorerPluginId && <KarenComposerFileExplorer
-          key={conversationId + ":" + fileExplorerPluginId}
-          pluginId={fileExplorerPluginId}
-          onAttach={attachFiles}
-          existingAttachments={attachments}
-          disabled={attachmentEditsDisabled} />}
-        {onOpenAgents && <KarenComposerAgentDiscovery onOpenAgents={onOpenAgents}
-          disabled={draftStatus !== "ready" || !draftSynced || agent.isRunning || failedSubmission !== null} />}
-        <KarenCopilotVoiceDock port={draftPort}
-          disabled={draftStatus !== "ready" || agent.isRunning || failedSubmission !== null}
-          personaControls={personaControls} />
+        <div className="flex flex-wrap items-center justify-between gap-2 px-2 py-1">
+          <div className="flex flex-wrap items-center gap-1.5">
+            {fileExplorerPluginId && <KarenComposerFileExplorer
+              key={conversationId + ":" + fileExplorerPluginId}
+              pluginId={fileExplorerPluginId}
+              onAttach={attachFiles}
+              existingAttachments={attachments}
+              disabled={attachmentEditsDisabled} />}
+            {onOpenAgents && <KarenComposerAgentDiscovery onOpenAgents={onOpenAgents}
+              disabled={draftStatus !== "ready" || !draftSynced || agent.isRunning || failedSubmission !== null} />}
+          </div>
+          <div className="w-full sm:w-auto sm:min-w-0 sm:flex-1">
+            <KarenCopilotVoiceDock port={draftPort}
+              disabled={draftStatus !== "ready" || agent.isRunning || failedSubmission !== null}
+              personaControls={personaControls} />
+          </div>
+        </div>
       </div>
     </div>
   );

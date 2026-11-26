@@ -23,6 +23,7 @@ from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
     RedisDistributedRunStore,
 )
 from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+    DurableRunLedgerConflict,
     PostgresDurableRunLedger,
 )
 from ai_karen_engine.agent_medusa.execution.run_manager import (
@@ -196,6 +197,10 @@ async def _run_acceptance() -> None:
         await _cross_process_acceptance(
             redis=redis, ledger=ledger, prefix=prefix, tenant_id=tenant_a,
             foreign_tenant_id=tenant_b, marker=marker
+        )
+        await _retirement_replay_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix, tenant_id=tenant_a,
+            marker=marker,
         )
         await _postgres_lock_stall_acceptance(
             redis=redis, ledger=ledger, prefix=prefix,
@@ -463,3 +468,82 @@ async def _postgres_lock_stall_acceptance(
                 await task
             except asyncio.CancelledError:
                 pass
+
+
+async def _retirement_replay_acceptance(
+    *, redis, ledger, prefix: str, tenant_id: str, marker: str
+) -> None:
+    """Retained Redis identity and durable history independently fence replay."""
+    owner_settings = _settings(worker=f"retire-owner-{marker}", prefix=prefix)
+    other_settings = _settings(worker=f"retire-other-{marker}", prefix=prefix)
+    owner_store = RedisDistributedRunStore(
+        settings=owner_settings, redis_manager=redis
+    )
+    other_store = RedisDistributedRunStore(
+        settings=other_settings, redis_manager=redis
+    )
+    for retirement in ("explicit", "lost_lease"):
+        run_id = f"{marker}-{retirement}"
+        args = dict(
+            run_id=run_id,
+            correlation_id=f"corr-{run_id}",
+            tenant_id=tenant_id,
+            user_id="retirement-owner",
+            started_at=datetime.now(timezone.utc),
+        )
+        await owner_store.register(**args, worker_id=owner_settings.worker_id)
+        if retirement == "explicit":
+            await owner_store.mark_terminal(
+                run_id=run_id,
+                worker_id=owner_settings.worker_id,
+                status="orphaned",
+                completed_at=datetime.now(timezone.utc),
+                error_type="NativeRetirementUnverified",
+            )
+        else:
+            # Isolated fixture: simulate lease loss without waiting for TTL.
+            await redis.client.delete(f"{prefix}:claim:{run_id}")
+        before = await redis.client.hgetall(f"{prefix}:run:{run_id}")
+        assert before
+        with pytest.raises(RuntimeError, match="already exists"):
+            await other_store.register(**args, worker_id=other_settings.worker_id)
+        assert await redis.client.hgetall(f"{prefix}:run:{run_id}") == before
+        assert not await redis.client.exists(f"{prefix}:claim:{run_id}")
+
+    # Required PostgreSQL authority rejects same-ID replay even after the
+    # worker-local manager and Redis receipt are gone.
+    run_id = f"{marker}-durable-retirement"
+    owner = MedusaRunManager(
+        settings=owner_settings, distributed_store=owner_store, durable_ledger=ledger
+    )
+    other = MedusaRunManager(
+        settings=other_settings, distributed_store=other_store, durable_ledger=ledger
+    )
+    task = asyncio.create_task(asyncio.sleep(0))
+    args = dict(
+        run_id=run_id,
+        correlation_id=f"corr-{run_id}",
+        tenant_id=tenant_id,
+        user_id="retirement-owner",
+        task=task,
+    )
+    run = await owner.register(**args)
+    try:
+        await task
+        await owner.mark_retirement_unverified(run_id)
+        before = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+        assert before is not None
+        assert before["status"] == "orphaned"
+        assert before["outcome_status"] is None
+        await redis.client.delete(
+            f"{prefix}:claim:{run_id}", f"{prefix}:run:{run_id}"
+        )
+        with pytest.raises(DurableRunLedgerConflict):
+            await other.register(**args)
+        after = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+        assert after == before
+        assert not await redis.client.exists(f"{prefix}:claim:{run_id}")
+    finally:
+        if run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            await asyncio.gather(run.heartbeat_task, return_exceptions=True)
