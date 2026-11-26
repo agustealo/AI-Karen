@@ -1042,6 +1042,52 @@ describe("KUI-004B2B composer file eligibility", () => {
 });
 
 describe("Attachment-aware controlled composer", () => {
+  it("retains attached draft text on the SDK rejected-send clear and allows later manual clearing", async () => {
+    const ref = { source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) };
+    sdk.initialAttachments = [ref];
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onChange("Keep this attached draft"));
+    const writes = sdk.draftWrites.length;
+    act(() => {
+      input().onSubmitMessage("Keep this attached draft");
+      input().onChange("");
+    });
+    expect(input().value).toBe("Keep this attached draft");
+    expect(sdk.draftWrites).toHaveLength(writes);
+    expect(screen.getByText("1 / 12 file references")).toBeTruthy();
+    expect(screen.getByText("Sending attached files is not supported yet. Remove the attachments before sending your message.")).toBeTruthy();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    await act(async () => { await Promise.resolve(); });
+    act(() => input().onChange(""));
+    expect(input().value).toBe("");
+    expect(screen.getByText("1 / 12 file references")).toBeTruthy();
+  });
+
+  it("retains attached draft text when an unresolved run rejects the SDK send", async () => {
+    sdk.initialAttachments = [{ source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) }];
+    sdk.recoveryRun = { runId: "previous-run", submissionId: "previous-turn", status: "interrupted" };
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onChange("Keep this pending draft"));
+    const writes = sdk.draftWrites.length;
+    act(() => {
+      input().onSubmitMessage("Keep this pending draft");
+      input().onChange("");
+    });
+    expect(input().value).toBe("Keep this pending draft");
+    expect(sdk.draftWrites).toHaveLength(writes);
+    expect(screen.getByText("1 / 12 file references")).toBeTruthy();
+    expect(screen.getByText("The previous run is unverified. Check its status and saved history before sending another message.")).toBeTruthy();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    await act(async () => { await Promise.resolve(); });
+    act(() => input().onChange(""));
+    expect(input().value).toBe("");
+    expect(screen.getByText("1 / 12 file references")).toBeTruthy();
+  });
+
   it("blocks inference with restored references and permits text submission after explicit removal", async () => {
     const ref = { source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) };
     sdk.initialAttachments = [ref];
