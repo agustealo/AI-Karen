@@ -255,8 +255,10 @@ class MedusaRunManager:
             )
         return run
 
-    async def mark_response(self, run_id: str, outcome_status: str) -> None:
-        """Persist task outcome separately from execution lifecycle."""
+    async def mark_response(
+        self, run_id: str, outcome_status: str
+    ) -> ExecutionRunStatus:
+        """Return the resolved lifecycle, not merely the proposed response."""
 
         normalized = str(outcome_status or "").strip().lower()
         if normalized not in {"success", "partial", "degraded", "error", "timeout"}:
@@ -266,7 +268,7 @@ class MedusaRunManager:
             if normalized in {"success", "partial", "degraded"}
             else ExecutionRunStatus.FAILED
         )
-        await self._mark_terminal(
+        resolved = await self._mark_terminal(
             run_id,
             lifecycle,
             outcome_status=normalized,
@@ -276,6 +278,9 @@ class MedusaRunManager:
                 else f"Response{normalized.title()}"
             ),
         )
+        if resolved is None:
+            raise RunNotFoundError(run_id)
+        return resolved
 
     async def mark_completed(self, run_id: str) -> None:
         await self._mark_terminal(
@@ -306,13 +311,13 @@ class MedusaRunManager:
         *,
         error_type: str | None = None,
         outcome_status: str | None = None,
-    ) -> None:
+    ) -> ExecutionRunStatus | None:
         heartbeat_task: asyncio.Task[None] | None = None
         completed_at = datetime.now(timezone.utc)
         async with self._lock:
             run = self._runs.get(run_id)
             if run is None:
-                return
+                return None
             if run.status is ExecutionRunStatus.CANCELLING:
                 status = ExecutionRunStatus.CANCELLED
                 outcome_status = "cancelled"
@@ -322,7 +327,7 @@ class MedusaRunManager:
                 ExecutionRunStatus.FAILED,
                 ExecutionRunStatus.CANCELLED,
             }:
-                return
+                return run.status
             run.status = status
             run.completed_at = completed_at
             run.error_type = error_type
@@ -384,6 +389,7 @@ class MedusaRunManager:
                                 "outcome_status": outcome_status,
                             },
                         )
+        return status
 
     async def cancel(
         self,

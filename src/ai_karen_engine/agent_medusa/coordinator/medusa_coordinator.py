@@ -27,7 +27,11 @@ from ..contracts.specialist_execution import SpecialistExecutionContext
 from ..contracts.trace import ExecutionTrajectory
 from ..execution.event_emitter import EventEmitter
 from ..execution.failure_policy import aggregate_status
-from ..execution.run_manager import MedusaRunManager, get_medusa_run_manager
+from ..execution.run_manager import (
+    ExecutionRunStatus,
+    MedusaRunManager,
+    get_medusa_run_manager,
+)
 from ..lifecycle.lifecycle_manager import LifecycleStatus, MedusaAgentLifecycle
 from ..planning.capability_planner import CapabilityAwareMedusaPlanner
 from ..registry import get_medusa_registry
@@ -212,10 +216,23 @@ class MedusaCoordinator:
             )
             return to_safe_response(exc, correlation_id=requirements.correlation_id)
         else:
-            await self.run_manager.mark_response(
+            resolved = await self.run_manager.mark_response(
                 request.request_id,
                 response.status.value,
             )
+            if resolved is ExecutionRunStatus.CANCELLED:
+                logger.info(
+                    "medusa_run_cancelled",
+                    extra={
+                        "run_id": request.request_id,
+                        "correlation_id": requirements.correlation_id,
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                    },
+                )
+                # A specialist may catch cancellation and return content.
+                # The canonical run manager still owns the terminal outcome.
+                raise asyncio.CancelledError
             logger.info(
                 "medusa_run_finished",
                 extra={

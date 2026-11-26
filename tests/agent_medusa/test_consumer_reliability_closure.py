@@ -18,7 +18,11 @@ from ai_karen_engine.agent_medusa.contracts.runtime_response import (
     RuntimeResponse,
 )
 from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import MedusaCoordinator
-from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
+from ai_karen_engine.agent_medusa.execution.run_manager import (
+    ExecutionRunStatus,
+    MedusaRunManager,
+    RunNotFoundError,
+)
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
@@ -75,7 +79,7 @@ async def test_partial_response_is_not_recorded_as_successful_run_completion() -
     run_manager.mark_completed = AsyncMock()
     run_manager.mark_failed = AsyncMock()
     run_manager.mark_cancelled = AsyncMock()
-    run_manager.mark_response = AsyncMock()
+    run_manager.mark_response = AsyncMock(return_value=ExecutionRunStatus.COMPLETED)
     coordinator = MedusaCoordinator(run_manager=run_manager)
 
     with patch.object(
@@ -104,7 +108,7 @@ async def test_success_response_remains_successful_run_completion() -> None:
     run_manager.mark_completed = AsyncMock()
     run_manager.mark_failed = AsyncMock()
     run_manager.mark_cancelled = AsyncMock()
-    run_manager.mark_response = AsyncMock()
+    run_manager.mark_response = AsyncMock(return_value=ExecutionRunStatus.COMPLETED)
     coordinator = MedusaCoordinator(run_manager=run_manager)
 
     with patch.object(
@@ -281,7 +285,12 @@ async def test_cancellation_wins_race_against_late_success_response() -> None:
         task=task,
     )
     await manager.cancel(run_id="cancel-race-1", tenant_id="tenant-1")
-    await manager.mark_response("cancel-race-1", "success")
+    resolved = await manager.mark_response("cancel-race-1", "success")
+    assert resolved is ExecutionRunStatus.CANCELLED
+    assert (
+        await manager.mark_response("cancel-race-1", "success")
+        is ExecutionRunStatus.CANCELLED
+    )
 
     snapshot = await manager.get(run_id="cancel-race-1", tenant_id="tenant-1")
     assert snapshot["status"] == "cancelled"
@@ -290,6 +299,87 @@ async def test_cancellation_wins_race_against_late_success_response() -> None:
 
     with pytest.raises(asyncio.CancelledError):
         await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", list(ResponseStatus))
+@pytest.mark.parametrize("cancel", [False, True])
+async def test_coordinator_returns_only_authoritative_terminal_outcome(
+    status: ResponseStatus, cancel: bool
+) -> None:
+    manager = MedusaRunManager(
+        settings=AgentMedusaRuntimeSettings(
+            distributed_run_control_enabled=False,
+            durable_run_ledger_enabled=False,
+            durable_run_ledger_required=False,
+            worker_id="consumer-reliability-test",
+        )
+    )
+    coordinator = MedusaCoordinator(run_manager=manager)
+    request = _request()
+    entered = asyncio.Event()
+    finish = asyncio.Event()
+    proposed = RuntimeResponse(
+        request_id=request.request_id, status=status, content="assembled result"
+    )
+
+    async def execute(_request: RuntimeRequest) -> RuntimeResponse:
+        entered.set()
+        try:
+            await finish.wait()
+        except asyncio.CancelledError:
+            # Reproduce a specialist swallowing cancellation and returning
+            # an assembled result to the real coordinator.
+            pass
+        return proposed
+
+    with patch.object(coordinator, "_handle_request", new=execute):
+        task = asyncio.create_task(coordinator.handle_request(request))
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=5)
+            if cancel:
+                await manager.cancel(
+                    run_id=request.request_id, tenant_id="tenant-1"
+                )
+                with pytest.raises(asyncio.CancelledError):
+                    await asyncio.wait_for(task, timeout=5)
+                assert task.cancelled()
+                lifecycle = ExecutionRunStatus.CANCELLED
+                outcome = "cancelled"
+            else:
+                finish.set()
+                assert await asyncio.wait_for(task, timeout=5) is proposed
+                lifecycle = (
+                    ExecutionRunStatus.FAILED
+                    if status in {ResponseStatus.ERROR, ResponseStatus.TIMEOUT}
+                    else ExecutionRunStatus.COMPLETED
+                )
+                outcome = status.value
+            terminal = await manager.get(
+                run_id=request.request_id, tenant_id="tenant-1"
+            )
+            assert terminal["status"] == lifecycle.value
+            assert terminal["outcome_status"] == outcome
+            assert terminal["cancellable"] is False
+        finally:
+            if not task.done():
+                finish.set()
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_response_requires_registered_run() -> None:
+    manager = MedusaRunManager(
+        settings=AgentMedusaRuntimeSettings(
+            distributed_run_control_enabled=False,
+            durable_run_ledger_enabled=False,
+            durable_run_ledger_required=False,
+            worker_id="consumer-reliability-test",
+        )
+    )
+    with pytest.raises(RunNotFoundError):
+        await manager.mark_response("unknown", "success")
 
 
 @pytest.mark.asyncio
