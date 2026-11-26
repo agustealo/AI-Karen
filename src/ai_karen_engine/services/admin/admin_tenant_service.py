@@ -80,16 +80,19 @@ class AdminTenantService:
         *,
         admin_password: str,
         admin_full_name: str,
-        operator_id: Optional[str] = None,
+        operator_id: str,
     ) -> Optional[Any]:
-        """Create a tenant with audit logging."""
+        """Create a tenant with its transaction-bound audit receipt."""
         tenant = await self._tenant_manager.create_tenant(
             config=config,
             admin_email=admin_email,
             admin_roles=admin_roles,
             admin_password=admin_password,
             admin_full_name=admin_full_name,
+            operator_id=operator_id,
         )
+        # Preserve the existing post-commit diagnostic stream; the database
+        # receipt is authoritative for the successful creation.
         self._audit_mutation(
             action="create",
             tenant_id=str(tenant.id),

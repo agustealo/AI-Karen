@@ -117,10 +117,13 @@ async def create_admin_tenant(
             admin_email=request.admin_email,
             admin_password=request.admin_password.get_secret_value(),
             admin_full_name=request.admin_full_name,
-            operator_id=current_user.get("user_id"),
+            operator_id=current_user["user_id"],
         )
     except ValueError:
         raise HTTPException(status_code=400, detail="Tenant or administrator creation rejected") from None
+    except Exception:
+        logger.warning("Tenant creation failed")
+        raise HTTPException(status_code=500, detail="Tenant creation failed") from None
     if not tenant:
         raise HTTPException(status_code=400, detail="Failed to create tenant")
     return {

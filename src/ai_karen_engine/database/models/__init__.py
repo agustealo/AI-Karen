@@ -327,8 +327,9 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     event_id = Column(BigInteger, primary_key=True, autoincrement=True)
-    tenant_id = Column(String)
-    user_id = Column(String)
+    # The canonical migration uses UUID; retain the historical string-facing API.
+    tenant_id = Column(UUID(as_uuid=False))
+    user_id = Column(UUID(as_uuid=False))
     actor_type = Column(String)
     action = Column(String, nullable=False)
     resource_type = Column(String)

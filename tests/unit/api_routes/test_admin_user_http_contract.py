@@ -184,6 +184,7 @@ def test_legacy_tenant_creation_uses_shared_platform_guard_and_audit(monkeypatch
         assert calls[0]["admin_password"] == payload["admin_password"]
         assert calls[0]["admin_full_name"] == payload["admin_full_name"]
         assert calls[0]["admin_email"] == payload["admin_email"]
+        assert calls[0]["operator_id"] == "platform-operator"
         assert audit[0].user_id == "platform-operator"
         assert audit[0].tenant_id == "tenant-created"
         assert payload["admin_password"] not in repr(audit[0])

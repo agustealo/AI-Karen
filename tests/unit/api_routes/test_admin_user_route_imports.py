@@ -106,24 +106,41 @@ async def test_tenant_create_requires_credentials_and_redacts_secret(monkeypatch
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", [None, "account", "scope", "commit"])
+@pytest.mark.parametrize("failure", [None, "account", "scope", "audit_scope", "audit_flush", "commit"])
 async def test_tenant_creation_uses_one_transaction(monkeypatch, failure):
     import uuid
     from contextlib import asynccontextmanager
     from ai_karen_engine.auth import auth_service
+    from ai_karen_engine.database.models import AuditLog
     from ai_karen_engine.database.tenant_manager import TenantConfig, TenantManager
+    from ai_karen_engine.persistence.postgres import transactions
 
+    operator_id = str(uuid.uuid4())
+    admin_id = str(uuid.uuid4())
     events = []
+
     class Session:
-        def add(self, tenant):
-            self.tenant = tenant
-            events.append("tenant")
+        audit = None
+
+        def add(self, row):
+            if isinstance(row, AuditLog):
+                self.audit = row
+                events.append("audit")
+            else:
+                self.tenant = row
+                events.append("tenant")
 
         async def flush(self):
-            self.tenant.id = uuid.uuid4()
-            events.append("flush")
+            if self.audit is not None:
+                events.append("audit_flush")
+                if failure == "audit_flush":
+                    raise RuntimeError("audit write failed")
+            else:
+                self.tenant.id = uuid.uuid4()
+                events.append("flush")
 
     session = Session()
+
     class Client:
         @asynccontextmanager
         async def get_async_session(self):
@@ -153,28 +170,64 @@ async def test_tenant_creation_uses_one_transaction(monkeypatch, failure):
             if failure == "account":
                 raise ValueError("duplicate account")
             return SimpleNamespace(
-                id="user-id", tenant_id="wrong" if failure == "scope" else kwargs["tenant_id"],
+                id=admin_id, tenant_id="wrong" if failure == "scope" else kwargs["tenant_id"],
             )
 
     async def get_auth():
         return Auth()
 
+    async def apply_context(supplied, *, tenant_id, user_id):
+        assert supplied is session
+        assert tenant_id == str(session.tenant.id)
+        assert user_id == operator_id
+        events.append("audit_scope")
+        if failure == "audit_scope":
+            raise RuntimeError("audit scope failed")
+
     monkeypatch.setattr(auth_service, "get_auth_service", get_auth)
+    monkeypatch.setattr(transactions, "apply_authenticated_transaction_context", apply_context)
     manager = TenantManager(Client())
+
     async def create():
         return await manager.create_tenant(
             TenantConfig("Tenant", "tenant"), "a@example.test",
             admin_password="StrongPassword1!", admin_full_name="Tenant Admin",
+            operator_id=operator_id,
         )
 
+    expected = ["tenant", "flush", "account"]
+    if failure not in {"account", "scope"}:
+        expected.append("audit_scope")
+        if failure != "audit_scope":
+            expected.extend(["audit", "audit_flush"])
     if failure:
         with pytest.raises((ValueError, RuntimeError)):
             await create()
-        assert events == ["tenant", "flush", "account", "rollback"]
+        assert events == [*expected, "rollback"]
     else:
         assert await create() is session.tenant
-        assert events == ["tenant", "flush", "account", "commit"]
+        assert events == [*expected, "commit"]
+        assert session.audit.tenant_id == str(session.tenant.id)
+        assert session.audit.user_id == operator_id
+        assert session.audit.actor_type == "user"
+        assert session.audit.action == "admin_tenant_create"
+        assert session.audit.resource_type == "tenant"
+        assert session.audit.resource_id == str(session.tenant.id)
+        assert session.audit.details == {"initial_admin_user_id": admin_id}
     assert not manager._tenant_cache
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operator_id", [None, "", "not-a-uuid", "00000000-0000-0000-0000-000000000000"])
+async def test_tenant_creation_rejects_invalid_operator_before_database(operator_id):
+    from ai_karen_engine.database.tenant_manager import TenantConfig, TenantManager
+
+    with pytest.raises(ValueError, match="operator"):
+        await TenantManager(None).create_tenant(
+            TenantConfig("Tenant", "tenant"), "a@example.test",
+            admin_password="StrongPassword1!", admin_full_name="Tenant Admin",
+            operator_id=operator_id,
+        )
 
 
 @pytest.mark.asyncio
@@ -186,4 +239,5 @@ async def test_tenant_creation_rejects_privilege_escalation_before_database():
         await manager.create_tenant(
             TenantConfig("Tenant", "tenant"), "a@example.test", ["super_admin"],
             admin_password="StrongPassword1!", admin_full_name="Tenant Admin",
+            operator_id="11111111-1111-4111-8111-111111111111",
         )

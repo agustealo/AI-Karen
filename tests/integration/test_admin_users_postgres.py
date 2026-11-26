@@ -7,7 +7,7 @@ import uuid
 import pytest
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-from ai_karen_engine.database.models import AuthSession, AuthUser, Base, Tenant
+from ai_karen_engine.database.models import AuditLog, AuthSession, AuthUser, Base, Tenant
 from ai_karen_engine.services.auth.auth_service import AuthService, UserRole, UserStatus
 from ai_karen_engine.services.auth.config import AuthConfig, Environment
 
@@ -104,12 +104,14 @@ async def test_tenant_and_admin_creation_commit_and_rollback_against_postgres(mo
     from contextlib import asynccontextmanager
     from sqlalchemy import delete, func, select
     from ai_karen_engine.auth import auth_service
+    from ai_karen_engine.database import tenant_manager
     from ai_karen_engine.database.tenant_manager import TenantConfig, TenantManager
 
     url = os.environ["AUTH_TEST_DATABASE_URL"]
     engine = create_async_engine(url, pool_pre_ping=True)
     factory = async_sessionmaker(engine, expire_on_commit=False)
-    tables = [Tenant.__table__, AuthUser.__table__, AuthSession.__table__]
+    tables = [Tenant.__table__, AuthUser.__table__, AuthSession.__table__, AuditLog.__table__]
+    operator_id = str(uuid.uuid4())
     suffix = uuid.uuid4().hex
     slug = f"tenant-create-proof-{suffix}"
     email = f"tenant-create-proof-{suffix}@example.test"
@@ -138,6 +140,7 @@ async def test_tenant_and_admin_creation_commit_and_rollback_against_postgres(mo
         return await manager.create_tenant(
             TenantConfig("Proof Tenant", tenant_slug), admin_email,
             admin_password=admin_password, admin_full_name="Proof Administrator",
+            operator_id=operator_id,
         )
 
     async def count_tenants():
@@ -163,6 +166,15 @@ async def test_tenant_and_admin_creation_commit_and_rollback_against_postgres(mo
             assert admin.is_verified and admin.is_active
             assert admin.password_hash != password
             assert auth._verify_password(password, admin.password_hash)
+            receipt = (await session.execute(
+                select(AuditLog).where(AuditLog.tenant_id == str(tenant.id))
+            )).scalar_one()
+            assert receipt.user_id == operator_id
+            assert receipt.actor_type == "user"
+            assert receipt.action == "admin_tenant_create"
+            assert receipt.resource_type == "tenant"
+            assert receipt.resource_id == str(tenant.id)
+            assert receipt.details == {"initial_admin_user_id": str(admin.user_id)}
 
         # Duplicate slug, email and username must not leave an orphan tenant.
         with pytest.raises(ValueError):
@@ -173,10 +185,28 @@ async def test_tenant_and_admin_creation_commit_and_rollback_against_postgres(mo
             await create(slug + "-username", email.replace("@example.test", "@example.org"))
         with pytest.raises(ValueError):
             await create(slug + "-weak", f"weak-{suffix}@example.test", "weak")
+        # A real database NOT NULL violation on the audit insert must roll
+        # back both the new tenant and its newly staged administrator.
+        def invalid_receipt(**kwargs):
+            return AuditLog(**{**kwargs, "action": None})
+
+        with monkeypatch.context() as patch:
+            patch.setattr(tenant_manager, "AuditLog", invalid_receipt)
+            with pytest.raises(ValueError):
+                await create(slug + "-audit", f"audit-{suffix}@example.test")
+
         assert await count_tenants() == 1
         async with factory() as session:
             assert await session.scalar(
                 select(func.count()).select_from(AuthUser).where(AuthUser.tenant_id == tenant.id)
+            ) == 1
+            assert await session.scalar(
+                select(func.count()).select_from(AuthUser).where(
+                    AuthUser.email == f"audit-{suffix}@example.test"
+                )
+            ) == 0
+            assert await session.scalar(
+                select(func.count()).select_from(AuditLog).where(AuditLog.user_id == operator_id)
             ) == 1
         assert not auth._user_cache
     finally:
@@ -185,6 +215,7 @@ async def test_tenant_and_admin_creation_commit_and_rollback_against_postgres(mo
             async with factory() as session:
                 async with session.begin():
                     tenant_ids = select(Tenant.id).where(Tenant.slug.startswith(slug))
+                    await session.execute(delete(AuditLog).where(AuditLog.user_id == operator_id))
                     await session.execute(delete(AuthUser).where(AuthUser.tenant_id.in_(tenant_ids)))
                     await session.execute(delete(Tenant).where(Tenant.slug.startswith(slug)))
         finally:

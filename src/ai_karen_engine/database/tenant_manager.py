@@ -10,7 +10,7 @@ from sqlalchemy import text, select, update, delete
 from sqlalchemy.exc import IntegrityError
 
 from ai_karen_engine.database.client import MultiTenantPostgresClient
-from ai_karen_engine.database.models import Tenant
+from ai_karen_engine.database.models import AuditLog, Tenant
 
 if TYPE_CHECKING:
     from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
@@ -107,15 +107,30 @@ class TenantManager:
         *,
         admin_password: str,
         admin_full_name: str,
+        operator_id: str,
     ) -> Tenant:
-        """Create a tenant and its initial administrator in one transaction."""
+        """Create the tenant, initial administrator and audit receipt atomically.
+
+        Only the trusted platform-authorized caller may invoke this operation.
+        The operator identifies that caller, not the newly created administrator.
+        """
         from ai_karen_engine.auth.auth_service import get_auth_service
+        from ai_karen_engine.persistence.postgres.transactions import (
+            apply_authenticated_transaction_context,
+        )
 
         roles = ["admin", "user"] if admin_roles is None else list(admin_roles)
         if "admin" not in roles or any(role not in {"admin", "user"} for role in roles):
             raise ValueError("Initial tenant administrator roles are invalid")
         if not admin_password or not admin_full_name.strip():
             raise ValueError("Administrator credentials and name are required")
+
+        try:
+            operator = uuid.UUID(str(operator_id))
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("A valid authenticated operator is required") from None
+        if operator.int == 0:
+            raise ValueError("A valid authenticated operator is required")
 
         auth = await get_auth_service()
         try:
@@ -145,6 +160,25 @@ class TenantManager:
                 )
                 if user.tenant_id != str(tenant.id):
                     raise RuntimeError("Initial administrator tenant assignment failed")
+
+                # Install the target tenant scope only after the authorized
+                # platform operation has staged the tenant and its account.
+                # The context helper is not an authorization grant.
+                await apply_authenticated_transaction_context(
+                    session, tenant_id=str(tenant.id), user_id=str(operator),
+                )
+                session.add(AuditLog(
+                    tenant_id=str(tenant.id),
+                    user_id=str(operator),
+                    actor_type="user",
+                    action="admin_tenant_create",
+                    resource_type="tenant",
+                    resource_id=str(tenant.id),
+                    details={"initial_admin_user_id": user.id},
+                ))
+                # Surface an audit constraint failure before reporting success.
+                # The existing session owner commits or rolls back all rows.
+                await session.flush()
         except IntegrityError:
             logger.warning("Tenant creation rejected by database integrity constraint")
             raise ValueError("Tenant or administrator already exists or violates a constraint") from None
