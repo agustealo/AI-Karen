@@ -944,3 +944,33 @@ async def test_event_read_refuses_flag_off_foreign_run_and_unbounded_cursors(
         )
     assert absent.value.status_code == 404
     assert len(calls) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("runtime_request_id", ["foreign-request", "", None, 123])
+async def test_journal_rejects_foreign_receipt_request_identity_before_sql(
+    monkeypatch, runtime_request_id,
+):
+    tx = Transaction(status="completed")
+    scoped(monkeypatch, tx)
+    with pytest.raises(ValueError, match="chat_projection_identity_mismatch"):
+        await repository.SqlChatRunRepository().append_projected_event(
+            lease(), event={
+                "type": "CUSTOM", "name": "karen.execution_receipt.v1",
+                "value": {"runtime_request_id": runtime_request_id, "actual_model": "observed"},
+            },
+        )
+    assert tx.queries == []
+
+
+@pytest.mark.asyncio
+async def test_journal_retains_exact_receipt_request_identity(monkeypatch):
+    tx = Transaction(status="completed")
+    scoped(monkeypatch, tx)
+    owned = lease()
+    event = {
+        "type": "CUSTOM", "name": "karen.execution_receipt.v1",
+        "value": {"runtime_request_id": owned.request_id, "actual_model": "observed"},
+    }
+    assert await repository.SqlChatRunRepository().append_projected_event(owned, event=event) == 1
+    assert tx.stored[0]["event_payload"] == event
