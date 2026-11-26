@@ -32,6 +32,28 @@ def parse_owner_code_artifact_view(query: str) -> Optional[str]:
     return artifact_id if raw_id == artifact_id else None
 
 
+_OWNER_GENERATED_TEXT_COMMAND = re.compile(
+    r"^(?:please[ \t]+)?(?:create|generate|write)[ \t]+"
+    r"(?:me[ \t]+)?(?:a[ \t]+)?(?:plain[ \t]+)?text[ \t]+file[ \t]*:"
+    r"[ \t]*(?P<description>[\s\S]+)$",
+    re.IGNORECASE,
+)
+
+
+def parse_owner_generated_text_request(query: str) -> Optional[str]:
+    """Recognize an explicit inert text-file creation request, not a grant.
+
+    The description is model input, never a filename, storage key, action
+    selector, or permission. No inferred intent or historical reply suffices.
+    """
+    if not isinstance(query, str) or not 1 <= len(query) <= 4000:
+        return None
+    match = _OWNER_GENERATED_TEXT_COMMAND.fullmatch(query.strip())
+    if match is None:
+        return None
+    return match.group("description").strip() or None
+
+
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "artifact.code.read": {
         "triggers": [],

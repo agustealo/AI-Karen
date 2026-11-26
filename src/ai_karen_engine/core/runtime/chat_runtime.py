@@ -5254,11 +5254,23 @@ class ChatRuntime:
         permissions or idempotency identities. Uncertain writes never replay.
         """
         from ai_karen_engine.core.expression.gateway import MODEL_GENERATION_RESPONSE_SOURCES
+        from ai_karen_engine.core.cortex.routing_intents import parse_owner_generated_text_request
         from ai_karen_engine.services.database.repositories.artifact_store import (
             Artifact, ArtifactUploadRequest,
         )
 
         ctx = request.context
+        latest_user = next(
+            (message.get("content") for message in reversed(request.messages)
+             if message.get("role") == "user"),
+            None,
+        )
+        if parse_owner_generated_text_request(latest_user) is None:
+            raise PermissionError("generated_artifact_explicit_request_required")
+        # An execution-only clarification rewrite cannot establish consent.
+        original = request.metadata.get("original_user_input")
+        if original is not None and original != latest_user:
+            raise PermissionError("generated_artifact_explicit_request_required")
         if not isinstance(result, ExpressionResult):
             raise PermissionError("generated_artifact_result_denied")
         metadata = result.metadata or {}
@@ -5308,6 +5320,12 @@ class ChatRuntime:
                 or (ctx.tenant_id, ctx.user_id, ctx.request_id, ctx.correlation_id)
                 != (tenant_id, user_id, request_id, correlation_id)
                 or self._attachment_restriction_required(request)
+                or next(
+                    (message.get("content") for message in reversed(request.messages)
+                     if message.get("role") == "user"),
+                    None,
+                ) != latest_user
+                or request.metadata.get("original_user_input") not in (None, latest_user)
             ):
                 raise PermissionError("generated_artifact_authority_denied")
             await policy.authorize_generated_text_write(context=ctx, plan=plan, meter=meter)

@@ -162,7 +162,10 @@ async def authority(*, grant=True, bind=True, references=None, generated=False):
         context.bind_runtime_model_authority(plan, meter)
         meter.start()
     request = ChatExecutionRequest(
-        messages=[{"role": "user", "content": "Summarize the attachment"}],
+        messages=[{"role": "user", "content": (
+            "Create a text file: a complete deliverable" if generated
+            else "Summarize the attachment"
+        )}],
         context=context,
         attachment_references=selected_refs,
     )
@@ -1109,5 +1112,43 @@ async def test_generated_artifact_denies_unverified_model_result_before_storage(
         await runtime._persist_generated_text_result(
             request, SimpleNamespace(intent=GENERATED_TEXT_ARTIFACT_CAPABILITY),
             plan, meter, ExpressionResult(**{**fields, **changes}),
+        )
+    unavailable.assert_not_called()
+
+
+@pytest.mark.parametrize("query,expected", [
+    ("Create a text file: a poem", "a poem"),
+    ("Please generate a plain text file: a short report", "a short report"),
+    ("Can you create a text file: a poem?", None),
+    ("Write a text file:", None),
+    ("Explain how to create a text file: a poem", None),
+    ("Surprise me", None),
+    ("Create a text file: " + "x" * 4000, None),
+])
+def test_generated_artifact_explicit_request_parser(query, expected):
+    from ai_karen_engine.core.cortex.routing_intents import parse_owner_generated_text_request
+
+    assert parse_owner_generated_text_request(query) == expected
+
+
+@pytest.mark.asyncio
+async def test_generated_artifact_inferred_intent_cannot_supply_write_consent(monkeypatch):
+    from ai_karen_engine.core.expression.contracts import ExpressionResult
+
+    request, plan, meter = await authority(generated=True)
+    request.messages = [{"role": "user", "content": "Tell me a story"}]
+    runtime = runtime_with_reader(monkeypatch, None)
+    unavailable = Mock(side_effect=AssertionError("inferred write reached repository"))
+    monkeypatch.setattr(runtime, "_artifact_repositories", unavailable)
+    result = ExpressionResult(
+        task_id=f"expr_{request.context.correlation_id}", text="Story",
+        provider="local-provider", model="local-model", engine_id="local-engine",
+        engine_mode="local", runtime_engine="local-engine", response_source="provider_runtime",
+        attempts=[], skipped=[], latency_ms=1.0, metadata={"finish_reason": "stop"},
+    )
+    with pytest.raises(PermissionError, match="generated_artifact_explicit_request_required"):
+        await runtime._persist_generated_text_result(
+            request, SimpleNamespace(intent=GENERATED_TEXT_ARTIFACT_CAPABILITY),
+            plan, meter, result,
         )
     unavailable.assert_not_called()
