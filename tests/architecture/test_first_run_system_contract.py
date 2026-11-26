@@ -332,3 +332,21 @@ def test_communications_failure_diagnostics_do_not_disclose_private_report(capsy
     assert "line=123 column=45" in output
     assert "line=124 column=5" in output
     assert "private-secret" not in output
+
+    # Backend logs remain private even if an unexpected exception contains
+    # secrets or a user supplies text resembling a diagnostic event.
+    module.report_backend_failure_summary("\n".join([
+        "2026-01-01 - ai_karen_engine.core.realtime.inbox_invalidation - WARNING - communications.invalidation.wait_unavailable",
+        "2026-01-01 - ai_karen_engine.middleware.rate_limit - ERROR - Rate limit enforcement unavailable: TimeoutError",
+        "2026-01-01 - ai_karen_engine.middleware.rate_limit - ERROR - Rate limit enforcement unavailable: private-secret",
+        '{"name":"ai_karen_engine.api_routes.content.communications","message":"communications.inbox.unavailable","error_type":"AttributeError","user_id":"private-secret"}',
+        '{"name":"untrusted","message":"communications.invalidation.wait_unavailable","error_type":"private-secret"}',
+        "private-secret",
+    ]))
+    output = capsys.readouterr().out
+    assert "kind=wait_unavailable error_type=unknown count=1" in output
+    assert "kind=rate_limit_unavailable error_type=TimeoutError count=1" in output
+    assert "kind=rate_limit_unavailable error_type=unknown count=1" in output
+    assert "kind=inbox_unavailable error_type=AttributeError count=1" in output
+    assert "private-secret" not in output
+    assert output.count("KCOMM_BACKEND_EVENT ") == 4

@@ -31,6 +31,26 @@ _STATUSES = {"passed", "failed", "timedOut", "skipped", "interrupted", "expected
 _HINT_FAILURES = {
     "none", "proxy_unavailable", "redirect_rejected", "invalidation_unavailable",
     "session_unavailable", "auth_required", "permission_denied", "other",
+    "inbox_unavailable", "authentication_unavailable", "rate_limit_unavailable",
+    "backend_not_configured", "serialization_failed", "unclassified_body",
+}
+_BACKEND_EVENTS = {
+    ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.wait_unavailable"): "wait_unavailable",
+    ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.unavailable"): "publish_unavailable",
+    ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.broker_acknowledged"): "broker_acknowledged",
+    ("ai_karen_engine.services.communications_inbox", "communications.invalidation.wait_completed"): "wait_completed",
+    ("ai_karen_engine.api_routes.content.communications", "communications.inbox.unavailable"): "inbox_unavailable",
+    ("ai_karen_engine.server.routers", "Authentication service unavailable"): "authentication_unavailable",
+    ("ai_karen_engine.server.routers", "Authentication rejected request"): "authentication_rejected",
+    ("ai_karen_engine.server.exception_handlers", "Failed to serialize exception response"): "serialization_failed",
+    ("ai_karen_engine.server.exception_handlers", "Authentication request rejected"): "authentication_rejected",
+}
+_SAFE_ERROR_TYPES = {
+    "InboxInvalidationUnavailable", "AuthenticationError", "HTTPException",
+    "RuntimeError", "TimeoutError", "ConnectionError", "ConnectionResetError",
+    "AttributeError", "TypeError", "ValueError", "PermissionError", "OSError",
+    "InvalidStateError", "RedisError", "ResponseError", "OperationalError",
+    "InterfaceError", "DBAPIError", "MissingGreenlet",
 }
 _BROWSER_STAGES = {
     "login", "initial_projection", "broker_admission", "commit_read",
@@ -94,6 +114,68 @@ def report_failure_summary(report):
             visit(suite.get("suites", []))
 
     visit(report.get("suites", []))
+
+
+def report_backend_failure_summary(logs):
+    """Emit only known backend event labels; never copy raw logs or identities.
+
+    This is an aggregate of the disposable browser run, not a per-request trace.
+    Recognize the canonical console formatter and structured JSON formatter.
+    """
+    counts = {}
+    for line in logs.splitlines():
+        name = message = error_type = None
+        try:
+            entry = json.loads(line)
+        except (TypeError, ValueError):
+            entry = None
+        if isinstance(entry, dict):
+            name, message, error_type = (
+                entry.get("name"), entry.get("message"), entry.get("error_type")
+            )
+        else:
+            parts = line.split(" - ", 3)
+            if len(parts) == 4:
+                _, name, level, message = parts
+                if level not in {"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"}:
+                    continue
+        if not isinstance(name, str) or not isinstance(message, str):
+            continue
+        kind = _BACKEND_EVENTS.get((name, message))
+        if name == "ai_karen_engine.middleware.rate_limit":
+            prefix = "Rate limit enforcement unavailable: "
+            if message.startswith(prefix):
+                kind = "rate_limit_unavailable"
+                error_type = message[len(prefix):]
+        if kind is None:
+            continue
+        safe_type = (
+            error_type
+            if isinstance(error_type, str) and error_type in _SAFE_ERROR_TYPES
+            else "unknown"
+        )
+        key = (kind, safe_type)
+        counts[key] = counts.get(key, 0) + 1
+    if not counts:
+        print("KCOMM_BACKEND_EVENTS status=none_observed")
+    for (kind, error_type), count in sorted(counts.items()):
+        print(f"KCOMM_BACKEND_EVENT kind={kind} error_type={error_type} count={count}")
+
+
+def collect_backend_failure_summary(container, started):
+    """Best effort on the already verified disposable API container only."""
+    try:
+        result = subprocess.run(
+            ["docker", "logs", "--since", str(started), "--tail", "2000", container],
+            capture_output=True, text=True, errors="replace", timeout=15, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        print("KCOMM_BACKEND_EVENTS status=unavailable")
+        return
+    if result.returncode:
+        print("KCOMM_BACKEND_EVENTS status=unavailable")
+        return
+    report_backend_failure_summary(result.stdout + "\n" + result.stderr)
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -243,6 +325,7 @@ def main():
             private = Path(directory)
             report_path = private / "report.json"
             env["PLAYWRIGHT_JSON_OUTPUT_FILE"] = str(report_path)
+            browser_started = int(time.time())
             with (private / "runner.log").open("w", encoding="utf-8") as log:
                 result = subprocess.run([
                     "npx", "--no-install", "playwright", "test", "e2e/comms-visual-acceptance.spec.ts",
@@ -251,12 +334,14 @@ def main():
                     "--grep=KCOMM-02E|KCOMM-03G", "--output=" + str(private / "artifacts"),
                 ], cwd=UI, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=420)
             if not report_path.is_file():
+                collect_backend_failure_summary(args.api_container, browser_started)
                 stage("chromium_report_missing")
                 raise RuntimeError("Disposable Chromium report missing")
             stage("chromium_report_validation")
             report = json.loads(report_path.read_text(encoding="utf-8"))
             if result.returncode != 0:
                 report_failure_summary(report)
+                collect_backend_failure_summary(args.api_container, browser_started)
                 raise RuntimeError("Disposable Chromium scenario failed; private diagnostics suppressed")
             stats = report.get("stats", {})
             if report.get("errors") != [] or stats.get("expected") != 2 or any(

@@ -568,6 +568,13 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
       : hintBody?.error_code === "BACKEND_REDIRECT_REJECTED" ? "redirect_rejected"
       : hintBody?.detail === "Inbox invalidation unavailable" ? "invalidation_unavailable"
       : hintBody?.detail === "Active session unavailable" ? "session_unavailable"
+      : hintBody?.detail === "Communications inbox unavailable" ? "inbox_unavailable"
+      : hintBody?.detail === "Authentication service unavailable" ? "authentication_unavailable"
+      : hintBody?.detail === "Active authenticated session could not be verified" ? "session_unavailable"
+      : hintBody?.error === "Rate limit enforcement unavailable" ? "rate_limit_unavailable"
+      : hintBody?.error_code === "BACKEND_TARGET_NOT_CONFIGURED" ? "backend_not_configured"
+      : hintBody?.error_code === "ERROR_RESPONSE_SERIALIZATION_FAILED" ? "serialization_failed"
+      : hintBody === null ? "unclassified_body"
       : hint.status() === 401 ? "auth_required"
       : hint.status() === 403 ? "permission_denied"
       : "other";
