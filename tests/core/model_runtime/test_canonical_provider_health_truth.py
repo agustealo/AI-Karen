@@ -269,3 +269,39 @@ def test_diagnostic_snapshot_distinguishes_eligibility_inventory_and_observation
     assert recovered["status"] == "healthy"
     assert recovered["response_time"] == 0.125
     assert registry.get_provider_health_snapshot("missing_test_provider") is None
+
+
+def test_aggregate_health_preserves_all_five_states_and_observation_time(monkeypatch):
+    registry = provider_registry_service.ProviderRegistryService()
+    names = ["agg_healthy", "agg_degraded", "agg_unhealthy", "agg_unknown", "agg_disabled"]
+    for name in names:
+        registry.register_configured_endpoint({
+            "provider_id": name, "enabled": name != "agg_disabled",
+            "base_url": "http://localhost:1234/v1", "capabilities": ["chat"],
+            "default_model": name + "_model",
+        })
+    monkeypatch.setattr(registry, "get_all_provider_names", lambda: names)
+    unchecked = registry.get_provider_health_summary()
+    assert unchecked["overall_status"] == "unknown"
+    assert unchecked["last_health_check"] is None
+    assert not unchecked["degraded_mode"]
+    assert unchecked["groups"]["healthy"] == []
+    registry.health_monitor.record_provider_interaction("agg_healthy", success=True)
+    registry.health_monitor.record_provider_interaction("agg_degraded", success=False)
+    for _ in range(5):
+        registry.health_monitor.record_provider_interaction("agg_unhealthy", success=False)
+    registry.health_monitor.record_provider_interaction("agg_disabled", success=True)
+    summary = registry.get_provider_health_summary(llm_only=True)
+    assert summary["groups"] == {
+        "healthy": ["agg_healthy"], "degraded": ["agg_degraded"],
+        "unhealthy": ["agg_unhealthy"], "unknown": ["agg_unknown"],
+        "unavailable": ["agg_disabled"],
+    }
+    assert summary["overall_status"] == "degraded"
+    assert summary["registered_model_count"] == 5
+    assert summary["eligible_registered_model_count"] == 3
+    assert summary["local_models_count"] == 3
+    assert summary["last_health_check"] == max(
+        row["last_check"] for row in summary["providers"].values()
+        if row["last_check"] is not None
+    )

@@ -43,3 +43,53 @@ async def test_health_routes_read_observations_without_legacy_provider_callbacks
         recovered = await client.get("/health/diagnostic_test")
         assert recovered.json()["status"] == "healthy"
         assert recovered.json()["last_check"] is not None
+
+
+@pytest.mark.asyncio
+async def test_aggregate_routes_use_canonical_health_and_static_summary_path(monkeypatch):
+    from ai_karen_engine.core.model_runtime.compatibility.provider_model_compatibility import (
+        ProviderModelCompatibilityService,
+    )
+
+    registry = ProviderRegistryService()
+    registry.register_configured_endpoint({
+        "provider_id": "aggregate_test", "enabled": True,
+        "base_url": "http://localhost:1234/v1", "default_model": "registered-model",
+        "capabilities": ["chat"],
+    })
+    monkeypatch.setattr(registry, "get_all_provider_names", lambda: ["aggregate_test"])
+    monkeypatch.setattr(
+        ProviderModelCompatibilityService, "validate_provider_model_setup",
+        lambda self, name: {"status": "error", "error": "private diagnostic error"},
+    )
+    app = FastAPI()
+    app.include_router(providers.router)
+    app.dependency_overrides[providers.get_provider_registry_service] = lambda: registry
+
+    def forbidden():
+        pytest.fail("aggregate health must not resolve legacy registry")
+
+    app.dependency_overrides[providers.get_llm_registry] = forbidden
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        stats = (await client.get("/stats")).json()
+        assert stats["healthy_providers"] == 0
+        assert stats["unknown_providers"] == 1
+        assert stats["last_health_check"] is None
+        summary_response = await client.get("/health/llms")
+        assert summary_response.status_code == 200
+        summary = summary_response.json()
+        assert summary["overall_status"] == "unknown"
+        assert summary["unknown_providers"] == ["aggregate_test"]
+        assert summary["last_health_check"] is None
+        assert summary["degraded_mode_active"] is False
+        integration_response = await client.get("/integration/status")
+        assert integration_response.status_code == 200
+        integration = integration_response.json()
+        assert integration["healthy_providers"] == 0
+        assert integration["overall_status"] == "unknown"
+        row = integration["providers"]["aggregate_test"]
+        assert row["has_compatible_models"] is None
+        assert row["total_compatible"] is None
+        assert "private diagnostic error" not in integration_response.text
+        registry.health_monitor.record_provider_interaction("aggregate_test", success=True)
+        assert (await client.get("/health/llms")).json()["healthy_providers"] == ["aggregate_test"]

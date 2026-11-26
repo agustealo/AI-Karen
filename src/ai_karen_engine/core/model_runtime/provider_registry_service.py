@@ -922,7 +922,67 @@ class ProviderRegistryService:
                 ),
             },
             "registered_model_count": len(models),
+            "category": registration.category if registration else "LLM",
+            "locality": endpoint.locality.value if endpoint else "unknown",
+            "configured": bool(status.has_api_key and (endpoint is None or endpoint.enabled)),
             "source": "canonical_observed_health",
+        }
+
+    def get_provider_health_summary(self, *, llm_only: bool = False) -> Dict[str, Any]:
+        """Aggregate existing snapshots, never provider callbacks or discovery."""
+        snapshots: Dict[str, Dict[str, Any]] = {}
+        for name in self.get_all_provider_names():
+            snapshot = self.get_provider_health_snapshot(name)
+            if snapshot is None or (llm_only and snapshot["category"] != "LLM"):
+                continue
+            snapshots[snapshot["provider_id"]] = snapshot
+
+        groups: Dict[str, List[str]] = {state.value: [] for state in HealthStatus}
+        registered_count = eligible_count = local_count = remote_count = unknown_locality = 0
+        checked_times = []
+        for name, snapshot in sorted(snapshots.items()):
+            # Configuration availability is a separate axis from observation.
+            # Keep the observation on the row, but never count a disabled or
+            # unconfigured provider as currently healthy or eligible.
+            state = snapshot["status"] if snapshot["configured"] else "unavailable"
+            groups[state].append(name)
+            count = snapshot["registered_model_count"]
+            registered_count += count
+            if snapshot["is_available"]:
+                eligible_count += count
+                if snapshot["locality"] in {"local", "lan"}:
+                    local_count += count
+                elif snapshot["locality"] == "cloud":
+                    remote_count += count
+                else:
+                    unknown_locality += count
+            if snapshot["last_check"] is not None:
+                checked_times.append(snapshot["last_check"])
+
+        if not snapshots:
+            overall = "unknown"
+        elif len(groups["healthy"]) == len(snapshots):
+            overall = "healthy"
+        elif len(groups["unavailable"]) == len(snapshots):
+            overall = "unavailable"
+        elif len(groups["unhealthy"]) == len(snapshots):
+            overall = "critical"
+        elif groups["degraded"] or groups["unhealthy"]:
+            overall = "degraded"
+        else:
+            overall = "unknown"
+        return {
+            "providers": snapshots,
+            "groups": groups,
+            "overall_status": overall,
+            "total_providers": len(snapshots),
+            "registered_model_count": registered_count,
+            "eligible_registered_model_count": eligible_count,
+            "local_models_count": local_count,
+            "remote_models_count": remote_count,
+            "unknown_locality_model_count": unknown_locality,
+            "last_health_check": max(checked_times, default=None),
+            "degraded_mode": overall in {"degraded", "critical"},
         }
 
     def get_available_providers(

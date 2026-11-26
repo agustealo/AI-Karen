@@ -107,6 +107,13 @@ class ProviderStats(BaseModel):
     total_providers: int
     last_sync: float
     degraded_mode: bool
+    degraded_providers: int = 0
+    unhealthy_providers: int = 0
+    unknown_providers: int = 0
+    unavailable_providers: int = 0
+    overall_status: str = "unknown"
+    last_health_check: Optional[float] = None
+    model_count_source: str = "registered_inventory"
 
 
 class ModelInfo(BaseModel):
@@ -664,6 +671,55 @@ async def health_check_all_providers(registry_service=Depends(get_provider_regis
     return results
 
 
+class LLMHealthSummary(BaseModel):
+    """Observed LLM-provider health, not a request execution receipt."""
+    overall_status: str
+    healthy_providers: List[str]
+    degraded_providers: List[str]
+    unhealthy_providers: List[str]
+    unknown_providers: List[str] = Field(default_factory=list)
+    unavailable_providers: List[str] = Field(default_factory=list)
+    total_models_available: int
+    local_models_count: int
+    remote_models_count: int
+    unknown_locality_model_count: int = 0
+    registered_model_count: int = 0
+    model_count_source: str = "eligible_registered_inventory"
+    degraded_mode_active: bool
+    last_health_check: Optional[float] = None
+    recommendations: List[str] = Field(default_factory=list)
+
+
+# Static path must precede the parameterized provider health route.
+@router.get("/health/llms", response_model=LLMHealthSummary)
+async def get_llm_health_summary(registry_service=Depends(get_provider_registry_service)):
+    summary = registry_service.get_provider_health_summary(llm_only=True)
+    groups = summary["groups"]
+    recommendations = []
+    if groups["unknown"]:
+        recommendations.append("Some provider health has not been observed")
+    if groups["unhealthy"] or groups["degraded"]:
+        recommendations.append("Review observed provider failures")
+    if groups["unavailable"]:
+        recommendations.append("Review disabled or unconfigured providers")
+    return LLMHealthSummary(
+        overall_status=summary["overall_status"],
+        healthy_providers=groups["healthy"],
+        degraded_providers=groups["degraded"],
+        unhealthy_providers=groups["unhealthy"],
+        unknown_providers=groups["unknown"],
+        unavailable_providers=groups["unavailable"],
+        total_models_available=summary["eligible_registered_model_count"],
+        registered_model_count=summary["registered_model_count"],
+        local_models_count=summary["local_models_count"],
+        remote_models_count=summary["remote_models_count"],
+        unknown_locality_model_count=summary["unknown_locality_model_count"],
+        degraded_mode_active=summary["degraded_mode"],
+        last_health_check=summary["last_health_check"],
+        recommendations=recommendations,
+    )
+
+
 @router.get("/health/{provider_name}", response_model=ProviderHealthResult)
 async def health_check_provider(
     provider_name: str,
@@ -677,39 +733,23 @@ async def health_check_provider(
 
 
 @router.get("/stats", response_model=ProviderStats)
-async def get_provider_stats(registry=Depends(get_llm_registry)):
-    """
-    Get provider statistics and system status.
-    
-    Returns:
-        Provider statistics including health status and model counts
-    """
-    try:
-        provider_names = registry.list_providers()
-        healthy_providers = registry.get_healthy_providers()
-        
-        # Count total models across all providers
-        total_models = 0
-        for name in provider_names:
-            spec = registry.get_provider_spec(name)
-            if spec:
-                total_models += len(spec.fallback_models)
-        
-        # Check if system is in degraded mode
-        unhealthy_components = registry.get_unhealthy_components()
-        degraded_mode = len(unhealthy_components) > len(provider_names) // 2
-        
-        return ProviderStats(
-            total_models=total_models,
-            healthy_providers=len(healthy_providers),
-            total_providers=len(provider_names),
-            last_sync=time.time(),
-            degraded_mode=degraded_mode
-        )
-        
-    except Exception as ex:
-            logger.error(f"Failed to get provider stats: {ex}")
-            raise handle_api_exception(ex, "Failed to get provider statistics")
+async def get_provider_stats(registry_service=Depends(get_provider_registry_service)):
+    """Return observed provider statistics and registered inventory."""
+    summary = registry_service.get_provider_health_summary()
+    groups = summary["groups"]
+    return ProviderStats(
+        total_models=summary["registered_model_count"],
+        total_providers=summary["total_providers"],
+        healthy_providers=len(groups["healthy"]),
+        degraded_providers=len(groups["degraded"]),
+        unhealthy_providers=len(groups["unhealthy"]),
+        unknown_providers=len(groups["unknown"]),
+        unavailable_providers=len(groups["unavailable"]),
+        overall_status=summary["overall_status"],
+        last_health_check=summary["last_health_check"],
+        last_sync=time.time(),
+        degraded_mode=summary["degraded_mode"],
+    )
 
 
 # ----------------- Contract endpoints under /api/providers -----------------
@@ -984,110 +1024,14 @@ async def get_provider_model_suggestions(
 
 
 @router.get("/integration/status")
-async def get_integration_status(registry=Depends(get_llm_registry)):
-    """
-    Get integration status between providers and Model Library.
-    
-    Returns:
-        Integration status information including model availability and compatibility
-    """
-    try:
-        provider_names = registry.list_llm_providers()
-        integration_status = {
-            "providers": {},
-            "overall_status": "healthy",
-            "total_providers": len(provider_names),
-            "healthy_providers": 0,
-            "providers_with_models": 0,
-            "total_compatible_models": 0,
-            "recommendations": []
-        }
-        
-        for provider_name in provider_names:
-            try:
-                # Get provider health
-                health = registry.get_health_status(f"provider:{provider_name}")
-                is_healthy = health and health.status == "healthy"
-                
-                # Get model compatibility info
-                try:
-                    from ai_karen_engine.core.model_runtime.compatibility.provider_model_compatibility import ProviderModelCompatibilityService
-                    compatibility_service = ProviderModelCompatibilityService()
-                    validation = compatibility_service.validate_provider_model_setup(provider_name)
-                    
-                    provider_status = {
-                        "name": provider_name,
-                        "healthy": is_healthy,
-                        "has_compatible_models": validation.get("has_compatible_models", False),
-                        "has_local_models": validation.get("has_local_models", False),
-                        "local_models_count": validation.get("local_models_count", 0),
-                        "available_for_download": validation.get("available_for_download", 0),
-                        "total_compatible": validation.get("total_compatible", 0),
-                        "status": validation.get("status", "unknown"),
-                        "recommendations": validation.get("recommendations", [])
-                    }
-                    
-                    if is_healthy:
-                        integration_status["healthy_providers"] += 1
-                    
-                    if validation.get("has_compatible_models", False):
-                        integration_status["providers_with_models"] += 1
-                    
-                    integration_status["total_compatible_models"] += validation.get("total_compatible", 0)
-                    
-                except ImportError:
-                    # Fallback without compatibility service
-                    spec = registry.get_provider_spec(provider_name)
-                    provider_status = {
-                        "name": provider_name,
-                        "healthy": is_healthy,
-                        "has_compatible_models": len(spec.fallback_models) > 0 if spec else False,
-                        "has_local_models": False,  # Can't determine without compatibility service
-                        "local_models_count": 0,
-                        "available_for_download": len(spec.fallback_models) if spec else 0,
-                        "total_compatible": len(spec.fallback_models) if spec else 0,
-                        "status": "unknown",
-                        "recommendations": ["Install Model Library compatibility service for full integration"]
-                    }
-                    
-                    if is_healthy:
-                        integration_status["healthy_providers"] += 1
-                
-                integration_status["providers"][provider_name] = provider_status
-                
-            except Exception as e:
-                logger.warning(f"Failed to get integration status for {provider_name}: {e}")
-                integration_status["providers"][provider_name] = {
-                    "name": provider_name,
-                    "healthy": False,
-                    "has_compatible_models": False,
-                    "has_local_models": False,
-                    "local_models_count": 0,
-                    "available_for_download": 0,
-                    "total_compatible": 0,
-                    "status": "error",
-                    "recommendations": [f"Error checking integration: {e}"]
-                }
-        
-        # Determine overall status
-        if integration_status["healthy_providers"] == 0:
-            integration_status["overall_status"] = "unhealthy"
-        elif integration_status["providers_with_models"] == 0:
-            integration_status["overall_status"] = "needs_models"
-        elif integration_status["healthy_providers"] < integration_status["total_providers"] // 2:
-            integration_status["overall_status"] = "degraded"
-        
-        # Add overall recommendations
-        if integration_status["providers_with_models"] == 0:
-            integration_status["recommendations"].append("No providers have compatible models. Visit Model Library to download models.")
-        elif integration_status["providers_with_models"] < integration_status["total_providers"]:
-            integration_status["recommendations"].append("Some providers need compatible models. Check Model Library for recommendations.")
-        
-        return integration_status
-        
-    except Exception as ex:
-        logger.error(f"Failed to get integration status: {ex}")
-        raise handle_api_exception(ex, "Failed to get integration status")
+async def get_integration_status(registry_service=Depends(get_provider_registry_service)):
+    """Join observed health with Model Library compatibility metadata."""
+    from ai_karen_engine.core.model_runtime.compatibility.provider_model_compatibility import (
+        ProviderModelCompatibilityService,
+    )
+
+    summary = registry_service.get_provider_health_summary(llm_only=True)
+    return ProviderModelCompatibilityService().project_integration_status(summary)
 
 
 @router.get("/{provider_name}/model-recommendations")
@@ -1245,20 +1189,6 @@ class ProviderHealthResponse(BaseModel):
     capabilities: Dict[str, Any] = Field(default_factory=dict)
     model_availability: Dict[str, Any] = Field(default_factory=dict)
     rate_limit_status: Optional[Dict[str, Any]] = None
-
-
-class LLMHealthSummary(BaseModel):
-    """LLM system health summary."""
-    overall_status: str  # healthy, degraded, critical
-    healthy_providers: List[str]
-    degraded_providers: List[str]
-    unhealthy_providers: List[str]
-    total_models_available: int
-    local_models_count: int
-    remote_models_count: int
-    degraded_mode_active: bool
-    last_health_check: float
-    recommendations: List[str] = Field(default_factory=list)
 
 
 @router.post("/validate", response_model=ProviderValidationResponse)
@@ -1502,108 +1432,6 @@ async def get_provider_models_dynamic(
     except Exception as ex:
         logger.error(f"Failed to get models for provider {provider_id}: {ex}")
         raise handle_api_exception(ex, f"Failed to get models for provider {provider_id}")
-
-
-@router.get("/health/llms", response_model=LLMHealthSummary)
-async def get_llm_health_summary(registry=Depends(get_llm_registry)):
-    """
-    Get comprehensive health summary for all LLM providers and runtimes.
-    
-    This endpoint provides a system-wide health overview including provider status,
-    model availability, and recommendations for improving system reliability.
-    """
-    try:
-        start_time = time.time()
-        
-        # Get all LLM providers
-        llm_providers = registry.list_llm_providers()
-        
-        healthy_providers = []
-        degraded_providers = []
-        unhealthy_providers = []
-        
-        total_models = 0
-        local_models = 0
-        remote_models = 0
-        
-        # Check health of each provider
-        for provider_name in llm_providers:
-            try:
-                health = registry.health_check(f"provider:{provider_name}")
-                spec = registry.get_provider_spec(provider_name)
-                
-                if health.status == "healthy":
-                    healthy_providers.append(provider_name)
-                elif health.status == "degraded":
-                    degraded_providers.append(provider_name)
-                else:
-                    unhealthy_providers.append(provider_name)
-                
-                # Count models
-                if spec:
-                    model_count = len(spec.fallback_models)
-                    total_models += model_count
-                    
-                    if spec.requires_api_key:
-                        remote_models += model_count
-                    else:
-                        local_models += model_count
-                        
-            except Exception as e:
-                logger.warning(f"Health check failed for {provider_name}: {e}")
-                unhealthy_providers.append(provider_name)
-        
-        # Determine overall system status
-        total_providers = len(llm_providers)
-        healthy_ratio = len(healthy_providers) / total_providers if total_providers > 0 else 0
-        
-        if healthy_ratio >= 0.8:
-            overall_status = "healthy"
-        elif healthy_ratio >= 0.5:
-            overall_status = "degraded"
-        else:
-            overall_status = "critical"
-        
-        # Check if degraded mode is active
-        degraded_mode_active = overall_status in ["degraded", "critical"]
-        
-        # Generate recommendations
-        recommendations = []
-        
-        if len(unhealthy_providers) > 0:
-            recommendations.append(f"Check configuration for unhealthy providers: {', '.join(unhealthy_providers)}")
-        
-        if len(degraded_providers) > 0:
-            recommendations.append(f"Monitor degraded providers: {', '.join(degraded_providers)}")
-        
-        if local_models == 0:
-            recommendations.append("Consider setting up local models for offline capability")
-        
-        if remote_models == 0 and len(healthy_providers) == 0:
-            recommendations.append("Configure at least one cloud provider for enhanced capabilities")
-        
-        if degraded_mode_active:
-            recommendations.append("System is in degraded mode - check provider configurations and network connectivity")
-        
-        if total_models < 5:
-            recommendations.append("Consider adding more model options for better flexibility")
-        
-        return LLMHealthSummary(
-            overall_status=overall_status,
-            healthy_providers=healthy_providers,
-            degraded_providers=degraded_providers,
-            unhealthy_providers=unhealthy_providers,
-            total_models_available=total_models,
-            local_models_count=local_models,
-            remote_models_count=remote_models,
-            degraded_mode_active=degraded_mode_active,
-            last_health_check=start_time,
-            recommendations=recommendations
-        )
-        
-    except Exception as ex:
-        logger.error(f"Failed to get LLM health summary: {ex}")
-        raise handle_api_exception(ex, "Failed to get LLM health summary")
 
 
 @router.get("/{provider_id}/health/detailed", response_model=ProviderHealthResponse)
