@@ -13,7 +13,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from ai_karen_engine.auth.models import UserData
@@ -229,10 +229,17 @@ class InboxCursorResponse(BaseModel):
     entry_id: UUID
 
 
+class InboxCapabilitiesResponse(BaseModel):
+    can_mutate: bool
+    producer_enabled: bool
+    can_reconcile: bool
+
+
 class InboxPageResponse(BaseModel):
     entries: list[InboxEntryResponse]
     next_cursor: InboxCursorResponse | None
     active_unread_count: int
+    capabilities: InboxCapabilitiesResponse
 
 
 class InboxMutationRequest(BaseModel):
@@ -274,6 +281,7 @@ def _inbox_error(exc: Exception, correlation_id: str) -> HTTPException:
 @router.get("/inbox", response_model=InboxPageResponse)
 async def list_communications_inbox(
     request: Request,
+    response: Response,
     limit: int = Query(default=50, ge=1, le=100),
     inbox_filter: InboxFilter = Query(default=InboxFilter.ACTIVE),
     cursor_at: datetime | None = Query(default=None),
@@ -290,15 +298,18 @@ async def list_communications_inbox(
             raise HTTPException(status_code=422, detail="Timezone-aware inbox cursor required")
         cursor = InboxCursor(cursor_at, str(cursor_id))
     try:
-        page = await service.list_owned(
+        owned = await service.list_owned(
             user=user, correlation_id=correlation_id, limit=limit,
             inbox_filter=inbox_filter, cursor=cursor,
         )
+        page = owned.page
+        response.headers["Cache-Control"] = "no-store"
         return InboxPageResponse(
             entries=[_inbox_entry_response(entry) for entry in page.entries],
             next_cursor=InboxCursorResponse.model_validate(asdict(page.next_cursor))
             if page.next_cursor else None,
             active_unread_count=page.active_unread_count,
+            capabilities=InboxCapabilitiesResponse.model_validate(asdict(owned.capabilities)),
         )
     except Exception as exc:
         raise _inbox_error(exc, correlation_id) from None
