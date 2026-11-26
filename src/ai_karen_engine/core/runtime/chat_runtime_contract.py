@@ -285,7 +285,7 @@ class ChatExecutionContext:
         await self._revalidate_runtime_data_session(db_session=db_session)
 
     async def revalidate_runtime_artifact_write_session(self) -> None:
-        """Generated artifact writes require both current read and write RBAC."""
+        """Generated artifact writes require read and owner-create RBAC."""
         await self._revalidate_runtime_data_session(require_write=True)
 
     async def _revalidate_runtime_data_session(
@@ -298,7 +298,7 @@ class ChatExecutionContext:
         self.require_runtime_attachment_read_permission()
         principal = self.require_authenticated_user()
         manager = get_rbac_manager()
-        if require_write and not manager.has_permission(principal, Permission.DATA_WRITE):
+        if require_write and not manager.has_permission(principal, Permission.ARTIFACT_CREATE_OWN):
             raise PermissionError("generated_artifact_write_permission_denied")
         grant = vars(principal).get("_runtime_session_witness")
         if (
@@ -341,8 +341,8 @@ class ChatExecutionContext:
         ) is not grant:
             raise PermissionError("runtime_attachment_session_binding_invalid")
         if require_write and (
-            not manager.has_permission(principal, Permission.DATA_WRITE)
-            or not manager.has_permission(fresh, Permission.DATA_WRITE)
+            not manager.has_permission(principal, Permission.ARTIFACT_CREATE_OWN)
+            or not manager.has_permission(fresh, Permission.ARTIFACT_CREATE_OWN)
         ):
             raise PermissionError("generated_artifact_write_permission_revoked")
 

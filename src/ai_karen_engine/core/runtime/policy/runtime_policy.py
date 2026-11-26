@@ -1280,7 +1280,7 @@ class RuntimePolicyEnforcer:
                     "workflow_id", "agent_delegation", "requires_human_gate",
                 ))
                 or not manager.has_permission(principal, Permission.DATA_READ)
-                or not manager.has_permission(principal, Permission.DATA_WRITE)
+                or not manager.has_permission(principal, Permission.ARTIFACT_CREATE_OWN)
             ):
                 return PolicyDecision(
                     decision_id=decision_id,

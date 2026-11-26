@@ -22,6 +22,7 @@ from ai_karen_engine.services.database.repositories.postgres_conversation_reposi
     PostgresConversationRepository,
 )
 from ai_karen_engine.services.database.repositories.artifact_store import ArtifactStore
+from ai_karen_engine.services.database.repositories.upload_session import UploadSessionRepository
 from ai_karen_engine.services.database.repositories.supabase_artifact_store import (
     SupabaseArtifactStore,
 )
@@ -42,6 +43,7 @@ class RepositoryFactory:
         self._memory: Optional[MemoryRepository] = None
         self._conversation: Optional[ConversationRepository] = None
         self._artifact: Optional[ArtifactStore] = None
+        self._upload_sessions: Optional[UploadSessionRepository] = None
 
     def create_memory_repository(self) -> MemoryRepository:
         if self._memory is None:
@@ -67,6 +69,11 @@ class RepositoryFactory:
             )
             logger.info("Canonical ArtifactStore initialized (Supabase Storage + PostgreSQL)")
         return self._artifact
+
+    def create_upload_session_repository(self) -> UploadSessionRepository:
+        if self._upload_sessions is None:
+            self._upload_sessions = UploadSessionRepository(self._session_factory)
+        return self._upload_sessions
 
     async def health_check_all(self) -> dict:
         results = {}

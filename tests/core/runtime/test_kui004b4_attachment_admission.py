@@ -104,7 +104,7 @@ async def authority(*, grant=True, bind=True, references=None, generated=False):
     if generated:
         selected_refs = []
     permissions = (
-        ["data:read", "data:write"] if generated and grant
+        ["data:read", "artifact:create_own"] if generated and grant
         else ["data:read"] if grant else []
     )
     user_id, tenant_id = str(uuid.uuid4()), str(uuid.uuid4())
@@ -951,6 +951,8 @@ async def test_revoked_private_execution_cannot_initiate_memory_formation(monkey
 @pytest.mark.parametrize("changes", [
     {"permissions": ["data:read"]},
     {"permissions": ["data:write"]},
+    {"permissions": ["data:read", "data:write"]},
+    {"permissions": ["artifact:create_own"]},
     {"action": "general_assist"},
     {"requested_capabilities": []},
     {"session_id": None},
@@ -965,7 +967,7 @@ async def test_generated_artifact_policy_denies_missing_entitlement_or_wrong_sco
         session_id="session", correlation_id="correlation",
         action=GENERATED_TEXT_ARTIFACT_CAPABILITY,
         requested_capabilities=[GENERATED_TEXT_ARTIFACT_CAPABILITY],
-        permissions=["data:read", "data:write"], max_model_calls=1,
+        permissions=["data:read", "artifact:create_own"], max_model_calls=1,
     )
     decision = await RuntimePolicyEnforcer().evaluate(
         PolicyEvaluationRequest(**{**params, **changes}),
@@ -997,8 +999,8 @@ async def test_generated_artifact_requires_original_plan_meter_and_current_write
 
     # The original signed-in account now has read-only data access. A cached
     # permission list and previously issued plan cannot authorize the write.
-    controlled_session_witness_issuer.revalidate_session_identity.return_value.roles = ["user"]
-    with pytest.raises(PermissionError, match="generated_artifact_write_permission_revoked"):
+    controlled_session_witness_issuer.revalidate_session_identity.return_value.roles = ["readonly"]
+    with pytest.raises(PermissionError, match="runtime_attachment_read_permission_revoked"):
         await authorize()
 
 
@@ -1011,3 +1013,16 @@ async def test_generated_artifact_never_inherits_attachment_read_grant():
         await policy.authorize_generated_text_write(
             context=context, plan=plan, meter=meter,
         )
+
+
+def test_generated_artifact_standard_user_has_narrow_permission_not_data_write():
+    from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+    manager = get_rbac_manager()
+    user = UserData(user_id=str(uuid.uuid4()), tenant_id=str(uuid.uuid4()), roles=["user"])
+    assert manager.has_permission(user, Permission.DATA_READ)
+    assert manager.has_permission(user, Permission.ARTIFACT_CREATE_OWN)
+    assert not manager.has_permission(user, Permission.DATA_WRITE)
+    assert not manager.has_permission(user, Permission.DATA_DELETE)
+    readonly = UserData(user_id=user.user_id, tenant_id=user.tenant_id, roles=["readonly"])
+    assert not manager.has_permission(readonly, Permission.ARTIFACT_CREATE_OWN)
