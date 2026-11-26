@@ -171,11 +171,21 @@ describe("canonical CopilotKit chat ownership", () => {
     // Each independent real-browser scenario must verify backend readiness
     // before credentials are used. Do not hardcode the number of scenarios:
     // new time/weather acceptance must increase coverage without weakening auth.
-    const preflights = [...liveBrowser.matchAll(/await requireLiveCanonicalBackend\(page, target\);/g)]
+    const postflight = /if \(localSpecialistMode\) \{\s*await requireReviewedRevision\(page, target\);\s*await requireLiveCanonicalBackend\(page, target\);\s*\}/g;
+    const isolation = liveBrowser.indexOf("await expectFreshSpecialistIsolation(page, target, id!");
+    const postflights = [...liveBrowser.matchAll(postflight)];
+    expect(postflights).toHaveLength(1);
+    expect(isolation).toBeGreaterThanOrEqual(0);
+    expect(postflights[0].index!).toBeGreaterThan(isolation);
+    // The local postflight is an extra integrity check, not another login.
+    // Every actual owner or foreign-account login still needs its own preflight.
+    const beforeCredentials = liveBrowser.replace(postflight, "");
+    const preflights = [...beforeCredentials.matchAll(/await requireLiveCanonicalBackend\(page, target\);/g)]
       .map(match => match.index!);
-    const signIns = [...liveBrowser.matchAll(/await signInApprovedKaren\(page, approvedEmail!, approvedPassword!, \{ allowLocalLoopback: localMode \}\);/g)]
+    const signIns = [...beforeCredentials.matchAll(/await signInApprovedKaren\(page, (?:approvedEmail!, approvedPassword!|account\.email!, account\.password!), \{ allowLocalLoopback: localMode \}\);/g)]
       .map(match => match.index!);
-    expect(preflights.length).toBeGreaterThanOrEqual(2);
+    expect(preflights.length).toBeGreaterThanOrEqual(3);
+    expect(signIns).toHaveLength([...beforeCredentials.matchAll(/await signInApprovedKaren\(/g)].length);
     expect(preflights).toHaveLength(signIns.length);
     preflights.forEach((position, index) => {
       expect(position).toBeLessThan(signIns[index]);
@@ -187,7 +197,8 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(liveBrowser).toContain('new URL("/api/health", target)');
     expect(liveBrowser).toContain("maxRedirects: 0");
     expect(liveBrowser).toContain('response.headers()["cache-control"] ?? ""');
-    expect(liveBrowser).toContain('expectVerifiedExecutionReceipt(page, id!, persistedAnswer)');
+    expect(liveBrowser).toContain('const firstReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);');
+    expect(liveBrowser).toContain('const replayedReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);');
   });
 
   it("uses the governed runtime, canonical session and verified history", () => {
