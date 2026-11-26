@@ -132,16 +132,37 @@ test("CK-07E8 native controlled view retains an authenticated draft without star
       await expect(selector).toHaveCount(0);
     }
 
+    // Desktop evidence is intentionally collapsed until explicitly opened.
+    // Inspecting it must not submit or start a new inference.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const desktopContext = page.getByTestId("karen-copilot-response-context");
+    const showContext = desktopContext.getByRole("button", { name: "Show response context" });
+    await expect(showContext).toBeVisible();
+    await expect(showContext).toHaveAttribute("aria-expanded", "false");
+    await showContext.click();
+    const hideContext = desktopContext.getByRole("button", { name: "Hide response context" });
+    await expect(hideContext).toBeVisible();
+    await expect(hideContext).toHaveAttribute("aria-expanded", "true");
+    const desktopDeck = desktopContext.locator(
+      '[data-testid="conversation-context-rail"], [data-testid="karen-copilot-rail-unverified"]',
+    );
+    await expect(desktopDeck).toHaveCount(1);
+    await expect(desktopDeck).toBeVisible();
+    await hideContext.click();
+    await expect(desktopDeck).toHaveCount(0);
+    await expect(showContext).toBeVisible();
+    expect(runs).toBe(0);
+
     // Responsive geometry is read-only and must not submit, reflow offscreen or
     // hide access to the shared native composer at a mobile viewport width.
     await page.setViewportSize({ width: 375, height: 812 });
     const mobileIntelligence = page.getByTestId("karen-copilot-mobile-intelligence");
     await expect(mobileIntelligence).toBeVisible();
     const intelligenceToggle = mobileIntelligence.locator("summary");
-    await expect(intelligenceToggle).toContainText("Conversation intelligence");
+    await expect(intelligenceToggle).toContainText("Response context");
     await intelligenceToggle.click();
     await expect(mobileIntelligence).toHaveAttribute("open", "");
-    const verifiedMobileDeck = mobileIntelligence.getByTestId("canonical-conversation-rail");
+    const verifiedMobileDeck = mobileIntelligence.getByTestId("conversation-context-rail");
     const unverifiedMobileDeck = mobileIntelligence.getByTestId("karen-copilot-rail-unverified");
     const verifiedCount = await verifiedMobileDeck.count();
     const unverifiedCount = await unverifiedMobileDeck.count();
@@ -726,12 +747,23 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(karenSpeaker).toHaveText("Karen");
   await expect(karenSpeaker).toHaveAttribute("aria-label", "Assistant: Karen");
   await page.setViewportSize({ width: 1440, height: 900 });
-  const intelligence = page.locator(
+  const desktopContext = page.getByTestId("karen-copilot-response-context");
+  const showContext = desktopContext.getByRole("button", { name: "Show response context" });
+  const intelligence = desktopContext.locator(
     '[data-testid="conversation-context-rail"], [data-testid="karen-copilot-rail-unverified"]',
   );
-  await expect(intelligence, "The CopilotKit desktop must render exactly one canonical intelligence rail")
+  await expect(showContext).toBeVisible();
+  await expect(showContext).toHaveAttribute("aria-expanded", "false");
+  await expect(intelligence).toHaveCount(0);
+  await showContext.click();
+  const hideContext = desktopContext.getByRole("button", { name: "Hide response context" });
+  await expect(hideContext).toHaveAttribute("aria-expanded", "true");
+  await expect(intelligence, "The expanded CopilotKit desktop must render exactly one canonical intelligence rail")
     .toHaveCount(1);
   await expect(intelligence).toBeVisible();
+  await hideContext.click();
+  await expect(intelligence).toHaveCount(0);
+  await expect(showContext).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByTestId("karen-copilot-model-discovery")).toBeVisible();
   await expect(page.getByRole("button", { name: "Find conversations" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "New conversation" })).toBeEnabled();
