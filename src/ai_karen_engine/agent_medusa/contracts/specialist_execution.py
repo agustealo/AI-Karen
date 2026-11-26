@@ -8,8 +8,8 @@ Carries the authorization + identity needed for canonical routing:
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Optional
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional
 
 if TYPE_CHECKING:
     from ...core.runtime.chat_runtime_contract import ChatExecutionContext
@@ -43,3 +43,14 @@ class SpecialistExecutionContext:
     # evidence. Never source it directly from an agent/user-supplied task.
     approved_prompt_messages: Optional[list[dict[str, str]]] = None
     learning_context_status: Optional[dict[str, Any]] = None
+
+    # Coordinator-owned, in-process observation only. Never supplied from
+    # serialized request data, a prompt, or a specialist result.
+    _invocation_entry: Optional[Callable[[], Awaitable[None]]] = field(
+        default=None, repr=False, compare=False,
+    )
+
+    async def acknowledge_invocation_entry(self) -> None:
+        """Record entry into the trusted run method, not model/tool activity."""
+        if self._invocation_entry is not None:
+            await self._invocation_entry()

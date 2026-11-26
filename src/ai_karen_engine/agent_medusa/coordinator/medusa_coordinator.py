@@ -795,8 +795,28 @@ class MedusaCoordinator:
                 pending=pending_participation,
             )
 
-        await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
         invocation_entered = False
+        entry_acknowledged = False
+        entry_violation = False
+        call_attempted = False
+
+        async def acknowledge_entry() -> None:
+            nonlocal invocation_entered, entry_acknowledged, entry_violation
+            if invocation_entered:
+                entry_violation = True
+                if pending_participation is not None:
+                    pending_participation.add(step.id)
+                raise OutcomeStoreError("Duplicate specialist invocation entry")
+            # The trusted run method has already entered. No model or tool
+            # processing may proceed until this observation is acknowledged.
+            invocation_entered = True
+            await record_participation(SpecialistParticipationPhase.STARTED)
+            entry_acknowledged = True
+
+        if trusted_context is not None:
+            execution._invocation_entry = acknowledge_entry
+
+        await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
         try:
             if emitter is not None:
                 await emitter.emit(
@@ -808,10 +828,14 @@ class MedusaCoordinator:
                         metadata={"step_id": step.id, "degraded": is_degraded},
                     )
                 )
-            invocation_entered = True
+            call_attempted = True
+            if trusted_context is None:
+                invocation_entered = True
             result = await specialist.run(step.input_data, context, execution=execution)
             step.status = StepStatus.COMPLETED
             step.output_data = result
+            if trusted_context is not None and (not entry_acknowledged or entry_violation):
+                raise OutcomeStoreError("Specialist invocation entry unacknowledged")
             await record_participation(SpecialistParticipationPhase.COMPLETED)
             if emitter is not None:
                 await emitter.emit(
@@ -839,7 +863,14 @@ class MedusaCoordinator:
             if step.status != StepStatus.COMPLETED:
                 step.status = StepStatus.FAILED
                 step.error = "cancelled"
-                if invocation_entered:
+                if (
+                    trusted_context is not None
+                    and call_attempted
+                    and not entry_acknowledged
+                    and pending_participation is not None
+                ):
+                    pending_participation.add(step.id)
+                if invocation_entered and (trusted_context is None or entry_acknowledged) and not entry_violation:
                     try:
                         await record_participation(
                             SpecialistParticipationPhase.INTERRUPTED
@@ -880,6 +911,16 @@ class MedusaCoordinator:
             )
             raise
         except Exception as exc:
+            if (
+                trusted_context is not None
+                and call_attempted
+                and (not entry_acknowledged or entry_violation)
+            ):
+                # Entry persistence failure is not a specialist work failure.
+                # Do not append FAILED or erase the pending STARTED marker.
+                if isinstance(exc, OutcomeStoreError):
+                    raise
+                raise OutcomeStoreError("Specialist invocation entry unacknowledged") from exc
             if invocation_entered and step.status != StepStatus.COMPLETED:
                 step.status = StepStatus.FAILED
                 step.error = type(exc).__name__
@@ -904,6 +945,8 @@ class MedusaCoordinator:
                 )
             raise
         finally:
+            # The capability belongs to this call only, not a retained context.
+            execution._invocation_entry = None
             await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
 
     async def _record_participation(

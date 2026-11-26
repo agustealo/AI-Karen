@@ -28,6 +28,17 @@ from ai_karen_engine.core.runtime.contracts import (
 )
 
 
+def _entered_run(*, side_effect=None, result=None):
+    """Trusted run test double acknowledges entry before specialist work."""
+    async def run(*args, **kwargs):
+        await kwargs["execution"].acknowledge_invocation_entry()
+        if side_effect is not None:
+            return await side_effect(*args, **kwargs)
+        return result
+
+    return AsyncMock(side_effect=run)
+
+
 def _request(
     *, authenticated: bool = True, shared: bool = True,
     allowed_agents: list[str] | None = None,
@@ -430,7 +441,7 @@ async def test_admitted_specialist_emits_correlated_start_and_terminal_event(fai
             raise RuntimeError("specialist_sentinel")
         return {"result": "observed"}
 
-    specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
+    specialist = SimpleNamespace(run=_entered_run(side_effect=invoke))
     coordinator = object.__new__(MedusaCoordinator)
     coordinator._outcome_recorder = OutcomeRecorder(
         store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
@@ -587,7 +598,7 @@ async def test_specialist_cancellation_preserves_observed_execution_boundary(bou
         return {"result": "observed"}
 
     emitter = InterruptingEmitter()
-    specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
+    specialist = SimpleNamespace(run=_entered_run(side_effect=invoke))
     coordinator = object.__new__(MedusaCoordinator)
     coordinator._outcome_recorder = OutcomeRecorder(
         store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
@@ -728,7 +739,7 @@ async def test_post_invocation_failure_does_not_emit_false_specialist_failure(bo
             raise RuntimeError("post_invocation_failure")
 
     emitter = FailingEmitter()
-    specialist = SimpleNamespace(run=AsyncMock(return_value={"result": "observed"}))
+    specialist = SimpleNamespace(run=_entered_run(result={"result": "observed"}))
     coordinator = object.__new__(MedusaCoordinator)
     coordinator._outcome_recorder = OutcomeRecorder(
         store=SimpleNamespace(save_unique_outcome_async=AsyncMock())
@@ -799,7 +810,7 @@ async def test_wave_propagates_post_invocation_error_without_rewriting_completed
     ["completed", "failed", "interrupted", "before_call", "append_failed",
      "failed_append_failed", "interrupted_append_timeout"],
 )
-async def test_coordinator_records_only_observed_terminal_participation(boundary):
+async def test_coordinator_records_only_observed_participation(boundary):
     import asyncio
 
     from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
@@ -824,7 +835,8 @@ async def test_coordinator_records_only_observed_terminal_participation(boundary
             await super().emit(event)
 
     async def invoke(*args, **kwargs):
-        store.save_unique_outcome_async.assert_not_awaited()
+        store.save_unique_outcome_async.assert_awaited_once()
+        assert store.save_unique_outcome_async.await_args.args[0]["metadata"]["phase"] == "started"
         if boundary in {"failed", "failed_append_failed"}:
             raise RuntimeError("invocation_failed")
         if boundary in {"interrupted", "interrupted_append_timeout"}:
@@ -832,6 +844,8 @@ async def test_coordinator_records_only_observed_terminal_participation(boundary
         return {"result": "observed"}
 
     async def append(payload):
+        if payload["metadata"]["phase"] == "started":
+            return
         if boundary in {"append_failed", "failed_append_failed"}:
             raise OutcomeStoreError("append failed")
         if boundary == "interrupted_append_timeout":
@@ -840,7 +854,7 @@ async def test_coordinator_records_only_observed_terminal_participation(boundary
     if boundary == "interrupted_append_timeout":
         meter.remaining_evidence_duration_ms = AsyncMock(return_value=10)
     store.save_unique_outcome_async.side_effect = append
-    specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
+    specialist = SimpleNamespace(run=_entered_run(side_effect=invoke))
     emitter = InterruptingEmitter()
     coordinator = MedusaCoordinator(
         registry=SimpleNamespace(
@@ -877,8 +891,12 @@ async def test_coordinator_records_only_observed_terminal_participation(boundary
         return
 
     specialist.run.assert_awaited_once()
-    store.save_unique_outcome_async.assert_awaited_once()
-    payload = store.save_unique_outcome_async.await_args.args[0]
+    assert store.save_unique_outcome_async.await_count == 2
+    started, payload = [
+        call.args[0] for call in store.save_unique_outcome_async.await_args_list
+    ]
+    assert started["metadata"]["phase"] == "started"
+    assert started["metadata"]["step_id"] == step.id
     assert payload["tenant_id"] == "tenant-a"
     assert payload["user_id"] == "user-a"
     assert payload["trajectory_id"] == "request-a"
@@ -920,10 +938,11 @@ async def test_wave_timeout_during_completion_receipt_cannot_assemble_success():
     plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
 
     async def append(payload):
-        await asyncio.Event().wait()
+        if payload["metadata"]["phase"] == "completed":
+            await asyncio.Event().wait()
 
     store = SimpleNamespace(save_unique_outcome_async=AsyncMock(side_effect=append))
-    specialist = SimpleNamespace(run=AsyncMock(return_value={"result": "observed"}))
+    specialist = SimpleNamespace(run=_entered_run(result={"result": "observed"}))
     coordinator = MedusaCoordinator(
         planner=SimpleNamespace(create_plan=AsyncMock(return_value=plan)),
         registry=SimpleNamespace(
@@ -941,7 +960,7 @@ async def test_wave_timeout_during_completion_receipt_cannot_assemble_success():
         await coordinator._handle_request(request)
 
     specialist.run.assert_awaited_once()
-    store.save_unique_outcome_async.assert_awaited_once()
+    assert store.save_unique_outcome_async.await_count == 2
     assert step.status == StepStatus.COMPLETED
     assert step.output_data == {"result": "observed"}
     coordinator.assembler.assemble.assert_not_awaited()
@@ -1022,3 +1041,100 @@ async def test_scheduler_skip_receipt_failure_cannot_assemble_success(mode):
     coordinator._execute_step.assert_not_awaited()
     assert step.status is StepStatus.SKIPPED
     assert request.request_id not in coordinator.active_plans
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["entry_failed", "entry_cancelled", "missing", "duplicate"])
+async def test_entry_failure_does_not_claim_specialist_work_failed(mode):
+    import asyncio
+
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+    )
+    from ai_karen_engine.agent_medusa.contracts.events import AgentEventType
+    from ai_karen_engine.agent_medusa.execution.event_emitter import EventEmitter
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, root, meter, _ = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+    pending = set()
+    work = AsyncMock(return_value={"result": "observed"})
+
+    async def append(payload):
+        if mode == "entry_failed":
+            raise OutcomeStoreError("entry append failed")
+        if mode == "entry_cancelled":
+            raise asyncio.CancelledError
+
+    async def run(*args, **kwargs):
+        execution = kwargs["execution"]
+        if mode != "missing":
+            await execution.acknowledge_invocation_entry()
+        if mode == "duplicate":
+            await execution.acknowledge_invocation_entry()
+        return await work()
+
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock(side_effect=append))
+    specialist = SimpleNamespace(run=AsyncMock(side_effect=run))
+    emitter = EventEmitter()
+    coordinator = MedusaCoordinator(
+        registry=SimpleNamespace(
+            get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
+            get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
+        ),
+        factory=SimpleNamespace(resolve=lambda _: specialist),
+        lifecycle=SimpleNamespace(set_status=AsyncMock()),
+        outcome_recorder=OutcomeRecorder(store=store),
+    )
+    expected = asyncio.CancelledError if mode == "entry_cancelled" else OutcomeStoreError
+    with pytest.raises(expected):
+        await coordinator._execute_step(
+            step, plan, request, root, meter, emitter, pending_participation=pending,
+        )
+
+    specialist.run.assert_awaited_once()
+    assert not any(event.type == AgentEventType.AGENT_FAILED for event in emitter.events)
+    if mode == "missing":
+        store.save_unique_outcome_async.assert_not_awaited()
+        work.assert_awaited_once()
+    else:
+        work.assert_not_awaited()
+        store.save_unique_outcome_async.assert_awaited_once()
+        assert store.save_unique_outcome_async.await_args.args[0]["metadata"]["phase"] == "started"
+        assert pending == {step.id}
+    assert specialist.run.await_args.kwargs["execution"]._invocation_entry is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("harness", ["native", "deepagents"])
+async def test_real_registered_entry_methods_acknowledge_before_work(harness):
+    from ai_karen_engine.agent_medusa.contracts.specialist_execution import (
+        SpecialistExecutionContext,
+    )
+    from ai_karen_engine.agent_medusa.specialists.specialist_base import SpecialistBase
+    from ai_karen_engine.agent_medusa.specialists.deepagents_research_specialist import (
+        DeepAgentsResearchSpecialist,
+    )
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    _, root, meter, _ = _request()
+    entry = AsyncMock(side_effect=OutcomeStoreError("entry append failed"))
+    execution = SpecialistExecutionContext(
+        authorized_plan=root, budget_meter=meter, _invocation_entry=entry,
+    )
+    if harness == "native":
+        specialist = SpecialistBase(SimpleNamespace(agent_id="researcher"))
+        specialist._process = AsyncMock()
+        downstream = specialist._process
+    else:
+        specialist = object.__new__(DeepAgentsResearchSpecialist)
+        specialist.registration = SimpleNamespace()
+        specialist._verify_scope = AsyncMock()
+        downstream = specialist._verify_scope
+
+    with pytest.raises(OutcomeStoreError, match="entry append failed"):
+        await specialist.run({"query": "test"}, execution=execution)
+    entry.assert_awaited_once()
+    downstream.assert_not_called()
