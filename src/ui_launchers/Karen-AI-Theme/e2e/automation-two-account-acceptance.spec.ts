@@ -255,7 +255,8 @@ async function scopedParticipationGet(page: Page, origin: string, path: string, 
     const url = new URL(path, window.location.origin);
     if (window.location.origin !== origin || url.origin !== origin ||
         (url.pathname !== "/api/auth/validate-session" &&
-          !/^\/api\/agent-runtime\/my-runs\/[A-Za-z0-9_-]{1,128}\/participation$/.test(url.pathname))) {
+          !/^\/api\/agent-runtime\/my-runs\/[A-Za-z0-9_-]{1,128}\/(?:participation|tool-receipts)$/.test(url.pathname) &&
+          !(authenticated && /^\/api\/copilotkit\/threads\/[0-9a-f-]{36}\/messages$/i.test(url.pathname)))) {
       throw new Error("Refusing unapproved participation authorization probe");
     }
     const bearer = window.localStorage.getItem("access_token");
@@ -471,4 +472,260 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
     }
   }
   expect(forbidden, "Readback must not submit inference or mutate executions").toEqual([]);
+});
+
+
+/** ARM-05C.8C: fresh ordinary chat, not a seeded Medusa run. */
+const freshTitle = "ARM-05C.8C fresh specialist execution survives reload";
+const freshEnabled = process.env.KAREN_SPECIALIST_FRESH_ACCEPTANCE === "true";
+const localEngines = new Set(["lmstudio", "vllm", "sglang", "llamacpp", "tensorrt_llm", "ollama", "transformers"]);
+const freshUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+const requestIdentity = (value: unknown): value is string =>
+  typeof value === "string" && value.length >= 1 && value.length <= 128 &&
+  !/[^A-Za-z0-9_-]/.test(value);
+const nonblank = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && value.length <= 256 &&
+  value === value.trim() && !/[\u0000-\u001f\u007f]/.test(value);
+type ToolReceipt = {
+  receipt_id: string; tool_call_id: string; tool_name: string; tool_version: string | null;
+  agent_id: string; step_id: string; policy_decision_id: string; success: boolean;
+  error_type: string | null; result_sha256: string | null; recorded_at: string;
+  execution_scope: "tool_runtime_acknowledgment"; independently_verified: false;
+};
+type ToolEvidence = {
+  run_id: string; evidence_status: "recorded"; receipts: ToolReceipt[];
+  window_limit_reached: false; response_source: "postgres_outcome_records";
+};
+
+function parseFreshToolEvidence(value: unknown, runId: string): ToolEvidence {
+  if (!hasExactKeys(value, ["run_id", "evidence_status", "receipts", "window_limit_reached", "response_source"]) ||
+      value.run_id !== runId || value.evidence_status !== "recorded" ||
+      value.window_limit_reached !== false || value.response_source !== "postgres_outcome_records" ||
+      !Array.isArray(value.receipts) || value.receipts.length < 1 || value.receipts.length >= 100) {
+    throw new Error("Incomplete or invalid governed tool evidence");
+  }
+  const seen = new Set<string>();
+  for (const row of value.receipts) {
+    if (!hasExactKeys(row, ["receipt_id", "tool_call_id", "tool_name", "tool_version", "agent_id",
+      "step_id", "policy_decision_id", "success", "error_type", "result_sha256", "recorded_at",
+      "execution_scope", "independently_verified"]) ||
+        typeof row.tool_call_id !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.tool_call_id) ||
+        row.receipt_id !== "out_tool_" + row.tool_call_id.replace(/-/g, "") ||
+        seen.has(row.tool_call_id) ||
+        ![row.tool_name, row.agent_id, row.step_id, row.policy_decision_id].every(nonblank) ||
+        (row.tool_version !== null && !nonblank(row.tool_version)) ||
+        (row.error_type !== null && !nonblank(row.error_type)) ||
+        typeof row.success !== "boolean" || (row.success && row.error_type !== null) ||
+        (row.result_sha256 !== null && (typeof row.result_sha256 !== "string" ||
+          row.result_sha256.length !== 64 || /[^0-9a-f]/.test(row.result_sha256))) ||
+        typeof row.recorded_at !== "string" || !Number.isFinite(Date.parse(row.recorded_at)) ||
+        row.execution_scope !== "tool_runtime_acknowledgment" || row.independently_verified !== false) {
+      throw new Error("Invalid governed tool receipt");
+    }
+    seen.add(row.tool_call_id);
+  }
+  return value as ToolEvidence;
+}
+
+function hasSuccessfulResearch(participation: ParticipationReadback, tools: ToolEvidence): boolean {
+  if (participation.run_id !== tools.run_id) return false;
+  return tools.receipts.some(tool => {
+    if (tool.agent_id !== "researcher" || tool.tool_name !== "web_search" ||
+        !tool.success || !tool.result_sha256) return false;
+    const observed = participation.receipts.filter(row =>
+      row.specialist_id === tool.agent_id && row.step_id === tool.step_id);
+    const started = observed.find(row => row.phase === "started");
+    const completed = observed.find(row => row.phase === "completed");
+    return !!started && !!completed &&
+      !observed.some(row => ["failed", "interrupted", "skipped"].includes(row.phase)) &&
+      Date.parse(started.observed_at) <= Date.parse(tool.recorded_at) &&
+      Date.parse(tool.recorded_at) <= Date.parse(completed.observed_at);
+  });
+}
+
+test("ARM-05C.8C rejects mismatched or fabricated governed tool evidence", () => {
+  const call = "00000000-0000-4000-8000-000000000001";
+  const row = {
+    receipt_id: "out_tool_" + call.replace(/-/g, ""), tool_call_id: call,
+    tool_name: "web_search", tool_version: null, agent_id: "researcher", step_id: "step",
+    policy_decision_id: "policy", success: true, error_type: null, result_sha256: "a".repeat(64),
+    recorded_at: "2026-01-01T00:00:01Z", execution_scope: "tool_runtime_acknowledgment",
+    independently_verified: false,
+  };
+  const envelope = {
+    run_id: "run", evidence_status: "recorded", receipts: [row],
+    window_limit_reached: false, response_source: "postgres_outcome_records",
+  };
+  const participation = parseParticipation({
+    run_id: "run", evidence_status: "recorded", truncated: false,
+    response_source: "postgres_outcome_records", receipts: [
+      { receipt_id: "00000000-0000-5000-8000-000000000001", step_id: "step",
+        specialist_id: "researcher", phase: "started", observed_at: "2026-01-01T00:00:00Z" },
+      { receipt_id: "00000000-0000-5000-8000-000000000002", step_id: "step",
+        specialist_id: "researcher", phase: "completed", observed_at: "2026-01-01T00:00:02Z" },
+    ],
+  }, "run");
+  expect(hasSuccessfulResearch(participation, parseFreshToolEvidence(envelope, "run"))).toBe(true);
+  for (const invalid of [
+    { ...envelope, run_id: "foreign" }, { ...envelope, window_limit_reached: true },
+    { ...envelope, receipts: [] }, { ...envelope, receipts: [row, row] },
+    { ...envelope, receipts: [{ ...row, payload: "test-only" }] },
+    { ...envelope, receipts: [{ ...row, receipt_id: "forged" }] },
+    { ...envelope, receipts: [{ ...row, independently_verified: true }] },
+    { ...envelope, receipts: [{ ...row, error_type: "failure" }] },
+  ]) expect(() => parseFreshToolEvidence(invalid, "run")).toThrow();
+  for (const different of [
+    { ...row, step_id: "other" }, { ...row, agent_id: "other" },
+    { ...row, tool_name: "other" }, { ...row, success: false },
+    { ...row, result_sha256: null }, { ...row, recorded_at: "2026-01-01T00:01:00Z" },
+  ]) expect(hasSuccessfulResearch(participation,
+    parseFreshToolEvidence({ ...envelope, receipts: [different] }, "run"))).toBe(false);
+});
+
+type FreshMessage = { id: string; role: string; content: string };
+type FreshHistory = {
+  threadId: string; messages: FreshMessage[]; recovery_run: unknown;
+  replayEvents: Array<{ type: string; name: string; messageId: string; value: Record<string, unknown> }>;
+};
+type FreshObservation = {
+  assistant: FreshMessage; receipt: Record<string, unknown>; runId: string;
+};
+function observeFreshHistory(body: FreshHistory, threadId: string, prompt: string,
+  provider: string, model: string, engine: string): FreshObservation | null {
+  if (!body || body.threadId !== threadId || body.recovery_run !== null ||
+      !Array.isArray(body.messages) || !Array.isArray(body.replayEvents) ||
+      body.messages.length !== 2) return null;
+  const [user, assistant] = body.messages;
+  if (user?.role !== "user" || user.content !== prompt || !nonblank(user.id) ||
+      assistant?.role !== "assistant" || !nonblank(assistant.id) || assistant.id === user.id ||
+      typeof assistant.content !== "string" || !assistant.content.trim()) return null;
+  const events = body.replayEvents.filter(event =>
+    event.type === "CUSTOM" && event.name === "karen.execution_receipt.v1");
+  if (events.length !== 1 || events[0].messageId !== assistant.id) return null;
+  const receipt = events[0].value;
+  if (!receipt || !requestIdentity(receipt.runtime_request_id) ||
+      receipt.actual_provider !== provider || receipt.actual_model !== model ||
+      receipt.runtime_engine !== engine || receipt.degraded_mode !== false ||
+      typeof receipt.response_source !== "string" ||
+      !/(?:^|[_-])(?:model|inference|generation)(?:[_-]|$)/i.test(receipt.response_source)) return null;
+  return { assistant, receipt, runId: receipt.runtime_request_id };
+}
+
+test(freshTitle, async ({ page }) => {
+  test.skip(!freshEnabled, "Explicit protected fresh specialist execution opt-in required");
+  test.setTimeout(6 * 60_000);
+  if (process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
+      process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== "true" || local ||
+      process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined) {
+    throw new Error("Fresh specialist acceptance requires the protected signed Docker scenario");
+  }
+  const origin = requireApprovedOrigin();
+  const { email, password } = accounts[0];
+  const provider = process.env.KAREN_SPECIALIST_EXPECTED_PROVIDER;
+  const model = process.env.KAREN_SPECIALIST_EXPECTED_MODEL;
+  const engine = process.env.KAREN_SPECIALIST_EXPECTED_ENGINE;
+  if (!email || !password || !nonblank(provider) || !nonblank(model) ||
+      !engine || !localEngines.has(engine)) {
+    throw new Error("Dedicated consumer credentials and approved local provider identity required");
+  }
+  await signInApprovedKaren(page, email, password);
+  const session = await scopedParticipationGet(page, origin, "/api/auth/validate-session");
+  const identity = session.payload as {
+    valid?: boolean; session_valid?: boolean; authenticated?: boolean;
+    user?: { user_id: string; tenant_id: string; roles: string[] };
+  };
+  if (session.status !== 200 || identity?.valid !== true || identity.session_valid !== true ||
+      identity.authenticated !== true || !identity.user || !nonblank(identity.user.user_id) ||
+      !nonblank(identity.user.tenant_id) || ["default", "dev-tenant"].includes(identity.user.tenant_id.toLowerCase()) ||
+      !Array.isArray(identity.user.roles) || identity.user.roles.includes("admin")) {
+    throw new Error("A verified dedicated non-admin principal and tenant are required");
+  }
+  const shell = page.getByTestId("karen-copilot-consumer-chat");
+  const ask = page.getByRole("button", { name: "Ask Karen", exact: true });
+  if (!(await shell.isVisible().catch(() => false)) &&
+      await ask.isVisible().catch(() => false)) await ask.click();
+  await expect(shell).toBeVisible({ timeout: 30_000 });
+  await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible();
+  const previousId = await shell.getAttribute("data-conversation-id");
+  await shell.getByRole("button", { name: "New conversation", exact: true }).click();
+  await expect.poll(async () => {
+    const id = await shell.getAttribute("data-conversation-id");
+    return !!id && id !== previousId && freshUuid.test(id);
+  }, { timeout: 30_000 }).toBe(true);
+  const threadId = (await shell.getAttribute("data-conversation-id"))!;
+  const historyPath = "/api/copilotkit/threads/" + threadId + "/messages";
+  const before = await scopedParticipationGet(page, origin, historyPath);
+  const empty = before.payload as FreshHistory;
+  expect(before.status).toBe(200);
+  expect(empty?.threadId === threadId && Array.isArray(empty.messages) && empty.messages.length === 0 &&
+    Array.isArray(empty.replayEvents) && empty.replayEvents.length === 0 && empty.recovery_run === null,
+    "Fresh conversation must have no pre-existing evidence or unresolved execution").toBe(true);
+
+  const prompt = "Research the official Python documentation on virtual environments and explain the recommended creation command with an official source. Reference " +
+    crypto.randomUUID() + ".";
+  const executions: string[] = [];
+  const mutations: string[] = [];
+  page.context().on("request", request => {
+    const url = new URL(request.url());
+    if (url.origin !== origin || ["GET", "HEAD", "OPTIONS"].includes(request.method())) return;
+    if (["/api/copilotkit/agent/default/run", "/api/chat", "/api/chat/ag-ui", "/api/chat/stream"].includes(url.pathname)) {
+      executions.push(url.pathname);
+    }
+    if (url.pathname.startsWith("/api/agent-runtime/") || url.pathname.startsWith("/api/admin/agents/")) {
+      mutations.push(request.method());
+    }
+  });
+  const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea");
+  await expect(composer).toHaveCount(1);
+  await expect(composer).toBeVisible();
+  const submitted = page.waitForRequest(request => {
+    const url = new URL(request.url());
+    return url.origin === origin && request.method() === "POST" &&
+      url.pathname === "/api/copilotkit/agent/default/run";
+  }, { timeout: 30_000 });
+  await composer.fill(prompt);
+  await composer.press("Enter");
+  const packet = (await submitted).postDataJSON() as { threadId?: string; runId?: string };
+  expect(packet.threadId === threadId && requestIdentity(packet.runId)).toBe(true);
+
+  let observed: FreshObservation | null = null;
+  await expect.poll(async () => {
+    const read = await scopedParticipationGet(page, origin, historyPath);
+    if (read.status !== 200) return false;
+    observed = observeFreshHistory(read.payload as FreshHistory, threadId, prompt, provider, model, engine);
+    return !!observed;
+  }, { timeout: 180_000, intervals: [1000, 2000, 3000] }).toBe(true);
+  if (!observed) throw new Error("No attested fresh local model receipt");
+  const result: FreshObservation = observed;
+  const runId = result.runId; // Never substitute the SDK transport run ID.
+  const receiptView = shell.getByTestId("karen-copilot-assistant-message")
+    .getByTestId("karen-restored-execution-receipt");
+  await expect(receiptView).toHaveCount(1, { timeout: 30_000 });
+  await expect(receiptView).toContainText(model);
+  const participation = await readParticipation(page, origin, runId);
+  const toolPath = personalRunsPath + "/" + encodeURIComponent(runId) + "/tool-receipts";
+  const toolRead = await scopedParticipationGet(page, origin, toolPath);
+  expect(toolRead.status).toBe(200);
+  const tools = parseFreshToolEvidence(toolRead.payload, runId);
+  expect(hasSuccessfulResearch(participation, tools),
+    "Fresh completed researcher step must contain a successful correlated search acknowledgment").toBe(true);
+  expect(executions).toEqual(["/api/copilotkit/agent/default/run"]);
+
+  await page.reload();
+  await expect(shell).toBeVisible({ timeout: 30_000 });
+  await expect(shell).toHaveAttribute("data-conversation-id", threadId);
+  await expect(shell.getByText(prompt, { exact: true })).toBeVisible();
+  await expect(receiptView).toHaveCount(1, { timeout: 30_000 });
+  await expect(receiptView).toContainText(model);
+  const replay = await scopedParticipationGet(page, origin, historyPath);
+  expect(replay.status).toBe(200);
+  const replayed = observeFreshHistory(replay.payload as FreshHistory, threadId, prompt, provider, model, engine);
+  expect(replayed).toEqual(result);
+  expect(sameParticipation(await readParticipation(page, origin, runId), participation)).toBe(true);
+  const restoredTools = await scopedParticipationGet(page, origin, toolPath);
+  expect(restoredTools.status).toBe(200);
+  expect(parseFreshToolEvidence(restoredTools.payload, runId)).toEqual(tools);
+  expect(executions, "Reload must not resubmit inference").toEqual(["/api/copilotkit/agent/default/run"]);
+  expect(mutations, "Consumer must not mutate execution authority").toEqual([]);
 });
