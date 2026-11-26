@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import secrets
 import subprocess
+import sys
 import tempfile
 import time
 from urllib.parse import urlsplit
@@ -74,6 +75,8 @@ def main():
     parser.add_argument("--network", required=True)
     parser.add_argument("--api-url", required=True)
     parser.add_argument("--tenant-id", required=True)
+    parser.add_argument("--observe-owner", action="append")
+    parser.add_argument("--expected-count", type=int, choices=(0, 1))
     args = parser.parse_args()
     if os.environ.get("KAREN_SMOKE_COMMS_BROWSER_PROOF") != "true":
         raise RuntimeError("Explicit disposable smoke opt-in required")
@@ -90,6 +93,18 @@ def main():
     binding = inspected["NetworkSettings"]["Ports"].get("8000/tcp") or []
     if not any(b["HostIp"] == "127.0.0.1" and b["HostPort"] == str(urlsplit(origin).port) for b in binding):
         raise RuntimeError("API host binding is not the isolated smoke container")
+    if args.observe_owner is not None or args.expected_count is not None:
+        if not args.observe_owner or args.expected_count is None:
+            raise RuntimeError("Incomplete broker witness request")
+        owners = [str(uuid.UUID(owner)) for owner in args.observe_owner]
+        receipt = fixture(args.api_container, {
+            "mode": "observe_subscribers", "tenant_id": tenant,
+            "owners": owners, "expected_count": args.expected_count,
+        })
+        if receipt != {"subscriber_counts": [args.expected_count] * len(owners)}:
+            raise RuntimeError("Unexpected broker witness receipt")
+        print("DISPOSABLE COMMUNICATIONS BROKER WITNESS PASSED")
+        return
     accounts = [account(), account()]
     user_ids = fixture(args.api_container, {"mode": "accounts", "tenant_id": tenant, "accounts": accounts})["users"]
     identities = []
@@ -128,6 +143,14 @@ def main():
                "CI": "true", "KAREN_BASE_URL": web_origin,
                "KAREN_LOCAL_CHAT_ACCEPTANCE": "1", "KAREN_CHAT_BOOT_ACCEPTANCE": "0",
                "KAREN_COMMS_INBOX_ACCEPTANCE": "true", "KAREN_COMMS_VISUAL_ACCEPTANCE": "false",
+               "KAREN_COMMS_INVALIDATION_ACCEPTANCE": "true",
+               "KAREN_COMMS_WITNESS_PYTHON": sys.executable,
+               "KAREN_COMMS_WITNESS_API_CONTAINER": args.api_container,
+               "KAREN_COMMS_WITNESS_NETWORK": args.network,
+               "KAREN_COMMS_WITNESS_API_URL": origin,
+               "KAREN_COMMS_WITNESS_TENANT": tenant,
+               "KAREN_COMMS_WITNESS_OWNER_A": user_ids[0],
+               "KAREN_COMMS_WITNESS_OWNER_B": user_ids[1],
                "KAREN_UX_EMAIL": accounts[0]["email"], "KAREN_UX_PASSWORD": accounts[0]["password"],
                "KAREN_UX_ACCOUNT_B_EMAIL": accounts[1]["email"], "KAREN_UX_ACCOUNT_B_PASSWORD": accounts[1]["password"],
                "KAREN_UX_ACCOUNT_A_PENDING_INBOX_EXECUTION_ID": runs[0],
@@ -143,16 +166,16 @@ def main():
                     "npx", "--no-install", "playwright", "test", "e2e/comms-visual-acceptance.spec.ts",
                     "--config=e2e/playwright.config.ts", "--project=chromium",
                     "--reporter=json", "--workers=1", "--retries=0", "--forbid-only",
-                    "--grep=KCOMM-02E", "--output=" + str(private / "artifacts"),
+                    "--grep=KCOMM-02E|KCOMM-03G", "--output=" + str(private / "artifacts"),
                 ], cwd=UI, env=env, stdout=log, stderr=subprocess.STDOUT, timeout=420)
             if result.returncode != 0 or not report_path.is_file():
                 raise RuntimeError("Disposable Chromium scenario failed; private diagnostics suppressed")
             report = json.loads(report_path.read_text(encoding="utf-8"))
             stats = report.get("stats", {})
-            if report.get("errors") != [] or stats.get("expected") != 1 or any(
+            if report.get("errors") != [] or stats.get("expected") != 2 or any(
                 stats.get(key) != 0 for key in ("unexpected", "skipped", "flaky")
             ):
-                raise RuntimeError("Exactly one passing browser scenario without skips or retries required")
+                raise RuntimeError("Exactly two passing browser scenarios without skips or retries required")
             observed = []
 
             def collect(suites):
@@ -168,9 +191,13 @@ def main():
             if observed != [(
                 "KCOMM-02E: real signed-session recovery, lifecycle persistence and account isolation",
                 "expected", "passed", "chromium", ["passed"],
+            ), (
+                "KCOMM-03G: committed change delivery, cancellation and live session revocation",
+                "expected", "passed", "chromium", ["passed"],
             )]:
                 raise RuntimeError("Incorrect browser acceptance inventory")
         print("DISPOSABLE COMMUNICATIONS SIGNED-SESSION LIFECYCLE PROOF PASSED: one test, zero skips or retries")
+        print("DISPOSABLE COMMUNICATIONS SIGNED-SESSION INVALIDATION PROOF PASSED: one test, zero skips or retries")
     finally:
         subprocess.run(["docker", "rm", "-f", web_container], stdout=subprocess.DEVNULL,
                        stderr=subprocess.DEVNULL, check=False, timeout=30)

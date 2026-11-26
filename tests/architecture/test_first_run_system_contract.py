@@ -268,5 +268,28 @@ def test_disposable_communications_browser_is_opt_in_and_isolated() -> None:
     assert "Refusing non-disposable database target" in fixture
     assert "Only explicitly isolated loopback origin allowed" in runner
     assert "API host binding is not the isolated smoke container" in runner
-    assert "Exactly one passing browser scenario without skips or retries required" in runner
+    assert "Exactly two passing browser scenarios without skips or retries required" in runner
     assert "DISPOSABLE COMMUNICATIONS SIGNED-SESSION LIFECYCLE PROOF PASSED" in runner
+
+
+def test_disposable_communications_invalidation_requires_real_broker_and_browser_receipts() -> None:
+    smoke = _read(SMOKE)
+    fixture = _read(ROOT / "scripts/ci/communications_browser_fixture.py")
+    runner = _read(ROOT / "scripts/ci/communications_browser_smoke.py")
+    spec = _read(ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/comms-visual-acceptance.spec.ts")
+    block = smoke.split('if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then', 2)[-1].split("\nfi", 1)[0]
+    assert "-e KARI_ENABLE_COMMUNICATIONS_INVALIDATION=true" in block
+    assert "-e KARI_ENABLE_COMMUNICATIONS_INVALIDATION_WAIT=true" in block
+    assert "Refusing non-disposable Redis target" in fixture
+    assert "pubsub_numsub(*channels)" in fixture
+    assert "DISPOSABLE COMMUNICATIONS BROKER WITNESS PASSED" in runner
+    assert 'stats.get("expected") != 2' in runner
+    assert "DISPOSABLE COMMUNICATIONS SIGNED-SESSION INVALIDATION PROOF PASSED" in runner
+    assert 'await witness([ownerA, ownerB], 1)' in spec
+    assert 'expect(sequence[0]).toBe("hint")' in spec
+    assert 'expect(sequence[1]).toBe("read")' in spec
+    assert 'expect(await foreign.json()).toEqual({ changed: false })' in spec
+    assert 'page.waitForEvent("requestfailed"' in spec
+    assert 'await witness([ownerB], 0)' in spec
+    assert 'expect([401, 403]).toContain(rejection.status())' in spec
+    assert 'expect(rejectionBody).not.toHaveProperty("changed")' in spec

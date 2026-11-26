@@ -873,3 +873,22 @@ bash ../../../scripts/ci/run_specialist_browser_acceptance.sh local ordinary-cha
 ````
 
 Install pinned frontend dependencies and Chromium before entering credentials. The local runner rejects dirty/wrong revisions, unapproved or non-loopback origins, inherited bypass credentials and partial configuration. It requires exactly one passing local scenario, no skips or retries, and deletes private browser output. Signed Docker and Vercel scenarios keep their existing admission rules; a local report cannot substitute for either. Report local runtime proof separately from image provenance and external deployment status.
+
+
+### KCOMM-03G signed-session invalidation acceptance
+
+The existing explicit `communications_browser` workflow dispatch now requires
+both KCOMM-02E and KCOMM-03G (two Chromium scenarios, zero skips/retries).
+After the frontend capability integration is merged, the disposable API image
+enables both invalidation flags and uses the existing Redis lifecycle.
+A test-only read-only witness checks exact owner subscription counts in the
+same guarded disposable Redis container. A second signed owner session commits
+a real inbox mutation, the browser receives the exact boolean hint and performs
+a canonical GET, and the foreign owner's concurrent wait returns idle.
+Workspace exit must abort the browser request and leave zero broker
+subscriptions. A real logout revokes the pending browser session; a subsequent
+committed owner change must not return an invalidation to that revoked session.
+No hosted account or deployment, fabricated event, mock API, direct runtime-row
+write, or production flag change. The exact-head run must actually execute
+both scenarios. This does not certify distributed HTTP worker capacity or
+real model inference failure.

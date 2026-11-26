@@ -1,4 +1,7 @@
-import { expect, test, type Page, type TestInfo } from "@playwright/test";
+import { expect, test, type Page, type TestInfo, type Request as BrowserRequest } from "@playwright/test";
+import { execFile } from "node:child_process";
+import { resolve } from "node:path";
+import { promisify } from "node:util";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 import { openAutomationWorkspace } from "./fixtures/automation-workspace-navigation";
 import { INBOX_PATH, readPage, readReceipt, type InboxEntry, type InboxFilter, type InboxOperation } from "../src/components/comms/communications-inbox-contract";
@@ -444,4 +447,177 @@ test("KCOMM-02E: real signed-session recovery, lifecycle persistence and account
   await expect(inbox.getByText("Execution " + runA.slice(0,8), { exact: false })).toHaveCount(0);
   const otherArchived = await readAfter(() => inbox.getByRole("button", { name: "Archived", exact: true }).click(), "archived");
   expect(otherArchived.entries.some(e => e.entry_id === archived.entry_id || e.execution_id === runA)).toBe(false);
+});
+
+
+/** Genuine production-image HTTP/browser delivery; no interception or synthetic events. */
+test("KCOMM-03G: committed change delivery, cancellation and live session revocation", async ({ page, request }) => {
+  test.skip(process.env.KAREN_COMMS_INVALIDATION_ACCEPTANCE !== "true", "Explicit disposable invalidation opt-in required");
+  test.setTimeout(5 * 60_000);
+  const target = validateTarget();
+  const accountB = process.env.KAREN_UX_ACCOUNT_B_EMAIL;
+  const passwordB = process.env.KAREN_UX_ACCOUNT_B_PASSWORD;
+  const runB = process.env.KAREN_UX_ACCOUNT_B_INBOX_EXECUTION_ID;
+  const tenant = process.env.KAREN_COMMS_WITNESS_TENANT;
+  const ownerA = process.env.KAREN_COMMS_WITNESS_OWNER_A;
+  const ownerB = process.env.KAREN_COMMS_WITNESS_OWNER_B;
+  const apiContainer = process.env.KAREN_COMMS_WITNESS_API_CONTAINER;
+  const network = process.env.KAREN_COMMS_WITNESS_NETWORK;
+  const apiOrigin = process.env.KAREN_COMMS_WITNESS_API_URL;
+  const python = process.env.KAREN_COMMS_WITNESS_PYTHON;
+  if (target.protocol !== "http:" || target.hostname !== "127.0.0.1" ||
+      process.env.KAREN_SMOKE_COMMS_BROWSER_PROOF !== "true" ||
+      !email || !password || !accountB || !passwordB || !runB || !tenant ||
+      !ownerA || !ownerB || ownerA === ownerB || !apiContainer || !network || !apiOrigin || !python) {
+    throw new Error("Isolated signed-session invalidation fixture required");
+  }
+  if (![tenant, ownerA, ownerB, runB].every(v => /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v))) {
+    throw new Error("Invalid disposable witness identities");
+  }
+  const origin = target.origin;
+  const waitPath = INBOX_PATH + "/wait";
+  const inbox = page.getByTestId("personal-communications-inbox");
+  const root = page.getByTestId("comms-center");
+  const execute = promisify(execFile);
+  const witnessScript = resolve(process.cwd(), "../../../scripts/ci/communications_browser_smoke.py");
+  async function witness(owners: string[], count: 0 | 1) {
+    const args = [witnessScript, "--api-container", apiContainer!, "--network", network!,
+      "--api-url", apiOrigin!, "--tenant-id", tenant!, "--expected-count", String(count)];
+    for (const owner of owners) args.push("--observe-owner", owner);
+    const result = await execute(python!, args, { timeout: 20_000, maxBuffer: 64 * 1024 });
+    if (result.stdout.trim() !== "DISPOSABLE COMMUNICATIONS BROKER WITNESS PASSED") {
+      throw new Error("Broker witness missing");
+    }
+  }
+  async function login(actorEmail: string, actorPassword: string, owner: string) {
+    const response = await request.post(origin + "/api/auth/login", {
+      data: { email: actorEmail, password: actorPassword }, maxRedirects: 0,
+    });
+    if (response.status() !== 200) throw new Error("Fixture login failed");
+    const raw = await response.json();
+    if (raw?.user?.user_id !== owner || raw?.user?.tenant_id !== tenant ||
+        typeof raw.access_token !== "string" || !raw.access_token ||
+        typeof raw.refresh_token !== "string" || !raw.refresh_token) {
+      throw new Error("Fixture login identity mismatch");
+    }
+    return { Authorization: "Bearer " + raw.access_token };
+  }
+  const waitRequest = (req: BrowserRequest) => {
+    const url = new URL(req.url());
+    return url.origin === origin && url.pathname === waitPath && req.method() === "GET";
+  };
+  const inboxRequest = (req: BrowserRequest) => {
+    const url = new URL(req.url());
+    return url.origin === origin && url.pathname === INBOX_PATH && req.method() === "GET"
+      && url.searchParams.get("inbox_filter") === "active" && !url.searchParams.has("cursor_id");
+  };
+  const aHeaders = await login(email, password, ownerA);
+  const bHeaders = await login(accountB, passwordB, ownerB);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await signInApprovedKaren(page, accountB, passwordB, { allowLocalLoopback: true });
+  await openCommunications(page);
+  const initialRead = page.waitForResponse(res => inboxRequest(res.request()), { timeout: 30_000 });
+  const browserWait = page.waitForRequest(waitRequest, { timeout: 30_000 });
+  await root.getByRole("tab", { name: "Inbox", exact: true }).click();
+  const initial = await initialRead;
+  expect(initial.status()).toBe(200);
+  const raw = await initial.json();
+  // Deliberately read the backend capability, not a browser configuration flag.
+  expect(raw?.capabilities?.invalidation_wait_enabled).toBe(true);
+  const projection = readPage(raw, "active", null);
+  const entry = projection.entries.find(e => e.execution_id === runB);
+  if (!entry || entry.read_at || entry.acknowledged_at || entry.archived_at) {
+    throw new Error("Fresh unread owner B fixture required");
+  }
+  await expect(inbox.getByTestId("personal-inbox-unread")).toHaveText(projection.active_unread_count + " unread active");
+  const ownerRequest = await browserWait;
+  const sequence: string[] = [];
+  const recordRequest = (req: BrowserRequest) => { if (inboxRequest(req)) sequence.push("read"); };
+  const recordResponse = (res: import("@playwright/test").Response) => {
+    if (res.request() === ownerRequest) sequence.push("hint");
+  };
+  page.on("request", recordRequest);
+  page.on("response", recordResponse);
+  try {
+    const hintPending = page.waitForResponse(res => res.request() === ownerRequest, { timeout: 20_000 });
+    const readPending = page.waitForResponse(res => inboxRequest(res.request()), { timeout: 20_000 });
+    const foreignPending = request.get(origin + waitPath, { headers: aHeaders, timeout: 25_000, maxRedirects: 0 });
+    await witness([ownerA, ownerB], 1);
+    const patch = await request.patch(origin + INBOX_PATH + "/" + entry.entry_id, {
+      headers: bHeaders, data: { operation: "read", expected_revision: entry.revision }, maxRedirects: 0,
+    });
+    expect(patch.status()).toBe(200);
+    const read = readReceipt(await patch.json(), entry, "read");
+    expect(read.changed).toBe(true);
+    const hint = await hintPending;
+    expect(hint.status()).toBe(200);
+    expect(await hint.json()).toEqual({ changed: true });
+    expect(hint.headers()["cache-control"]).toBe("no-store");
+    const reread = await readPending;
+    expect(reread.status()).toBe(200);
+    expect(sequence[0]).toBe("hint");
+    expect(sequence[1]).toBe("read");
+    expect(readPage(await reread.json(), "active", null).entries.find(e => e.entry_id === entry.entry_id)).toEqual(read.entry);
+    await expect(inbox.getByRole("listitem").filter({ hasText: "Execution " + runB.slice(0, 8) })).toContainText("Read");
+    const foreign = await foreignPending;
+    expect(foreign.status()).toBe(200);
+    expect(await foreign.json()).toEqual({ changed: false });
+    expect(foreign.headers()["cache-control"]).toBe("no-store");
+
+    // Begin a newly observed wait after the foreign idle window; leave the
+    // workspace while it is subscribed and require browser failure plus zero
+    // broker subscriptions, not merely a successful navigation.
+    const cancellable = await page.waitForRequest(waitRequest, { timeout: 30_000 });
+    const failed = page.waitForEvent("requestfailed", { predicate: req => req === cancellable, timeout: 12_000 });
+    await witness([ownerB], 1);
+    await openAutomationWorkspace(page, "My Account", false);
+    await failed;
+    await witness([ownerB], 0);
+
+    const reopened = page.waitForRequest(waitRequest, { timeout: 30_000 });
+    await openCommunications(page);
+    await root.getByRole("tab", { name: "Inbox", exact: true }).click();
+    const revokedRequest = await reopened;
+    const denied = page.waitForResponse(res => res.request() === revokedRequest, { timeout: 25_000 });
+    await witness([ownerB], 1);
+    // Revoke the browser's exact active credentials via the real logout API,
+    // without resetting its UI state. Never expose tokens to the test runner.
+    const logoutStatus = await page.evaluate(async () => {
+      const access = localStorage.getItem("access_token");
+      const refresh = localStorage.getItem("refresh_token");
+      if (!access || !refresh) throw new Error("Browser session credentials unavailable");
+      const result = await fetch("/api/auth/logout", {
+        method: "POST", redirect: "error", cache: "no-store", credentials: "same-origin",
+        headers: { Authorization: "Bearer " + access, "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refresh }),
+      });
+      return result.status;
+    });
+    expect(logoutStatus).toBe(200);
+    await witness([ownerB], 1);
+    // The independent signed owner session is still authorized to commit.
+    // Its real post-commit signal must not be returned to the revoked waiter.
+    const ack = await request.patch(origin + INBOX_PATH + "/" + entry.entry_id, {
+      headers: bHeaders, data: { operation: "acknowledge", expected_revision: read.entry.revision }, maxRedirects: 0,
+    });
+    expect(ack.status()).toBe(200);
+    expect(readReceipt(await ack.json(), read.entry, "acknowledge").changed).toBe(true);
+    const rejection = await denied;
+    expect([401, 403]).toContain(rejection.status());
+    expect(rejection.headers()["cache-control"]).toBe("no-store");
+    const rejectionBody = await rejection.json();
+    expect(rejectionBody).not.toHaveProperty("changed");
+    await witness([ownerB], 0);
+    const staleStatus = await page.evaluate(async path => {
+      const access = localStorage.getItem("access_token");
+      if (!access) throw new Error("Revoked bearer unavailable for backend verification");
+      return (await fetch(path, {
+        headers: { Authorization: "Bearer " + access }, cache: "no-store", redirect: "error", credentials: "same-origin",
+      })).status;
+    }, INBOX_PATH);
+    expect([401, 403]).toContain(staleStatus);
+  } finally {
+    page.off("request", recordRequest);
+    page.off("response", recordResponse);
+  }
 });
