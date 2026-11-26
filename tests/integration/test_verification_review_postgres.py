@@ -953,6 +953,11 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
             "WHERE outcome_id='pg:needed:1'"
         ) == 1
 
+        await _assert_specialist_participation_reads(
+            raw, tenant_a=tenant_a, tenant_b=tenant_b,
+            subject_id=subject_a, other_user=other_user,
+        )
+
         # Tampering with a committed payload is detectable even when the
         # database user holding the direct test connection is a superuser.
         await raw.execute(
@@ -972,3 +977,104 @@ async def test_live_postgres_review_receipts_are_atomic_scoped_and_immutable() -
         )
     finally:
         await raw.close()
+
+
+async def _assert_specialist_participation_reads(
+    raw: asyncpg.Connection,
+    *,
+    tenant_a: str,
+    tenant_b: str,
+    subject_id: str,
+    other_user: str,
+) -> None:
+    """Exercise actual strict append/read, principal isolation and RLS."""
+    from dataclasses import replace
+    from datetime import timedelta
+
+    from ai_karen_engine.core.runtime.outcome.contracts import (
+        SpecialistParticipationPhase,
+        SpecialistParticipationReceipt,
+    )
+
+    run_id = "pg-specialist-" + str(uuid.uuid4())
+    correlation = "pg-correlation-" + str(uuid.uuid4())
+    foreign_user = str(uuid.uuid4())
+    await raw.execute(
+        "INSERT INTO public.auth_users(user_id, tenant_id) VALUES ($1,$2)",
+        uuid.UUID(foreign_user), uuid.UUID(tenant_b),
+    )
+    start = SpecialistParticipationReceipt(
+        tenant_id=tenant_a,
+        user_id=subject_id,
+        trajectory_id=run_id,
+        correlation_id=correlation,
+        step_id="step-a",
+        specialist_id="researcher",
+        phase=SpecialistParticipationPhase.STARTED,
+        observed_at=datetime.now(timezone.utc),
+    )
+    completed = replace(
+        start, phase=SpecialistParticipationPhase.COMPLETED,
+        observed_at=start.observed_at + timedelta(seconds=1),
+    )
+    other_owner = replace(start, user_id=other_user)
+    other_tenant = replace(start, tenant_id=tenant_b, user_id=foreign_user)
+    other_run = replace(start, trajectory_id=run_id + "-other")
+    other_correlation = replace(
+        start, step_id="step-other-correlation", correlation_id=correlation + "-other",
+    )
+    writer = PostgresOutcomeStore()
+    for receipt in (start, completed, other_owner, other_tenant, other_run, other_correlation):
+        await writer.save_unique_outcome_async(receipt.to_evidence_payload())
+
+    with pytest.raises(OutcomeStoreError):
+        await writer.save_unique_outcome_async(start.to_evidence_payload())
+
+    # A different runtime outcome must not consume the specialist query window.
+    await writer.save_unique_outcome_async({
+        "outcome_id": run_id + "-ordinary",
+        "tenant_id": tenant_a,
+        "user_id": subject_id,
+        "trajectory_id": run_id,
+        "correlation_id": correlation,
+        "source": "runtime.execution",
+        "recorded_at": (start.observed_at + timedelta(seconds=2)).isoformat(),
+        "metadata": {"event_type": "agent.tool.execution"},
+    })
+    reader = PostgresOutcomeStore()
+    scope = dict(
+        trajectory_id=run_id, correlation_id=correlation,
+        tenant_id=tenant_a, user_id=subject_id,
+    )
+    assert await reader.list_specialist_participation_async(**scope) == (
+        [start.to_evidence_payload(), completed.to_evidence_payload()], False,
+    )
+    assert await reader.list_specialist_participation_async(**scope, limit=1) == (
+        [completed.to_evidence_payload()], True,
+    )
+    assert await reader.list_specialist_participation_async(
+        **{**scope, "user_id": other_user},
+    ) == ([other_owner.to_evidence_payload()], False)
+    assert await reader.list_specialist_participation_async(
+        **{**scope, "tenant_id": tenant_b, "user_id": foreign_user},
+    ) == ([other_tenant.to_evidence_payload()], False)
+    for change in (
+        {"user_id": str(uuid.uuid4())}, {"tenant_id": tenant_b},
+        {"trajectory_id": run_id + "-missing"}, {"correlation_id": correlation + "-missing"},
+    ):
+        assert await reader.list_specialist_participation_async(
+            **{**scope, **change},
+        ) == ([], False)
+    await _assert_rls_is_real(
+        raw, tenant_a=tenant_a, tenant_b=tenant_b,
+        receipt_id=start.receipt_id, subject_id=subject_id,
+    )
+
+    # Simulate corruption by a privileged database operator, not a writer bypass.
+    await raw.execute(
+        "UPDATE public.outcome_records SET payload=jsonb_set(payload, "
+        "'{metadata,phase}', '\"invented\"'::jsonb) WHERE outcome_id=$1",
+        completed.receipt_id,
+    )
+    with pytest.raises(OutcomeStoreError):
+        await reader.list_specialist_participation_async(**scope)
