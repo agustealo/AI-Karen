@@ -12,6 +12,7 @@ import asyncio
 import threading
 from typing import Callable, Any, Dict, Optional
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.logging.events import ProviderEvents, RuntimeEvents
 
 from ai_karen_engine.config.performance_config import PerformanceConfig, get_performance_config
@@ -168,6 +169,8 @@ class SafeStageRunner:
                         reason="timeout"
                     )
                 retries_left -= 1
+            except NativeRetirementUnverified:
+                raise
             except Exception as exc:
                 # Stage errors can include connection credentials, personal
                 # memory, or private backend query text. Preserve a stable

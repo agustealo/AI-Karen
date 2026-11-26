@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
@@ -113,6 +114,10 @@ class WorkflowRuntime:
                 )
                 while True:
                     if run_task.done():
+                        if not run_task.cancelled():
+                            failure = run_task.exception()
+                            if isinstance(failure, NativeRetirementUnverified):
+                                raise failure
                         # Do not race a permanently completed task against a
                         # newly scheduled queue-get. Drain observed events
                         # before reporting the terminal response.
@@ -151,7 +156,7 @@ class WorkflowRuntime:
                     correlation_id=ctx.correlation_id,
                     metadata=metadata,
                 )
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, NativeRetirementUnverified):
                 raise
             except Exception:
                 logger.exception(
@@ -168,7 +173,23 @@ class WorkflowRuntime:
             finally:
                 if not run_task.done():
                     run_task.cancel()
-                    await asyncio.gather(run_task, return_exceptions=True)
+                interrupted = False
+                # Own the child through retirement, including repeated
+                # cancellation of this forwarding generator.
+                while not run_task.done():
+                    try:
+                        await asyncio.shield(run_task)
+                    except asyncio.CancelledError:
+                        if not run_task.cancelled():
+                            interrupted = True
+                    except Exception:
+                        break
+                if not run_task.cancelled():
+                    failure = run_task.exception()
+                    if isinstance(failure, NativeRetirementUnverified):
+                        raise failure
+                if interrupted:
+                    raise asyncio.CancelledError
             return
 
         orchestrator = await self._get_orchestrator()

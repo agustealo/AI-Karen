@@ -43,6 +43,7 @@ from ai_karen_engine.core.memory.profile_synthesis.profile_manager import (
     ProfileManager,
 )
 from ai_karen_engine.services.tooling.tool_service import ToolInput, ToolOutput, ToolService
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.chat_runtime_contract import ToolType
 
 from ai_karen_engine.services.formatting.response_formatting_engine import (
@@ -811,6 +812,9 @@ class LangGraphOrchestrator:
 
             return final_state
 
+        except NativeRetirementUnverified as exc:
+            error_message = str(exc)
+            raise
         except Exception as e:
             error_message = str(e)
             logger.error(f"Orchestration processing error: {e}")
@@ -867,6 +871,9 @@ class LangGraphOrchestrator:
             finally:
                 await graph_stream.aclose()
 
+        except NativeRetirementUnverified as exc:
+            error_message = str(exc)
+            raise
         except Exception as e:
             error_message = str(e)
             logger.error(f"Orchestration streaming error: {e}")

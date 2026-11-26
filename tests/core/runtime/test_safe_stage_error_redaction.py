@@ -69,3 +69,31 @@ async def test_projection_stage_failure_logs_only_exception_type(monkeypatch):
     assert "RuntimeError" in " ".join(log_lines)
     assert "never-expose-this" not in str(diagnostics)
     assert "never-expose-this" not in str(log_lines)
+
+
+@pytest.mark.asyncio
+async def test_stage_retirement_failure_prevents_retry_and_fallback(monkeypatch):
+    from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
+
+    module = import_module("ai_karen_engine.core.runtime.resilience.safe_stage_runner")
+    runner = module.SafeStageRunner()
+    runner.flags = SimpleNamespace(is_enabled=lambda *args, **kwargs: True)
+    runner.breakers = SimpleNamespace(get_breaker=lambda name: SimpleNamespace(
+        allow_request=lambda: True,
+    ))
+    runner.policies = SimpleNamespace(
+        get_policy=lambda name: SimpleNamespace(max_retries=3, timeout_seconds=1)
+    )
+    runner.fallbacks = SimpleNamespace(
+        get_fallback=lambda *args, **kwargs: pytest.fail("retirement cannot trigger fallback")
+    )
+    monkeypatch.setattr(module, "_emit_resilience_event", lambda *args, **kwargs: None)
+    attempts = []
+
+    async def stage():
+        attempts.append("dispatch")
+        raise NativeRetirementUnverified()
+
+    with pytest.raises(NativeRetirementUnverified):
+        await runner.run_stage("reasoning_executor", "reasoning_enabled", stage)
+    assert attempts == ["dispatch"]

@@ -137,3 +137,24 @@ leaves its existing unresolved lease fence intact; the AG-UI diagnostic is
 not a durable terminal event. These source contracts do not certify hardware
 quiescence or authorize a process restart. Full cross-adapter and real device
 acceptance remain required.
+
+
+### Cross-adapter containment audit (KUI-004B4.48C7Z8E10)
+
+Typed retirement failure now bypasses retry/fallback handlers in the legacy
+ProviderRuntime and SafeStageRunner, graph reasoning and synthesis nodes, and
+LangGraph's nonstreaming and streaming orchestration adapters. The workflow
+agent forwarding stream preserves the specific failure across child-task
+cleanup rather than treating it as normal completion. The structured-tool
+SDK's current transport uses the original admission and HTTP transport; this
+does not establish native device retirement for remote schedulers.
+
+**Outstanding P0 authority gap:** WorkflowGenerationRuntime still accepts a
+serialized plan and delegates to legacy ProviderRuntime, whose synchronous
+generation path uses a timed thread and independent retries. Exception
+containment does not govern that dispatch. Replace this live workflow synthesis
+path with the original authenticated admission/meter and canonical provider
+transport. Do not treat the compatibility route, arbitrary SDK/tool callbacks,
+or Medusa's independent durable ledger as proven native cessation. The
+candidate must not merge until the live workflow dispatch boundary is resolved
+and full exact-head verification is available.

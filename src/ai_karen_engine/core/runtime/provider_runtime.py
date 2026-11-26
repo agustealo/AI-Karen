@@ -14,6 +14,7 @@ import inspect
 
 from ai_karen_engine.config.runtime_provider_manager import RuntimeProviderManager
 from ai_karen_engine.core.model_runtime.llm_adapter import ProviderNotAvailable, GenerationFailed
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.model_runtime.provider_policy import (
     BUILTIN_EXPRESSION_ENGINES,
     EXTERNAL_PROVIDER_OPTIONS,
@@ -447,6 +448,8 @@ class ProviderRuntime:
                 }
             )
             
+        except NativeRetirementUnverified:
+            raise
         except Exception as exc:
             logger.warning("Primary provider %s failed (%s). Attempting fallbacks.", current_provider, type(exc).__name__)
             provider_attempts.append({
@@ -567,6 +570,8 @@ class ProviderRuntime:
                 metadata={"source": "primary_execution"}
             )
             
+        except NativeRetirementUnverified:
+            raise
         except Exception as exc:
             logger.warning("Primary provider %s failed during stream (%s).", current_provider, type(exc).__name__)
             provider_attempts.append({
@@ -659,6 +664,8 @@ class ProviderRuntime:
                         metadata={"source": "fallback_execution"}
                     )
                     return
+                except NativeRetirementUnverified:
+                    raise
                 except Exception as fall_exc:
                     provider_attempts.append({
                         "provider": fallback_provider,
@@ -757,6 +764,8 @@ class ProviderRuntime:
                         "tokens_per_second": llm_metadata.get("tokens_per_second")
                     }
                 )
+            except NativeRetirementUnverified:
+                raise
             except Exception as fall_exc:
                 provider_attempts.append({
                     "provider": fallback_provider,
@@ -1146,6 +1155,8 @@ class ProviderRuntime:
                     success=True,
                 )
                 return
+            except NativeRetirementUnverified:
+                raise
             except Exception as exc:
                 duration = time.time() - start_time
                 errors.append(exc)
@@ -1202,6 +1213,8 @@ class ProviderRuntime:
                 provider_name, request, model_name
             ):
                 yield chunk
+        except NativeRetirementUnverified:
+            raise
         except Exception as exc:
             if not isinstance(exc, ProviderProcessingError):
                 raise ProviderProcessingError(provider_name, [exc]) from exc
@@ -1893,6 +1906,8 @@ class ProviderRuntime:
                         },
                     }
 
+            except NativeRetirementUnverified:
+                raise
             except ProviderNotAvailable as exc:
                 logger.warning(
                     f"Provider {provider_name} is not available during fallback",
