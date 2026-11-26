@@ -64,7 +64,7 @@ _WAIT_REASONS = {
 }
 _BODY_STATES = {"read_failed", "empty", "invalid_json", "json"}
 _BROWSER_STAGES = {
-    "login", "initial_projection", "broker_admission", "commit_read",
+    "login", "prior_wait_cleanup", "initial_projection", "broker_admission", "commit_read",
     "hint_order", "foreign_idle", "cancel", "reopen", "revoke",
     "revoked_signal", "cleanup",
 }

@@ -517,6 +517,11 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
   const bHeaders = await login(accountB, passwordB, ownerB);
   await page.setViewportSize({ width: 1440, height: 900 });
   await signInApprovedKaren(page, accountB, passwordB, { allowLocalLoopback: true });
+  // The preceding signed-session scenario uses the same disposable accounts.
+  // Prove that no previous owner subscription survived before observing the
+  // first new wait; a stale subscription must not satisfy the admission witness.
+  mark("prior_wait_cleanup");
+  await witness([ownerA, ownerB], 0);
   await openCommunications(page);
   mark("initial_projection");
   let ownerRequest: BrowserRequest | undefined;
