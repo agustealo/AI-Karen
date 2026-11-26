@@ -56,3 +56,134 @@ async def test_admin_user_create_uses_canonical_role():
         service=UserService(),
     )
     assert result["roles"] == ["admin"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("roles,allowed", [(["user"], False), (["admin"], False),
+                                            (["super_admin"], True)])
+async def test_platform_tenant_permission_requires_super_admin(roles, allowed):
+    from fastapi import HTTPException
+    from ai_karen_engine.api_routes.admin.tenants import require_platform_tenant_permission
+    from ai_karen_engine.auth.rbac_middleware import Permission
+
+    guard = require_platform_tenant_permission(Permission.ADMIN_TENANTS_MANAGE)
+    principal = {"user_id": "operator", "tenant_id": "tenant-a", "roles": roles}
+    if allowed:
+        assert await guard(principal) is principal
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await guard(principal)
+        assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_tenant_create_requires_credentials_and_redacts_secret(monkeypatch):
+    from pydantic import ValidationError
+    from ai_karen_engine.api_routes.admin import tenants
+
+    with pytest.raises(ValidationError):
+        tenants.AdminTenantCreateRequest(name="Tenant", slug="tenant", admin_email="a@example.test")
+
+    class Service:
+        async def create_tenant(self, **kwargs):
+            assert kwargs["admin_password"] == "StrongPassword1!"
+            assert kwargs["admin_full_name"] == "Tenant Admin"
+            assert kwargs["operator_id"] == "operator"
+            config = kwargs["config"]
+            return SimpleNamespace(id="created", name=config.name, slug=config.slug, settings={})
+
+    request = tenants.AdminTenantCreateRequest(
+        name="Tenant", slug="tenant", admin_email="a@example.test",
+        admin_password="StrongPassword1!", admin_full_name="Tenant Admin",
+    )
+    assert "StrongPassword1!" not in repr(request)
+    monkeypatch.setattr(tenants, "get_admin_tenant_service", lambda: Service())
+    result = await tenants.create_admin_tenant(
+        request, current_user={"user_id": "operator", "roles": ["super_admin"]},
+    )
+    assert result["tenant_id"] == "created"
+    assert "admin_password" not in result
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [None, "account", "scope", "commit"])
+async def test_tenant_creation_uses_one_transaction(monkeypatch, failure):
+    import uuid
+    from contextlib import asynccontextmanager
+    from ai_karen_engine.auth import auth_service
+    from ai_karen_engine.database.tenant_manager import TenantConfig, TenantManager
+
+    events = []
+    class Session:
+        def add(self, tenant):
+            self.tenant = tenant
+            events.append("tenant")
+
+        async def flush(self):
+            self.tenant.id = uuid.uuid4()
+            events.append("flush")
+
+    session = Session()
+    class Client:
+        @asynccontextmanager
+        async def get_async_session(self):
+            try:
+                yield session
+                if failure == "commit":
+                    raise RuntimeError("commit failed")
+                events.append("commit")
+            except Exception:
+                events.append("rollback")
+                raise
+
+        def create_tenant_schema(self, *args):
+            raise AssertionError("Shared tables are migration owned")
+
+        def drop_tenant_schema(self, *args):
+            raise AssertionError("Failed creation must never drop a schema")
+
+    class Auth:
+        async def create_user_in_transaction(self, supplied, **kwargs):
+            assert supplied is session
+            assert kwargs["password"] == "StrongPassword1!"
+            assert kwargs["tenant_id"] == str(session.tenant.id)
+            assert kwargs["roles"] == ["admin", "user"]
+            assert kwargs["is_verified"] is True
+            events.append("account")
+            if failure == "account":
+                raise ValueError("duplicate account")
+            return SimpleNamespace(
+                id="user-id", tenant_id="wrong" if failure == "scope" else kwargs["tenant_id"],
+            )
+
+    async def get_auth():
+        return Auth()
+
+    monkeypatch.setattr(auth_service, "get_auth_service", get_auth)
+    manager = TenantManager(Client())
+    async def create():
+        return await manager.create_tenant(
+            TenantConfig("Tenant", "tenant"), "a@example.test",
+            admin_password="StrongPassword1!", admin_full_name="Tenant Admin",
+        )
+
+    if failure:
+        with pytest.raises((ValueError, RuntimeError)):
+            await create()
+        assert events == ["tenant", "flush", "account", "rollback"]
+    else:
+        assert await create() is session.tenant
+        assert events == ["tenant", "flush", "account", "commit"]
+    assert not manager._tenant_cache
+
+
+@pytest.mark.asyncio
+async def test_tenant_creation_rejects_privilege_escalation_before_database():
+    from ai_karen_engine.database.tenant_manager import TenantConfig, TenantManager
+
+    manager = TenantManager(None)
+    with pytest.raises(ValueError, match="roles"):
+        await manager.create_tenant(
+            TenantConfig("Tenant", "tenant"), "a@example.test", ["super_admin"],
+            admin_password="StrongPassword1!", admin_full_name="Tenant Admin",
+        )

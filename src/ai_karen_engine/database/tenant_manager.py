@@ -3,18 +3,17 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Union
 from dataclasses import dataclass, field
 
 from sqlalchemy import text, select, update, delete
 from sqlalchemy.exc import IntegrityError
 
 from ai_karen_engine.database.client import MultiTenantPostgresClient
-from ai_karen_engine.database.models import (
-    Tenant,
-    AuthUser,
-)
-from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
+from ai_karen_engine.database.models import Tenant
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
 
 logger = logging.getLogger(__name__)
 
@@ -104,14 +103,24 @@ class TenantManager:
         self,
         config: TenantConfig,
         admin_email: str,
-        admin_roles: Optional[List[str]] = None
+        admin_roles: Optional[List[str]] = None,
+        *,
+        admin_password: str,
+        admin_full_name: str,
     ) -> Tenant:
-        if admin_roles is None:
-            admin_roles = ["admin", "user"]
-        
-        logger.info(f"Creating tenant: {config.name} ({config.slug})")
-        
+        """Create a tenant and its initial administrator in one transaction."""
+        from ai_karen_engine.auth.auth_service import get_auth_service
+
+        roles = ["admin", "user"] if admin_roles is None else list(admin_roles)
+        if "admin" not in roles or any(role not in {"admin", "user"} for role in roles):
+            raise ValueError("Initial tenant administrator roles are invalid")
+        if not admin_password or not admin_full_name.strip():
+            raise ValueError("Administrator credentials and name are required")
+
+        auth = await get_auth_service()
         try:
+            # Shared tables are migration-owned. The session scope is the sole
+            # commit/rollback owner; no compatibility schema operations.
             async with self.db_client.get_async_session() as session:
                 tenant = Tenant(
                     name=config.name,
@@ -120,41 +129,32 @@ class TenantManager:
                     settings={
                         **config.settings,
                         "features": config.features,
-                        "limits": config.limits
-                    }
+                        "limits": config.limits,
+                    },
                 )
-                
                 session.add(tenant)
                 await session.flush()
-                
-                schema_created = self.db_client.create_tenant_schema(tenant.id)
-                if not schema_created:
-                    raise RuntimeError(f"Failed to create schema for tenant {tenant.id}")
-                
-                admin_user = AuthUser(
-                    tenant_id=tenant.id,
+                user = await auth.create_user_in_transaction(
+                    session,
                     email=admin_email,
-                    roles=admin_roles,
-                    preferences={"is_admin": True}
+                    password=admin_password,
+                    full_name=admin_full_name,
+                    tenant_id=str(tenant.id),
+                    roles=roles,
+                    is_verified=True,
                 )
-                
-                session.add(admin_user)
-                await session.commit()
-                
-                self._tenant_cache[str(tenant.id)] = tenant
-                
-                logger.info(f"Successfully created tenant {tenant.id} with admin user {admin_user.id}")
-                return tenant
-                
-        except IntegrityError as e:
-            logger.error(f"Tenant creation failed - integrity error: {e}")
-            raise ValueError(f"Tenant with slug '{config.slug}' already exists")
-        except Exception as e:
-            logger.error(f"Failed to create tenant: {e}")
-            if 'tenant' in locals():
-                await self._cleanup_failed_tenant(tenant.id)
-            raise
-    
+                if user.tenant_id != str(tenant.id):
+                    raise RuntimeError("Initial administrator tenant assignment failed")
+        except IntegrityError:
+            logger.warning("Tenant creation rejected by database integrity constraint")
+            raise ValueError("Tenant or administrator already exists or violates a constraint") from None
+
+        logger.info(
+            "Tenant and initial administrator created",
+            extra={"tenant_id": str(tenant.id), "admin_user_id": user.id},
+        )
+        return tenant
+
     async def get_tenant(self, tenant_id: Union[str, uuid.UUID]) -> Optional[Tenant]:
         tenant_id_str = str(tenant_id)
         
@@ -386,14 +386,6 @@ class TenantManager:
             "usage_percentage": usage_percentage,
             "remaining": max(0, limit - current_usage)
         }
-    
-    async def _cleanup_failed_tenant(self, tenant_id: Union[str, uuid.UUID]):
-        try:
-            self.db_client.drop_tenant_schema(tenant_id)
-            logger.info(f"Cleaned up failed tenant creation for {tenant_id}")
-            
-        except Exception as e:
-            logger.error(f"Failed to cleanup failed tenant {tenant_id}: {e}")
     
     async def health_check(self) -> Dict[str, Any]:
         try:

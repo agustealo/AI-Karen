@@ -78,6 +78,8 @@ class AdminTenantService:
         admin_email: str,
         admin_roles: Optional[List[str]] = None,
         *,
+        admin_password: str,
+        admin_full_name: str,
         operator_id: Optional[str] = None,
     ) -> Optional[Any]:
         """Create a tenant with audit logging."""
@@ -85,6 +87,8 @@ class AdminTenantService:
             config=config,
             admin_email=admin_email,
             admin_roles=admin_roles,
+            admin_password=admin_password,
+            admin_full_name=admin_full_name,
         )
         self._audit_mutation(
             action="create",
