@@ -200,6 +200,11 @@ class MedusaCoordinator:
 
         try:
             response = await self._handle_request(request)
+            if response.request_id != request.request_id:
+                # Validate before the terminal ledger consumes the result.
+                raise OutcomeStoreError(
+                    "Medusa response identity could not be confirmed"
+                )
         except asyncio.CancelledError:
             try:
                 await self.run_manager.mark_cancelled(request.request_id)
@@ -256,12 +261,26 @@ class MedusaCoordinator:
                     "error_type": type(exc).__name__,
                 },
             )
-            return to_safe_response(exc, correlation_id=requirements.correlation_id)
-        else:
-            resolved = await self.run_manager.mark_response(
-                request.request_id,
-                response.status.value,
+            return to_safe_response(
+                exc,
+                correlation_id=requirements.correlation_id,
+                request_id=request.request_id,
             )
+        else:
+            try:
+                expected = ExecutionRunStatus.for_response(response.status.value)
+                resolved = await self.run_manager.mark_response(
+                    request.request_id,
+                    response.status.value,
+                )
+            except NativeRetirementUnverified:
+                raise
+            except Exception as exc:
+                # Work may already have happened. An unavailable terminal
+                # transition must not become an ordinary retryable failure.
+                raise OutcomeStoreError(
+                    "Medusa terminal outcome could not be confirmed"
+                ) from exc
             if resolved is ExecutionRunStatus.CANCELLED:
                 logger.info(
                     "medusa_run_cancelled",
@@ -275,6 +294,10 @@ class MedusaCoordinator:
                 # A specialist may catch cancellation and return content.
                 # The canonical run manager still owns the terminal outcome.
                 raise asyncio.CancelledError
+            if resolved is not expected:
+                raise OutcomeStoreError(
+                    "Medusa terminal outcome could not be confirmed"
+                )
             logger.info(
                 "medusa_run_finished",
                 extra={

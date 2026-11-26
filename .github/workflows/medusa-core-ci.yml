@@ -411,96 +411,12 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
       
-      - name: Run final behavioral proof tests
+      - name: Run assertion-backed planner, scheduler and budget proofs
         run: |
-          
-          echo "Running behavioral proofs..."
-          
-          # Test dependency chain execution order
-          python -c "
-          import asyncio
-          from ai_karen_engine.agent_medusa.planning.capability_planner import CapabilityAwareMedusaPlanner
-          from ai_karen_engine.core.runtime.contracts import ExecutionRequirements, AuthorizedExecutionPlan
-          from unittest.mock import AsyncMock, MagicMock
-          
-          async def test_dependency_order():
-              # Mock registry with dependency chain
-              registry = MagicMock()
-              registry.list_agents = AsyncMock(return_value=[])
-              registry.find_agents_by_capability = AsyncMock(return_value=[])
-              
-              # Test that dependencies are resolved
-              print('✓ Dependency chain execution order validated')
-          
-          asyncio.run(test_dependency_order())
-          "
-          
-          # Test independent parallel execution
-          python -c "
-          import asyncio
-          from ai_karen_engine.core.runtime.contracts import ExecutionBudget, ExecutionBudgetMeter
-          
-          async def test_parallel_execution():
-              meter = ExecutionBudgetMeter(ExecutionBudget(max_parallelism=4))
-              meter.start()
-              
-              # Simulate concurrent reservations
-              results = await asyncio.gather(
-                  *[meter.reserve_agent_turn() for _ in range(4)],
-                  return_exceptions=True
-              )
-              
-              assert all(r is True for r in results), 'Parallel execution should work within budget'
-              print('✓ Independent steps execute in parallel')
-          
-          asyncio.run(test_parallel_execution())
-          "
-          
-          # Test cycle detection
-          python -c "
-          from ai_karen_engine.agent_medusa.planning.plan_validator import PlanValidator
-          from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import PlanStep, DeepExecutionPlan
-          
-          def test_cycle_detection():
-              validator = PlanValidator()
-              
-              # Create a cyclic plan
-              step1 = PlanStep(id='step1', agent_specialist='agent1', dependencies=['step2'])
-              step2 = PlanStep(id='step2', agent_specialist='agent2', dependencies=['step1'])
-              plan = DeepExecutionPlan(request_id='test', steps=[step1, step2])
-              
-              report = validator.validate(plan)
-              assert not report.valid, 'Cyclic plan should fail validation'
-              assert any('cycle' in err.lower() for err in report.errors), 'Should detect cycles'
-              print('✓ Cycles are rejected')
-          
-          test_cycle_detection()
-          "
-          
-          # Test budget ceiling under concurrency
-          python -c "
-          import asyncio
-          from ai_karen_engine.core.runtime.contracts import ExecutionBudget, ExecutionBudgetMeter
-          
-          async def test_budget_ceiling():
-              meter = ExecutionBudgetMeter(ExecutionBudget(
-                  max_agent_turns=2,
-                  max_tool_calls=2
-              ))
-              meter.start()
-              
-              # Try to exceed budget concurrently
-              results = await asyncio.gather(
-                  *[meter.reserve_agent_turn() for _ in range(10)],
-                  return_exceptions=True
-              )
-              
-              successes = sum(1 for r in results if r is True)
-              assert successes == 2, f'Only 2 agent turns should succeed, got {successes}'
-              assert meter.exhausted, 'Budget should be exhausted'
-              print('✓ Budget cannot be overspent under concurrency')
-          
-          asyncio.run(test_budget_ceiling())
-          "
-          
-          echo "All behavioral proofs completed successfully!"
+          set -euo pipefail
+          python -m pytest \
+            tests/core/runtime/test_medusa_planner_correctness.py::TestDependencyGraphProof \
+            tests/agent_medusa/test_consumer_reliability_closure.py::test_coordinator_observes_dependency_completion_and_parallelism \
+            tests/core/runtime/test_medusa_planner_correctness.py::TestExecutionBudgetMeterConcurrency \
+            tests/core/runtime/test_execution_budget_meter_integrity.py \
+            -v --tb=short

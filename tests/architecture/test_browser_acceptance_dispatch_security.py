@@ -3,10 +3,10 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
-from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/karen-history-browser-acceptance.yml"
@@ -443,13 +443,15 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
     ):
         assert name + ": " + chr(36) + "{{ secrets." + name + " }}" in step
         assert job.count(name) == step.count(name)
-    assert "--grep='ARM-05C.5B real participation receipts survive reload and deny a second account'" in step
-    assert "--retries=0" in step and "--workers=1" in step
-    assert 'stats.get("expected") != 1' in step
-    assert '"unexpected", "skipped", "flaky"' in step
-    assert '"expected", "passed", "chromium", ["passed"]' in step
-    assert "umask 077" in step and "mktemp -d" in step
-    assert "trap 'rm -rf --" in step
+    assert 'bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" vercel' in step
+    shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text(encoding="utf-8")
+    assert "--grep='ARM-05C.5B real participation receipts survive reload and deny a second account'" in shell
+    assert "--retries=0" in shell and "--workers=1" in shell
+    assert 'stats.get("expected") != 1' in shell
+    assert '"unexpected", "skipped", "flaky"' in shell
+    assert '"expected", "passed", "chromium", ["passed"]' in shell
+    assert "umask 077" in shell and "mktemp -d" in shell
+    assert "trap 'rm -rf --" in shell
     assert "upload-artifact" not in job
     assert job.index("python scripts/ci/verify_vercel_deployment.py") < job.index(title)
     assert job.index(title) < job.rindex("python scripts/ci/verify_vercel_deployment.py")
@@ -462,12 +464,8 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
 
 
 def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> None:
-    """Execute the actual inline gate on synthetic test-only report fixtures."""
-    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    step = workflow.split(
-        "      - name: Prove protected specialist lifecycle and cross-tenant readback", 1
-    )[1].split("\n      - name:", 1)[0]
-    shell = dedent(step.split("        run: |\n", 1)[1])
+    """Execute the actual shared gate on synthetic test-only report fixtures."""
+    shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text(encoding="utf-8")
     subprocess.run(["bash", "-n"], input=shell, text=True, check=True)
     validator = shell.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
     title = "ARM-05C.5B real participation receipts survive reload and deny a second account"
@@ -517,3 +515,68 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
     for payload in invalid:
         assert validate(json.dumps(payload)) != 0
     assert validate("{malformed") != 0
+
+
+def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path: Path) -> None:
+    """Run the real shell admission; an inert test-only executable detects launch."""
+    script = ROOT / "scripts/ci/run_specialist_browser_acceptance.sh"
+    marker = tmp_path / "browser-launched"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npx = bin_dir / "npx"
+    npx.write_text('#!/bin/sh\n: > "$TEST_LAUNCH_MARKER"\nexit 99\n', encoding="utf-8")
+    npx.chmod(0o700)
+    flags = tuple(f"KAREN_SPECIALIST_{name}_ACCEPTANCE" for name in ("PARTICIPATION", "LIFECYCLE", "CROSS_TENANT"))
+    names = (
+        "KAREN_UX_EMAIL", "KAREN_UX_PASSWORD",
+        "KAREN_UX_ACCOUNT_B_EMAIL", "KAREN_UX_ACCOUNT_B_PASSWORD",
+        "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD",
+        "KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID",
+    )
+    env = {
+        "PATH": str(bin_dir) + os.pathsep + os.defpath,
+        "RUNNER_TEMP": str(tmp_path),
+        "TEST_LAUNCH_MARKER": str(marker),
+        **dict.fromkeys(flags, "true"),
+        **dict.fromkeys(names, "synthetic-test-only"),
+    }
+
+    def run(platform: str, overrides: dict[str, str | None]) -> subprocess.CompletedProcess[str]:
+        current = env.copy()
+        for key, value in overrides.items():
+            if value is None:
+                current.pop(key, None)
+            else:
+                current[key] = value
+        return subprocess.run(["bash", str(script), platform], env=current, capture_output=True, text=True, check=False)
+
+    for platform in ("docker", "vercel"):
+        base = {"VERCEL_AUTOMATION_BYPASS_SECRET": "synthetic-test-only"} if platform == "vercel" else {}
+        for flag in flags:
+            for value in (None, "false", "1"):
+                result = run(platform, {**base, flag: value})
+                assert result.returncode != 0
+                assert "Full specialist acceptance flags are required" in result.stdout
+                assert not marker.exists()
+    for platform, overrides in (
+        ("docker", {"VERCEL_AUTOMATION_BYPASS_SECRET": ""}),
+        ("docker", {"VERCEL_AUTOMATION_BYPASS_SECRET": "synthetic-test-only"}),
+        ("vercel", {}),
+        ("local", {}),
+        ("docker", {names[0]: None}),
+    ):
+        result = run(platform, overrides)
+        assert result.returncode != 0
+        assert not marker.exists()
+        assert "synthetic-test-only" not in result.stdout + result.stderr
+
+    # Positive admission reaches the inert runner, but its failure remains a
+    # failure and its temporary private diagnostics must be removed.
+    result = run("docker", {})
+    assert marker.exists()
+    assert result.returncode != 0
+    assert "private diagnostics suppressed" in result.stdout
+    assert not list(tmp_path.glob("specialist-acceptance.*"))
