@@ -91,6 +91,12 @@ def derive_model_signals(
             continue
         if row.get("source") != "runtime.execution":
             continue
+        metadata = row.get("metadata")
+        if isinstance(metadata, dict) and (
+            metadata.get("event_type") == "agent.specialist.participation"
+            or metadata.get("receipt_version") == "specialist-participation.v1"
+        ):
+            continue
         if row.get("tenant_id") != tenant_id or row.get("user_id") != user_id:
             continue
         outcome_id = row.get("outcome_id")
@@ -158,11 +164,11 @@ class ModelOutcomeSignalService:
             store = get_outcome_store()
             records = await asyncio.wait_for(
                 asyncio.to_thread(
-                    store.list_for_tenant,
+                    store.list_scoped_model_operational_outcomes,
                     tenant_id,
                     limit=settings.model_routing_history_limit,
                     user_id=user_id,
-                    source="runtime.execution",
+                    task_type=task_type,
                 ),
                 timeout=settings.model_routing_read_timeout_seconds,
             )
