@@ -821,3 +821,55 @@ Supply KAREN_UX_EMAIL, KAREN_UX_PASSWORD, KAREN_UX_ACCOUNT_B_EMAIL, KAREN_UX_ACC
 
 
 KCOMM-03A uses bounded authenticated **read** refresh while the inbox is open (30 seconds, focus, online and visibility return). This is not WebSocket/Supabase push delivery. Refresh does not POST reconciliation or replay mutations, cannot bypass an uncertain outcome, and stops on hidden/inactive or unmounted views. The existing simulated realtime client and tenant-wide notification topic are not authorized personal-inbox transports.
+
+
+### Disposable signed-session Communications acceptance (KCOMM-02E)
+
+Run the existing **Production First-Boot Smoke** workflow on an approved source
+revision with its explicit `communications_browser` dispatch input enabled.
+The default remains false; ordinary PR and mainline boot checks do not claim
+browser acceptance. No hosted deployment credentials or live model endpoint
+are used. The proof uses disposable production images, isolated PostgreSQL,
+loopback HTTP ingress, distinct signed user accounts and the existing runtime
+ledger/reconciliation owners. It rejects skipped or retried browser tests.
+
+Historical execution: [run 45852298782](https://github.com/agustealo/AI-Karen/actions/runs/45852298782),
+source `1dffc88011bff58852b1fe8b353b5242cdafb019`, one passing Chromium
+scenario with zero skips/retries. The controlled terminal repository fixture
+does not establish real model inference failure, multiworker push delivery or
+hosted production acceptance. A new source revision needs a fresh opt-in run.
+
+### ARM-08: fresh ordinary-chat specialist execution
+
+The existing consumer first-send test has an explicit ordinary-specialist mode. Use only the approved disposable non-admin tenant/account with a preconfigured local model and policy restricted to the single approved read-only tool. Set `KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE=true`, `KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED=true`, `KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID`, `KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID`, `KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT`, and `KAREN_SPECIALIST_EXPECTED_PROVIDER`, `MODEL`, `ENGINE`, `AGENT`, `TOOL` (each with the same prefix). The prompt must naturally request one registered specialist and one permitted read-only action, not ask for fabricated proof. It creates one new conversation through the UI, uses the approved signed Docker origin, and compares the attested runtime identity, actual model attribution, terminal lifecycle, participation and tool acknowledgment before and after reload. Neither tool success nor model attribution independently proves external state or installed model inventory; operator preflight and signed host attestation remain required. Depends on #1344/#1346 merged contracts. Protected execution remains NOT_RUN.
+
+Select `docker-specialist-ordinary-chat` in **KAREN Browser Acceptance** on the exact reviewed current main SHA. This reuses the signed host pre/post and exact-origin hosted browser chain and the private one-test report validator. Set approval and expected identifiers in the existing protected environment; supply dedicated owner credentials, approved principal IDs and the sanitized prompt as step-scoped secrets. The ordinary mode receives the existing sanitized B/C credentials only in its protected proof step, never pre-existing run IDs. The operator must approve these read-only isolation probes along with the disposable owner trial: after verified owner reload, sign out and require 401/403 on the exact new run evidence endpoints, then authenticate distinct same-tenant B and cross-tenant C principals and require 404 on the new run details, transitions, participation, tool receipts and owned history. No second inference or runtime mutation is permitted. It deliberately fails on a run detail missing policy/request identity (including a remote snapshot that cannot expose those fields), multiple tools, partial/degraded execution, or incomplete evidence. It does not mutate the host, alter policy or install a model. The single approved conversation and read-only tool execution are real mutations/observations inside the disposable tenant. A green source build is not the live trial.
+
+Consolidation: ARM-05C.8C (#1350) contributes canonical UUIDv4 tool-call/derived receipt identity, a required result digest, empty verified thread and explicit local-engine admission, replay of complete receipt inventories, and strict scenario-report substitution tests to ARM-08 (#1354). There is one fresh ordinary-chat scenario (`docker-specialist-ordinary-chat`), not a parallel fresh runner. The operator-approved prompt, exact principal and tool configuration remain required; a local engine label does not independently establish physical locality.
+
+The trial additionally joins the owner-visible, completed assistant-digest-attested `karen.agent_step.v1` history projection to the actual SDK transport run, exact assistant and runtime request IDs, and durable specialist step. It requires ordered outer invocation entry/completion, rejecting contradictory, stale, foreign or internal-only activity. It compares the attested sequence evidence after reload. The generic event cursor intentionally cannot replay arbitrary agent/tool activity; this trial does not expand that boundary. The governed tool evidence remains independently read from its owner-scoped receipt endpoint, not inferred from an agent-step event.
+
+The run tool envelope uses the exact same pure `src/lib/governed-tool-receipts.ts` wire validator as the Mission Control receipt view (#1352). ARM-08 only adds trial-specific requirements (one successful approved call, matching policy/step, digest and time window). The shared file is byte-identical across the dependent candidates; preserve it once during reconciliation.
+
+
+#### ARM-08 local-only ordinary specialist trial
+
+External deployment quotas and hosted runner availability are not source-integration blockers. The same browser scenario and private report gate also support explicit local loopback acceptance. A local pass is **local execution/readback evidence only**, never signed-release provenance. Use a clean exact reviewed checkout and local production-built API/Web images with matching source labels and deployed revision, local PostgreSQL/Redis and configured installed inference engine. Independently inspect the running image IDs, database/tenant isolation and approved read-only tool before and after the trial; do not point at a shared or production account/database. The browser itself checks the exact uncached frontend revision and canonical backend readiness before credentials and after all isolation probes. No deployment, image build, account provisioning or policy mutation is performed by the browser gate.
+
+In a private shell, configure the same dedicated non-admin A/B/C credentials, explicit approval, exact principal IDs, approved prompt and expected executor/tool variables documented above. Do not place credentials in the checkout or command history. A and B must share a tenant; C must be in a separate tenant. Run from the repository root:
+
+```bash
+export KAREN_CHAT_BOOT_REVISION="$(git rev-parse HEAD)"
+export KAREN_BASE_URL=http://127.0.0.1:8010
+export KAREN_LOCAL_CHAT_ACCEPTANCE=1
+export KAREN_SANITIZED_ACCOUNT=true
+export KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE=true
+# Set KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED=true only after operator approval.
+unset KAREN_CHAT_BOOT_ACCEPTANCE KAREN_E2E_AUTH_STATE VERCEL_AUTOMATION_BYPASS_SECRET
+export RUNNER_TEMP="$(mktemp -d)"
+trap 'rm -rf -- "$RUNNER_TEMP"' EXIT
+cd src/ui_launchers/Karen-AI-Theme
+bash ../../../scripts/ci/run_specialist_browser_acceptance.sh local ordinary-chat
+````
+
+Install pinned frontend dependencies and Chromium before entering credentials. The local runner rejects dirty/wrong revisions, unapproved or non-loopback origins, inherited bypass credentials and partial configuration. It requires exactly one passing local scenario, no skips or retries, and deletes private browser output. Signed Docker and Vercel scenarios keep their existing admission rules; a local report cannot substitute for either. Report local runtime proof separately from image provenance and external deployment status.

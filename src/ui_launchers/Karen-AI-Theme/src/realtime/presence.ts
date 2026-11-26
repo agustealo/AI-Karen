@@ -1,30 +1,21 @@
-/**
- * Frontend Presence abstraction.
- *
- * Presence is strictly for ephemeral awareness.
- */
-
+/** Unavailable presence compatibility boundary, not a local presence authority. */
 import { PresenceState } from "./types";
 
 export type PresenceHandler = (state: PresenceState) => void;
 
 export class PresenceClient {
-  private handlers: Set<PresenceHandler> = new Set();
-  private current: PresenceState | null = null;
-
   subscribe(handler: PresenceHandler): () => void {
-    this.handlers.add(handler);
-    if (this.current) handler(this.current);
-    return () => this.handlers.delete(handler);
+    // No authenticated transport or session scope: retain no private state.
+    void handler;
+    return () => {};
   }
 
   update(state: PresenceState): void {
-    this.current = state;
-    this.handlers.forEach((h) => h(state));
+    void state;
+    throw new Error("Authenticated presence transport unavailable");
   }
 
   disconnect(): void {
-    this.current = null;
-    this.handlers.clear();
+    // There is no established presence transport to close.
   }
 }
