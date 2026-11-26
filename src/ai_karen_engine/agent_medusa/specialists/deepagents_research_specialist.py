@@ -238,6 +238,7 @@ class DeepAgentsResearchSpecialist:
                     agent_id=self_agent_id,
                     message=f"Deep Agents {kind} {status}",
                     correlation_id=execution.correlation_id,
+                    request_id=execution.trajectory_id,
                     metadata={
                         "step_id": f"deepagents-{run_id}",
                         "source": "deepagents",
@@ -386,6 +387,7 @@ class DeepAgentsResearchSpecialist:
                     agent_id=self.registration.agent_id,
                     message="Deep Agents checkpoint verified in canonical PostgreSQL",
                     correlation_id=execution.correlation_id,
+                    request_id=execution.trajectory_id,
                     metadata={
                         "step_id": execution.step_id,
                         "source": "deepagents",

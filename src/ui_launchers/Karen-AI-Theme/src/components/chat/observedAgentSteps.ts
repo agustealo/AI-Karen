@@ -28,14 +28,23 @@ export function projectObservedAgentSteps(messages: readonly unknown[]): AgentSt
         typeof data.stepId === "string" ? data.stepId : "";
       if (!stepId || stepId.length > 200) continue;
       const rawStatus = typeof data.status === "string" ? data.status.toLowerCase() : "";
-      const eventType: AgentStepEvent["type"] =
+      const eventType: AgentStepEvent["type"] | undefined =
         ["failed", "failure", "error", "errored"].includes(rawStatus) ? "agent_step_failed" :
         ["complete", "completed", "finished", "success", "succeeded"].includes(rawStatus) ? "agent_step_completed" :
-        ["skipped"].includes(rawStatus) ? "agent_step_skipped" : "agent_step_started";
-      const key = `${part.name}:${stepId}`;
+        ["cancelled", "interrupted"].includes(rawStatus) ? "agent_step_cancelled" :
+        rawStatus === "skipped" ? "agent_step_skipped" :
+        ["running", "started"].includes(rawStatus) ? "agent_step_started" : undefined;
+      if (!eventType) continue;
+      const runId = typeof data.run_id === "string" ? data.run_id : data.runId;
+      const agentId = typeof data.agent_id === "string" ? data.agent_id : data.agentId;
+      if (typeof runId !== "string" || !runId || runId.length > 200 ||
+          typeof agentId !== "string" || !agentId || agentId.length > 200) continue;
+      const key = JSON.stringify([part.name, runId, agentId, stepId]);
       const metadata: Record<string, unknown> = {
         activity_category: part.name,
-        observed_status: rawStatus || "unknown",
+        observed_status: rawStatus,
+        run_id: runId,
+        agent_id: agentId,
       };
       for (const field of ["tool", "plugin_id", "extension_id", "actual_provider", "provider", "run_id", "agent_id"]) {
         if (typeof data[field] === "string" && (data[field] as string).length <= 200) {
