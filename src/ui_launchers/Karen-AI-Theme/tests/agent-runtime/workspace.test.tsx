@@ -843,6 +843,9 @@ describe("ARM-05C.8D recorded governed tool evidence", () => {
       { ...evidence, receipts: [{ ...row, result_sha256: "x".repeat(64) }] },
       { ...evidence, receipts: [{ ...row, recorded_at: "2026-11-26T00:00:00" }] },
       { ...evidence, receipts: [{ ...row, recorded_at: row.recorded_at + "\n" }] },
+      { ...evidence, receipts: [{ ...row, recorded_at: "2026-02-30T12:00:00Z" }] },
+      { ...evidence, receipts: [{ ...row, recorded_at: "2026-01-01T24:00:00Z" }] },
+      { ...evidence, receipts: [{ ...row, recorded_at: "0000-01-01T00:00:00Z" }] },
     ]) expect(isRunToolReceiptsResponse(invalid)).toBe(false);
   });
 
