@@ -119,6 +119,8 @@ async def test_backend_governed_history_uses_canonical_owner_and_ledger_only(
     assert [e["name"] for e in body["replayEvents"]] == [
         "karen.execution_receipt.v1",
     ]
+    assert body["replayEvents"][0]["messageId"] == ASSISTANT
+    assert body["replayEvents"][0]["value"]["runtime_request_id"] == REQUEST
     assert "never expose" not in str(body)
     assert calls[0] == ("owned", TENANT, USER, THREAD, 501)
     assert calls[1] == ("attested", {

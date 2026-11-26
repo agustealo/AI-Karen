@@ -1104,6 +1104,40 @@ async def _assert_specialist_participation_reads(
         receipt_id=start.receipt_id, subject_id=subject_id,
     )
 
+    # Canonical recorder and actual PostgreSQL, not an executed tool trial.
+    tool_recorder = OutcomeRecorder(store=writer)
+    tool_scope = dict(trajectory_id=run_id, correlation_id=correlation,
+                      tenant_id=tenant_a, user_id=subject_id)
+
+    async def record_tool(**overrides):
+        return await tool_recorder.record_governed_tool_outcome_async(**{
+            **tool_scope, "tool_call_id": str(uuid.uuid4()), "session_id": None,
+            "policy_decision_id": "policy-test-only", "tool_name": "read_only",
+            "tool_version": "v1", "agent_id": "researcher", "step_id": "step-a",
+            "success": True, **overrides,
+        })
+
+    tool_receipt = await record_tool()
+    await record_tool(correlation_id=correlation + "-other")
+    await record_tool(user_id=other_user)
+    await record_tool(tenant_id=tenant_b, user_id=foreign_user)
+    await record_tool(trajectory_id=run_id + "-other")
+    recorded_tools = await reader.list_governed_tool_receipts_async(**tool_scope, limit=1)
+    assert [row["outcome_id"] for row in recorded_tools] == [tool_receipt["outcome_id"]]
+    assert recorded_tools[0]["metadata"]["independently_verified"] is False
+    assert await reader.list_governed_tool_receipts_async(
+        **{**tool_scope, "correlation_id": correlation + "-missing"}
+    ) == []
+    assert await reader.list_governed_tool_receipts_async(
+        **{**tool_scope, "tenant_id": tenant_b}
+    ) == []
+    assert await reader.list_governed_tool_receipts_async(
+        **{**tool_scope, "user_id": str(uuid.uuid4())}
+    ) == []
+    from ai_karen_engine.core.runtime.outcome.store import InMemoryOutcomeStore
+    with pytest.raises(OutcomeStoreError):
+        await InMemoryOutcomeStore().list_governed_tool_receipts_async(**tool_scope)
+
     # ARM-05C: a real relation-availability failure, not a mocked store or
     # synthetic successful empty inventory. This helper runs only in the
     # designated disposable database; restore the original relation on every
@@ -1132,6 +1166,9 @@ async def _assert_specialist_participation_reads(
             ) as failure:
                 await reader.list_specialist_participation_async(**unavailable_scope)
             assert failure.value.__cause__ is not None
+        for unavailable_tool_scope in (tool_scope, {**tool_scope, "trajectory_id": run_id + "-missing"}):
+            with pytest.raises(OutcomeStoreError, match="^Tool receipts unavailable$"):
+                await reader.list_governed_tool_receipts_async(**unavailable_tool_scope)
     finally:
         async with raw.transaction():
             await raw.execute("SET LOCAL lock_timeout = '5s'")
@@ -1146,6 +1183,27 @@ async def _assert_specialist_participation_reads(
     assert await reader.list_specialist_participation_async(**empty_scope) == (
         [], False,
     )
+
+    assert [row["outcome_id"] for row in await reader.list_governed_tool_receipts_async(**tool_scope)] == [tool_receipt["outcome_id"]]
+    assert await reader.list_governed_tool_receipts_async(**{**tool_scope, "trajectory_id": run_id + "-missing"}) == []
+    # Corrupt stored payload only; SQL scope columns remain unchanged.
+    await raw.execute(
+        "UPDATE public.outcome_records SET payload=jsonb_set(payload, "
+        "'{metadata,independently_verified}', 'true'::jsonb) WHERE outcome_id=$1",
+        tool_receipt["outcome_id"],
+    )
+    with pytest.raises(OutcomeStoreError):
+        await reader.list_governed_tool_receipts_async(**tool_scope)
+
+    # A canonical tool ID must not silently vanish if its classification is corrupted.
+    await raw.execute(
+        "UPDATE public.outcome_records SET payload=jsonb_set(jsonb_set(payload, "
+        "'{metadata,independently_verified}', 'false'::jsonb), "
+        "'{metadata,receipt_version}', '\"invented\"'::jsonb) WHERE outcome_id=$1",
+        tool_receipt["outcome_id"],
+    )
+    with pytest.raises(OutcomeStoreError):
+        await reader.list_governed_tool_receipts_async(**tool_scope)
 
     # Simulate corruption by a privileged database operator, not a writer bypass.
     await raw.execute(
