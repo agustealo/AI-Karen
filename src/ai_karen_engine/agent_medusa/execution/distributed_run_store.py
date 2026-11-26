@@ -117,6 +117,12 @@ if not ((status == 'completed' and (outcome == 'success' or outcome == 'partial'
     or (status == 'orphaned' and outcome == '')) then
   return -3
 end
+if ARGV[9] == 'durable_arbitrated' then
+  local kind = redis.call('TYPE', KEYS[4]).ok
+  if kind ~= 'none' and kind ~= 'zset' then
+    return -3
+  end
+end
 if current == 'cancelling' and status ~= 'orphaned' then
   status = 'cancelled'
   error_type = ''
@@ -133,6 +139,13 @@ redis.call('HSET', KEYS[2],
 -- An unacknowledged durable receipt is recovery evidence, not a lease.
 if ARGV[9] == 'durable_arbitrated' then
   redis.call('PERSIST', KEYS[2])
+  local tail = redis.call('ZRANGE', KEYS[4], -1, -1, 'WITHSCORES')
+  local score = 0
+  if #tail > 0 then
+    score = tonumber(tail[2]) + 1
+  end
+  redis.call('ZADD', KEYS[4], score, ARGV[3])
+  redis.call('PERSIST', KEYS[4])
 else
   redis.call('EXPIRE', KEYS[2], retention)
 end
@@ -147,7 +160,15 @@ return 1
 
 # Release the retention hold only for the exact committed durable receipt.
 _ACK_DURABLE_TERMINAL_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[3]).ok
+if kind ~= 'none' and kind ~= 'zset' then
+  return 0
+end
 if redis.call('EXISTS', KEYS[1]) ~= 0 then
+  return 0
+end
+if redis.call('EXISTS', KEYS[2]) == 0 then
+  redis.call('ZREM', KEYS[3], ARGV[2])
   return 0
 end
 if redis.call('HGET', KEYS[2], 'terminal_authority') ~= 'durable_arbitrated'
@@ -160,13 +181,38 @@ for i = 1, 18, 2 do
   end
 end
 if redis.call('PTTL', KEYS[2]) ~= -1 then
+  redis.call('ZREM', KEYS[3], ARGV[2])
   return 0
 end
 local retention = tonumber(ARGV[19])
 if not retention or retention < 1 or retention % 1 ~= 0 then
   return 0
 end
-return redis.call('EXPIRE', KEYS[2], retention)
+local result = redis.call('EXPIRE', KEYS[2], retention)
+if result == 1 then
+  redis.call('ZREM', KEYS[3], ARGV[2])
+end
+return result
+"""
+
+
+# Rotate a bounded discovery batch. The index owns no terminal evidence.
+_PENDING_TERMINAL_BATCH_SCRIPT = """
+local limit = tonumber(ARGV[1])
+if not limit or limit < 1 or limit > 1000 then
+  return {}
+end
+local ids = redis.call('ZRANGE', KEYS[1], 0, limit - 1)
+local tail = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
+if #tail == 0 then
+  return ids
+end
+local score = tonumber(tail[2])
+for _, id in ipairs(ids) do
+  score = score + 1
+  redis.call('ZADD', KEYS[1], 'XX', score, id)
+end
+return ids
 """
 
 
@@ -225,6 +271,10 @@ class DistributedRunStore(Protocol):
         self, *, tenant_id: str, receipt: dict[str, Any]
     ) -> bool: ...
 
+    async def pending_terminal_ids(
+        self, *, tenant_id: str, limit: int
+    ) -> list[str]: ...
+
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
@@ -269,6 +319,9 @@ class RedisDistributedRunStore:
 
     def _tenant_index(self, tenant_id: str) -> str:
         return f"{self._settings.run_key_prefix}:tenant:{tenant_id}"
+
+    def _pending_terminal_index(self, tenant_id: str) -> str:
+        return f"{self._settings.run_key_prefix}:terminal-pending:{tenant_id}"
 
     def _now(self) -> datetime:
         return datetime.now(timezone.utc)
@@ -400,10 +453,11 @@ class RedisDistributedRunStore:
             result = int(
                 await client.eval(
                     _MARK_TERMINAL_SCRIPT,
-                    3,
+                    4,
                     self._claim_key(run_id),
                     self._run_key(run_id),
                     self._tenant_index(tenant_id),
+                    self._pending_terminal_index(tenant_id),
                     worker_id,
                     tenant_id,
                     run_id,
@@ -461,9 +515,10 @@ class RedisDistributedRunStore:
             return bool(
                 await client.eval(
                     _ACK_DURABLE_TERMINAL_SCRIPT,
-                    2,
+                    3,
                     self._claim_key(str(receipt["run_id"])),
                     self._run_key(str(receipt["run_id"])),
+                    self._pending_terminal_index(tenant_id),
                     *(value for key in keys for value in (key, str(expected.get(key) or ""))),
                     str(self._settings.run_terminal_retention_seconds),
                 )
@@ -471,6 +526,24 @@ class RedisDistributedRunStore:
         except RedisError as exc:
             raise DistributedRunStoreUnavailable(
                 "shared_terminal_retention_unconfirmed"
+            ) from exc
+
+    async def pending_terminal_ids(
+        self, *, tenant_id: str, limit: int
+    ) -> list[str]:
+        """Return a bounded rotating batch of retained receipt identities."""
+        client = await self._client()
+        try:
+            result = await client.eval(
+                _PENDING_TERMINAL_BATCH_SCRIPT,
+                1,
+                self._pending_terminal_index(tenant_id),
+                str(max(1, min(limit, 1000))),
+            )
+            return [str(run_id) for run_id in result]
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_terminal_discovery_unavailable"
             ) from exc
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:

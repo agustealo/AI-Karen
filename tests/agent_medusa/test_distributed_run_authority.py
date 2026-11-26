@@ -1003,10 +1003,11 @@ async def test_terminal_store_publishes_one_scoped_receipt(result: int) -> None:
     assert client.calls == [
         (
             _MARK_TERMINAL_SCRIPT,
-            3,
+            4,
             store._claim_key("terminal-run"),
             store._run_key("terminal-run"),
             store._tenant_index("tenant-a"),
+            store._pending_terminal_index("tenant-a"),
             "worker-a",
             "tenant-a",
             "terminal-run",
@@ -1121,9 +1122,10 @@ async def test_durable_receipt_retention_acknowledgement_is_exact(result: int) -
     assert client.calls == [
         (
             _ACK_DURABLE_TERMINAL_SCRIPT,
-            2,
+            3,
             store._claim_key("receipt"),
             store._run_key("receipt"),
+            store._pending_terminal_index("tenant-a"),
             "run_id", "receipt",
             "tenant_id", "tenant-a",
             "owner_worker_id", "owner",

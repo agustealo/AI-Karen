@@ -87,6 +87,7 @@ class ExecutionRun:
     terminal_unconfirmed: bool = field(default=False, repr=False)
     terminal_attempted_at: datetime | None = field(default=None, repr=False)
     terminal_recovered: bool = field(default=False, repr=False)
+    retention_pending: bool = field(default=False, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -439,20 +440,21 @@ class MedusaRunManager:
                     outcome_status = "cancelled"
                     error_type = None
                 if run.durable_registered:
-                    await self._release_terminal_retention(
-                        run.tenant_id,
-                        {
-                            "run_id": run.run_id,
-                            "tenant_id": _canonical_tenant_id(run.tenant_id),
-                            "owner_worker_id": self._settings.worker_id,
-                            "correlation_id": run.correlation_id,
-                            "user_id": run.user_id,
-                            "status": status.value,
-                            "completed_at": completed_at.isoformat(),
-                            "error_type": error_type,
-                            "outcome_status": outcome_status,
-                        },
+                    confirmed_receipt = {
+                        "run_id": run.run_id,
+                        "tenant_id": _canonical_tenant_id(run.tenant_id),
+                        "owner_worker_id": self._settings.worker_id,
+                        "correlation_id": run.correlation_id,
+                        "user_id": run.user_id,
+                        "status": status.value,
+                        "completed_at": completed_at.isoformat(),
+                        "error_type": error_type,
+                        "outcome_status": outcome_status,
+                    }
+                    acknowledged = await self._release_terminal_retention(
+                        run.tenant_id, confirmed_receipt
                     )
+                    run.retention_pending = not acknowledged
                 async with self._lock:
                     self._publish_terminal_locked(
                         run, status, completed_at, error_type, outcome_status
@@ -807,6 +809,7 @@ class MedusaRunManager:
                     raise RunNotFoundError(run_id)
         if run is not None:
             await self._recover_local_terminal_view(run)
+            await self._retry_local_retention(run)
         async with self._lock:
             run = self._runs.get(run_id)
             if run is not None:
@@ -937,6 +940,7 @@ class MedusaRunManager:
         user_id: str | None = None,
     ) -> list[dict[str, Any]]:
         await self._reconcile_tenant_from_redis(tenant_id)
+        await self._retry_tenant_retention(tenant_id, user_id=user_id)
         async with self._lock:
             uncertain = [
                 run
@@ -1249,20 +1253,19 @@ class MedusaRunManager:
 
     async def _release_terminal_retention(
         self, tenant_id: str, durable: dict[str, Any]
-    ) -> None:
+    ) -> bool:
         """Best-effort cleanup; failure cannot erase confirmed durable history."""
-        if (
-            not self._settings.distributed_run_control_enabled
-            or durable.get("tenant_id") != _canonical_tenant_id(tenant_id)
-        ):
-            return
+        if not self._settings.distributed_run_control_enabled or durable.get(
+            "tenant_id"
+        ) != _canonical_tenant_id(tenant_id):
+            return False
         acknowledge = getattr(
             self._distributed_store, "acknowledge_durable_terminal", None
         )
         if acknowledge is None:
-            return
+            return False
         try:
-            await asyncio.wait_for(
+            return await asyncio.wait_for(
                 acknowledge(tenant_id=tenant_id, receipt=durable),
                 timeout=self._settings.run_heartbeat_interval_seconds,
             )
@@ -1270,6 +1273,73 @@ class MedusaRunManager:
             logger.warning(
                 "Medusa terminal retention acknowledgement deferred",
                 extra={"run_id": durable.get("run_id"), "tenant_id": tenant_id},
+            )
+            return False
+
+    async def _retry_local_retention(self, run: ExecutionRun) -> None:
+        if (
+            not run.retention_pending
+            or run.terminal_pending
+            or not run.durable_registered
+            or not run.shared_registered
+            or run.completed_at is None
+        ):
+            return
+        receipt = run.snapshot()
+        receipt["tenant_id"] = _canonical_tenant_id(run.tenant_id)
+        receipt["owner_worker_id"] = self._settings.worker_id
+        if await self._release_terminal_retention(run.tenant_id, receipt):
+            run.retention_pending = False
+
+    async def _retry_tenant_retention(
+        self, tenant_id: str, *, user_id: str | None
+    ) -> None:
+        """Bound cleanup by both existing batch size and one time budget."""
+        if not (
+            self._settings.durable_run_ledger_enabled
+            and self._settings.distributed_run_control_enabled
+        ):
+            return
+        discover = getattr(self._distributed_store, "pending_terminal_ids", None)
+        if discover is None:
+            return
+
+        async def repair() -> None:
+            seen: set[str] = set()
+            for _ in range(self._settings.run_reconciliation_batch_size):
+                # Rotate only the item actually attempted. A time-budget
+                # interruption must not skip the remainder of a whole batch.
+                run_ids = await discover(tenant_id=tenant_id, limit=1)
+                if not run_ids or run_ids[0] in seen:
+                    break
+                run_id = run_ids[0]
+                seen.add(run_id)
+                durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
+                if durable is None or (
+                    user_id is not None and durable.get("user_id") != user_id
+                ):
+                    continue
+                if durable.get("status") not in {
+                    "completed",
+                    "failed",
+                    "cancelled",
+                    "orphaned",
+                }:
+                    continue
+                await self._release_terminal_retention(tenant_id, durable)
+
+        try:
+            await asyncio.wait_for(
+                repair(), timeout=self._settings.run_heartbeat_interval_seconds
+            )
+        except (
+            DistributedRunStoreUnavailable,
+            DurableRunLedgerUnavailable,
+            TimeoutError,
+        ):
+            logger.warning(
+                "Medusa terminal retention batch deferred",
+                extra={"tenant_id": tenant_id},
             )
 
     async def _recover_local_terminal_view(self, run: ExecutionRun) -> None:
@@ -1329,7 +1399,10 @@ class MedusaRunManager:
             completed_at = self._parse_time(receipt["completed_at"])
             assert completed_at is not None
             if run.durable_registered and run.shared_registered:
-                await self._release_terminal_retention(run.tenant_id, receipt)
+                acknowledged = await self._release_terminal_retention(
+                    run.tenant_id, receipt
+                )
+                run.retention_pending = not acknowledged
         except (
             DistributedRunNotFound,
             DistributedRunTenantMismatch,
@@ -1483,9 +1556,7 @@ class MedusaRunManager:
             if changed:
                 reconciled += 1
             if shared.get("terminal_authority") == "durable_arbitrated":
-                durable = await self._get_durable(
-                    run_id=run_id, tenant_id=tenant_id
-                )
+                durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
                 if durable is not None:
                     await self._release_terminal_retention(tenant_id, durable)
 

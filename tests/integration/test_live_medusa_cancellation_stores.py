@@ -280,6 +280,10 @@ async def _run_acceptance() -> None:
             redis=redis, ledger=ledger, prefix=prefix,
             tenant_id=tenant_a, marker=marker,
         )
+        await _retention_retry_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix,
+            tenant_id=tenant_a, marker=marker,
+        )
     finally:
         # Failure before the first cancellation must not strand workload cleanup.
         release_retirement.set()
@@ -854,6 +858,107 @@ async def _terminal_rollback_recovery_acceptance(
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+async def _retention_retry_acceptance(
+    *,
+    redis: RedisConnectionManager,
+    ledger: PostgresDurableRunLedger,
+    prefix: str,
+    tenant_id: str,
+    marker: str,
+) -> None:
+    """Recover deferred cleanup from owner reads and a fresh scoped listing."""
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunStoreUnavailable,
+    )
+
+    class DeferredStore(RedisDistributedRunStore):
+        fail_ack = True
+        attempts = 0
+
+        async def acknowledge_durable_terminal(self, **kwargs: Any) -> bool:
+            self.attempts += 1
+            if self.fail_ack:
+                raise DistributedRunStoreUnavailable("injected retention failure")
+            return await super().acknowledge_durable_terminal(**kwargs)
+
+    client = redis.client
+    assert client is not None
+    settings = _settings(worker=f"retention-owner-{marker}", prefix=prefix)
+    store = DeferredStore(settings=settings, redis_manager=redis)
+    index = store._pending_terminal_index(tenant_id)
+    # Prove the rotating discovery cursor advances past an unrepaired item.
+    await client.zadd(index, {"probe-a": 0, "probe-b": 1, "probe-c": 2})
+    try:
+        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
+            "probe-a"
+        ]
+        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
+            "probe-b"
+        ]
+        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
+            "probe-c"
+        ]
+        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
+            "probe-a"
+        ]
+    finally:
+        await client.zrem(index, "probe-a", "probe-b", "probe-c")
+    for mode in ("owner_get", "fresh_list"):
+        owner = MedusaRunManager(
+            settings=settings, distributed_store=store, durable_ledger=ledger
+        )
+        scope = dict(run_id=f"{marker}-retention-{mode}", tenant_id=tenant_id)
+        task = asyncio.create_task(asyncio.sleep(0))
+        run = None
+        store.fail_ack = True
+        before = store.attempts
+        try:
+            run = await owner.register(
+                **scope, correlation_id=f"corr-{mode}", user_id="retention-user", task=task
+            )
+            await task
+            assert (await owner.mark_response(run.run_id, "success")).value == "completed"
+            key = store._run_key(run.run_id)
+            assert store.attempts == before + 1
+            assert await client.pttl(key) == -1
+            assert await client.zscore(index, run.run_id) is not None
+            assert await client.pttl(index) == -1
+            store.fail_ack = False
+            if mode == "owner_get":
+                assert (await owner.get(**scope))["status"] == "completed"
+                assert store.attempts == before + 2
+                assert not run.retention_pending
+            else:
+                await client.delete(store._tenant_index(tenant_id))
+                fresh = MedusaRunManager(
+                    settings=settings, distributed_store=store, durable_ledger=ledger
+                )
+                rows = await fresh.list_runs(
+                    tenant_id=tenant_id,
+                    user_id="retention-user",
+                )
+                assert any(
+                    row["run_id"] == run.run_id and row["status"] == "completed"
+                    for row in rows
+                )
+            assert await client.pttl(key) > 0
+            assert await client.zscore(index, run.run_id) is None
+            durable = await ledger.get(**scope)
+            assert durable is not None and durable["outcome_status"] == "success"
+            previous_ttl = await client.pttl(key)
+            assert not await store.acknowledge_durable_terminal(
+                tenant_id=tenant_id, receipt=durable
+            )
+            assert 0 < await client.pttl(key) <= previous_ttl
+        finally:
+            if run is not None and run.heartbeat_task is not None:
+                run.heartbeat_task.cancel()
+                await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize(
