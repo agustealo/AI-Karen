@@ -137,12 +137,15 @@ class WorkflowGenerationRuntime:
         if token_budget <= 0:
             raise PermissionError("workflow_generation_input_budget_unavailable")
         prompt_request = prompt_runtime.build_request_from_runtime_context(
-            messages=list(request.messages),
-            request_context=dict(request.request_context),
-            integrated_context=dict(request.integrated_context),
-            profile=dict(request.profile),
+            # Graph checkpoint copies are not prompt authority. In particular,
+            # request_config may contain untrusted ingress metadata and graph
+            # memory recall is not the canonical resolved evidence snapshot.
+            messages=list(original.messages),
+            integrated_context={
+                "memories": ChatRuntime._selected_memory_for_generation(original, decision),
+            },
             workflow_context=dict(request.workflow_context),
-            cortex_intent=dict(request.cortex_intent),
+            cortex_intent={"primary_intent": decision.intent},
             token_budget=token_budget,
         )
         async with admission.admitted_execution_deadline():

@@ -121,12 +121,24 @@ jobs:
             --output build/kchat-auth-05b2b-caller-census.json
           pytest -q tests/core/model_runtime/test_kchat_auth_05b2b_caller_census.py
 
+      - name: Inventory tracked legacy executor references
+        run: |
+          # File names only; response-source labels and test contracts remain
+          # candidates, not proof of active execution or safe deletion.
+          status=0
+          git grep -l -I -E 'ProviderRuntime|provider_runtime|get_provider_runtime' -- . \
+            > build/legacy-provider-runtime-references.txt || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          cat build/legacy-provider-runtime-references.txt
+
       - name: Upload read-only model execution caller inventory
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: kchat-auth-05b2b-caller-census
-          path: build/kchat-auth-05b2b-caller-census.json
+          path: |
+            build/kchat-auth-05b2b-caller-census.json
+            build/legacy-provider-runtime-references.txt
           if-no-files-found: ignore
 
       - name: Prove runtime capabilities and available tools are observed, not invented

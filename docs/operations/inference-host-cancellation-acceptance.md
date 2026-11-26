@@ -176,3 +176,26 @@ stream observed workflow activity and the completed synthesis.
 This source change does not certify arbitrary graph-local evidence sources,
 tool side effects, SDK callbacks or remote device cessation. Exact-head
 tests and independent review remain required before merge.
+
+
+### Workflow fallback and evidence boundary (KUI-004B4.48C7Z8E12–E13)
+
+The E12 gateway prevents a disabled primary engine or substituted concrete
+provider from bypassing a no-degradation plan. Chat System Burn at
+`6d4d16edbcb993d926b92c3477fbe52b3a37dc00` passed its model-runtime test
+group (226 tests), including the governed workflow HTTP regression file.
+Context Authority and Cognitive Proof also passed at that head.
+The E13 candidate uses original Runtime messages and the existing scoped
+CognitiveContext memory projection rather than checkpoint copies of history,
+profile, recalled facts or instructions. Graph-local tool and reasoning
+result authorization is still open; this does not establish their provenance
+or grant execution rights. Added HTTP-boundary fallback tests for shared
+quota, forbidden fallback and verified actual provider identity.
+
+The existing caller census reported 1,632 Python files, 89 candidates and no
+parse errors at E12. It is not proof of legacy executor retirement. Chat
+System Burn now records tracked legacy symbol reference filenames alongside
+the existing census. Review each candidate, migrate any active execution
+consumer and preserve security coverage before deleting the executor or
+retiring tests. The new candidate requires fresh exact-head CI, independent
+review and actual host/consumer acceptance; no merge is implied.

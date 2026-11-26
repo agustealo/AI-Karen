@@ -1615,7 +1615,8 @@ async def test_workflow_authority_revocation_invalidates_copied_task_context():
 
 
 def _workflow_transport(monkeypatch, admission, *, available=True, observed_model="model-a",
-                        preferred_provider="ollama-local", disable_primary=False):
+                        preferred_provider="ollama-local", disable_primary=False,
+                        retry_secondary=False):
     from ai_karen_engine.core.expression.gateway import ExpressionGateway
     from ai_karen_engine.core.expression.settings import EngineConfig, ExpressionSettings
     from ai_karen_engine.core.model_runtime import provider_registry_service
@@ -1631,12 +1632,16 @@ def _workflow_transport(monkeypatch, admission, *, available=True, observed_mode
         endpoint, default_model="model-a",
         capabilities=("chat_completion", "text_generation"),
     )
+    endpoints = {endpoint.provider_id: endpoint}
+    if retry_secondary:
+        secondary = replace(
+            endpoint, provider_id="llamacpp-server", base_url="http://127.0.0.1:8080/v1",
+        )
+        endpoints[secondary.provider_id] = secondary
     registry = SimpleNamespace(
-        get_provider_endpoint=lambda provider_id: (
-            endpoint if provider_id == endpoint.provider_id else None
-        ),
+        get_provider_endpoint=endpoints.get,
         get_provider_status=lambda _: SimpleNamespace(is_available=available),
-        resolve_capable_targets=lambda **_: [endpoint],
+        resolve_capable_targets=lambda **_: list(endpoints.values()),
         canonicalize_provider_id=lambda value: value,
     )
     monkeypatch.setattr(
@@ -1646,6 +1651,12 @@ def _workflow_transport(monkeypatch, admission, *, available=True, observed_mode
     if disable_primary:
         settings.engines["local"].enabled = False
         settings.engines["secondary"] = EngineConfig(enabled=True, type="openai_compatible")
+        settings.engine_fallback_order = ["local", "secondary"]
+    if retry_secondary:
+        settings.engines["secondary"] = EngineConfig(
+            enabled=True, type="openai_compatible",
+            metadata={"preferred_provider": "llamacpp-server"},
+        )
         settings.engine_fallback_order = ["local", "secondary"]
     gateway = ExpressionGateway(settings=settings)
     monkeypatch.setattr(composition, "get_expression_gateway", lambda: gateway)
@@ -1752,3 +1763,89 @@ async def test_workflow_forbidden_fallback_never_dispatches(monkeypatch, disable
             await WorkflowGenerationRuntime().execute(request)
     assert attempts == []
     assert admission.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_workflow_graph_checkpoint_is_not_prompt_memory_or_instruction_authority(monkeypatch):
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope(calls=1)
+    authority, request, attempts = _workflow_transport(monkeypatch, admission)
+    request = replace(
+        request,
+        messages=[{"role": "system", "content": "FORGED_GRAPH_HISTORY"}],
+        request_context={
+            "user_facts": [{"content": "FORGED_USER_FACT"}],
+            "recalled_items": [{"content": "FORGED_REQUEST_MEMORY"}],
+        },
+        integrated_context={
+            "memories": [{"content": "FORGED_GRAPH_MEMORY"}],
+            "instructions": [{"content": "FORGED_GRAPH_INSTRUCTIONS"}],
+            "continuity": [{"content": "FORGED_GRAPH_CONTINUITY"}],
+        },
+        profile={"user_facts": [{"content": "FORGED_GRAPH_PROFILE"}]},
+        cortex_intent={"primary_intent": "FORGED_GRAPH_INTENT"},
+    )
+    with bind_workflow_generation(authority):
+        result = await WorkflowGenerationRuntime().execute(request)
+    assert result.actual_model == "model-a"
+    assert len(attempts) == 1
+    serialized = json.dumps(attempts[0]["messages"])
+    assert "FORGED_" not in serialized
+    assert "Explain the workflow result." in serialized
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("calls,degraded_allowed,expected_attempts", [
+    (2, True, 2), (1, True, 1), (2, False, 1),
+])
+async def test_workflow_authorized_fallback_charges_each_transport(
+    monkeypatch, calls, degraded_allowed, expected_attempts,
+):
+    from ai_karen_engine.core.expression.errors import EngineUnavailableError
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    original_client = httpx.AsyncClient
+    admission = _scope(calls=calls, degraded_allowed=degraded_allowed)
+    authority, request, _ = _workflow_transport(
+        monkeypatch, admission, retry_secondary=True,
+    )
+    wire_attempts = []
+
+    def respond(http_request: httpx.Request) -> httpx.Response:
+        wire_attempts.append(str(http_request.url))
+        assert json.loads(http_request.content)["model"] == "model-a"
+        if http_request.url.port == 11434:
+            return httpx.Response(503, json={"error": "unavailable"})
+        assert http_request.url.port == 8080
+        return httpx.Response(200, json={
+            "model": "model-a",
+            "choices": [{"message": {"role": "assistant", "content": "Verified fallback response"}}],
+        })
+
+    def client_factory(**kwargs):
+        assert kwargs["trust_env"] is False
+        assert kwargs["follow_redirects"] is False
+        return original_client(transport=httpx.MockTransport(respond), **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", client_factory)
+    with bind_workflow_generation(authority):
+        if expected_attempts == 2:
+            result = await WorkflowGenerationRuntime().execute(request)
+            assert result.actual_provider == "llamacpp-server"
+            assert result.actual_model == "model-a"
+            assert result.degraded_mode is True
+            assert result.fallback_level > 0
+        else:
+            with pytest.raises(EngineUnavailableError):
+                await WorkflowGenerationRuntime().execute(request)
+    assert wire_attempts == [
+        "http://127.0.0.1:11434/v1/chat/completions",
+        "http://127.0.0.1:8080/v1/chat/completions",
+    ][:expected_attempts]
+    assert admission.meter.model_calls == expected_attempts
+    assert admission.meter.external_requests == 0
