@@ -2,9 +2,16 @@ name: Production First-Boot Smoke
 
 on:
   workflow_dispatch:
+    inputs:
+      communications_browser:
+        description: "Disposable local Communications lifecycle browser proof"
+        type: boolean
+        default: false
   push:
     branches:
       - main
+      # Temporary isolated proof branch; remove before promotion.
+      - kcomm-02e-disposable-browser-proof-20261126
     paths:
       - "Dockerfile"
       - "requirements.txt"
@@ -20,6 +27,8 @@ on:
       - "src/ui_launchers/Karen-AI-Theme/next.config.*"
       - "supabase/migrations/**"
       - "scripts/ci/production-first-boot-smoke.sh"
+      - "scripts/ci/communications_browser_smoke.py"
+      - "scripts/ci/communications_browser_fixture.py"
       - "tests/architecture/test_first_run_system_contract.py"
       - ".github/workflows/production-first-boot-smoke.yml"
   pull_request:
@@ -41,6 +50,8 @@ on:
       - "src/ui_launchers/Karen-AI-Theme/next.config.*"
       - "supabase/migrations/**"
       - "scripts/ci/production-first-boot-smoke.sh"
+      - "scripts/ci/communications_browser_smoke.py"
+      - "scripts/ci/communications_browser_fixture.py"
       - "tests/architecture/test_first_run_system_contract.py"
       - ".github/workflows/production-first-boot-smoke.yml"
 
@@ -198,9 +209,24 @@ jobs:
             fi
           done
 
+      - uses: actions/setup-node@v4
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || github.ref == 'refs/heads/kcomm-02e-disposable-browser-proof-20261126' }}
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
+
+      - name: Install disposable browser proof dependencies
+        if: ${{ (github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || github.ref == 'refs/heads/kcomm-02e-disposable-browser-proof-20261126' }}
+        working-directory: src/ui_launchers/Karen-AI-Theme
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
       - name: Execute real production first boot
         env:
           KAREN_SMOKE_API_IMAGE: ai-karen-api:beta
+          KAREN_SMOKE_COMMS_BROWSER_PROOF: ${{ ((github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || github.ref == 'refs/heads/kcomm-02e-disposable-browser-proof-20261126') && 'true' || 'false' }}
         run: bash scripts/ci/production-first-boot-smoke.sh
 
       - name: Execute real production web boot
