@@ -576,17 +576,6 @@ class MedusaCoordinator:
 
         specialist = self.factory.resolve(registration)
 
-        if emitter is not None:
-            await emitter.emit(
-                AgentEvent(
-                    type=AgentEventType.AGENT_STARTED,
-                    agent_id=step.agent_specialist,
-                    message=f"step {step.id} started",
-                    correlation_id=self._correlation_id(request),
-                    metadata={"step_id": step.id, "degraded": is_degraded},
-                )
-            )
-
         specialist_plan = replace(
             authorized_plan,
             allowed_tools=list(step.required_tools),
@@ -735,6 +724,16 @@ class MedusaCoordinator:
 
         await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
         try:
+            if emitter is not None:
+                await emitter.emit(
+                    AgentEvent(
+                        type=AgentEventType.AGENT_STARTED,
+                        agent_id=step.agent_specialist,
+                        message=f"step {step.id} started",
+                        correlation_id=self._correlation_id(request),
+                        metadata={"step_id": step.id, "degraded": is_degraded},
+                    )
+                )
             result = await specialist.run(step.input_data, context, execution=execution)
             step.status = StepStatus.COMPLETED
             step.output_data = result

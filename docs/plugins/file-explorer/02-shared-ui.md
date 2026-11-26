@@ -315,14 +315,22 @@ the first root page; do not substitute the disposable empty mutation root.
 After enabling the explicit flags and supplying the fixture IDs above:
 
 ```bash
-git rev-parse HEAD
+# Set EXPECTED_SHA to the independently approved 40-character commit.
+: "${EXPECTED_SHA:?Set the approved integration SHA}"
+[[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" || exit 1
 test -z "$(git status --porcelain)" || exit 1
 cd src/ui_launchers/Karen-AI-Theme
 CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
   --config=e2e/playwright.config.ts --project=chromium \
-  --grep='^KFILE-(LIVE|MUTATION-LOCAL|ATTACHMENT-LOCAL|ISOLATION-LOCAL):' \
-  --workers=1 --retries=0 --forbid-only
+  --grep='\bKFILE-(LIVE|MUTATION-LOCAL|ATTACHMENT-LOCAL|ISOLATION-LOCAL):' \
+  --workers=1 --retries=0 --forbid-only --list
 ```
+
+Require exactly one listed test for each of the four KFILE prefixes above
+and no other tests. Playwright matches the composite project, file and test
+title, so the filter must not start with `^KFILE`. Only after confirming the
+list, rerun the same command without `--list`. Listing is not execution.
 
 Record the exact commit and independently verified stack identity, and require
 **four passed, zero failed, zero skipped, zero retries**. Playwright's zero
