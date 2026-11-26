@@ -2282,6 +2282,13 @@ async def test_medusa_final_synthesis_preserves_original_meter_and_provenance(mo
     assert result.metadata["synthesis"]["source"] == "expression_gateway"
     assert len(attempts) == admission.meter.model_calls == 1
     assert admission.meter.external_requests == 0
-    with pytest.raises(PermissionError):
+    # The gateway projects a denied model reservation as an unavailable
+    # engine. Verify its public error contract and the actual transport
+    # invariant, rather than assuming an authorization exception type.
+    from ai_karen_engine.core.expression.errors import EngineUnavailableError
+
+    with pytest.raises(EngineUnavailableError, match="provider_execution_failed"):
         await assemble(execution)
     assert len(attempts) == 1
+    assert admission.meter.model_calls == 1
+    assert admission.meter.external_requests == 0

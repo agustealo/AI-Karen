@@ -459,7 +459,8 @@ class MedusaCoordinator:
             synthesis_scope = (
                 SpecialistExecutionContext(
                     authorized_plan=authorized_plan,
-                    tenant_id=request.tenant_id, user_id=request.user_id,
+                    tenant_id=request.tenant_id,
+                    user_id=request.user_id,
                     session_id=request.session_id,
                     policy_decision_id=authorized_plan.policy_decision_id,
                     trajectory_id=request.request_id,
@@ -470,7 +471,8 @@ class MedusaCoordinator:
                     preferred_provider=request.context.get("preferred_provider"),
                     preferred_model=request.context.get("preferred_model"),
                 )
-                if trusted_context is not None else None
+                if trusted_context is not None
+                else None
             )
             response = await self.assembler.assemble(
                 request_id=request.request_id,
@@ -493,7 +495,6 @@ class MedusaCoordinator:
             raise
         finally:
             self.active_plans.pop(request.request_id, None)
-
 
     async def _execute_step(
         self,
@@ -605,17 +606,6 @@ class MedusaCoordinator:
             )
 
         specialist = self.factory.resolve(registration)
-
-        if emitter is not None:
-            await emitter.emit(
-                AgentEvent(
-                    type=AgentEventType.AGENT_STARTED,
-                    agent_id=step.agent_specialist,
-                    message=f"step {step.id} started",
-                    correlation_id=self._correlation_id(request),
-                    metadata={"step_id": step.id, "degraded": is_degraded},
-                )
-            )
 
         specialist_plan = replace(
             authorized_plan,
@@ -765,6 +755,16 @@ class MedusaCoordinator:
 
         await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
         try:
+            if emitter is not None:
+                await emitter.emit(
+                    AgentEvent(
+                        type=AgentEventType.AGENT_STARTED,
+                        agent_id=step.agent_specialist,
+                        message=f"step {step.id} started",
+                        correlation_id=self._correlation_id(request),
+                        metadata={"step_id": step.id, "degraded": is_degraded},
+                    )
+                )
             result = await specialist.run(step.input_data, context, execution=execution)
             step.status = StepStatus.COMPLETED
             step.output_data = result

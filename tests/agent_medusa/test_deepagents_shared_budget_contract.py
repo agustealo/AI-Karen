@@ -413,3 +413,88 @@ def test_medusa_safe_error_does_not_log_upstream_exception_content(caplog):
     assert secret not in caplog.text
     assert secret not in repr(response.to_dict())
     assert "RuntimeError" in [getattr(record, "error_type", "") for record in caplog.records]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["authorization", "child_admission", "busy"])
+async def test_specialist_pre_invocation_failure_emits_no_start(failure):
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+    )
+    from ai_karen_engine.agent_medusa.execution.event_emitter import EventEmitter
+
+    request, root, meter, context = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+    specialist = SimpleNamespace(run=AsyncMock())
+    registration = SimpleNamespace(lifecycle_state="active")
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.registry = SimpleNamespace(
+        get_agent=AsyncMock(return_value=registration),
+        get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
+    )
+    coordinator.factory = SimpleNamespace(resolve=lambda _: specialist)
+    coordinator.lifecycle = SimpleNamespace(set_status=AsyncMock())
+    emitter = EventEmitter()
+
+    if failure == "authorization":
+        step.required_tools = ["unapproved-tool"]
+    elif failure == "child_admission":
+        context.authenticated_user = None
+    else:
+        coordinator.lifecycle.set_status.side_effect = RuntimeError("busy_sentinel")
+
+    with pytest.raises((PermissionError, RuntimeError)):
+        await coordinator._execute_step(
+            step, plan, request, root, meter, emitter,
+        )
+    specialist.run.assert_not_awaited()
+    assert emitter.events == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fails", [False, True])
+async def test_admitted_specialist_emits_correlated_start_and_terminal_event(fails):
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+    )
+    from ai_karen_engine.agent_medusa.contracts.events import AgentEventType
+    from ai_karen_engine.agent_medusa.execution.event_emitter import EventEmitter
+
+    request, root, meter, _ = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+    emitter = EventEmitter()
+
+    async def invoke(*args, **kwargs):
+        assert [event.type for event in emitter.events] == [AgentEventType.AGENT_STARTED]
+        if fails:
+            raise RuntimeError("specialist_sentinel")
+        return {"result": "observed"}
+
+    specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.registry = SimpleNamespace(
+        get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
+        get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
+    )
+    coordinator.factory = SimpleNamespace(resolve=lambda _: specialist)
+    coordinator.lifecycle = SimpleNamespace(set_status=AsyncMock())
+    if fails:
+        with pytest.raises(RuntimeError, match="specialist_sentinel"):
+            await coordinator._execute_step(step, plan, request, root, meter, emitter)
+    else:
+        assert await coordinator._execute_step(
+            step, plan, request, root, meter, emitter
+        ) == {"result": "observed"}
+    specialist.run.assert_awaited_once()
+    assert [event.type for event in emitter.events] == [
+        AgentEventType.AGENT_STARTED,
+        AgentEventType.AGENT_FAILED if fails else AgentEventType.AGENT_COMPLETED,
+    ]
+    for event in emitter.events:
+        assert event.agent_id == "researcher"
+        assert event.correlation_id == "corr-a"
+        assert event.metadata["step_id"] == step.id

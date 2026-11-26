@@ -401,3 +401,26 @@ Regression coverage checks alias identity and redaction, running status
 during final synthesis, degraded/error/cancelled terminal outcomes, and
 safe Medusa log projection. The targeted suites are included in Chat
 System Burn. No full CI, deployment or legacy executor deletion claimed.
+
+
+### Integration reconciliation and exact-head stabilization (KUI-004B4.48C7Z8E22)
+
+The E20 Chat System Burn model group returned 245 passes and one
+failure. Final Medusa synthesis and its positive provenance assertions
+passed; the second invocation was denied through the gateway's existing
+EngineUnavailableError projection, not the PermissionError expected by
+the regression. The test now verifies that public exception and confirms
+the original single model reservation and transport count remain unchanged.
+The generic budget-denial error projection remains an observability debt.
+The E20 durable-run gate also reported Black formatting differences in
+the coordinator; the reported formatting and subsequent extra blank line
+are corrected, pending CI.
+
+Live main advanced to 7dcac39bdb57a458b6dd9ef2b54873e81595ba79, changing
+three overlapping files. Reconciliation preserves the mainline
+ARM-05C.1B ledger update, deferral of AGENT_STARTED until actual child
+admission and BUSY lifecycle admission, and all five associated tests,
+alongside E21 terminal synthesis lifecycle coverage. The merge commit
+has both the previous branch head and the observed main as parents.
+No forced update, legacy deletion, test weakening of budget assertions,
+or production deployment. Fresh exact-head CI remains mandatory.
