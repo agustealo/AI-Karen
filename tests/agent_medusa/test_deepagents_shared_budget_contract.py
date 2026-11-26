@@ -516,3 +516,228 @@ async def test_participation_writer_acknowledges_only_completed_strict_append(mo
         store.save_unique_outcome_async.assert_not_awaited()
     else:
         store.save_unique_outcome_async.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["before_call", "inside_call", "after_return"])
+async def test_specialist_cancellation_preserves_observed_execution_boundary(boundary):
+    import asyncio
+
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+    from ai_karen_engine.agent_medusa.contracts.events import AgentEventType
+    from ai_karen_engine.agent_medusa.execution.event_emitter import EventEmitter
+    from ai_karen_engine.agent_medusa.lifecycle.lifecycle_manager import LifecycleStatus
+
+    request, root, meter, _ = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+
+    class InterruptingEmitter(EventEmitter):
+        async def emit(self, event):
+            if (
+                boundary == "before_call"
+                and event.type == AgentEventType.AGENT_STARTED
+            ):
+                raise asyncio.CancelledError
+            if (
+                boundary == "after_return"
+                and event.type == AgentEventType.AGENT_COMPLETED
+            ):
+                raise asyncio.CancelledError
+            await super().emit(event)
+
+    async def invoke(*args, **kwargs):
+        if boundary == "inside_call":
+            raise asyncio.CancelledError
+        return {"result": "observed"}
+
+    emitter = InterruptingEmitter()
+    specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.registry = SimpleNamespace(
+        get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
+        get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
+    )
+    coordinator.factory = SimpleNamespace(resolve=lambda _: specialist)
+    coordinator.lifecycle = SimpleNamespace(set_status=AsyncMock())
+
+    with pytest.raises(asyncio.CancelledError):
+        await coordinator._execute_step(step, plan, request, root, meter, emitter)
+
+    assert coordinator.lifecycle.set_status.await_args.args == (
+        "researcher",
+        LifecycleStatus.IDLE,
+    )
+    if boundary == "before_call":
+        specialist.run.assert_not_awaited()
+    else:
+        specialist.run.assert_awaited_once()
+    interruptions = [
+        event
+        for event in emitter.events
+        if event.type == AgentEventType.AGENT_INTERRUPTED
+    ]
+    if boundary == "after_return":
+        assert step.status == StepStatus.COMPLETED
+        assert step.output_data == {"result": "observed"}
+        assert step.error is None
+        assert not interruptions
+    else:
+        assert step.status == StepStatus.FAILED
+        assert step.error == "cancelled"
+        assert step.output_data is None
+        assert len(interruptions) == 1
+        event = interruptions[0]
+        assert event.agent_id == "researcher"
+        assert event.correlation_id == "corr-a"
+        assert event.metadata["step_id"] == step.id
+        assert event.metadata["reason_code"] == "cancelled"
+        assert event.metadata["invocation_entered"] is (boundary == "inside_call")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhausted", [True, False])
+async def test_scheduler_emits_each_skipped_step_once(exhausted):
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+    from ai_karen_engine.agent_medusa.contracts.events import AgentEventType
+
+    request, _, meter, _ = _request()
+    first = PlanStep(id="first", agent_specialist="researcher")
+    second = PlanStep(
+        id="second", agent_specialist="researcher", dependencies=["first"]
+    )
+    third = PlanStep(
+        id="third", agent_specialist="researcher", dependencies=["second"]
+    )
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[first, second, third])
+    events = []
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.registry = SimpleNamespace()
+    coordinator.planner = SimpleNamespace(create_plan=AsyncMock(return_value=plan))
+    coordinator.active_plans = {}
+    coordinator.trajectories = {}
+    coordinator._global_sinks = [events.append]
+    coordinator.assembler = SimpleNamespace(assemble=AsyncMock())
+
+    if exhausted:
+        assert await meter.reserve_model_execution()
+        assert await meter.reserve_model_execution()
+        # Reaching the quota is not a denied reservation. The shared meter
+        # becomes exhausted only after a further request is rejected.
+        assert not await meter.reserve_model_execution()
+        assert meter.exhausted
+        assert meter.model_calls == 2
+
+    coordinator._execute_step = AsyncMock(side_effect=RuntimeError("step_failure"))
+    await coordinator._handle_request(request)
+
+    skipped = [event for event in events if event.type == AgentEventType.AGENT_SKIPPED]
+    expected_ids = ["first", "second", "third"] if exhausted else ["second", "third"]
+    assert [event.metadata["step_id"] for event in skipped] == expected_ids
+    for event in skipped:
+        assert event.correlation_id == "corr-a"
+        assert event.agent_id == "researcher"
+        assert event.metadata["reason_code"] == (
+            "execution_budget_exhausted" if exhausted else "dependency_blocked"
+        )
+    assert all(step.status == StepStatus.SKIPPED for step in plan.steps[1:])
+    if exhausted:
+        coordinator._execute_step.assert_not_awaited()
+        assert first.status == StepStatus.SKIPPED
+    else:
+        coordinator._execute_step.assert_awaited_once()
+        assert first.status == StepStatus.FAILED
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["completion_event", "idle_cleanup"])
+async def test_post_invocation_failure_does_not_emit_false_specialist_failure(boundary):
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+    from ai_karen_engine.agent_medusa.contracts.events import AgentEventType
+    from ai_karen_engine.agent_medusa.execution.event_emitter import EventEmitter
+    from ai_karen_engine.agent_medusa.lifecycle.lifecycle_manager import LifecycleStatus
+
+    request, root, meter, _ = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+
+    class FailingEmitter(EventEmitter):
+        async def emit(self, event):
+            if boundary == "completion_event" and event.type == AgentEventType.AGENT_COMPLETED:
+                raise RuntimeError("post_invocation_failure")
+            await super().emit(event)
+
+    async def set_status(agent, status):
+        if boundary == "idle_cleanup" and status == LifecycleStatus.IDLE:
+            raise RuntimeError("post_invocation_failure")
+
+    emitter = FailingEmitter()
+    specialist = SimpleNamespace(run=AsyncMock(return_value={"result": "observed"}))
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.registry = SimpleNamespace(
+        get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
+        get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
+    )
+    coordinator.factory = SimpleNamespace(resolve=lambda _: specialist)
+    coordinator.lifecycle = SimpleNamespace(set_status=AsyncMock(side_effect=set_status))
+
+    with pytest.raises(RuntimeError, match="post_invocation_failure"):
+        await coordinator._execute_step(step, plan, request, root, meter, emitter)
+
+    specialist.run.assert_awaited_once()
+    assert step.status == StepStatus.COMPLETED
+    assert step.output_data == {"result": "observed"}
+    assert step.error is None
+    assert all(event.type != AgentEventType.AGENT_FAILED for event in emitter.events)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("cancelled", [False, True])
+async def test_wave_propagates_post_invocation_error_without_rewriting_completed_step(cancelled):
+    import asyncio
+
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+
+    request, _, _, _ = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.registry = SimpleNamespace()
+    coordinator.planner = SimpleNamespace(create_plan=AsyncMock(return_value=plan))
+    coordinator.active_plans = {}
+    coordinator.trajectories = {}
+    coordinator._global_sinks = []
+    coordinator.assembler = SimpleNamespace(assemble=AsyncMock())
+    error = asyncio.CancelledError if cancelled else RuntimeError
+
+    async def execute(*args, **kwargs):
+        step.status = StepStatus.COMPLETED
+        step.output_data = {"result": "observed"}
+        raise error("post_invocation_failure")
+
+    coordinator._execute_step = AsyncMock(side_effect=execute)
+    with pytest.raises(error):
+        await coordinator._handle_request(request)
+
+    assert step.status == StepStatus.COMPLETED
+    assert step.output_data == {"result": "observed"}
+    assert step.error is None
+    coordinator._execute_step.assert_awaited_once()
+    coordinator.assembler.assemble.assert_not_awaited()
+    assert request.request_id not in coordinator.active_plans
