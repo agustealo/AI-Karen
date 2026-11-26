@@ -94,10 +94,10 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
         )
         await raw.execute(f'CREATE ROLE "{backend}" NOLOGIN NOBYPASSRLS')
         await raw.execute(f'GRANT USAGE ON SCHEMA public TO "{backend}"')
-        await raw.execute(f'GRANT SELECT, DELETE ON public.conversations TO "{backend}"')
+        await raw.execute(f'GRANT SELECT, UPDATE, DELETE ON public.conversations TO "{backend}"')
         await raw.execute(f'GRANT SELECT ON public.messages TO "{backend}"')
         await raw.execute(
-            f'GRANT SELECT ON public.runtime_chat_runs TO "{backend}"'
+            f'GRANT SELECT, INSERT, UPDATE ON public.runtime_chat_runs TO "{backend}"'
         )
         await raw.execute(
             'GRANT SELECT, INSERT, UPDATE, DELETE ON public.communications_inbox_entries '
@@ -248,8 +248,30 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
         assert archive_only["read_at"] is None
         assert archive_only["acknowledged_at"] is None
 
-        # Exercise actual repository and privacy authority against the same
-        # migration, through the canonical SQLAlchemy transaction manager
+        # Promote only the test database through the canonical producer migration.
+        # Keep the already-verified schema-77 assertions above intact.
+        for filename in (
+            "20261125010000_74_runtime_chat_single_active_run.sql",
+            "20261125020000_75_runtime_chat_submission_identity.sql",
+            "20261125030000_76_runtime_chat_unresolved_run.sql",
+        ):
+            await raw.execute(
+                (ROOT / "supabase/migrations" / filename).read_text(encoding="utf-8")
+            )
+        await raw.execute(
+            (ROOT / "supabase/migrations/20261126150739_78_communications_attention.sql").read_text(encoding="utf-8")
+        )
+        assert await raw.fetchval(
+            "SELECT communications_attention_eligible_at IS NULL "
+            "FROM runtime_chat_runs WHERE execution_id=$1", active_run,
+        )
+        with pytest.raises(asyncpg.CheckViolationError):
+            await raw.execute(
+                "UPDATE runtime_chat_runs SET communications_attention_eligible_at=terminal_at "
+                "WHERE execution_id=$1", active_run,
+            )
+
+        # Exercise actual repository and privacy authority through the canonical SQLAlchemy transaction manager
         # and a non-owner / non-BYPASSRLS role.
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
         from ai_karen_engine.persistence.postgres import transactions
@@ -258,8 +280,9 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
             InboxNotFound, InboxOperation,
         )
         from ai_karen_engine.services.privacy_compliance import DataEraser, DataExporter
+        from ai_karen_engine.persistence.repositories import chat_run_repository
 
-        new_run, foreign_run, foreign_conversation = (uuid.uuid4() for _ in range(3))
+        new_run, foreign_run, foreign_conversation, historical_run = (uuid.uuid4() for _ in range(4))
         await raw.execute(
             "INSERT INTO conversations (conversation_id,tenant_id,user_id,title) "
             "VALUES ($1,$2,$3,'foreign private conversation')",
@@ -269,10 +292,23 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
             INSERT INTO runtime_chat_runs (
                 execution_id, tenant_id, user_id, conversation_id, transport_run_id,
                 request_id, correlation_id, status, terminal_at
-            ) VALUES ($1,$2,$3,$4,'new-failed','req','corr','failed',now()),
-                     ($5,$2,$6,$7,'foreign-failed','req','corr','failed',now())
+            ) VALUES ($1,$2,$3,$4,'historical','req','corr','failed',now())
+        """, historical_run, tenant, owner, second_conversation)
+        await raw.execute("""
+            INSERT INTO runtime_chat_runs (
+                execution_id, tenant_id, user_id, conversation_id, transport_run_id,
+                request_id, correlation_id, status, lease_token, lease_expires_at,
+                communications_attention_conversation_id
+            ) VALUES ($1,$2,$3,$4,'new-failed','req','corr','running',$8,now()+interval '1 hour',$4),
+                     ($5,$2,$6,$7,'foreign-failed','req','corr','running',$9,now()+interval '1 hour',$7)
         """, new_run, tenant, owner, second_conversation, foreign_run,
-            other_owner, foreign_conversation)
+            other_owner, foreign_conversation, uuid.uuid4(), uuid.uuid4())
+        await raw.execute("""
+            UPDATE runtime_chat_runs SET status='failed', terminal_at=now(),
+                lease_token=NULL, lease_expires_at=NULL,
+                communications_attention_eligible_at=now()
+            WHERE execution_id IN ($1,$2)
+        """, new_run, foreign_run)
         engine = create_async_engine(
             dsn.replace("postgresql://", "postgresql+asyncpg://", 1),
             connect_args={"server_settings": {"role": backend}},
@@ -286,6 +322,10 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
         principal = {"tenant_id": str(tenant), "user_id": str(owner)}
         foreign_principal = {"tenant_id": str(tenant), "user_id": str(other_owner)}
         try:
+            with pytest.raises(InboxNotFound):
+                await repo.admit_terminal_execution(
+                    **principal, execution_id=str(historical_run),
+                )
             first, second = await asyncio.gather(
                 repo.admit_terminal_execution(**principal, execution_id=str(new_run)),
                 repo.admit_terminal_execution(**principal, execution_id=str(new_run)),
@@ -367,15 +407,148 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
                 await repo.admit_terminal_execution(
                     **principal, execution_id=str(active_run),
                 )
+
+            # Three actual canonical ledger paths, without replacing its SQL.
+            # Simulate a lost projection after durable terminal commit, then recover.
+            feature = SimpleNamespace(enable_communications_terminal_producer=False)
+            monkeypatch.setattr(chat_run_repository, "get_runtime_settings", lambda: SimpleNamespace(
+                features=feature, timeouts=SimpleNamespace(chat_run_lease_seconds=120),
+            ))
+            ledger = chat_run_repository.SqlChatRunRepository()
+            conversations = [uuid.uuid4() for _ in range(5)]
+            await raw.executemany(
+                "INSERT INTO conversations (conversation_id,tenant_id,user_id) VALUES ($1,$2,$3)",
+                [(c, tenant, owner) for c in conversations],
+            )
+
+            async def admit(c, transport):
+                return await ledger.admit(
+                    **principal, conversation_id=str(c), transport_run_id=transport,
+                    request_id="producer-req", correlation_id="producer-corr",
+                )
+
+            disabled = await admit(conversations[0], "disabled")
+            assert disabled is not None
+            assert await ledger.finish(disabled, status="failed")
+            assert await raw.fetchval(
+                "SELECT communications_attention_eligible_at IS NULL "
+                "FROM runtime_chat_runs WHERE execution_id=$1", uuid.UUID(disabled.execution_id),
+            )
+            feature.enable_communications_terminal_producer = True
+
+            # The marker shares the source transaction: rollback leaves no
+            # eligible terminal evidence for reconciliation.
+            rollback_run = await admit(conversations[0], "rollback")
+            assert rollback_run is not None
+            async with raw.transaction():
+                await scope(raw, tenant, owner)
+                savepoint = raw.transaction()
+                await savepoint.start()
+                await raw.execute(
+                    "UPDATE runtime_chat_runs SET status='failed', terminal_at=now(), "
+                    "lease_token=NULL, lease_expires_at=NULL, "
+                    "communications_attention_eligible_at=now() WHERE execution_id=$1",
+                    uuid.UUID(rollback_run.execution_id),
+                )
+                await savepoint.rollback()
+            assert await raw.fetchval(
+                "SELECT status='running' AND communications_attention_eligible_at IS NULL "
+                "FROM runtime_chat_runs WHERE execution_id=$1", uuid.UUID(rollback_run.execution_id),
+            )
+            assert await repo.reconcile_pending(**principal) == 0
+
+            failed = await admit(conversations[1], "failed")
+            assert failed is not None
+
+            async def projection_failure(*args, **kwargs):
+                raise RuntimeError("private projection failure")
+            with monkeypatch.context() as failure:
+                failure.setattr(CommunicationsInboxRepository, "reconcile_pending", projection_failure)
+                assert await ledger.finish(failed, status="failed")
+            assert await raw.fetchval(
+                "SELECT status FROM runtime_chat_runs WHERE execution_id=$1",
+                uuid.UUID(failed.execution_id),
+            ) == "failed"
+            assert not (await repo.list_entries(**principal)).entries
+            counts = await asyncio.gather(
+                repo.reconcile_pending(**principal),
+                repo.reconcile_pending(**principal),
+            )
+            assert sum(counts) == 1
+            entry = (await repo.list_entries(**principal)).entries[0]
+            assert entry.execution_id == failed.execution_id
+
+            expired = await admit(conversations[2], "expired-admit")
+            assert expired is not None
+            await raw.execute(
+                "UPDATE runtime_chat_runs SET lease_expires_at=now()-interval '1 second' "
+                "WHERE execution_id=$1", uuid.UUID(expired.execution_id),
+            )
+            assert await admit(conversations[2], "must-not-restart") is None
+            assert await raw.fetchval(
+                "SELECT status FROM runtime_chat_runs WHERE execution_id=$1",
+                uuid.UUID(expired.execution_id),
+            ) == "orphaned"
+
+            stopped = await admit(conversations[3], "expired-stop")
+            assert stopped is not None
+            await raw.execute(
+                "UPDATE runtime_chat_runs SET lease_expires_at=now()-interval '1 second' "
+                "WHERE execution_id=$1", uuid.UUID(stopped.execution_id),
+            )
+            assert await ledger.request_cancel(
+                **principal, conversation_id=str(conversations[3]), transport_run_id="expired-stop",
+            ) == "orphaned"
+            assert await ledger.request_cancel(
+                **principal, conversation_id=str(conversations[3]), transport_run_id="expired-stop",
+            ) == "orphaned"
+
+            cancelled = await admit(conversations[4], "cancelled")
+            assert cancelled is not None
+            assert await ledger.finish(cancelled, status="cancelled")
+            assert {e.execution_id for e in (await repo.list_entries(**principal)).entries} == {
+                failed.execution_id, expired.execution_id, stopped.execution_id,
+            }
+            assert await repo.reconcile_pending(**principal) == 0
+
+            # A pending marker with erased source ownership may never recreate an entry.
+            erased_conversation = uuid.uuid4()
+            await raw.execute(
+                "INSERT INTO conversations (conversation_id,tenant_id,user_id) VALUES ($1,$2,$3)",
+                erased_conversation, tenant, owner,
+            )
+            erased_run = await admit(erased_conversation, "erased-pending")
+            assert erased_run is not None
+            with monkeypatch.context() as failure:
+                failure.setattr(CommunicationsInboxRepository, "reconcile_pending", projection_failure)
+                assert await ledger.finish(erased_run, status="failed")
+            await raw.execute("DELETE FROM conversations WHERE conversation_id=$1", erased_conversation)
+            assert await raw.fetchval(
+                "SELECT communications_attention_conversation_id IS NULL "
+                "AND communications_attention_eligible_at IS NOT NULL "
+                "FROM runtime_chat_runs WHERE execution_id=$1", uuid.UUID(erased_run.execution_id),
+            )
+            # Even an explicit same-ID recreation cannot rebind an erased source.
+            await raw.execute(
+                "INSERT INTO conversations (conversation_id,tenant_id,user_id) VALUES ($1,$2,$3)",
+                erased_conversation, tenant, owner,
+            )
+            with pytest.raises(asyncpg.CheckViolationError):
+                await raw.execute(
+                    "UPDATE runtime_chat_runs SET communications_attention_conversation_id=$1 "
+                    "WHERE execution_id=$2", erased_conversation, uuid.UUID(erased_run.execution_id),
+                )
+            assert await repo.reconcile_pending(**principal) == 0
+            assert len((await repo.list_entries(**principal)).entries) == 3
         finally:
             await engine.dispose()
 
-        await raw.execute("DELETE FROM conversations WHERE conversation_id=$1", conversation)
+        await raw.execute("DELETE FROM conversations WHERE tenant_id=$1 AND user_id=$2", tenant, owner)
         assert not await query(f"SELECT * FROM {table}")
         assert await raw.fetchval(
             "SELECT status FROM runtime_chat_runs WHERE execution_id=$1", active_run
         ) == "orphaned"
-        with pytest.raises(asyncpg.ForeignKeyViolationError):
+        with pytest.raises(asyncpg.InsufficientPrivilegeError):
             await query(insert, tenant, owner, conversation, active_run)
     finally:
         try:
@@ -386,6 +559,7 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
                         public.runtime_chat_runs, public.messages, public.conversations,
                         public.auth_users, public.tenants CASCADE;
                     DROP FUNCTION IF EXISTS public.communications_inbox_lifecycle_guard();
+                    DROP FUNCTION IF EXISTS public.runtime_chat_communications_attention_guard();
                 """)
                 if await raw.fetchval(
                     "SELECT 1 FROM pg_roles WHERE rolname=$1", backend
