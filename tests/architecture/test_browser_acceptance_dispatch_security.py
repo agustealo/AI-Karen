@@ -6,7 +6,6 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/karen-history-browser-acceptance.yml"
@@ -443,13 +442,15 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
     ):
         assert name + ": " + chr(36) + "{{ secrets." + name + " }}" in step
         assert job.count(name) == step.count(name)
-    assert "--grep='ARM-05C.5B real participation receipts survive reload and deny a second account'" in step
-    assert "--retries=0" in step and "--workers=1" in step
-    assert 'stats.get("expected") != 1' in step
-    assert '"unexpected", "skipped", "flaky"' in step
-    assert '"expected", "passed", "chromium", ["passed"]' in step
-    assert "umask 077" in step and "mktemp -d" in step
-    assert "trap 'rm -rf --" in step
+    assert 'bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" vercel' in step
+    shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text(encoding="utf-8")
+    assert "--grep='ARM-05C.5B real participation receipts survive reload and deny a second account'" in shell
+    assert "--retries=0" in shell and "--workers=1" in shell
+    assert 'stats.get("expected") != 1' in shell
+    assert '"unexpected", "skipped", "flaky"' in shell
+    assert '"expected", "passed", "chromium", ["passed"]' in shell
+    assert "umask 077" in shell and "mktemp -d" in shell
+    assert "trap 'rm -rf --" in shell
     assert "upload-artifact" not in job
     assert job.index("python scripts/ci/verify_vercel_deployment.py") < job.index(title)
     assert job.index(title) < job.rindex("python scripts/ci/verify_vercel_deployment.py")
@@ -462,12 +463,8 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
 
 
 def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> None:
-    """Execute the actual inline gate on synthetic test-only report fixtures."""
-    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
-    step = workflow.split(
-        "      - name: Prove protected specialist lifecycle and cross-tenant readback", 1
-    )[1].split("\n      - name:", 1)[0]
-    shell = dedent(step.split("        run: |\n", 1)[1])
+    """Execute the actual shared gate on synthetic test-only report fixtures."""
+    shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text(encoding="utf-8")
     subprocess.run(["bash", "-n"], input=shell, text=True, check=True)
     validator = shell.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
     title = "ARM-05C.5B real participation receipts survive reload and deny a second account"
