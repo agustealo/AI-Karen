@@ -600,6 +600,14 @@ class PostgresOutcomeStore(OutcomeStore):
             raise OutcomeStoreError("KCM withdrawal timestamps disagree")
 
     @staticmethod
+    def _is_specialist_participation(payload: dict[str, Any]) -> bool:
+        metadata = payload.get("metadata")
+        return isinstance(metadata, dict) and (
+            metadata.get("event_type") == "agent.specialist.participation"
+            or metadata.get("receipt_version") == "specialist-participation.v1"
+        )
+
+    @staticmethod
     def _validate_specialist_participation(payload: dict[str, Any]) -> None:
         """Validate the exact observation envelope; never infer task success."""
         metadata = payload.get("metadata")
@@ -642,11 +650,7 @@ class PostgresOutcomeStore(OutcomeStore):
             "runtime.execution", "user.feedback", "intelligence.ml",
         }:
             raise OutcomeStoreError(f"Unsupported outcome source: {source or 'missing'}")
-        metadata = payload.get("metadata")
-        if isinstance(metadata, dict) and (
-            metadata.get("event_type") == "agent.specialist.participation"
-            or metadata.get("receipt_version") == "specialist-participation.v1"
-        ):
+        if PostgresOutcomeStore._is_specialist_participation(payload):
             PostgresOutcomeStore._validate_specialist_participation(payload)
         if source == "intelligence.ml":
             metadata = payload.get("metadata")
@@ -728,6 +732,8 @@ class PostgresOutcomeStore(OutcomeStore):
 
     def save_outcome(self, payload: dict[str, Any]) -> None:
         tenant_id, source = self._validated_identity(payload)
+        if self._is_specialist_participation(payload):
+            raise OutcomeStoreError("Specialist participation requires strict append")
         try:
             with transaction_scope(tenant_id) as session:
                 session.execute(
@@ -928,6 +934,8 @@ class PostgresOutcomeStore(OutcomeStore):
     async def save_outcome_async(self, payload: dict[str, Any]) -> None:
         """Persist through SQLAlchemy's async engine on async runtime paths."""
         tenant_id, source = self._validated_identity(payload)
+        if self._is_specialist_participation(payload):
+            raise OutcomeStoreError("Specialist participation requires strict append")
         try:
             async with async_transaction_scope(tenant_id) as session:
                 await session.execute(
