@@ -9,6 +9,11 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ai_karen_engine.core.runtime.outcome.contracts import (
+    SpecialistParticipationPhase,
+    SpecialistParticipationReceipt,
+)
+
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope, transaction_scope
 
 logger = logging.getLogger(__name__)
@@ -595,6 +600,41 @@ class PostgresOutcomeStore(OutcomeStore):
             raise OutcomeStoreError("KCM withdrawal timestamps disagree")
 
     @staticmethod
+    def _validate_specialist_participation(payload: dict[str, Any]) -> None:
+        """Validate the exact observation envelope; never infer task success."""
+        metadata = payload.get("metadata")
+        if (
+            set(payload) != {
+                "outcome_id", "source", "tenant_id", "user_id", "trajectory_id",
+                "correlation_id", "recorded_at", "metadata",
+            }
+            or payload.get("source") != "runtime.execution"
+            or not isinstance(metadata, dict)
+            or set(metadata) != {
+                "event_type", "receipt_version", "step_id", "specialist_id", "phase",
+            }
+            or metadata.get("event_type") != "agent.specialist.participation"
+            or metadata.get("receipt_version") != "specialist-participation.v1"
+            or not isinstance(payload.get("recorded_at"), str)
+        ):
+            raise OutcomeStoreError("Invalid specialist participation envelope")
+        try:
+            receipt = SpecialistParticipationReceipt(
+                tenant_id=payload["tenant_id"],
+                user_id=payload["user_id"],
+                trajectory_id=payload["trajectory_id"],
+                correlation_id=payload["correlation_id"],
+                step_id=metadata["step_id"],
+                specialist_id=metadata["specialist_id"],
+                phase=SpecialistParticipationPhase(metadata["phase"]),
+                observed_at=datetime.fromisoformat(payload["recorded_at"]),
+            )
+        except (TypeError, ValueError) as exc:
+            raise OutcomeStoreError("Invalid specialist participation fields") from exc
+        if payload != receipt.to_evidence_payload():
+            raise OutcomeStoreError("Specialist participation identity or encoding mismatch")
+
+    @staticmethod
     def _validated_identity(payload: dict[str, Any]) -> tuple[str, str]:
         tenant_id = PostgresOutcomeStore._require_tenant(payload.get("tenant_id"))
         source = str(payload.get("source") or "").strip()
@@ -602,6 +642,12 @@ class PostgresOutcomeStore(OutcomeStore):
             "runtime.execution", "user.feedback", "intelligence.ml",
         }:
             raise OutcomeStoreError(f"Unsupported outcome source: {source or 'missing'}")
+        metadata = payload.get("metadata")
+        if isinstance(metadata, dict) and (
+            metadata.get("event_type") == "agent.specialist.participation"
+            or metadata.get("receipt_version") == "specialist-participation.v1"
+        ):
+            PostgresOutcomeStore._validate_specialist_participation(payload)
         if source == "intelligence.ml":
             metadata = payload.get("metadata")
             if (
