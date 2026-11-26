@@ -16,7 +16,7 @@ vi.mock("@/lib/api", () => ({
   apiClient: { get: (...args: unknown[]) => mocks.get(...args), post: (...args: unknown[]) => mocks.post(...args) },
 }));
 
-import AgentsPage, { isAgentRunRecord, isAgentRunsResponse, isRuntimeApproval } from "@/components/automation/AgentsPage";
+import AgentsPage, { isAgentRunRecord, isAgentRunsResponse, isRuntimeApproval, isRunTransitionsResponse } from "@/components/automation/AgentsPage";
 
 const run = { run_id: "run-123456789", status: "running" };
 const history = (runs: unknown[]) => ({ runs, total: runs.length, generated_at: "2026-11-25T00:00:00Z" });
@@ -492,5 +492,78 @@ describe("runtime projection validation", () => {
     expect(screen.getByText("1m 5s")).toBeTruthy();
     expect(screen.getByRole("region", { name: "Recorded lifecycle timestamps" })).toBeTruthy();
     expect(screen.queryByText("Cancellation requested", { exact: true })).toBeNull();
+  });
+});
+
+
+describe("ARM-05 durable transition timeline", () => {
+  const event = { transition_id: "9007199254740995", from_status: null, to_status: "created", event_at: "2026-11-25T00:00:00Z", source: "migration_backfill" };
+  const receipt = { run_id: run.run_id, transitions: [event], truncated: true, response_source: "postgres_durable_run_ledger" };
+  const endpoint = "/api/agent-runtime/my-runs/" + run.run_id + "/transitions";
+  function installTimeline(read: () => Promise<unknown>) {
+    const fallback = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((path: string) => {
+      if (path === "/api/agent-runtime/my-runs" || path === "/api/admin/agents/runs?include_terminal=true") return Promise.resolve(history([run]));
+      if (path === endpoint) return read();
+      if (path.endsWith("/" + run.run_id)) return Promise.resolve(run);
+      return fallback(path);
+    });
+  }
+  it("validates provenance, identifiers, bounds and required fields", () => {
+    expect(isRunTransitionsResponse(receipt)).toBe(true);
+    for (const invalid of [
+      { ...receipt, transitions: [event, event] },
+      { ...receipt, transitions: [{ ...event, transition_id: 1 }] },
+      { ...receipt, transitions: [{ ...event, source: "unknown" }] },
+      { ...receipt, transitions: [{ ...event, to_status: "invented" }] },
+      { ...receipt, transitions: [{ ...event, event_at: "invalid" }] },
+      { ...receipt, transitions: [{ ...event, from_status: undefined }] },
+      { ...receipt, transitions: [] },
+      { ...receipt, transitions: Array.from({ length: 251 }, (_, i) => ({ ...event, transition_id: String(i + 1) })) },
+      { ...receipt, response_source: "worker_local_execution" },
+    ]) expect(isRunTransitionsResponse(invalid)).toBe(false);
+  });
+  it("displays recorded provenance and truncation instead of simulated progress", async () => {
+    installTimeline(async () => receipt);
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Migration backfill (not an observed live event)");
+    expect(screen.getByText(/earlier history is omitted/)).toBeTruthy();
+    expect(mocks.get).toHaveBeenCalledWith(endpoint);
+  });
+  it("distinguishes verified empty history from a failed or mismatched response", async () => {
+    let response: unknown = { ...receipt, transitions: [], truncated: false };
+    installTimeline(async () => response);
+    const view = render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("No durable transitions were recorded.");
+    response = { ...receipt, run_id: "different-run" };
+    view.unmount();
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText(/Recorded transition history is unavailable/);
+    expect(screen.queryByText("No durable transitions were recorded.")).toBeNull();
+  });
+  it("does not request personal timeline in tenant administration", async () => {
+    installTimeline(async () => receipt);
+    render(<AgentsPage />);
+    await screen.findByRole("button", { name: /Execution run-1234/ });
+    fireEvent.click(screen.getByRole("button", { name: "Tenant administration" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Reported task outcome");
+    expect(mocks.get).not.toHaveBeenCalledWith(endpoint);
+    expect(screen.queryByRole("region", { name: "Recorded execution timeline" })).toBeNull();
+  });
+  it("discards delayed evidence after principal changes", async () => {
+    const pending = deferred<unknown>();
+    installTimeline(() => pending.promise);
+    const view = render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Loading recorded transitions…");
+    mocks.user = { tenant_id: "tenant-B", user_id: "user-B", roles: [] };
+    view.rerender(<AgentsPage />);
+    await act(async () => { pending.resolve(receipt); });
+    expect(screen.queryByText("Migration backfill (not an observed live event)")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Recorded execution timeline" })).toBeNull();
   });
 });
