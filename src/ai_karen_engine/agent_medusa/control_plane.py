@@ -20,6 +20,7 @@ from ai_karen_engine.audit_logging import (
     get_audit_logger,
 )
 
+from ai_karen_engine.core.runtime.outcome.contracts import project_governed_tool_receipt
 from ai_karen_engine.core.runtime.outcome.store import (
     OutcomeStoreError,
     get_outcome_store,
@@ -129,14 +130,14 @@ class AgentMedusaControlPlane:
             user_id=user_id,
         )
 
-    async def read_run_participation(
+    async def _owned_evidence_correlation(
         self,
         *,
         run_id: str,
         tenant_id: str,
         user_id: str,
-    ) -> dict[str, Any] | None:
-        """Project durable specialist evidence after canonical run owner lookup."""
+    ) -> str | None:
+        """Only a durable exact run owner may read execution evidence."""
         if not run_id or not tenant_id or not user_id:
             return None
         try:
@@ -145,6 +146,7 @@ class AgentMedusaControlPlane:
                 tenant_id=tenant_id,
                 require_durable_history=True,
                 user_id=user_id,
+                require_durable_identity=True,
             )
         except (RunNotFoundError, RunTenantMismatchError):
             return None
@@ -160,7 +162,24 @@ class AgentMedusaControlPlane:
             or not isinstance(correlation_id, str)
             or not correlation_id
         ):
-            raise OutcomeStoreError("Specialist participation run identity unavailable")
+            raise OutcomeStoreError("Run evidence identity unavailable")
+        return correlation_id
+
+    async def read_run_participation(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> dict[str, Any] | None:
+        """Project durable specialist evidence after canonical run owner lookup."""
+        correlation_id = await self._owned_evidence_correlation(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        if correlation_id is None:
+            return None
         (
             receipts,
             truncated,
@@ -184,6 +203,38 @@ class AgentMedusaControlPlane:
                 for receipt in receipts
             ],
             "truncated": truncated,
+            "response_source": "postgres_outcome_records",
+        }
+
+    async def read_run_tool_receipts(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
+    ) -> dict[str, Any] | None:
+        """Read only recorded governed acknowledgments for a durable owned run."""
+        correlation_id = await self._owned_evidence_correlation(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+        )
+        if correlation_id is None:
+            return None
+        # A saturated window may have older records; never imply completeness.
+        limit = 100
+        events = await get_outcome_store().list_governed_tool_receipts_async(
+            trajectory_id=run_id,
+            correlation_id=correlation_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
+            limit=limit,
+        )
+        return {
+            "run_id": run_id,
+            "evidence_status": "recorded" if events else "empty",
+            "receipts": [project_governed_tool_receipt(event) for event in events],
+            "window_limit_reached": len(events) == limit,
             "response_source": "postgres_outcome_records",
         }
 
