@@ -299,6 +299,17 @@ describe('request diagnostic privacy', () => {
     assertPrivate();
   });
 
+  it('does not log the target when an unauthenticated request receives 401', async () => {
+    const assertPrivate = observeDiagnostics();
+    const fetchMock = vi.fn().mockResolvedValue(new Response('Unauthorized', { status: 401 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(apiClient.getUnauthenticated(endpoint)).rejects.toMatchObject({ status: 401 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe(endpoint);
+    assertPrivate();
+  });
+
   it('keeps safe-read fallback requests private without changing their targets', async () => {
     const assertPrivate = observeDiagnostics();
     vi.mocked(clientInternals.getFallbackBaseUrl).mockReturnValue('http://127.0.0.1:8000');

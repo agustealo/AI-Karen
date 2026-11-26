@@ -445,7 +445,6 @@ class ApiClient {
       };
 
       const accessToken = localStorage.getItem('access_token');
-      console.log('[ApiClient] getAuthHeaders called; token present:', !!accessToken);
 
       if (accessToken) {
         const expTime = this.getTokenExpirationTime(accessToken);
@@ -475,7 +474,7 @@ class ApiClient {
               // Clear warning flag on successful refresh
               this.clearSessionWarningFlag();
             }
-          } catch (error) {
+          } catch {
             console.warn('[ApiClient] Proactive token refresh failed');
             // Continue with current token, let backend handle expiry
             headers['Authorization'] = `Bearer ${accessToken}`;
