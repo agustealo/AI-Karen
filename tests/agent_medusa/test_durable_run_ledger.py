@@ -3,6 +3,9 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any
+from unittest.mock import AsyncMock, MagicMock
+
+from sqlalchemy.exc import SQLAlchemyError
 
 import pytest
 
@@ -15,6 +18,7 @@ from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
 from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
     DurableRunLedgerConflict,
     DurableRunLedgerUnavailable,
+    PostgresDurableRunLedger,
     _canonical_tenant_id,
 )
 from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
@@ -641,3 +645,126 @@ def test_retired_persistence_adapter_is_not_public_api() -> None:
     assert "PersistenceAdapter" not in dir(agent_medusa)
     with pytest.raises(AttributeError):
         getattr(agent_medusa, "PersistenceAdapter")
+
+
+def _transition_reader(rows):
+    postgres = MagicMock()
+    session = AsyncMock()
+    postgres.get_async_session.return_value.__aenter__.return_value = session
+    result = MagicMock()
+    result.mappings.return_value.all.return_value = rows
+    session.execute.side_effect = [MagicMock(), result]
+    return PostgresDurableRunLedger(postgres=postgres), session
+
+
+@pytest.mark.asyncio
+async def test_transition_reader_projects_bounded_owner_scoped_evidence():
+    stamp = datetime(2026, 11, 25, tzinfo=timezone.utc)
+    rows = [
+        {
+            "transition_id": n,
+            "from_status": "running",
+            "to_status": "completed",
+            "event_at": stamp,
+            "source": "runtime",
+            "metadata": {"secret": "hidden"},
+            "worker_id": "internal",
+            "audit_event_ref": "internal",
+        }
+        for n in (9007199254740995, 9007199254740994, 9007199254740993)
+    ]
+    ledger, session = _transition_reader(rows)
+    tenant = "11111111-1111-4111-8111-111111111111"
+    receipt = await ledger.read_transitions(
+        run_id="run-1",
+        tenant_id=tenant,
+        user_id="owner",
+        limit=2,
+    )
+    assert receipt == {
+        "run_id": "run-1",
+        "truncated": True,
+        "response_source": "postgres_durable_run_ledger",
+        "transitions": [
+            {
+                "transition_id": str(n),
+                "from_status": "running",
+                "to_status": "completed",
+                "event_at": stamp.isoformat(),
+                "source": "runtime",
+            }
+            for n in (9007199254740994, 9007199254740995)
+        ],
+    }
+    scope, query = session.execute.await_args_list
+    assert scope.args[1] == {"tenant_id": tenant}
+    assert query.args[1] == {
+        "tenant_id": tenant,
+        "run_id": "run-1",
+        "user_id": "owner",
+        "limit": 3,
+    }
+    sql = " ".join(str(query.args[0]).split())
+    assert "r.user_id = :user_id" in sql
+    assert "r.tenant_id = CAST(:tenant_id AS uuid)" in sql
+    assert "t.tenant_id = r.tenant_id" in sql
+    assert "ORDER BY t.event_at DESC, t.transition_id DESC" in sql
+    assert "LIMIT :limit" in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "rows, expected",
+    [
+        ([], None),
+        (
+            [{"transition_id": None}],
+            {
+                "run_id": "run-1",
+                "transitions": [],
+                "truncated": False,
+                "response_source": "postgres_durable_run_ledger",
+            },
+        ),
+    ],
+)
+async def test_transition_reader_distinguishes_absent_owner_from_empty_history(
+    rows, expected
+):
+    ledger, session = _transition_reader(rows)
+    assert (
+        await ledger.read_transitions(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            user_id="owner",
+            limit=9999,
+        )
+        == expected
+    )
+    assert session.execute.await_args_list[-1].args[1]["limit"] == 251
+
+
+@pytest.mark.asyncio
+async def test_transition_reader_rejects_blank_owner_without_query():
+    ledger, session = _transition_reader([])
+    assert (
+        await ledger.read_transitions(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            user_id=" ",
+        )
+        is None
+    )
+    session.execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_transition_reader_does_not_turn_database_failure_into_empty_history():
+    ledger, session = _transition_reader([])
+    session.execute.side_effect = [MagicMock(), SQLAlchemyError("database unavailable")]
+    with pytest.raises(DurableRunLedgerUnavailable):
+        await ledger.read_transitions(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            user_id="owner",
+        )

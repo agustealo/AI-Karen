@@ -58,6 +58,14 @@ def test_live_file_explorer_acceptance_is_not_a_mock_or_skipped_proof():
     assert 'searched.folders.map' in source
     assert "firstPage.items.length" in source
     assert "expect(firstPage.has_more" in source
+    assert 'for (const mode of ["grid", "list"] as const)' in source
+    assert 'toHaveCSS("display", mode === "grid" ? "grid" : "flex")' in source
+    assert 'control.press("Space")' in source
+    assert 'name: "Selected references"' in source
+    assert "expect(nested.folders.length" in source
+    assert "expect(childPage.items.length" in source
+    assert "childPage.breadcrumbs.map" in source
+    assert "inventoryResponse(await parentHttp.json(), folder.folder_id)" in source
     assert "route.fulfill(" not in source
     assert "page.route(" not in source
     assert "page.waitForTimeout(" not in source

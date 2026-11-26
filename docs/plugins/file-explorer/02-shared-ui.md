@@ -114,9 +114,10 @@ are not substitutes for authenticated browser acceptance or release certificatio
 ## Protected hierarchy and filename-search acceptance (KEXP-004B.7A)
 
 The reviewed-main `file-explorer` protected browser scenario requires a
-sanitized owner with more than 100 active **root** artifacts, at least one
-owned root folder, and a printable ASCII filename of 1–160 characters on the
-first root page (no leading or trailing whitespace). The browser test does not
+sanitized owner with more than 100 active **root** artifacts, a first owned
+root folder containing a first child folder with at least one owned file,
+and a printable ASCII filename of 1–160 characters on the first root page
+(no leading or trailing whitespace). The browser test does not
 create or change these fixtures. It observes the real hierarchy endpoint,
 verifies the server search request, matching owner file metadata, unchanged
 folder navigation, selection reset, query-bound pagination when a second search
@@ -137,3 +138,46 @@ hide bound parameters in SQLAlchemy diagnostics. Request method, path, status,
 correlation and authorization audit context remain available. This is
 application-side protection; managed ingress, external tracing and database
 server logging policies still require deployment-specific verification.
+
+
+## KEXP-005A: local authenticated read-only browser acceptance
+
+The existing `KFILE-LIVE` case now exercises both list and grid layout at
+390/768/1024/1440 pixels, keyboard activation, selection retention when
+switching layout, selected-reference review while filtered out, two-level
+folder navigation, exact breadcrumb identity and selection reset on returning
+to a parent. Required nested mode fails when the first root folder has no
+child folder or that first child contains no owned file. It does not create,
+rename, move or delete any fixtures. Use a dedicated sanitized **local** owner
+and the normal authenticated application to prepare these fixtures before
+running. Do not seed production or use real customer files.
+
+From the checked-out integration revision, start the existing local Karen
+stack and confirm the web origin and backend revision match that checkout.
+With the project's pinned package manager dependencies and Chromium installed,
+run from `src/ui_launchers/Karen-AI-Theme` (Bash):
+
+```bash
+(
+  set +x
+  unset VERCEL_AUTOMATION_BYPASS_SECRET KAREN_SETTINGS_VERIFIED_DEPLOYMENT
+  export KAREN_BASE_URL=http://localhost:8010 # use the actual local web port
+  export KAREN_LOCAL_CHAT_ACCEPTANCE=1 KAREN_CHAT_BOOT_ACCEPTANCE=0
+  export KAREN_FILE_EXPLORER_ACCEPTANCE=true
+  export KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE=true
+  export KAREN_FILE_EXPLORER_REQUIRE_NESTED=true
+  read -r -p 'Sanitized owner email: ' KAREN_UX_EMAIL
+  read -r -s -p 'Sanitized owner password: ' KAREN_UX_PASSWORD; printf '\n'
+  export KAREN_UX_EMAIL KAREN_UX_PASSWORD
+  CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+    --config=e2e/playwright.config.ts --project=chromium \
+    --grep='KFILE-LIVE:' --workers=1 --retries=0
+)
+```
+
+The private configuration disables screenshots, trace, video and persistent
+HTML/JSON reports. Record only commit, fixture contract satisfaction and
+pass/fail/skip counts; do not publish raw private request or failure data.
+A skipped case, an empty root folder, or a source-level contract test is not
+browser acceptance. Live Storage, governed mutation execution and composer
+attachment handoff still need separately authorized observed acceptance.

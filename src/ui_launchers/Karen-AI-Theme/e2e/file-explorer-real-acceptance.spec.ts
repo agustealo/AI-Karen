@@ -12,9 +12,11 @@ import { signInApprovedKaren } from "./fixtures/approved-karen-login";
  * Requires a dedicated, sanitized account and an enabled File Explorer plugin.
  * To prove a second real page, seed >100 genuinely owned artifacts beforehand
  * and set KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE=true.
- * Protected File Explorer acceptance also requires an owned root folder and
- * a root artifact with a printable ASCII filename (1–160 characters) for
- * literal, case-insensitive search evidence. No fixture is created by this test.
+ * Protected File Explorer acceptance also requires a root folder containing
+ * a child folder with at least one owned file, and a root artifact with a
+ * printable ASCII filename (1–160 characters) for literal search evidence.
+ * The first root folder and its first child must satisfy this fixture contract.
+ * No fixture is created by this read-only test.
  */
 const enabled = process.env.KAREN_FILE_EXPLORER_ACCEPTANCE === "true";
 const requireSecondPage =
@@ -243,26 +245,39 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
   await firstFileCheckbox.check();
   await expect(firstFileCheckbox).toBeChecked();
   await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
+  // Layout controls are presentation-only. Exercise both actual render modes
+  // at every required viewport, preserving the already selected reference.
+  const layoutGroup = explorer.getByRole("group", { name: "Explorer layout" });
+  const selectedLabel = await firstFileCheckbox.getAttribute("aria-label");
+  if (!selectedLabel) throw new Error("Selected file has no accessible name");
+  const selectedCheckbox = explorer.getByRole("checkbox", { name: selectedLabel, exact: true }).first();
   for (const viewport of widths) {
     await page.setViewportSize(viewport);
-    await expect(explorer).toBeVisible();
-    const geometry = await explorer.evaluate((node) => {
-      const bounds = node.getBoundingClientRect();
-      return {
-        viewportWidth: document.documentElement.clientWidth,
-        pageWidth: document.documentElement.scrollWidth,
-        left: bounds.left,
-        right: bounds.right,
-      };
-    });
-    expect(geometry.pageWidth, `Unexpected sideways overflow at ${viewport.width}px`)
-      .toBeLessThanOrEqual(geometry.viewportWidth + 1);
-    expect(geometry.left).toBeGreaterThanOrEqual(-1);
-    expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
-    await verifyDisplayedInventory(page, firstPage);
-    await expect(explorer.getByRole("list", { name: "Files and folders" })
-      .getByRole("checkbox").first()).toBeChecked();
-    await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
+    for (const mode of ["grid", "list"] as const) {
+      const control = layoutGroup.getByRole("button", { name: mode === "grid" ? "Grid view" : "List view" });
+      await control.focus();
+      await expect(control).toBeFocused();
+      await control.press("Space");
+      await expect(control).toHaveAttribute("aria-pressed", "true");
+      await expect(explorer.getByRole("list", { name: "Files and folders" }))
+        .toHaveCSS("display", mode === "grid" ? "grid" : "flex");
+      const geometry = await explorer.evaluate((node) => {
+        const bounds = node.getBoundingClientRect();
+        return {
+          viewportWidth: document.documentElement.clientWidth,
+          pageWidth: document.documentElement.scrollWidth,
+          left: bounds.left,
+          right: bounds.right,
+        };
+      });
+      expect(geometry.pageWidth, `Unexpected sideways overflow at ${viewport.width}px (${mode})`)
+        .toBeLessThanOrEqual(geometry.viewportWidth + 1);
+      expect(geometry.left).toBeGreaterThanOrEqual(-1);
+      expect(geometry.right).toBeLessThanOrEqual(geometry.viewportWidth + 1);
+      await verifyDisplayedInventory(page, firstPage);
+      await expect(selectedCheckbox).toBeChecked();
+      await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
+    }
   }
 
   await page.setViewportSize(widths[0]);
@@ -274,6 +289,21 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
     [...firstPage.items, ...firstPage.folders].filter((item) => item.name.toLowerCase().includes(firstPage.items[0].name.toLowerCase())).length,
   );
   await filter.fill("");
+
+  // Local filtering must not silently remove an already selected reference.
+  let noMatch = "__kexp_no_match__";
+  while ([...firstPage.items, ...firstPage.folders].some(item =>
+    item.name.toLowerCase().includes(noMatch))) noMatch += "_";
+  await filter.fill(noMatch);
+  await expect(selectedCheckbox).toHaveCount(0);
+  await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
+  await explorer.getByRole("button", { name: "Review selection (1)", exact: true }).click();
+  const review = explorer.getByRole("list", { name: "Selected references" });
+  await expect(review.getByRole("listitem")).toHaveCount(1);
+  await expect(review.getByRole("button", { name: "Remove " + selectedLabel.slice("Select ".length) + " from selection", exact: true })).toBeVisible();
+  await explorer.getByRole("button", { name: "Review selection (1)", exact: true }).click();
+  await filter.fill("");
+  await expect(selectedCheckbox).toBeChecked();
 
   if (requireSecondPage) {
     expect(firstPage.has_more, "A real second page was required but no cursor exists").toBe(true);
@@ -367,7 +397,8 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
 
   // Observe real nested navigation when a sanitized fixture exists.
   // The protected fixture may explicitly require nested proof; absence is not a pass.
-  if (process.env.KAREN_FILE_EXPLORER_REQUIRE_NESTED === "true") {
+  const requireNested = process.env.KAREN_FILE_EXPLORER_REQUIRE_NESTED === "true";
+  if (requireNested) {
     expect(cleared.folders.length, "A real root folder fixture is required").toBeGreaterThan(0);
   }
   if (cleared.folders.length > 0) {
@@ -382,8 +413,39 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
     await expect(explorer.getByRole("navigation", { name: "Folder location" })
       .getByRole("button", { name: folder.name, exact: true }).last()).toHaveAttribute("aria-current", "location");
     await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
+    if (requireNested) {
+      expect(nested.folders.length, "The first root folder must contain a real child folder").toBeGreaterThan(0);
+    }
+    if (nested.folders.length > 0) {
+      const child = nested.folders[0];
+      const childWait = nextRealPage(page, origin);
+      await explorer.getByRole("button", { name: "Open folder " + child.name, exact: true }).first().click();
+      const childHttp = await childWait;
+      expect(childHttp.status()).toBe(200);
+      expect(new URL(childHttp.request().url()).searchParams.get("parent_folder_id")).toBe(child.folder_id);
+      const childPage = inventoryResponse(await childHttp.json(), child.folder_id);
+      expect(childPage.breadcrumbs.map(crumb => crumb.folder_id)).toEqual([folder.folder_id, child.folder_id]);
+      await verifyDisplayedInventory(page, childPage);
+      if (requireNested) {
+        expect(childPage.items.length, "The first child folder must contain a real owned file").toBeGreaterThan(0);
+      }
+      if (childPage.items.length > 0) {
+        const childFile = explorer.getByRole("list", { name: "Files and folders" }).getByRole("checkbox").first();
+        await childFile.check();
+        await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
+      }
+      const parentWait = nextRealPage(page, origin);
+      const location = explorer.getByRole("navigation", { name: "Folder location" });
+      await expect(location.getByRole("button").nth(1)).toHaveText(folder.name);
+      await location.getByRole("button").nth(1).click();
+      const parentHttp = await parentWait;
+      expect(parentHttp.status()).toBe(200);
+      expect(new URL(parentHttp.request().url()).searchParams.get("parent_folder_id")).toBe(folder.folder_id);
+      await verifyDisplayedInventory(page, inventoryResponse(await parentHttp.json(), folder.folder_id));
+      await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
+    }
     const back = nextRealPage(page, origin);
-    await explorer.getByRole("navigation", { name: "Folder location" }).getByRole("button", { name: "Root", exact: true }).click();
+    await explorer.getByRole("navigation", { name: "Folder location" }).getByRole("button", { name: "Root", exact: true }).first().click();
     const rootHttp = await back;
     expect(rootHttp.status()).toBe(200);
     expect(new URL(rootHttp.request().url()).searchParams.has("parent_folder_id")).toBe(false);
