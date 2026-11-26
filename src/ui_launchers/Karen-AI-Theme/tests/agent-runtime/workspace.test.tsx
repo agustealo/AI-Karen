@@ -227,6 +227,7 @@ describe("runtime projection validation", () => {
 
 
   it("does not disclose transport errors from approval discovery", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
     mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
       ? Promise.reject(new Error("private transport detail")) : fallback(path));
     render(<AgentsPage />);
@@ -237,6 +238,7 @@ describe("runtime projection validation", () => {
   });
 
   it("requires a fresh confirmation after approval discovery refresh", async () => {
+    const fallback = mocks.get.getMockImplementation()!;
     mocks.get.mockImplementation((path: string) => path === "/api/approvals/"
       ? Promise.resolve([approval]) : fallback(path));
     render(<AgentsPage />);
