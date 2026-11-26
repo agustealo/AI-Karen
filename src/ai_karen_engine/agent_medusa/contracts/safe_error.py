@@ -23,7 +23,14 @@ from ..contracts.runtime_response import RuntimeResponse, ResponseStatus
 logger = logging.getLogger(__name__)
 
 
-def to_safe_response(exc: Exception, *, correlation_id: Optional[str] = None) -> RuntimeResponse:
+def to_safe_response(
+    exc: Exception,
+    *,
+    correlation_id: Optional[str] = None,
+    request_id: Optional[str] = None,
+) -> RuntimeResponse:
+    # Keep the caller's authorized request identity distinct from tracing.
+    # The optional fallback preserves standalone legacy error construction.
     correlation_id = correlation_id or str(uuid.uuid4())
     logger.error(
         "medusa.execution_error",
@@ -46,7 +53,7 @@ def to_safe_response(exc: Exception, *, correlation_id: Optional[str] = None) ->
         else f"We hit a problem running your request (ref: {correlation_id})."
     )
     return RuntimeResponse(
-        request_id=correlation_id,
+        request_id=request_id if request_id is not None else correlation_id,
         status=ResponseStatus.ERROR,
         content=content,
         metadata={
