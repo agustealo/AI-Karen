@@ -89,6 +89,10 @@ class Permission(str, Enum):
     # Create a new owner-scoped inert artifact; never general data mutation.
     ARTIFACT_CREATE_OWN = "artifact:create_own"
 
+    # Owner-only organization metadata, not file content or global data access.
+    FILE_EXPLORER_ORGANIZE = "file_explorer:organize_own"
+    FILE_EXPLORER_DELETE_EMPTY = "file_explorer:delete_empty_own"
+
     # Card Studio inert, owner-scoped declarative templates.
     CARD_STUDIO_READ = "card_studio:read"
     CARD_STUDIO_WRITE = "card_studio:write"
@@ -159,6 +163,16 @@ class Permission(str, Enum):
     CHANNEL_INSPECT = "channel.inspect"
     CHANNEL_WEBHOOK_REGISTER = "channel.webhook.register"
     CHANNEL_STATUS_PRUNE = "channel.status_prune"
+
+
+# One action-to-entitlement mapping shared by ingress, RuntimePolicy and host.
+FILE_EXPLORER_MUTATION_PERMISSIONS: Dict[str, Permission] = {
+    "file_explorer.folder.create": Permission.FILE_EXPLORER_ORGANIZE,
+    "file_explorer.folder.rename": Permission.FILE_EXPLORER_ORGANIZE,
+    "file_explorer.folder.move": Permission.FILE_EXPLORER_ORGANIZE,
+    "file_explorer.artifact.move": Permission.FILE_EXPLORER_ORGANIZE,
+    "file_explorer.folder.delete": Permission.FILE_EXPLORER_DELETE_EMPTY,
+}
 
 
 class Role(str, Enum):
@@ -246,6 +260,8 @@ def _default_role_entries() -> Dict[str, Dict[str, Any]]:
                 Permission.ARTIFACT_CREATE_OWN.value,
                 Permission.COMMUNICATIONS_READ.value,
                 Permission.COMMUNICATIONS_WRITE.value,
+                Permission.FILE_EXPLORER_ORGANIZE.value,
+                Permission.FILE_EXPLORER_DELETE_EMPTY.value,
                 Permission.PLANNER_READ.value,
                 Permission.PLANNER_WRITE.value,
                 Permission.CARD_STUDIO_READ.value,
@@ -753,6 +769,23 @@ def require_permission(permission: Union[Permission, str]) -> Callable:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, detail=detail
             )
+        return current_user
+
+    return dependency
+
+
+def require_platform_tenant_permission(permission: Permission):
+    """Platform tenant operations must not be enabled for tenant-local admins."""
+    async def dependency(
+        current_user: UserData = Depends(require_permission(permission)),
+    ):
+        rbac = get_rbac_manager()
+        if not current_user.get("user_id") or not rbac.has_super_admin_role(current_user):
+            rbac.audit_access_attempt(
+                current_user, permission, "admin.tenants", False,
+                additional_context={"reason": "platform_tenant_role_required"},
+            )
+            raise HTTPException(status_code=403, detail="Platform tenant administration required")
         return current_user
 
     return dependency

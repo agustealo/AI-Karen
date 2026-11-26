@@ -16,6 +16,8 @@ from ai_karen_engine.extensions.contracts import (
 
 logger = logging.getLogger(__name__)
 PLUGIN = "content-intelligence"
+# Fixed protocol ceiling, shared by ingress, execution and inventory metadata.
+MAX_CONTENT_SOURCE_REFERENCES = 12
 
 
 class TextStore(Protocol):
@@ -104,7 +106,7 @@ class ContentSourceHost:
     ) -> dict[str, Any]:
         if operation not in {"analyze", "search", "compare"}:
             raise ValueError("content_source_operation_invalid")
-        if not isinstance(references, list) or not 1 <= len(references) <= 12:
+        if not isinstance(references, list) or not 1 <= len(references) <= MAX_CONTENT_SOURCE_REFERENCES:
             raise ValueError("content_source_count_invalid")
         ids: set[str] = set()
         for ref in references:
