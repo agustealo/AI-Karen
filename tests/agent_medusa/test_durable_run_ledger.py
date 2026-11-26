@@ -834,9 +834,7 @@ async def test_local_terminal_acknowledgement_loss_never_publishes_proposal(
     manager = MedusaRunManager(settings=_settings(), durable_ledger=ledger)
     task = asyncio.create_task(asyncio.sleep(0))
     scope = dict(run_id="uncertain-local", tenant_id="tenant-a")
-    await manager.register(
-        **scope, correlation_id="corr", user_id="user-1", task=task
-    )
+    await manager.register(**scope, correlation_id="corr", user_id="user-1", task=task)
     await task
     assert (await manager.mark_response(scope["run_id"], "success")).value == "orphaned"
     snapshot = await manager.get(**scope)
