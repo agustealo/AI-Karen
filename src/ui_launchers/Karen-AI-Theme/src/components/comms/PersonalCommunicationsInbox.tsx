@@ -50,7 +50,7 @@ function useInboxController(initialScope: ApiPrincipalScope) {
   const current = useCallback(() => live.current && isCurrentApiPrincipalScope(scope), [scope]);
   useLayoutEffect(() => {
     live.current = true;
-    return () => { live.current = false; readEpoch.current += 1; };
+    return () => { live.current = false; readEpoch.current += 1; activated.current = false; };
   }, []);
   const load = useCallback(async (nextFilter: InboxFilter, nextCursor: InboxCursor | null, afterWrite = false) => {
     if (!current() || (writeLock.current && !afterWrite)) return;
