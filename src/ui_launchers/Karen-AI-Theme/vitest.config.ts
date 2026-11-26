@@ -16,6 +16,8 @@ export default defineConfig({
       'src/components/plugins/PluginOverviewPage.test.tsx',
       'src/components/plugins/FileExplorerInventoryHost.test.tsx',
       'src/components/comms/CommsCenterPage.test.tsx',
+      'src/components/comms/PersonalCommunicationsInbox.test.tsx',
+      'src/lib/api.mutation-replay.test.ts',
       'src/components/automation/AgentsPage.controlPlane.test.ts',
       'src/lib/card-studio-api.test.ts',
       'src/components/card-studio/CardStudioWorkspace.test.tsx',

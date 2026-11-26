@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { PersonalCommunicationsInbox } from "./PersonalCommunicationsInbox";
+import { PersonalCommunicationsInbox, PersonalCommunicationsInboxProvider } from "./PersonalCommunicationsInbox";
 import { INBOX_PATH, type InboxEntry } from "./communications-inbox-contract";
 
 const stubs = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), post: vi.fn(), revision: 1, user: "owner" }));
@@ -17,7 +17,11 @@ const entry: InboxEntry = {
   created_at: timestamp, read_at: null, acknowledged_at: null, archived_at: null, revision: "9007199254740993",
 };
 const page = (entries: InboxEntry[] = [entry], count = 42) => ({ entries, next_cursor: null, active_unread_count: count });
-const mount = (open?: (id: string) => Promise<void>) => render(<PersonalCommunicationsInbox tenantId="tenant" userId="owner" onOpenConversation={open} />);
+const workspace = (userId: string, visible = true, open?: (id: string) => Promise<void>) =>
+  <PersonalCommunicationsInboxProvider tenantId="tenant" userId={userId}>
+    {visible ? <PersonalCommunicationsInbox onOpenConversation={open} /> : <p>Other workspace</p>}
+  </PersonalCommunicationsInboxProvider>;
+const mount = (open?: (id: string) => Promise<void>) => render(workspace("owner", true, open));
 beforeEach(() => { stubs.get.mockReset().mockResolvedValue(page()); stubs.patch.mockReset(); stubs.post.mockReset(); stubs.user = "owner"; stubs.revision = 1; });
 afterEach(cleanup);
 
@@ -74,7 +78,7 @@ describe("personal inbox authority", () => {
     await waitFor(() => expect(stubs.get).toHaveBeenCalledTimes(1));
     stubs.user = "other";
     stubs.revision++;
-    view.rerender(<PersonalCommunicationsInbox tenantId="tenant" userId="other" />);
+    view.rerender(workspace("other"));
     await screen.findByText("0 unread active");
     await act(async () => resolve(page()));
     expect(screen.queryByText("Chat execution interrupted")).toBeNull();
@@ -94,4 +98,23 @@ describe("personal inbox authority", () => {
     fireEvent.click(screen.getByRole("button", { name: "Archived" }));
     await waitFor(() => expect(stubs.get).toHaveBeenLastCalledWith(INBOX_PATH + "?limit=25&inbox_filter=archived", { tenant_id: "tenant", user_id: "owner", revision: 1 }));
   });
+});
+
+it("keeps a single pending mutation and uncertainty across complete workspace unmount", async () => {
+  let reject!: (error: Error) => void;
+  stubs.patch.mockReturnValue(new Promise((_resolve, fail) => { reject = fail; }));
+  const view = mount();
+  fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+  view.rerender(workspace("owner", false));
+  expect(screen.queryByText("Chat execution interrupted")).toBeNull();
+  view.rerender(workspace("owner"));
+  expect((screen.getByRole("button", { name: "Archive" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(stubs.get).toHaveBeenCalledTimes(1);
+  await act(async () => reject(new Error("Lost response")));
+  await screen.findByText("Notification change could not be verified. Refresh before trying again.");
+  view.rerender(workspace("owner", false));
+  view.rerender(workspace("owner"));
+  expect(screen.getByText("Notification change could not be verified. Refresh before trying again.")).toBeTruthy();
+  expect(stubs.patch).toHaveBeenCalledTimes(1);
+  expect(stubs.get).toHaveBeenCalledTimes(1);
 });

@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createContext, useContext, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { apiClient, captureApiPrincipalScope, isCurrentApiPrincipalScope, type ApiPrincipalScope } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
@@ -11,19 +11,29 @@ import {
 } from "./communications-inbox-contract";
 
 type Props = {
-  tenantId?: string;
-  userId?: string;
   refreshRevision?: number;
   onOpenConversation?: (id: string) => Promise<void>;
 };
 
-export function PersonalCommunicationsInbox({ tenantId, userId, ...props }: Props) {
+type InboxController = ReturnType<typeof useInboxController>;
+const InboxContext = createContext<InboxController | null>(null);
+
+/** One lazily activated controller above workspace navigation. */
+export function PersonalCommunicationsInboxProvider({ tenantId, userId, children }: {
+  tenantId?: string; userId?: string; children: ReactNode;
+}) {
   const scope = tenantId && userId ? captureApiPrincipalScope(tenantId, userId) : null;
-  if (!scope) return <p role="status">Sign in to view your personal inbox.</p>;
-  return <ScopedInbox key={JSON.stringify(scope)} scope={scope} {...props} />;
+  return scope
+    ? <ScopedInboxProvider key={JSON.stringify(scope)} scope={scope}>{children}</ScopedInboxProvider>
+    : <InboxContext.Provider value={null}>{children}</InboxContext.Provider>;
 }
 
-function ScopedInbox({ scope: initialScope, refreshRevision, onOpenConversation }: Omit<Props, "tenantId" | "userId"> & { scope: ApiPrincipalScope }) {
+function ScopedInboxProvider({ scope, children }: { scope: ApiPrincipalScope; children: ReactNode }) {
+  const controller = useInboxController(scope);
+  return <InboxContext.Provider value={controller}>{children}</InboxContext.Provider>;
+}
+
+function useInboxController(initialScope: ApiPrincipalScope) {
   const [scope] = useState(initialScope);
   const [filter, setFilter] = useState<InboxFilter>("active");
   const [page, setPage] = useState<InboxPage | null>(null);
@@ -36,7 +46,7 @@ function ScopedInbox({ scope: initialScope, refreshRevision, onOpenConversation 
   const live = useRef(false);
   const readEpoch = useRef(0);
   const writeLock = useRef(false);
-  const handoffLock = useRef(false);
+  const activated = useRef(false);
   const current = useCallback(() => live.current && isCurrentApiPrincipalScope(scope), [scope]);
   useLayoutEffect(() => {
     live.current = true;
@@ -62,7 +72,11 @@ function ScopedInbox({ scope: initialScope, refreshRevision, onOpenConversation 
       if (current() && epoch === readEpoch.current) setLoading(false);
     }
   }, [current, scope]);
-  useEffect(() => { void load("active", null); }, [load, refreshRevision]);
+  const activate = useCallback(() => {
+    if (activated.current) return;
+    activated.current = true;
+    void load("active", null);
+  }, [load]);
 
   async function perform(entry: InboxEntry, operation: InboxOperation) {
     if (!current() || writeLock.current || loading || uncertain || !page?.entries.includes(entry)
@@ -114,11 +128,40 @@ function ScopedInbox({ scope: initialScope, refreshRevision, onOpenConversation 
       if (current()) setBusy(false);
     }
   }
+  return { scope, current, activate, load, filter, page, cursor, loading, busy, error, notice, uncertain,
+    setNotice, perform, reconcile };
+}
+
+export function PersonalCommunicationsInbox({ refreshRevision, onOpenConversation }: Props) {
+  const controller = useContext(InboxContext);
+  if (!controller) return <p role="status">Sign in to view your personal inbox.</p>;
+  return <InboxView controller={controller} refreshRevision={refreshRevision} onOpenConversation={onOpenConversation} />;
+}
+
+function InboxView({ controller, refreshRevision, onOpenConversation }: Pick<Props, "refreshRevision" | "onOpenConversation"> & { controller: InboxController }) {
+  const { scope, current, activate, load, filter, page, cursor, loading, busy, error, notice, uncertain, setNotice, perform, reconcile } = controller;
+  const handoffLock = useRef(false);
+  const viewLive = useRef(false);
+  const lastRefresh = useRef(refreshRevision);
+  const [handoffError, setHandoffError] = useState("");
+  useLayoutEffect(() => {
+    viewLive.current = true;
+    return () => { viewLive.current = false; };
+  }, []);
+  useEffect(() => { activate(); }, [activate]);
+  useEffect(() => {
+    if (lastRefresh.current === refreshRevision) return;
+    lastRefresh.current = refreshRevision;
+    setNotice("");
+    void load(filter, null);
+  }, [refreshRevision, filter, load, setNotice]);
+
   async function openConversation(entry: InboxEntry) {
-    if (!current() || writeLock.current || handoffLock.current || !onOpenConversation || !page?.entries.includes(entry)) return;
+    if (!current() || busy || loading || uncertain || handoffLock.current || !onOpenConversation || !page?.entries.includes(entry)) return;
     handoffLock.current = true;
+    setHandoffError("");
     try { await onOpenConversation(entry.conversation_id); }
-    catch { if (current()) setError("Unable to open the verified conversation."); }
+    catch { if (viewLive.current && current()) setHandoffError("Unable to open the verified conversation."); }
     finally { handoffLock.current = false; }
   }
 
@@ -143,7 +186,7 @@ function ScopedInbox({ scope: initialScope, refreshRevision, onOpenConversation 
         <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => void reconcile()}>Recover missed notifications</Button>
       </div>
       {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
-      {error && <p role="alert" className="rounded-lg border p-3 text-sm text-destructive">{error}</p>}
+      {(error || handoffError) && <p role="alert" className="rounded-lg border p-3 text-sm text-destructive">{error || handoffError}</p>}
       {loading && <p role="status" className="text-sm text-muted-foreground">Loading verified inbox…</p>}
       {page && page.entries.length === 0 && <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">No records returned in this view. This is not proof that all executions succeeded or that the producer is enabled.</p>}
       {page && page.entries.length > 0 && <ol className="divide-y" aria-label="Verified personal notifications">

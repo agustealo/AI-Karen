@@ -29,10 +29,17 @@ vi.mock("@/lib/api", () => ({
 vi.mock("@/lib/useAuth", () => ({ useAuth: stubs.useAuth, default: stubs.useAuth }));
 
 import CommsCenterPage from "./CommsCenterPage";
+import { PersonalCommunicationsInboxProvider } from "./PersonalCommunicationsInbox";
 import { RuntimeApprovalProvider } from "@/components/approvals/RuntimeApprovalProvider";
 import { ApprovalReviewPanel } from "@/components/approvals/ApprovalReviewPanel";
 
-const render = (ui: React.ReactElement) => renderWithTestingLibrary(ui, { wrapper: RuntimeApprovalProvider });
+function TestProviders({ children }: { children: React.ReactNode }) {
+  const auth = stubs.useAuth();
+  return <PersonalCommunicationsInboxProvider tenantId={auth.isAuthenticated && !auth.isLoading ? auth.user?.tenant_id : undefined} userId={auth.isAuthenticated && !auth.isLoading ? auth.user?.user_id : undefined}>
+    <RuntimeApprovalProvider>{children}</RuntimeApprovalProvider>
+  </PersonalCommunicationsInboxProvider>;
+}
+const render = (ui: React.ReactElement) => renderWithTestingLibrary(ui, { wrapper: TestProviders });
 
 const FIRST_PRINCIPAL = { tenant_id: "tenant-one", user_id: "user-one" };
 
