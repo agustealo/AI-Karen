@@ -169,11 +169,19 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     # Release SHA verification is centralized instead of duplicated at each
     # invocation; every release scenario still invokes the same exact check.
     assert 'async function requireReviewedRevision(page: Page, target: URL)' in consumer_source
-    assert 'if (!releaseMode) return;' in consumer_source
+    assert 'if (!releaseMode && !localSpecialistMode) return;' in consumer_source
+    assert 'const localSpecialistMode = ordinarySpecialistAcceptance && localMode && !releaseMode &&' in consumer_source
+    assert 'approvedUrl === "http://127.0.0.1:8010"' in consumer_source
+    assert 'expect(body).toEqual({ status: "ok", revision: expectedRevision });' in consumer_source
     assert 'target.protocol !== "https:" || target.port !== ""' in consumer_source
     assert '/^[0-9a-f]{40}$/i.test(expectedRevision)' in consumer_source
     assert 'new URL("/api/deployment-revision", target)' in consumer_source
-    assert consumer_source.count("await requireReviewedRevision(page, target)") == 5
+    assert consumer_source.count("await requireReviewedRevision(page, target)") == 6
+    # The additional local-only check must follow all fresh authorization probes.
+    isolation = consumer_source.index("await expectFreshSpecialistIsolation(page, target, id!")
+    assert consumer_source.index("if (localSpecialistMode) {", isolation) < consumer_source.index(
+        "await requireReviewedRevision(page, target)", isolation
+    )
     assert 'if (releaseMode && localMode)' in consumer_source
     assert '["localhost", "127.0.0.1"].includes(target.hostname)' in consumer_source
     assert "async ({ page, request })" not in consumer_source
