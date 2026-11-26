@@ -5607,9 +5607,21 @@ class ChatRuntime:
         if decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY:
             if token_sink is not None or reasoning_preflight is not None:
                 raise PermissionError("generated_artifact_delivery_scope_denied")
-            normalized["artifacts"] = [
-                await self._persist_generated_text_result(request, decision, plan, meter, result)
-            ]
+            receipt = await self._persist_generated_text_result(request, decision, plan, meter, result)
+            from ai_karen_engine.core.runtime.presentation_contract import validate_presentation
+
+            presentation = validate_presentation({
+                "schema_version": 1,
+                "presentation_id": f"generated-text:{receipt['artifact_id']}",
+                "component_type": "document.artifact",
+                "evidence_ref": receipt["artifact_id"],
+                "correlation_id": request.context.correlation_id,
+                "data": receipt,
+            })
+            if presentation is None:
+                raise PermissionError("generated_artifact_presentation_denied")
+            normalized["artifacts"] = [receipt]
+            normalized["structured_content"] = {"presentation": presentation}
         return result.text, normalized
 
     async def _run_simple_stream(
@@ -5723,6 +5735,16 @@ class ChatRuntime:
                     })
                 if _meta is not None:
                     _meta.update(normalized)
+                if decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY:
+                    presentation = normalized.get("structured_content", {}).get("presentation")
+                    if presentation is None:
+                        raise RuntimeError("generated_artifact_presentation_missing")
+                    yield ChatStreamChunk(
+                        type=ChatStreamEventType.PRESENTATION,
+                        content="",
+                        correlation_id=request.context.correlation_id,
+                        metadata={"presentation": presentation, "presentation_verified": True},
+                    )
                 if not observed_deltas:
                     # The selected endpoint may lack native SSE. Preserve
                     # the existing non-streaming behavior, without a fake

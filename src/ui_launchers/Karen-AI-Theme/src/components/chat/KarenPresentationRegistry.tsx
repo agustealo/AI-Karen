@@ -5,6 +5,10 @@
  * Backend authorization, evidence provenance and persistence remain authoritative.
  */
 import { z } from "zod";
+import { useEffect, useRef, useState } from "react";
+import { apiClient, captureApiPrincipalScope, isCurrentApiPrincipalScope, type ApiPrincipalScope } from "@/lib/api";
+import { authService } from "@/lib/auth";
+import { AUTH_INVALIDATED_EVENT, AUTH_USER_UPDATED_EVENT } from "@/lib/auth-events";
 import { KarenWeatherPresentation, normalizeWeatherObservation } from "./KarenWeatherPresentation";
 
 const MAX_PRESENTATION_BYTES = 32_768;
@@ -12,7 +16,7 @@ const MAX_PRESENTATION_BYTES = 32_768;
 const presentationSchema = z.object({
   schema_version: z.literal(1),
   presentation_id: z.string().min(1).max(160),
-  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table", "chart.bar", "code.artifact"]),
+  component_type: z.enum(["weather.observation", "weather.comparison", "planner.task_list", "time.observation", "date.observation", "surface.composition", "search.results", "data.table", "chart.bar", "code.artifact", "document.artifact"]),
   data: z.unknown(),
   evidence_ref: z.string().min(1).max(160),
   correlation_id: z.string().max(160).optional(),
@@ -134,6 +138,19 @@ export function parseKarenPresentation(value: unknown): KarenPresentationEnvelop
           !Number.isFinite(point.value) || point.value < 0 || point.value > 1_000_000_000) return null;
       labels.add(point.label.trim());
     }
+  } else if (result.data.component_type === "document.artifact") {
+    const raw = result.data.data;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    const data = raw as Record<string, unknown>;
+    if (Object.keys(data).sort().join(",") !== "artifact_id,filename,mime_type,sha256,size_bytes" ||
+        typeof data.artifact_id !== "string" ||
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(data.artifact_id) ||
+        result.data.evidence_ref !== data.artifact_id ||
+        result.data.presentation_id !== `generated-text:${data.artifact_id}` ||
+        data.filename !== "generated.txt" || data.mime_type !== "text/plain" ||
+        typeof data.size_bytes !== "number" || !Number.isInteger(data.size_bytes) ||
+        data.size_bytes < 1 || data.size_bytes > 65536 ||
+        typeof data.sha256 !== "string" || !/^[0-9a-f]{64}$/.test(data.sha256)) return null;
   } else if (result.data.component_type === "code.artifact") {
     const raw = result.data.data;
     if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -215,6 +232,99 @@ export function presentationFromStructuredContent(value: unknown): KarenPresenta
   return parseKarenPresentation((value as Record<string, unknown>).presentation);
 }
 
+type GeneratedDocumentReference = {
+  artifact_id: string;
+  filename: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+};
+
+function GeneratedDocumentReceipt({ artifact }: { artifact: GeneratedDocumentReference }) {
+  const [preview, setPreview] = useState<{ text: string; scope: ApiPrincipalScope } | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  const revision = useRef(0);
+  useEffect(() => {
+    function invalidate() {
+      revision.current++;
+      setPreview(null);
+      setBusy(false);
+      setError("");
+    }
+    window.addEventListener(AUTH_INVALIDATED_EVENT, invalidate);
+    window.addEventListener(AUTH_USER_UPDATED_EVENT, invalidate);
+    window.addEventListener("storage", invalidate);
+    return () => {
+      revision.current++;
+      window.removeEventListener(AUTH_INVALIDATED_EVENT, invalidate);
+      window.removeEventListener(AUTH_USER_UPDATED_EVENT, invalidate);
+      window.removeEventListener("storage", invalidate);
+    };
+  }, []);
+
+  async function access(mode: "preview" | "download") {
+    const generation = ++revision.current;
+    setPreview(null);
+    setError("");
+    setBusy(true);
+    try {
+      const principal = authService.getCurrentUser();
+      const scope = principal && captureApiPrincipalScope(principal.tenant_id, principal.user_id);
+      if (!scope) throw new Error("Authentication required");
+      const raw = await apiClient.get<unknown>(
+        "/api/artifacts/" + encodeURIComponent(artifact.artifact_id) + "/text", scope,
+      );
+      if (generation !== revision.current || !isCurrentApiPrincipalScope(scope)) return;
+      if (!raw || typeof raw !== "object" || Array.isArray(raw)) throw new Error("Invalid receipt");
+      const data = raw as Record<string, unknown>;
+      if (Object.keys(data).sort().join(",") !== "artifact_id,filename,mime_type,sha256,size_bytes,text" ||
+          data.artifact_id !== artifact.artifact_id || data.filename !== artifact.filename ||
+          data.mime_type !== artifact.mime_type || data.size_bytes !== artifact.size_bytes ||
+          data.sha256 !== artifact.sha256 || typeof data.text !== "string" ||
+          data.text.length > 65536) throw new Error("Artifact revision mismatch");
+      const bytes = new TextEncoder().encode(data.text);
+      if (bytes.byteLength !== artifact.size_bytes) throw new Error("Invalid byte count");
+      const digest = await crypto.subtle.digest("SHA-256", bytes);
+      const hex = Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, "0")).join("");
+      if (hex !== artifact.sha256) throw new Error("Invalid digest");
+      if (generation !== revision.current || !isCurrentApiPrincipalScope(scope)) return;
+      if (mode === "preview") {
+        setPreview({ text: data.text, scope });
+      } else {
+        const url = URL.createObjectURL(new Blob([bytes], { type: "text/plain;charset=utf-8" }));
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = artifact.filename;
+        try { link.click(); }
+        finally { window.setTimeout(() => URL.revokeObjectURL(url), 0); }
+      }
+    } catch {
+      if (generation === revision.current) {
+        setError("File access could not be verified. It may be archived, changed, or unavailable.");
+      }
+    } finally {
+      if (generation === revision.current) setBusy(false);
+    }
+  }
+
+  return <section aria-label="Generated text file receipt" data-testid="karen-document-artifact"
+    className="my-3 min-w-0 rounded-xl border border-border/70 p-4">
+    <h3 className="font-semibold">{artifact.filename}</h3>
+    <p className="mt-1 text-xs text-muted-foreground">Creation verified · {artifact.size_bytes.toLocaleString("en-US")} bytes · Plain text</p>
+    <p className="mt-2 text-xs text-muted-foreground">This receipt records creation. Current file access must be verified separately.</p>
+    <div className="mt-3 flex flex-wrap gap-2">
+      <button type="button" disabled={busy} onClick={() => void access("preview")} className="rounded-md border px-3 py-1.5 text-sm">Preview</button>
+      <button type="button" disabled={busy} onClick={() => void access("download")} className="rounded-md border px-3 py-1.5 text-sm">Download</button>
+      {preview && <button type="button" onClick={() => setPreview(null)} className="rounded-md border px-3 py-1.5 text-sm">Close preview</button>}
+    </div>
+    {busy && <p role="status" className="mt-2 text-xs">Verifying current file access…</p>}
+    {error && <p role="alert" className="mt-2 text-xs">{error}</p>}
+    {preview && isCurrentApiPrincipalScope(preview.scope) &&
+      <pre className="mt-3 max-h-96 overflow-auto whitespace-pre-wrap break-words rounded-md border p-3 text-sm">{preview.text}</pre>}
+  </section>;
+}
+
 export function KarenPresentationRegistry({ data }: { data: unknown }) {
   const envelope = parseKarenPresentation(data);
   if (!envelope) {
@@ -289,6 +399,10 @@ export function KarenPresentationRegistry({ data }: { data: unknown }) {
           </table>
         </div>
       </section>;
+    }
+    case "document.artifact": {
+      const artifact = envelope.data as GeneratedDocumentReference;
+      return <GeneratedDocumentReceipt key={artifact.artifact_id + ":" + artifact.sha256} artifact={artifact} />;
     }
     case "code.artifact": {
       const artifact = envelope.data as { filename: string; language: string; code: string };
