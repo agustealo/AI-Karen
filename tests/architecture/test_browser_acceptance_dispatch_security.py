@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -514,3 +515,68 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
     for payload in invalid:
         assert validate(json.dumps(payload)) != 0
     assert validate("{malformed") != 0
+
+
+def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path: Path) -> None:
+    """Run the real shell admission; an inert test-only executable detects launch."""
+    script = ROOT / "scripts/ci/run_specialist_browser_acceptance.sh"
+    marker = tmp_path / "browser-launched"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npx = bin_dir / "npx"
+    npx.write_text('#!/bin/sh\n: > "$TEST_LAUNCH_MARKER"\nexit 99\n', encoding="utf-8")
+    npx.chmod(0o700)
+    flags = tuple(f"KAREN_SPECIALIST_{name}_ACCEPTANCE" for name in ("PARTICIPATION", "LIFECYCLE", "CROSS_TENANT"))
+    names = (
+        "KAREN_UX_EMAIL", "KAREN_UX_PASSWORD",
+        "KAREN_UX_ACCOUNT_B_EMAIL", "KAREN_UX_ACCOUNT_B_PASSWORD",
+        "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD",
+        "KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID",
+    )
+    env = {
+        "PATH": str(bin_dir) + os.pathsep + os.defpath,
+        "RUNNER_TEMP": str(tmp_path),
+        "TEST_LAUNCH_MARKER": str(marker),
+        **dict.fromkeys(flags, "true"),
+        **dict.fromkeys(names, "synthetic-test-only"),
+    }
+
+    def run(platform: str, overrides: dict[str, str | None]) -> subprocess.CompletedProcess[str]:
+        current = env.copy()
+        for key, value in overrides.items():
+            if value is None:
+                current.pop(key, None)
+            else:
+                current[key] = value
+        return subprocess.run(["bash", str(script), platform], env=current, capture_output=True, text=True, check=False)
+
+    for platform in ("docker", "vercel"):
+        base = {"VERCEL_AUTOMATION_BYPASS_SECRET": "synthetic-test-only"} if platform == "vercel" else {}
+        for flag in flags:
+            for value in (None, "false", "1"):
+                result = run(platform, {**base, flag: value})
+                assert result.returncode != 0
+                assert "Full specialist acceptance flags are required" in result.stdout
+                assert not marker.exists()
+    for platform, overrides in (
+        ("docker", {"VERCEL_AUTOMATION_BYPASS_SECRET": ""}),
+        ("docker", {"VERCEL_AUTOMATION_BYPASS_SECRET": "synthetic-test-only"}),
+        ("vercel", {}),
+        ("local", {}),
+        ("docker", {names[0]: None}),
+    ):
+        result = run(platform, overrides)
+        assert result.returncode != 0
+        assert not marker.exists()
+        assert "synthetic-test-only" not in result.stdout + result.stderr
+
+    # Positive admission reaches the inert runner, but its failure remains a
+    # failure and its temporary private diagnostics must be removed.
+    result = run("docker", {})
+    assert marker.exists()
+    assert result.returncode != 0
+    assert "private diagnostics suppressed" in result.stdout
+    assert not list(tmp_path.glob("specialist-acceptance.*"))

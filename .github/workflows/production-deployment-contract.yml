@@ -110,6 +110,7 @@ jobs:
           pytest tests/architecture/test_docker_release_attestation.py -q
           pytest tests/architecture/test_signed_docker_release_provenance.py -q
           pytest tests/architecture/test_docker_browser_acceptance_contract.py -q
+          pytest tests/architecture/test_browser_acceptance_dispatch_security.py -q
           bash -n scripts/ci/verify_docker_browser_host.sh
           pytest tests/architecture/test_deployment_revision_acceptance.py -q
           pytest tests/architecture/test_ck28_backend_target_preflight.py -q

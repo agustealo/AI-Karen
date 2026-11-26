@@ -15,6 +15,14 @@ case "${1:-}" in
   *) echo "::error::Unsupported specialist acceptance platform"; exit 1 ;;
 esac
 export KAREN_SEARCH_ACCEPTANCE_PLATFORM="$1"
+# The selected test has weaker opt-in modes; exactly one pass alone does not
+# establish lifecycle and cross-tenant proof. Require all modes before launch.
+for flag in KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE KAREN_SPECIALIST_LIFECYCLE_ACCEPTANCE KAREN_SPECIALIST_CROSS_TENANT_ACCEPTANCE; do
+  test "${!flag:-}" = true || { echo "::error::Full specialist acceptance flags are required"; exit 1; }
+done
+# Always activate the shared exact-origin deployment fixture, even when this
+# runner is invoked outside its normal protected workflow step.
+export KAREN_SEARCH_ACCEPTANCE_REQUIRED=true
 for name in KAREN_UX_EMAIL KAREN_UX_PASSWORD KAREN_UX_ACCOUNT_B_EMAIL KAREN_UX_ACCOUNT_B_PASSWORD KAREN_UX_ACCOUNT_C_EMAIL KAREN_UX_ACCOUNT_C_PASSWORD KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID; do
   test -n "${!name}" || { echo "::error::Missing protected specialist fixture configuration"; exit 1; }
 done
