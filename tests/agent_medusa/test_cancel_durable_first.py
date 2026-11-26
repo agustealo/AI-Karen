@@ -13,6 +13,7 @@ from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
 from ai_karen_engine.agent_medusa.execution.run_manager import (
     ExecutionRunStatus,
     MedusaRunManager,
+    RunNotCancellableError,
 )
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
 
@@ -126,12 +127,12 @@ async def test_local_cancel_never_signals_redis_before_required_durable_transiti
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("failure", ["unavailable", "conflict"])
-@pytest.mark.parametrize("terminal", ["orphaned", "cancelled"])
-async def test_failed_cancel_admission_cannot_reopen_concurrent_terminal_run(
+@pytest.mark.parametrize("failure", ["unavailable", "conflict", "none"])
+@pytest.mark.parametrize("terminal", ["orphaned", "cancelled", "completed", "failed"])
+async def test_pending_cancel_admission_cannot_override_concurrent_terminal_run(
     failure: str, terminal: str
 ) -> None:
-    """A failed late durable response cannot undo an independently closed run."""
+    """Pending admission is not accepted intent; a late receipt cannot undo retirement."""
     manager = MedusaRunManager(
         settings=AgentMedusaRuntimeSettings(
             distributed_run_control_enabled=False,
@@ -150,7 +151,8 @@ async def test_failed_cancel_admission_cannot_reopen_concurrent_terminal_run(
             await release.wait()
             if failure == "unavailable":
                 raise DurableRunLedgerUnavailable("test-only late outage")
-            raise DurableRunLedgerConflict("test-only late conflict")
+            if failure == "conflict":
+                raise DurableRunLedgerConflict("test-only late conflict")
 
         async def mark_terminal(self, **kwargs: object) -> None:
             terminal_writes.append(kwargs)
@@ -181,25 +183,41 @@ async def test_failed_cancel_admission_cannot_reopen_concurrent_terminal_run(
             )
         )
         await asyncio.wait_for(entered.wait(), timeout=5)
-        assert run.status is ExecutionRunStatus.CANCELLING
+        assert run.status is ExecutionRunStatus.RUNNING
+        pending = await manager.get(run_id=run.run_id, tenant_id=run.tenant_id)
+        assert pending["status"] == "running"
+        assert pending["cancellable"] is False
+        assert not task.cancelling()
+        with pytest.raises(RunNotCancellableError):
+            await manager.cancel(run_id=run.run_id, tenant_id=run.tenant_id)
 
         if terminal == "orphaned":
             await manager.mark_retirement_unverified(run.run_id)
-        else:
+        elif terminal == "cancelled":
             await manager.mark_cancelled(run.run_id)
+        else:
+            outcome = "success" if terminal == "completed" else "error"
+            resolved = await manager.mark_response(run.run_id, outcome)
+            assert resolved.value == terminal
         snapshot = await manager.get(run_id=run.run_id, tenant_id=run.tenant_id)
         assert snapshot["status"] == terminal
         assert snapshot["completed_at"] is not None
         assert snapshot["cancellable"] is False
         assert len(terminal_writes) == 1
         assert terminal_writes[0]["status"] == terminal
+        assert snapshot["outcome_status"] == {
+            "orphaned": None,
+            "cancelled": "cancelled",
+            "completed": "success",
+            "failed": "error",
+        }[terminal]
 
         release.set()
-        error = (
-            DurableRunLedgerUnavailable
-            if failure == "unavailable"
-            else DurableRunLedgerConflict
-        )
+        error = {
+            "unavailable": DurableRunLedgerUnavailable,
+            "conflict": DurableRunLedgerConflict,
+            "none": RunNotCancellableError,
+        }[failure]
         with pytest.raises(error):
             await asyncio.wait_for(cancellation, timeout=5)
 
@@ -207,6 +225,7 @@ async def test_failed_cancel_admission_cannot_reopen_concurrent_terminal_run(
             run_id=run.run_id, tenant_id=run.tenant_id
         ) == snapshot
         assert task.cancelling() == 0
+        assert not run.cancel_admission_pending
         assert len(terminal_writes) == 1
     finally:
         release.set()
