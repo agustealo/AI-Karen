@@ -144,6 +144,7 @@ class AgentMedusaControlPlane:
                 run_id=run_id,
                 tenant_id=tenant_id,
                 require_durable_history=True,
+                user_id=user_id,
             )
         except (RunNotFoundError, RunTenantMismatchError):
             return None
