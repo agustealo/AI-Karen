@@ -102,3 +102,20 @@ def test_transport_recovery_exercises_real_responses_with_only_a_network_fault()
     assert "storageState:" not in source
     assert "No jobs defined yet." in source
     assert "Job definitions could not be verified with the backend." in source
+
+
+def test_specialist_lifecycle_extension_reuses_private_real_host_acceptance() -> None:
+    source = TWO_ACCOUNT.read_text(encoding="utf-8")
+    assert 'KAREN_SPECIALIST_LIFECYCLE_ACCEPTANCE === "true"' in source
+    assert "lifecycleEnabled && !participationEnabled" in source
+    assert "KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID" in source
+    assert "emptyRunId === a || emptyRunId === b" in source
+    assert 'readParticipation(page, origin, emptyRunId, "empty")' in source
+    assert "observedPhases.has(phase)" in source
+    assert "Object.keys(phases)" in source
+    assert 'deniedEmpty.status' in source
+    assert "Execution status alone does not establish participation." in source
+    assert "No durable specialist participation was recorded." in source
+    assert "page.route(" not in source
+    assert "route.fulfill(" not in source
+    assert "storageState:" not in source
