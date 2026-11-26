@@ -507,3 +507,56 @@ async def test_specialist_cancellation_preserves_observed_execution_boundary(bou
         assert event.metadata["step_id"] == step.id
         assert event.metadata["reason_code"] == "cancelled"
         assert event.metadata["invocation_entered"] is (boundary == "inside_call")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("exhausted", [True, False])
+async def test_scheduler_emits_each_skipped_step_once(exhausted):
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+        StepStatus,
+    )
+    from ai_karen_engine.agent_medusa.contracts.events import AgentEventType
+
+    request, _, meter, _ = _request()
+    first = PlanStep(id="first", agent_specialist="researcher")
+    second = PlanStep(
+        id="second", agent_specialist="researcher", dependencies=["first"]
+    )
+    third = PlanStep(
+        id="third", agent_specialist="researcher", dependencies=["second"]
+    )
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[first, second, third])
+    events = []
+    coordinator = object.__new__(MedusaCoordinator)
+    coordinator.registry = SimpleNamespace()
+    coordinator.planner = SimpleNamespace(create_plan=AsyncMock(return_value=plan))
+    coordinator.active_plans = {}
+    coordinator.trajectories = {}
+    coordinator._global_sinks = [events.append]
+    coordinator.assembler = SimpleNamespace(assemble=AsyncMock())
+
+    if exhausted:
+        assert await meter.reserve_model_execution()
+        assert await meter.reserve_model_execution()
+
+    coordinator._execute_step = AsyncMock(side_effect=RuntimeError("step_failure"))
+    await coordinator._handle_request(request)
+
+    skipped = [event for event in events if event.type == AgentEventType.AGENT_SKIPPED]
+    expected_ids = ["first", "second", "third"] if exhausted else ["second", "third"]
+    assert [event.metadata["step_id"] for event in skipped] == expected_ids
+    for event in skipped:
+        assert event.correlation_id == "corr-a"
+        assert event.agent_id == "researcher"
+        assert event.metadata["reason_code"] == (
+            "execution_budget_exhausted" if exhausted else "dependency_blocked"
+        )
+    assert all(step.status == StepStatus.SKIPPED for step in plan.steps[1:])
+    if exhausted:
+        coordinator._execute_step.assert_not_awaited()
+        assert first.status == StepStatus.SKIPPED
+    else:
+        coordinator._execute_step.assert_awaited_once()
+        assert first.status == StepStatus.FAILED
