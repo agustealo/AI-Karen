@@ -787,7 +787,11 @@ async def test_wave_propagates_post_invocation_error_without_rewriting_completed
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("boundary", ["completed", "failed", "interrupted", "before_call", "append_failed"])
+@pytest.mark.parametrize(
+    "boundary",
+    ["completed", "failed", "interrupted", "before_call", "append_failed",
+     "failed_append_failed", "interrupted_append_timeout"],
+)
 async def test_coordinator_records_only_observed_terminal_participation(boundary):
     import asyncio
 
@@ -814,16 +818,20 @@ async def test_coordinator_records_only_observed_terminal_participation(boundary
 
     async def invoke(*args, **kwargs):
         store.save_unique_outcome_async.assert_not_awaited()
-        if boundary == "failed":
+        if boundary in {"failed", "failed_append_failed"}:
             raise RuntimeError("invocation_failed")
-        if boundary == "interrupted":
+        if boundary in {"interrupted", "interrupted_append_timeout"}:
             raise asyncio.CancelledError
         return {"result": "observed"}
 
     async def append(payload):
-        if boundary == "append_failed":
+        if boundary in {"append_failed", "failed_append_failed"}:
             raise OutcomeStoreError("append failed")
+        if boundary == "interrupted_append_timeout":
+            await asyncio.Event().wait()
 
+    if boundary == "interrupted_append_timeout":
+        meter.remaining_duration_ms = AsyncMock(return_value=10)
     store.save_unique_outcome_async.side_effect = append
     specialist = SimpleNamespace(run=AsyncMock(side_effect=invoke))
     emitter = InterruptingEmitter()
@@ -843,13 +851,13 @@ async def test_coordinator_records_only_observed_terminal_participation(boundary
             pending_participation=pending,
         )
 
-    if boundary in {"before_call", "interrupted"}:
+    if boundary in {"before_call", "interrupted", "interrupted_append_timeout"}:
         with pytest.raises(asyncio.CancelledError):
             await execute()
     elif boundary == "failed":
         with pytest.raises(RuntimeError, match="invocation_failed"):
             await execute()
-    elif boundary == "append_failed":
+    elif boundary in {"append_failed", "failed_append_failed"}:
         with pytest.raises(OutcomeStoreError, match="append failed"):
             await execute()
     else:
@@ -870,14 +878,23 @@ async def test_coordinator_records_only_observed_terminal_participation(boundary
     assert payload["correlation_id"] == "corr-a"
     assert payload["metadata"]["step_id"] == step.id
     assert payload["metadata"]["specialist_id"] == "researcher"
-    assert payload["metadata"]["phase"] == (
-        "completed" if boundary == "append_failed" else boundary
-    )
+    assert payload["metadata"]["phase"] == {
+        "append_failed": "completed",
+        "failed_append_failed": "failed",
+        "interrupted_append_timeout": "interrupted",
+    }.get(boundary, boundary)
     if boundary in {"completed", "append_failed"}:
         assert step.status == StepStatus.COMPLETED
         assert step.output_data == {"result": "observed"}
         assert not any(event.type == AgentEventType.AGENT_FAILED for event in emitter.events)
-    assert pending == ({step.id} if boundary == "append_failed" else set())
+    if boundary in {"failed", "failed_append_failed"}:
+        assert step.status == StepStatus.FAILED
+        assert step.error == "RuntimeError"
+    assert pending == (
+        {step.id}
+        if boundary in {"append_failed", "failed_append_failed", "interrupted_append_timeout"}
+        else set()
+    )
 
 
 @pytest.mark.asyncio

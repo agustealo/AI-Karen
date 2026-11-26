@@ -785,14 +785,23 @@ class MedusaCoordinator:
             if pending_participation is not None:
                 pending_participation.add(step.id)
             try:
-                await self._outcome_recorder.record_specialist_participation_async(
-                    context=trusted_context,
-                    plan=specialist_plan,
-                    meter=meter,
-                    step_id=step.id,
-                    specialist_id=step.agent_specialist,
-                    phase=phase,
-                )
+                # A cancellation handler runs after the original cancellation
+                # has been delivered. Bound its append by the same remaining
+                # RuntimePolicy budget, never by a renewed deadline.
+                remaining_seconds = (await meter.remaining_duration_ms()) / 1000.0
+                if remaining_seconds <= 0:
+                    raise OutcomeStoreError(
+                        "Specialist participation acknowledgement unavailable"
+                    )
+                async with asyncio.timeout(remaining_seconds):
+                    await self._outcome_recorder.record_specialist_participation_async(
+                        context=trusted_context,
+                        plan=specialist_plan,
+                        meter=meter,
+                        step_id=step.id,
+                        specialist_id=step.agent_specialist,
+                        phase=phase,
+                    )
             except OutcomeStoreError:
                 raise
             except Exception as exc:
@@ -888,6 +897,8 @@ class MedusaCoordinator:
             raise
         except Exception as exc:
             if invocation_entered and step.status != StepStatus.COMPLETED:
+                step.status = StepStatus.FAILED
+                step.error = type(exc).__name__
                 await record_participation(SpecialistParticipationPhase.FAILED)
             if (
                 invocation_entered
