@@ -151,6 +151,7 @@ async def test_strict_history_lookup_can_use_live_owner_without_durable_ledger()
         with pytest.raises(asyncio.CancelledError):
             await task
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "mode",
