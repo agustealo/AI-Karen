@@ -39,6 +39,7 @@ export function KarenCopilotVerifiedRail() {
   const responses = useKarenVerifiedResponseContext();
   const latestId = responses.at(-1)?.messageId ?? null;
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [desktopOpen, setDesktopOpen] = useState(false);
 
   // Reject stale selected IDs after canonical history refresh or account switch.
   // A null selection means always follow the most recent assistant response.
@@ -122,20 +123,48 @@ export function KarenCopilotVerifiedRail() {
       </details>
       <aside aria-label="Response context panel"
         data-testid="karen-copilot-response-context"
-        className="hidden h-full min-h-0 w-[21rem] shrink-0 overflow-y-auto border-l border-border/70 bg-background/45 xl:block 2xl:w-[22rem]">
-        <div className="border-b border-border/60 px-4 py-3">
-          <h2 className="text-sm font-semibold">Response context</h2>
-          <p className="text-xs text-muted-foreground">
-            {selected ? "Evidence linked to the selected saved response" : "Awaiting verified saved history"}
-          </p>
-        </div>
-        {renderSwitcher("karen-verified-response-desktop")}
-        {renderPresentations()}
-        {selected?.receipt
-          ? <><ConversationContextRail metadata={selected.receipt}
-              agentSteps={selected.agentSteps} embedded />
-              {selected.agentSteps.length === 0 && <ActivityReplayNotice />}</>
-          : <RailUnavailable embedded />}
+        className={desktopOpen
+          ? "hidden h-full min-h-0 w-[21rem] shrink-0 overflow-y-auto border-l border-border/70 bg-background/45 xl:block 2xl:w-[22rem]"
+          : "hidden h-full min-h-0 w-11 shrink-0 border-l border-border/70 bg-background/45 xl:flex xl:flex-col xl:items-center xl:py-3"}>
+        {desktopOpen ? (
+          <>
+            <div className="flex items-start justify-between gap-2 border-b border-border/60 px-4 py-3">
+              <div>
+                <h2 className="text-sm font-semibold">Response context</h2>
+                <p className="text-xs text-muted-foreground">
+                  {selected ? "Evidence linked to the selected saved response" : "Awaiting verified saved history"}
+                </p>
+              </div>
+              <button
+                type="button"
+                aria-expanded="true"
+                aria-label="Hide response context"
+                onClick={() => setDesktopOpen(false)}
+                className="rounded-md border border-border/70 px-2 py-1 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring"
+              >
+                Hide
+              </button>
+            </div>
+            {renderSwitcher("karen-verified-response-desktop")}
+            {renderPresentations()}
+            {selected?.receipt
+              ? <><ConversationContextRail metadata={selected.receipt}
+                  agentSteps={selected.agentSteps} embedded />
+                  {selected.agentSteps.length === 0 && <ActivityReplayNotice />}</>
+              : <RailUnavailable embedded />}
+          </>
+        ) : (
+          <button
+            type="button"
+            aria-expanded="false"
+            aria-label="Show response context"
+            title="Show response context"
+            onClick={() => setDesktopOpen(true)}
+            className="rounded-md border border-border/70 px-1.5 py-2 text-[11px] font-medium text-muted-foreground hover:text-foreground focus-visible:outline-2 focus-visible:outline-ring [writing-mode:vertical-rl]"
+          >
+            Context
+          </button>
+        )}
       </aside>
     </>
   );
