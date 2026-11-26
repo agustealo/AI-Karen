@@ -17,6 +17,8 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.auth.auth_middleware import AuthenticationError
+from ai_karen_engine.core.realtime.inbox_invalidation import InboxInvalidationUnavailable
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.core.services.dependencies import get_user_context
 from ai_karen_engine.middleware.correlation_middleware import get_request_correlation_id
@@ -313,6 +315,49 @@ async def list_communications_inbox(
         )
     except Exception as exc:
         raise _inbox_error(exc, correlation_id) from None
+
+
+class InboxInvalidationResponse(BaseModel):
+    changed: bool
+
+
+@router.get("/inbox/wait", response_model=InboxInvalidationResponse)
+async def wait_communications_inbox(
+    request: Request,
+    response: Response,
+    user: UserData = Depends(get_current_user),
+    service: CommunicationsInboxService = Depends(get_communications_inbox_service),
+) -> InboxInvalidationResponse:
+    """Bounded change hint, never a notification read or execution request."""
+    headers = {"Cache-Control": "no-store"}
+    if request.query_params:
+        raise HTTPException(status_code=422, detail="Inbox wait accepts no parameters", headers=headers)
+    correlation_id = get_request_correlation_id(request)
+
+    async def reauthenticate() -> UserData:
+        # Canonical session helper authenticates the original request again;
+        # it does not trust request.state.user or the initial dependency result.
+        return await get_current_user(request, credentials=None)
+
+    try:
+        changed = await service.wait_owned(
+            user=user, correlation_id=correlation_id,
+            reauthenticate=reauthenticate, disconnected=request.is_disconnected,
+        )
+        response.headers.update(headers)
+        return InboxInvalidationResponse(changed=changed)
+    except AuthenticationError as exc:
+        code = exc.status_code if exc.status_code in (401, 403, 429, 503) else 503
+        raise HTTPException(status_code=code, detail="Active session unavailable", headers=headers) from None
+    except HTTPException as exc:
+        code = exc.status_code if exc.status_code in (401, 403, 429, 503) else 503
+        raise HTTPException(status_code=code, detail="Active session unavailable", headers=headers) from None
+    except InboxInvalidationUnavailable:
+        raise HTTPException(status_code=503, detail="Inbox invalidation unavailable", headers=headers) from None
+    except Exception as exc:
+        error = _inbox_error(exc, correlation_id)
+        error.headers = headers
+        raise error from None
 
 
 @router.patch("/inbox/{entry_id}", response_model=InboxMutationResponse)

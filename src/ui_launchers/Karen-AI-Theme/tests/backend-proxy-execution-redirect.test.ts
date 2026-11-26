@@ -169,3 +169,85 @@ describe("Hosted backend target single-owner contract", () => {
     expect(proxy).toContain("BACKEND_TARGET_NOT_CONFIGURED");
   });
 });
+
+
+describe("Bounded Communications wait proxy policy", () => {
+  const path = "/api/communications-center/inbox/wait";
+
+  it.each([502, 307])("never replays wait status %s even with read retry options", async (status) => {
+    const fetchSpy = vi.fn().mockImplementation(() => Promise.resolve(new Response(null, {
+      status, headers: { location: "/api/communications-center/inbox/wait" },
+    })));
+    globalThis.fetch = fetchSpy as typeof fetch;
+    const response = await proxyToBackend(new NextRequest("http://localhost:3000" + path), path, {
+      retryAttempts: 5, followRedirects: true, retryOnStatusCodes: [502],
+    });
+    expect(response.status).toBe(502);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("location")).toBeNull();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not send an already-cancelled wait", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    controller.abort("private cancellation reason");
+    const fetchSpy = vi.fn();
+    globalThis.fetch = fetchSpy as typeof fetch;
+    const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+    const response = await proxyToBackend(
+      new NextRequest("http://localhost:3000" + path, { signal: controller.signal }), path,
+    );
+    expect(response.status).toBe(502);
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(fetchSpy).not.toHaveBeenCalled();
+    expect(logs).toHaveBeenCalledWith("[BackendProxy] canonical_upstream_unavailable",
+      expect.objectContaining({ abort_origin: "client_disconnect" }));
+    expect(JSON.stringify(logs.mock.calls)).not.toContain("private cancellation reason");
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("propagates browser disconnect and releases the upstream deadline", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    let entered!: () => void;
+    const started = new Promise<void>(resolve => { entered = resolve; });
+    const logs = vi.spyOn(console, "error").mockImplementation(() => {});
+    const fetchSpy = vi.fn((_input: RequestInfo | URL, init?: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(new DOMException("aborted", "AbortError")), { once: true });
+        entered();
+      }),
+    );
+    globalThis.fetch = fetchSpy as typeof fetch;
+    const request = new NextRequest("http://localhost:3000" + path, { signal: controller.signal });
+    const pending = proxyToBackend(request, path, { retryAttempts: 5 });
+    await started;
+    controller.abort();
+    const response = await pending;
+    expect(response.status).toBe(502);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy.mock.calls[0][1]?.signal?.aborted).toBe(true);
+    expect(logs).toHaveBeenCalledWith("[BackendProxy] canonical_upstream_unavailable",
+      expect.objectContaining({ abort_origin: "client_disconnect" }));
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("clears disconnect handling and deadline on a completed wait", async () => {
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const request = new NextRequest("http://localhost:3000" + path, { signal: controller.signal });
+    const remove = vi.spyOn(request.signal, "removeEventListener");
+    const fetchSpy = vi.fn((_input: RequestInfo | URL, _init?: RequestInit) =>
+      Promise.resolve(new Response('{"changed":true}', { status: 200 })),
+    );
+    globalThis.fetch = fetchSpy as typeof fetch;
+    const response = await proxyToBackend(request, path);
+    expect(await response.json()).toEqual({ changed: true });
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
+    controller.abort();
+    expect(fetchSpy.mock.calls[0][1]?.signal?.aborted).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+});

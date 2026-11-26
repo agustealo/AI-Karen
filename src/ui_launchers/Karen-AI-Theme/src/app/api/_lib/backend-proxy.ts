@@ -223,19 +223,38 @@ function sanitizeHeaders(headers: Headers, backendBaseUrl: string): Headers {
 
 export { getBackendBaseUrl, getBackendTargetStatus, normalizeForwardedProto, sanitizeHeaders };
 
+type ProxyAbortOrigin = 'proxy_deadline' | 'client_disconnect';
+type ProxyRequestInit = RequestInit & {
+  __timeout?: ReturnType<typeof setTimeout>;
+  __detachDisconnect?: () => void;
+  __abortOrigin?: () => ProxyAbortOrigin | undefined;
+};
+
 async function buildInit(
   request: NextRequest,
   backendBaseUrl: string,
   timeoutMs: number,
   overrideBody?: string | ArrayBuffer,
+  cancelOnDisconnect = false,
 ): Promise<RequestInit> {
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+  let abortOrigin: ProxyAbortOrigin | undefined;
+  const abort = (origin: ProxyAbortOrigin) => {
+    if (controller.signal.aborted) return;
+    abortOrigin = origin;
+    controller.abort();
+  };
+  const timeout = setTimeout(() => abort('proxy_deadline'), timeoutMs);
+  const disconnect = () => abort('client_disconnect');
+  if (cancelOnDisconnect) {
+    if (request.signal.aborted) disconnect();
+    else request.signal.addEventListener('abort', disconnect, { once: true });
+  }
 
   const body =
     request.method === 'GET' || request.method === 'HEAD' ? undefined : overrideBody;
 
-  const init: RequestInit & { __timeout?: ReturnType<typeof setTimeout> } = {
+  const init: ProxyRequestInit = {
     method: request.method,
     headers: sanitizeHeaders(request.headers, backendBaseUrl),
     body,
@@ -248,6 +267,10 @@ async function buildInit(
   };
 
   init.__timeout = timeout;
+  init.__abortOrigin = () => abortOrigin;
+  if (cancelOnDisconnect) {
+    init.__detachDisconnect = () => request.signal.removeEventListener('abort', disconnect);
+  }
   return init;
 }
 
@@ -257,9 +280,10 @@ function getTimeoutHandle(init: RequestInit): ReturnType<typeof setTimeout> | un
 
 function clearInitTimeout(init: RequestInit): void {
   const timeout = getTimeoutHandle(init);
-  if (timeout) {
+  if (timeout !== undefined) {
     clearTimeout(timeout);
   }
+  (init as ProxyRequestInit).__detachDisconnect?.();
 }
 
 function isRetryableProxyError(error: unknown): boolean {
@@ -308,10 +332,13 @@ export async function proxyToBackend(
   }
   const backendBaseUrl = getBackendBaseUrl();
   const timeoutMs = options?.longTimeout ? LONG_TIMEOUT_MS : DEFAULT_TIMEOUT_MS;
-  // Only safe read methods may be retried or followed through redirects.
-  // A transport failure/502 does not establish that a mutating POST failed
-  // before persistence or execution. A second attempt could duplicate work.
-  const safeRead = request.method === 'GET' || request.method === 'HEAD';
+  // An inbox wait holds an upstream subscription even though it is a GET.
+  // Never replay it or follow a redirect; propagate the incoming disconnect.
+  // Keep this policy in the canonical proxy so catch-all and other callers
+  // cannot accidentally opt the wait back into generic read retries.
+  const boundedWait = upstreamPath.replace(/\/+$/, '') === '/api/communications-center/inbox/wait';
+  // Ordinary safe reads retain their existing retry behavior.
+  const safeRead = !boundedWait && (request.method === 'GET' || request.method === 'HEAD');
   const retryAttempts = safeRead ? Math.max(1, options?.retryAttempts ?? 2) : 1;
   const retryDelayMs = Math.max(0, options?.retryDelayMs ?? 250);
   const retryOnStatusCodes = new Set(options?.retryOnStatusCodes ?? [502]);
@@ -332,7 +359,7 @@ export async function proxyToBackend(
     }
   }
 
-  let init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody);
+  let init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody, boundedWait);
 
   try {
     let upstream: Response | undefined;
@@ -340,14 +367,16 @@ export async function proxyToBackend(
 
     for (let attempt = 1; attempt <= retryAttempts; attempt += 1) {
       try {
+        if (boundedWait && init.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError');
         upstream = await fetch(upstreamUrl, init);
+        if (boundedWait && init.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError');
         const shouldRetryStatus =
           retryOnStatusCodes.has(upstream.status) && attempt < retryAttempts;
 
         if (shouldRetryStatus) {
           clearInitTimeout(init);
           await sleep(retryDelayMs * attempt);
-          init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody);
+          init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody, boundedWait);
           continue;
         }
 
@@ -369,7 +398,7 @@ export async function proxyToBackend(
         }
 
         await sleep(retryDelayMs * attempt);
-        init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody);
+        init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody, boundedWait);
       }
     }
 
@@ -416,7 +445,7 @@ export async function proxyToBackend(
       // response-body consumption; otherwise a redirected timeout could leak
       // a timer and be incorrectly attributed to the original request.
       clearInitTimeout(init);
-      init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody);
+      init = await buildInit(request, backendBaseUrl, timeoutMs, capturedBody, boundedWait);
       upstream = await fetch(redirectUrl, init);
     }
 
@@ -436,6 +465,7 @@ export async function proxyToBackend(
       typeof upstream.arrayBuffer === 'function'
         ? await upstream.arrayBuffer()
         : await upstream.text();
+    if (boundedWait && init.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError');
     const headers = new Headers(upstream.headers);
     clearInitTimeout(init);
 
@@ -454,15 +484,10 @@ export async function proxyToBackend(
   } catch (error) {
     clearInitTimeout(init);
 
-    // AbortError alone cannot distinguish our own deadline from an upstream
-    // or transport cancellation. The request signal is owned by buildInit
-    // and is aborted only by its deadline timer. Keep the original HTTP
-    // failure contract, and emit a bounded, non-sensitive attribution.
-    const abortOrigin = init.signal?.aborted === true
-      ? 'proxy_deadline'
-      : isAbortError(error)
-        ? 'upstream_or_transport'
-        : 'not_aborted';
+    // Preserve the first observed cancellation cause, including a browser
+    // disconnect for bounded waits. Never expose the incoming abort reason.
+    const abortOrigin = (init as ProxyRequestInit).__abortOrigin?.()
+      ?? (isAbortError(error) ? 'upstream_or_transport' : 'not_aborted');
     // Some fetch/TLS errors embed the full upstream URL, including secrets.
     // Record structured error class only; never return or log raw causes.
     console.error('[BackendProxy] canonical_upstream_unavailable', {
