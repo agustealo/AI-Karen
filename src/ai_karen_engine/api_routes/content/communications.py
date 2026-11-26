@@ -10,11 +10,22 @@ from __future__ import annotations
 import logging
 from dataclasses import asdict, is_dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, ConfigDict, Field
 
+from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.core.services.dependencies import get_user_context
+from ai_karen_engine.middleware.correlation_middleware import get_request_correlation_id
+from ai_karen_engine.persistence.repositories.communications_inbox_repository import (
+    InboxConflict, InboxCursor, InboxEntry, InboxFilter, InboxNotFound, InboxOperation,
+)
+from ai_karen_engine.services.communications_inbox import (
+    CommunicationsAuthorizationError, CommunicationsInboxService,
+)
 from ai_karen_engine.core.services.service_registry import get_service_registry
 from ai_karen_engine.services.audit.audit_logging import AuditEventType, get_audit_logger
 from ai_karen_engine.services.audit.training_audit_logger import TrainingEventType, get_training_audit_logger
@@ -197,3 +208,114 @@ async def get_communications_center_observability(
         "memory": memory_observability,
         "alerts": alerts,
     }
+
+
+class InboxEntryResponse(BaseModel):
+    entry_id: UUID
+    conversation_id: UUID
+    execution_id: UUID
+    source_kind: Literal["terminal_chat_attention"]
+    source_status: Literal["failed", "orphaned"]
+    created_at: datetime
+    read_at: datetime | None
+    acknowledged_at: datetime | None
+    archived_at: datetime | None
+    # Preserve the full PostgreSQL bigint without JavaScript number rounding.
+    revision: str
+
+
+class InboxCursorResponse(BaseModel):
+    created_at: datetime
+    entry_id: UUID
+
+
+class InboxPageResponse(BaseModel):
+    entries: list[InboxEntryResponse]
+    next_cursor: InboxCursorResponse | None
+    active_unread_count: int
+
+
+class InboxMutationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation: InboxOperation
+    expected_revision: str = Field(strict=True, pattern=r"^[1-9][0-9]{0,18}$")
+
+
+class InboxMutationResponse(BaseModel):
+    entry: InboxEntryResponse
+    changed: bool
+
+
+def _inbox_entry_response(entry: InboxEntry) -> InboxEntryResponse:
+    return InboxEntryResponse.model_validate({**asdict(entry), "revision": str(entry.revision)})
+
+
+def get_communications_inbox_service() -> CommunicationsInboxService:
+    return CommunicationsInboxService()
+
+
+def _inbox_error(exc: Exception, correlation_id: str) -> HTTPException:
+    if isinstance(exc, CommunicationsAuthorizationError):
+        return HTTPException(status_code=403, detail="Communications permission denied")
+    if isinstance(exc, InboxNotFound):
+        return HTTPException(status_code=404, detail="Communications entry not found")
+    if isinstance(exc, InboxConflict):
+        return HTTPException(status_code=409, detail="Communications revision conflict")
+    if isinstance(exc, ValueError):
+        return HTTPException(status_code=422, detail="Invalid communications request")
+    logger.error("communications.inbox.unavailable", extra={
+        "correlation_id": correlation_id, "error_type": type(exc).__name__,
+    })
+    return HTTPException(status_code=503, detail="Communications inbox unavailable")
+
+
+@router.get("/inbox", response_model=InboxPageResponse)
+async def list_communications_inbox(
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    inbox_filter: InboxFilter = Query(default=InboxFilter.ACTIVE),
+    cursor_at: datetime | None = Query(default=None),
+    cursor_id: UUID | None = Query(default=None),
+    user: UserData = Depends(get_current_user),
+    service: CommunicationsInboxService = Depends(get_communications_inbox_service),
+) -> InboxPageResponse:
+    correlation_id = get_request_correlation_id(request)
+    if (cursor_at is None) != (cursor_id is None):
+        raise HTTPException(status_code=422, detail="Complete inbox cursor required")
+    cursor = None
+    if cursor_at is not None and cursor_id is not None:
+        if cursor_at.utcoffset() is None:
+            raise HTTPException(status_code=422, detail="Timezone-aware inbox cursor required")
+        cursor = InboxCursor(cursor_at, str(cursor_id))
+    try:
+        page = await service.list_owned(
+            user=user, correlation_id=correlation_id, limit=limit,
+            inbox_filter=inbox_filter, cursor=cursor,
+        )
+        return InboxPageResponse(
+            entries=[_inbox_entry_response(entry) for entry in page.entries],
+            next_cursor=InboxCursorResponse.model_validate(asdict(page.next_cursor))
+            if page.next_cursor else None,
+            active_unread_count=page.active_unread_count,
+        )
+    except Exception as exc:
+        raise _inbox_error(exc, correlation_id) from None
+
+
+@router.patch("/inbox/{entry_id}", response_model=InboxMutationResponse)
+async def mutate_communications_inbox(
+    entry_id: UUID,
+    payload: InboxMutationRequest,
+    request: Request,
+    user: UserData = Depends(get_current_user),
+    service: CommunicationsInboxService = Depends(get_communications_inbox_service),
+) -> InboxMutationResponse:
+    correlation_id = get_request_correlation_id(request)
+    try:
+        result = await service.mutate_owned(
+            user=user, correlation_id=correlation_id, entry_id=entry_id,
+            operation=payload.operation, expected_revision=int(payload.expected_revision),
+        )
+        return InboxMutationResponse(entry=_inbox_entry_response(result.entry), changed=result.changed)
+    except Exception as exc:
+        raise _inbox_error(exc, correlation_id) from None
