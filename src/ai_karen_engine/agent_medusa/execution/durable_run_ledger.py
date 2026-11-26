@@ -140,6 +140,8 @@ class DurableRunLedger(Protocol):
         reconciled_at: datetime,
         completed_at: datetime | None = None,
         error_type: str | None = None,
+        outcome_status: str | None = None,
+        expected_worker_id: str | None = None,
     ) -> bool: ...
 
     async def link_audit_event(
@@ -656,12 +658,27 @@ class PostgresDurableRunLedger:
         reconciled_at: datetime,
         completed_at: datetime | None = None,
         error_type: str | None = None,
+        outcome_status: str | None = None,
+        expected_worker_id: str | None = None,
     ) -> bool:
         """Repair durable state only from an authoritative Redis observation."""
 
         normalized = "cancellation_requested" if status == "cancelling" else status
         if normalized not in {"cancellation_requested", *_TERMINAL_STATUSES}:
             raise ValueError(f"Unsupported shared Medusa status: {status}")
+        valid_outcomes = {
+            "completed": {"success", "partial", "degraded", None},
+            "failed": {"error", "timeout", None},
+            "cancelled": {"cancelled", None},
+            "orphaned": {None},
+            "cancellation_requested": {None},
+        }
+        if outcome_status not in valid_outcomes[normalized]:
+            raise ValueError("Invalid shared terminal outcome")
+        if normalized in {"completed", "failed", "cancelled"} and (
+            completed_at is None or not expected_worker_id
+        ):
+            raise ValueError("Shared terminal receipt lacks identity or timestamp")
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
@@ -669,6 +686,17 @@ class PostgresDurableRunLedger:
                 if row is None:
                     return False
                 current = str(row["status"])
+                if expected_worker_id and str(row.get("owner_worker_id")) != (
+                    expected_worker_id
+                ):
+                    return False
+                # A conflicting durable cancellation after an uncertain Redis
+                # commit requires explicit arbitration, not history overwrite.
+                if current == "cancellation_requested" and normalized in {
+                    "completed",
+                    "failed",
+                }:
+                    return False
                 if current not in _ACTIVE_STATUSES or current == normalized:
                     return False
                 terminal_at = completed_at or reconciled_at
@@ -679,6 +707,7 @@ class PostgresDurableRunLedger:
                     "terminal_at": terminal_at,
                     "reconciled_at": reconciled_at,
                     "error_type": error_type,
+                    "outcome_status": outcome_status,
                 }
                 if normalized in _TERMINAL_STATUSES:
                     await session.execute(
@@ -690,6 +719,15 @@ class PostgresDurableRunLedger:
                                 updated_at = :reconciled_at,
                                 reconciled_at = :reconciled_at,
                                 error_type = COALESCE(:error_type, error_type),
+                                metadata = CASE
+                                    WHEN CAST(:outcome_status AS text) IS NULL THEN metadata
+                                    ELSE jsonb_set(
+                                        COALESCE(metadata, '{}'::jsonb),
+                                        '{outcome_status}',
+                                        to_jsonb(CAST(:outcome_status AS text)),
+                                        true
+                                    )
+                                END,
                                 last_worker_transition_at = :reconciled_at
                             WHERE run_id = :run_id
                               AND tenant_id = CAST(:tenant_id AS uuid)

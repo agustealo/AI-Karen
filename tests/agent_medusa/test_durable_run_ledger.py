@@ -211,10 +211,19 @@ class InMemoryDurableLedger:
         reconciled_at: datetime,
         completed_at: datetime | None = None,
         error_type: str | None = None,
+        outcome_status: str | None = None,
+        expected_worker_id: str | None = None,
     ) -> bool:
         record = self.records[run_id]
         assert record["tenant_id"] == tenant_id
         normalized = "cancellation_requested" if status == "cancelling" else status
+        if expected_worker_id and record["owner_worker_id"] != expected_worker_id:
+            return False
+        if record["status"] == "cancellation_requested" and normalized in {
+            "completed",
+            "failed",
+        }:
+            return False
         if record["status"] not in {"created", "running", "cancellation_requested"}:
             return False
         if record["status"] == normalized:
@@ -225,6 +234,7 @@ class InMemoryDurableLedger:
         if normalized in {"completed", "failed", "cancelled", "orphaned"}:
             record["completed_at"] = completed_at or reconciled_at
             record["error_type"] = error_type
+            record["outcome_status"] = outcome_status
         elif normalized == "cancellation_requested":
             record["cancel_requested_at"] = reconciled_at
         self._transition(
@@ -384,6 +394,7 @@ class SharedTruthStore:
             "correlation_id": f"corr-{run_id}",
             "tenant_id": tenant_id,
             "user_id": "user-1",
+            "owner_worker_id": "dead-worker",
             "status": status,
             "started_at": now.isoformat(),
             "completed_at": (
@@ -530,6 +541,7 @@ def test_redis_terminal_truth_repairs_missed_durable_terminal_transition() -> No
         ledger.seed_active(run_id="repair-1", tenant_id=tenant_id)
         shared = SharedTruthStore()
         shared.seed(run_id="repair-1", tenant_id=tenant_id, status="failed")
+        shared.records["repair-1"]["outcome_status"] = "timeout"
         manager = MedusaRunManager(
             settings=_settings(distributed=True, worker_id="observer"),
             distributed_store=shared,
@@ -540,6 +552,7 @@ def test_redis_terminal_truth_repairs_missed_durable_terminal_transition() -> No
 
         assert ledger.records["repair-1"]["status"] == "failed"
         assert ledger.records["repair-1"]["error_type"] == "SharedFailure"
+        assert ledger.records["repair-1"]["outcome_status"] == "timeout"
 
     asyncio.run(scenario())
 
@@ -804,3 +817,55 @@ async def test_unverified_retirement_is_owner_fenced_and_survives_manager_recrea
         "running",
         "orphaned",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("commit_first", [False, True])
+async def test_local_terminal_acknowledgement_loss_never_publishes_proposal(
+    commit_first: bool,
+) -> None:
+    class UncertainLedger(InMemoryDurableLedger):
+        async def mark_terminal(self, **kwargs: Any) -> str:
+            if commit_first:
+                await super().mark_terminal(**kwargs)
+            raise DurableRunLedgerUnavailable("injected lost acknowledgement")
+
+    ledger = UncertainLedger()
+    manager = MedusaRunManager(settings=_settings(), durable_ledger=ledger)
+    task = asyncio.create_task(asyncio.sleep(0))
+    scope = dict(run_id="uncertain-local", tenant_id="tenant-a")
+    await manager.register(
+        **scope, correlation_id="corr", user_id="user-1", task=task
+    )
+    await task
+    assert (await manager.mark_response(scope["run_id"], "success")).value == "orphaned"
+    snapshot = await manager.get(**scope)
+    assert snapshot["outcome_status"] is None
+    assert snapshot["completed_at"] is None
+    assert snapshot["error_type"] == "TerminalCommitUnconfirmed"
+    assert (await manager.mark_response(scope["run_id"], "success")).value == "orphaned"
+    assert ledger.records[scope["run_id"]]["status"] == (
+        "completed" if commit_first else "running"
+    )
+
+
+@pytest.mark.parametrize("field", ["owner_worker_id", "correlation_id", "user_id"])
+def test_reconciliation_rejects_foreign_receipt_identity(field: str) -> None:
+    async def scenario() -> None:
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+        ledger = InMemoryDurableLedger()
+        ledger.seed_active(run_id="foreign", tenant_id=tenant_id)
+        shared = SharedTruthStore()
+        shared.seed(run_id="foreign", tenant_id=tenant_id, status="completed")
+        shared.records["foreign"][field] = "foreign-value"
+        shared.records["foreign"]["outcome_status"] = "success"
+        manager = MedusaRunManager(
+            settings=_settings(distributed=True, worker_id="observer"),
+            distributed_store=shared,
+            durable_ledger=ledger,
+        )
+        await manager.list_runs(tenant_id=tenant_id)
+        assert ledger.records["foreign"]["status"] == "running"
+        assert not ledger.transitions
+
+    asyncio.run(scenario())

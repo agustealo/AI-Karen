@@ -500,6 +500,7 @@ class RedisDistributedRunStore:
             "run_id": record.get("run_id", ""),
             "correlation_id": record.get("correlation_id", ""),
             "tenant_id": record.get("tenant_id", ""),
+            "owner_worker_id": record.get("owner_worker_id", ""),
             "user_id": record.get("user_id", ""),
             "status": status,
             "started_at": record.get("started_at") or None,

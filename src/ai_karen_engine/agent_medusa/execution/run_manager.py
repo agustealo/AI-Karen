@@ -377,12 +377,7 @@ class MedusaRunManager:
                 return run.status
             heartbeat_task = run.heartbeat_task
             run.heartbeat_task = None
-            if run.shared_registered:
-                run.terminal_pending = True
-            else:
-                self._publish_terminal_locked(
-                    run, status, completed_at, error_type, outcome_status
-                )
+            run.terminal_pending = True
 
         if run.shared_registered:
             try:
@@ -476,16 +471,52 @@ class MedusaRunManager:
                     raise
                 return ExecutionRunStatus.ORPHANED
 
-        await self._stop_terminal_heartbeat(heartbeat_task)
-        if run.durable_registered:
-            await self._safe_mark_durable_terminal(
-                run=run,
-                status=status,
-                completed_at=completed_at,
-                error_type=error_type,
-                outcome_status=outcome_status,
+        try:
+            await self._stop_terminal_heartbeat(heartbeat_task)
+            if run.durable_registered:
+                # Even without Redis, a registered durable run must not expose
+                # a proposed result before its persistence is confirmed.
+                await self._durable_ledger.mark_terminal(
+                    run_id=run_id,
+                    tenant_id=run.tenant_id,
+                    worker_id=self._settings.worker_id,
+                    status=status.value,
+                    completed_at=completed_at,
+                    error_type=error_type,
+                    outcome_status=outcome_status,
+                )
+            async with self._lock:
+                self._publish_terminal_locked(
+                    run, status, completed_at, error_type, outcome_status
+                )
+                run.terminal_pending = False
+            return status
+        except (Exception, asyncio.CancelledError) as exc:
+            async with self._lock:
+                run.terminal_pending = False
+                run.terminal_unconfirmed = True
+                run.status = ExecutionRunStatus.ORPHANED
+                run.completed_at = None
+                run.error_type = "TerminalCommitUnconfirmed"
+                run.outcome_status = None
+                if run.task is not asyncio.current_task():
+                    self._signal_task_once_locked(run)
+                if (
+                    run.task.done() or run.task is asyncio.current_task()
+                ) and run_id not in self._terminal_order:
+                    self._terminal_order.append(run_id)
+                    self._prune_locked()
+            logger.warning(
+                "Medusa local terminal persistence unconfirmed",
+                extra={
+                    "run_id": run_id,
+                    "tenant_id": run.tenant_id,
+                    "error_type": type(exc).__name__,
+                },
             )
-        return status
+            if isinstance(exc, asyncio.CancelledError):
+                raise
+            return ExecutionRunStatus.ORPHANED
 
     def _publish_terminal_locked(
         self,
@@ -1149,6 +1180,21 @@ class MedusaRunManager:
                     "error_type": "WorkerLeaseExpired",
                 }
 
+            # A present shared receipt must match the durable identity.
+            # Absence is handled by the existing orphan reconciliation policy.
+            if "run_id" in shared and any(
+                shared.get(key) != row.get(key)
+                for key in ("run_id", "correlation_id", "user_id", "owner_worker_id")
+            ):
+                logger.warning(
+                    "Medusa reconciliation identity mismatch",
+                    extra={"run_id": run_id, "tenant_id": tenant_id},
+                )
+                continue
+            if "run_id" in shared and _canonical_tenant_id(
+                str(shared.get("tenant_id") or "")
+            ) != _canonical_tenant_id(tenant_id):
+                continue
             shared_status = str(shared.get("status") or "")
             if shared_status == "running":
                 continue
@@ -1164,6 +1210,10 @@ class MedusaRunManager:
                     extra={"run_id": run_id, "status": shared_status},
                 )
                 continue
+            if shared_status in {"completed", "failed", "cancelled"} and (
+                not shared.get("completed_at") or not shared.get("owner_worker_id")
+            ):
+                continue
             try:
                 changed = await reconcile(
                     run_id=run_id,
@@ -1172,7 +1222,15 @@ class MedusaRunManager:
                     reconciled_at=datetime.now(timezone.utc),
                     completed_at=self._parse_time(shared.get("completed_at")),
                     error_type=shared.get("error_type"),
+                    outcome_status=shared.get("outcome_status"),
+                    expected_worker_id=shared.get("owner_worker_id"),
                 )
+            except ValueError:
+                logger.warning(
+                    "Medusa reconciliation ignored invalid receipt",
+                    extra={"run_id": run_id, "tenant_id": tenant_id},
+                )
+                continue
             except DurableRunLedgerUnavailable:
                 if self._settings.durable_run_ledger_required:
                     raise
