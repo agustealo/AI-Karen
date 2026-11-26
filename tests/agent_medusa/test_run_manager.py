@@ -114,9 +114,7 @@ async def test_strict_history_lookup_distinguishes_unavailable_from_absent(mode)
     if mode == "recorded":
         assert await manager.get(**scope) == record
     else:
-        expected = (
-            RunNotFoundError if mode == "absent" else DurableRunLedgerUnavailable
-        )
+        expected = RunNotFoundError if mode == "absent" else DurableRunLedgerUnavailable
         with pytest.raises(expected):
             await manager.get(**scope)
     if mode == "disabled":

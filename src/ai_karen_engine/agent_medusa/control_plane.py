@@ -160,13 +160,14 @@ class AgentMedusaControlPlane:
             or not correlation_id
         ):
             raise OutcomeStoreError("Specialist participation run identity unavailable")
-        receipts, truncated = (
-            await get_outcome_store().list_specialist_participation_async(
-                trajectory_id=run_id,
-                correlation_id=correlation_id,
-                tenant_id=tenant_id,
-                user_id=user_id,
-            )
+        (
+            receipts,
+            truncated,
+        ) = await get_outcome_store().list_specialist_participation_async(
+            trajectory_id=run_id,
+            correlation_id=correlation_id,
+            tenant_id=tenant_id,
+            user_id=user_id,
         )
         return {
             "run_id": run_id,
