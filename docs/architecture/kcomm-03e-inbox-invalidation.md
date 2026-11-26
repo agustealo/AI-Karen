@@ -77,3 +77,9 @@ using real connections. It does not flush or modify existing Redis data, use
 hosted credentials, or change production configuration. This certifies the
 broker boundary only, not authenticated end-to-end HTTP revocation or browser
 delivery. The test must actually run and pass; an opt-out skip is not evidence.
+
+
+The canonical authentication middleware also applies no-store to the wait
+response before it leaves ingress, covering initial authentication rejection
+and dependency rejection as well as successful and post-wait responses.
+No duplicate authentication owner or global cache-policy change is introduced.

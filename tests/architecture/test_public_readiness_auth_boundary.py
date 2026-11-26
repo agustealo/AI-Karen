@@ -13,12 +13,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
 
 from ai_karen_engine.api_routes.monitoring.probes import router as probe_router
-from ai_karen_engine.auth.auth_middleware import SecureAuthMiddleware
+from ai_karen_engine.auth.auth_middleware import AuthenticationError, SecureAuthMiddleware
+from ai_karen_engine.server.exception_handlers import setup_exception_handlers
 from ai_karen_engine.core.runtime.operational_health import OperationalHealthService
 
 
@@ -40,10 +41,6 @@ def _canonical_auth_configuration(rejecting_auth):
     source_module = ast.Module(body=owned, type_ignores=[])
     ast.fix_missing_locations(source_module)
 
-    class UnusedAuthError(Exception):
-        status_code = 401
-        message = "Authentication required"
-
     class UnusedDevConfigError(Exception):
         pass
 
@@ -55,7 +52,7 @@ def _canonical_auth_configuration(rejecting_auth):
         "JSONResponse": JSONResponse,
         "get_auth_middleware": lambda: rejecting_auth,
         "auth_config": SimpleNamespace(should_bypass_auth=lambda: False),
-        "AuthenticationError": UnusedAuthError,
+        "AuthenticationError": AuthenticationError,
         "DevelopmentIdentityConfigurationError": UnusedDevConfigError,
         "is_native_channel_webhook_path": lambda *_: False,
         "is_personal_pairing_callback_path": lambda *_: False,
@@ -139,3 +136,70 @@ def test_auth_boundary_allows_anonymous_readiness_not_private_routes(monkeypatch
         db_unavailable = client.get("/ready")
         assert db_unavailable.status_code == 503
         assert db_unavailable.json()["detail"]["components"]["database"] == "not_ready"
+
+
+def test_communications_wait_admission_and_dependency_rejections_are_no_store():
+    class ControlledAuth:
+        failure = None
+
+        def is_public_endpoint(self, path: str) -> bool:
+            return False
+
+        async def authenticate_request(self, request: Request):
+            if self.failure is not None:
+                raise self.failure
+            return {"user_id": "verified-test-user"}
+
+    auth = ControlledAuth()
+    app = FastAPI()
+    setup_exception_handlers(app)
+    _canonical_auth_configuration(auth)(app)
+    dependency_failure = None
+    handler_calls = []
+
+    async def admit():
+        if dependency_failure is not None:
+            raise dependency_failure
+
+    path = "/api/communications-center/inbox/wait"
+
+    @app.get(path)
+    async def wait(_=Depends(admit)):
+        handler_calls.append(True)
+        return {"changed": False}
+
+    @app.get("/unrelated")
+    async def unrelated():
+        return {"ok": True}
+
+    failures = (
+        HTTPException(status_code=401, detail="Authentication required"),
+        AuthenticationError("Token has been revoked", 401),
+        AuthenticationError("Explicit non-default tenant scope is required", 403),
+        AuthenticationError("Session verification unavailable", 503),
+    )
+    with TestClient(app) as client:
+        for failure in failures:
+            auth.failure = failure
+            response = client.get(path)
+            assert response.status_code == failure.status_code
+            assert response.headers["cache-control"] == "no-store"
+        auth.failure = RuntimeError("private store failure")
+        response = client.get(path)
+        assert response.status_code == 503
+        assert response.headers["cache-control"] == "no-store"
+        assert "private store failure" not in response.text
+        auth.failure = None
+        for failure in failures:
+            dependency_failure = failure
+            response = client.get(path)
+            assert response.status_code == failure.status_code
+            assert response.headers["cache-control"] == "no-store"
+        assert not handler_calls
+        dependency_failure = None
+        response = client.get(path)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "no-store"
+        assert response.json() == {"changed": False}
+        assert len(handler_calls) == 1
+        assert "cache-control" not in client.get("/unrelated").headers
