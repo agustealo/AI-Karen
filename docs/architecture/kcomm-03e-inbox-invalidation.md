@@ -101,3 +101,18 @@ A coalesced/missed hint is recovered by periodic reconciliation. No persistent
 connection badge, broker payload, optimistic data, or automatic mutation.
 Browser-to-backend disconnect and signed-session revocation acceptance remain
 required; both server flags stay default-off.
+
+
+## KCOMM-04A: optional Redis lifecycle dependency
+
+The operational health authority distinguishes **lifecycle enabled** from
+**readiness required**. When Communications invalidation is enabled,
+the canonical ASGI lifespan attaches and drains the existing Redis manager
+even if memory and both Redis-backed rate-limit features are disabled.
+There is no second pool, per-request initialization or new configuration flag.
+The optional hint transport independently checks broker availability and
+fails closed; the durable inbox retains periodic authenticated polling.
+Global Redis readiness remains required only under the existing mandatory
+memory/rate-limit policy. A healthy global readiness response does not
+certify optional notification transport. Existing production Redis URL
+security validation remains unchanged. Both invalidation flags stay default-off.
