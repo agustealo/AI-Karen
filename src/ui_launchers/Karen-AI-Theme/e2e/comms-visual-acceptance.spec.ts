@@ -163,7 +163,8 @@ test("KUI-COMMS: live identity-scoped evidence and five responsive viewports", a
 
     const tabs = root.getByRole("tablist");
     await expect(tabs).toBeVisible();
-    await expect(tabs.getByRole("tab")).toHaveCount(6);
+    await expect(tabs.getByRole("tab")).toHaveCount(7);
+    await expect(tabs.getByRole("tab", { name: "Inbox" })).toBeVisible();
     const auditTab = tabs.getByRole("tab", { name: "Audit timeline" });
     await auditTab.focus();
     await expect(auditTab).toBeFocused();

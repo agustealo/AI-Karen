@@ -7,12 +7,16 @@ const stubs = vi.hoisted(() => ({
   get: vi.fn(),
   approvalGet: vi.fn(),
   approvalPost: vi.fn(),
+  inboxGet: vi.fn(),
+  inboxPatch: vi.fn(),
   useAuth: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
   default: { get: stubs.get },
-  apiClient: { get: stubs.approvalGet, post: stubs.approvalPost },
+  apiClient: { get: (path: string, ...args: unknown[]) => path.startsWith("/api/communications-center/inbox") ? stubs.inboxGet(path, ...args) : stubs.approvalGet(path, ...args), post: stubs.approvalPost, patch: stubs.inboxPatch },
+  captureApiPrincipalScope: (tenant_id: string, user_id: string) => ({ tenant_id, user_id, revision: 1 }),
+  isCurrentApiPrincipalScope: (scope: { tenant_id: string; user_id: string }) => stubs.useAuth().user?.tenant_id === scope.tenant_id && stubs.useAuth().user?.user_id === scope.user_id,
   ApiError: class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {
@@ -57,6 +61,8 @@ beforeEach(() => {
   stubs.get.mockReset();
   stubs.approvalGet.mockReset().mockResolvedValue([]);
   stubs.approvalPost.mockReset();
+  stubs.inboxGet.mockReset().mockResolvedValue({ entries: [], next_cursor: null, active_unread_count: 0 });
+  stubs.inboxPatch.mockReset();
   stubs.useAuth.mockReset();
   stubs.useAuth.mockReturnValue({
     isLoading: false,
@@ -374,4 +380,35 @@ describe("Communications Center's canonical visual and authority contract", () =
       expect(observabilityRequests).toHaveLength(2);
     });
   });
+});
+
+it("retains the personal inbox mutation lock when changing Communications tabs", async () => {
+  stubs.get.mockResolvedValue(LIVE_SNAPSHOT);
+  const entry = {
+    entry_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+    conversation_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+    execution_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    source_kind: "terminal_chat_attention", source_status: "failed",
+    created_at: "2026-11-26T15:00:00Z", read_at: null,
+    acknowledged_at: null, archived_at: null, revision: "1",
+  };
+  stubs.inboxGet.mockResolvedValue({ entries: [entry], next_cursor: null, active_unread_count: 1 });
+  let reject!: (error: Error) => void;
+  stubs.inboxPatch.mockReturnValue(new Promise((_resolve, fail) => { reject = fail; }));
+  render(<CommsCenterPage />);
+  const selectTab = (name: string) => {
+    const tab = screen.getByRole("tab", { name });
+    tab.focus();
+    fireEvent.keyDown(tab, { key: "Enter", code: "Enter" });
+  };
+  selectTab("Inbox");
+  fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+  selectTab("Overview");
+  selectTab("Inbox");
+  expect((screen.getByRole("button", { name: "Archive" }) as HTMLButtonElement).disabled).toBe(true);
+  expect(stubs.inboxGet).toHaveBeenCalledTimes(1);
+  expect(stubs.inboxPatch).toHaveBeenCalledTimes(1);
+  await act(async () => reject(new Error("Lost receipt")));
+  await screen.findByText("Notification change could not be verified. Refresh before trying again.");
+  expect(stubs.inboxPatch).toHaveBeenCalledTimes(1);
 });

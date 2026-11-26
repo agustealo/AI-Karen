@@ -270,8 +270,7 @@ describe("principal-fenced API requests", () => {
     let release!: (response: Response) => void;
     vi.stubGlobal("fetch", vi.fn().mockImplementation(() => new Promise<Response>(resolve => { release = resolve; })));
     const request = apiClient.get("/api/communications-center/inbox", scope);
-    await Promise.resolve();
-    await Promise.resolve();
+    await vi.waitFor(() => expect(release).toBeTypeOf("function"));
     vi.mocked(authService.getCurrentUser).mockReturnValue({ tenant_id: "other", user_id: "other" } as ReturnType<typeof authService.getCurrentUser>);
     release(new Response(JSON.stringify({ entries: [] }), { status: 200 }));
     await expect(request).rejects.toThrow("Authenticated request scope changed");

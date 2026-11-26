@@ -239,6 +239,7 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat,
     const [observabilityLoading, setObservabilityLoading] = useState(true);
     const [refreshRevision, setRefreshRevision] = useState(0);
     const [activeTab, setActiveTab] = useState("overview");
+    const [inboxVisited, setInboxVisited] = useState(false);
     const { approvals, approvalsError, isLoadingApprovals, loadApprovals } = useRuntimeApprovalContext();
     const [ownedRunSnapshot, setOwnedRunSnapshot] = useState<{ principal: string; value: OwnedRunResponse } | null>(null);
     const [ownedRunsLoading, setOwnedRunsLoading] = useState(true);
@@ -416,7 +417,7 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat,
             </div>
         </header>
 
-        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
+        <Tabs value={activeTab} onValueChange={(value) => { if (value === "inbox") setInboxVisited(true); setActiveTab(value); }} className="w-full">
             <div className="overflow-x-auto pb-1" aria-label="Communications Center sections">
                 <TabsList className="flex h-auto w-max min-w-full items-center justify-start gap-1 border-border/70 bg-muted/50 p-1.5">
                     <TabsTrigger value="overview" className="min-h-10 gap-2 px-3 sm:px-4">
@@ -680,13 +681,13 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat,
                 </div>
             </TabsContent>
 
-            <TabsContent value="inbox" className="mt-6 space-y-6">
-                <PersonalCommunicationsInbox
+            <TabsContent value="inbox" forceMount hidden={activeTab !== "inbox"} className="mt-6 space-y-6 data-[state=inactive]:hidden">
+                {inboxVisited && <PersonalCommunicationsInbox
                     tenantId={principal ? user?.tenant_id : undefined}
                     userId={principal ? user?.user_id : undefined}
                     onOpenConversation={onOpenConversation}
                     refreshRevision={refreshRevision}
-                />
+                />}
             </TabsContent>
 
             <TabsContent value="decisions" className="mt-6 space-y-6">
