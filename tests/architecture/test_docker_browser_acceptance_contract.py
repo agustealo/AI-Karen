@@ -45,7 +45,7 @@ def test_docker_scenario_reuses_existing_protected_acceptance_workflow() -> None
     before = _job(workflow, "docker-provenance-before")
     browser = _job(workflow, "authenticated-docker-search-replay")
     after = _job(workflow, "docker-provenance-after")
-    guard = "(inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation') && github.ref == 'refs/heads/main'"
+    guard = "(inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-fresh') && github.ref == 'refs/heads/main'"
     for job in (before, browser, after):
         assert guard in job
         assert "ref: " + chr(36) + "{{ inputs.target_sha }}" in job
@@ -112,7 +112,7 @@ def test_browser_is_hosted_and_credentials_are_only_available_to_proof_step() ->
     for secret in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
         binding = secret + ": " + chr(36) + "{{ secrets." + secret + " }}"
         assert binding not in job_scope
-        assert browser.count(binding) == 2
+        assert browser.count(binding) == 3
         assert binding in proof
 
     for step in (
@@ -191,3 +191,30 @@ def test_signed_docker_specialist_reuses_host_chain_and_private_gate() -> None:
     shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text()
     assert '[[ -v VERCEL_AUTOMATION_BYPASS_SECRET ]]' in shell
     assert 'export KAREN_SEARCH_ACCEPTANCE_PLATFORM="$1"' in shell
+
+
+def test_fresh_specialist_acceptance_is_separate_and_provenance_bound() -> None:
+    workflow = WORKFLOW.read_text()
+    assert "          - docker-specialist-fresh\n" in workflow
+    browser = _job(workflow, "authenticated-docker-search-replay")
+    title = "Prove fresh signed Docker ordinary-chat specialist execution"
+    proof = browser.split("      - name: " + title, 1)[1].split("\n      - ", 1)[0]
+    assert "if: inputs.scenario == 'docker-specialist-fresh'" in proof
+    assert 'KAREN_SPECIALIST_FRESH_ACCEPTANCE: "true"' in proof
+    assert 'bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" docker fresh' in proof
+    assert "PARTICIPATION_RUN_ID" not in proof
+    for key in ("PROVIDER", "MODEL", "ENGINE"):
+        name = "KAREN_SPECIALIST_EXPECTED_" + key
+        assert name + ": " + chr(36) + "{{ vars." + name + " }}" in proof
+        assert browser.count(name) == proof.count(name)
+    assert browser.index("python -m scripts.ci.verify_backend_target") < browser.index(title)
+    assert browser.index(title) < browser.rindex("python -m scripts.ci.verify_backend_target")
+    assert browser.count('== "docker-specialist-fresh"') == 2
+    for job in ("docker-provenance-before", "docker-provenance-after"):
+        assert "docker-specialist-fresh" in _job(workflow, job)
+        assert "KAREN_SPECIALIST_EXPECTED_" not in _job(workflow, job)
+    suite = (ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/automation-two-account-acceptance.spec.ts").read_text()
+    assert 'runtime_request_id' in suite and 'tool-receipts' in suite
+    assert "Fresh conversation must have no pre-existing evidence or unresolved execution" in suite
+    assert "Reload must not resubmit inference" in suite
+    assert "page.route(" not in suite

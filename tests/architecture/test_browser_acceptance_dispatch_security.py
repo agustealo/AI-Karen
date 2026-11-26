@@ -445,7 +445,8 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
         assert job.count(name) == step.count(name)
     assert 'bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" vercel' in step
     shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text(encoding="utf-8")
-    assert "--grep='ARM-05C.5B real participation receipts survive reload and deny a second account'" in shell
+    assert "title='ARM-05C.5B real participation receipts survive reload and deny a second account'" in shell
+    assert '--grep="$title"' in shell
     assert "--retries=0" in shell and "--workers=1" in shell
     assert 'stats.get("expected") != 1' in shell
     assert '"unexpected", "skipped", "flaky"' in shell
@@ -486,10 +487,10 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
 
     path = tmp_path / "report.json"
 
-    def validate(payload: str) -> int:
+    def validate(payload: str, mode: str = "readback") -> int:
         path.write_text(payload, encoding="utf-8")
         return subprocess.run(
-            [sys.executable, "-c", validator, str(path)],
+            [sys.executable, "-c", validator, str(path), mode],
             capture_output=True,
             check=False,
         ).returncode
@@ -515,6 +516,12 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
     for payload in invalid:
         assert validate(json.dumps(payload)) != 0
     assert validate("{malformed") != 0
+    fresh = report()
+    fresh["suites"][0]["suites"][0]["specs"][0]["title"] = "ARM-05C.8C fresh specialist execution survives reload"
+    assert validate(json.dumps(fresh), "fresh") == 0
+    assert validate(json.dumps(fresh)) != 0
+    assert validate(json.dumps(report()), "fresh") != 0
+    assert validate(json.dumps(fresh), "unknown") != 0
 
 
 def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path: Path) -> None:
@@ -544,14 +551,14 @@ def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path:
         **dict.fromkeys(names, "synthetic-test-only"),
     }
 
-    def run(platform: str, overrides: dict[str, str | None]) -> subprocess.CompletedProcess[str]:
+    def run(platform: str, overrides: dict[str, str | None], mode: str = "readback") -> subprocess.CompletedProcess[str]:
         current = env.copy()
         for key, value in overrides.items():
             if value is None:
                 current.pop(key, None)
             else:
                 current[key] = value
-        return subprocess.run(["bash", str(script), platform], env=current, capture_output=True, text=True, check=False)
+        return subprocess.run(["bash", str(script), platform, mode], env=current, capture_output=True, text=True, check=False)
 
     for platform in ("docker", "vercel"):
         base = {"VERCEL_AUTOMATION_BYPASS_SECRET": "synthetic-test-only"} if platform == "vercel" else {}
@@ -572,6 +579,26 @@ def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path:
         assert result.returncode != 0
         assert not marker.exists()
         assert "synthetic-test-only" not in result.stdout + result.stderr
+
+    fresh = {
+        "KAREN_SPECIALIST_FRESH_ACCEPTANCE": "true",
+        "KAREN_SPECIALIST_EXPECTED_PROVIDER": "synthetic-test-only",
+        "KAREN_SPECIALIST_EXPECTED_MODEL": "synthetic-test-only",
+        "KAREN_SPECIALIST_EXPECTED_ENGINE": "synthetic-test-only",
+    }
+    for overrides in ({}, {**fresh, "KAREN_SPECIALIST_FRESH_ACCEPTANCE": None},
+                      {**fresh, "KAREN_SPECIALIST_EXPECTED_MODEL": None}):
+        assert run("docker", overrides, "fresh").returncode != 0
+        assert not marker.exists()
+    assert run("vercel", {**fresh, "VERCEL_AUTOMATION_BYPASS_SECRET": "synthetic-test-only"}, "fresh").returncode != 0
+    assert run("docker", fresh, "unknown").returncode != 0
+    assert not marker.exists()
+
+    fresh_result = run("docker", fresh, "fresh")
+    assert fresh_result.returncode != 0
+    assert marker.exists()
+    assert "private diagnostics suppressed" in fresh_result.stdout
+    marker.unlink()
 
     # Positive admission reaches the inert runner, but its failure remains a
     # failure and its temporary private diagnostics must be removed.
