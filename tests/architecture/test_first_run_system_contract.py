@@ -277,7 +277,7 @@ def test_disposable_communications_invalidation_requires_real_broker_and_browser
     fixture = _read(ROOT / "scripts/ci/communications_browser_fixture.py")
     runner = _read(ROOT / "scripts/ci/communications_browser_smoke.py")
     spec = _read(ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/comms-visual-acceptance.spec.ts")
-    block = smoke.split('if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then', 2)[-1].split("\nfi", 1)[0]
+    block = smoke.split('if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then', 1)[1].split("\nfi", 1)[0]
     assert "-e KARI_ENABLE_COMMUNICATIONS_INVALIDATION=true" in block
     assert "-e KARI_ENABLE_COMMUNICATIONS_INVALIDATION_WAIT=true" in block
     assert "Refusing non-disposable Redis target" in fixture

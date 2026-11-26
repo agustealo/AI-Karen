@@ -582,7 +582,7 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     await witness([ownerB], 1);
     // Revoke the browser's exact active credentials via the real logout API,
     // without resetting its UI state. Never expose tokens to the test runner.
-    const logoutStatus = await page.evaluate(async () => {
+    const logoutEvidence = await page.evaluate(async path => {
       const access = localStorage.getItem("access_token");
       const refresh = localStorage.getItem("refresh_token");
       if (!access || !refresh) throw new Error("Browser session credentials unavailable");
@@ -591,9 +591,13 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
         headers: { Authorization: "Bearer " + access, "Content-Type": "application/json" },
         body: JSON.stringify({ refresh_token: refresh }),
       });
-      return result.status;
-    });
-    expect(logoutStatus).toBe(200);
+      const stale = await fetch(path, {
+        headers: { Authorization: "Bearer " + access }, cache: "no-store", redirect: "error", credentials: "same-origin",
+      });
+      return { logoutStatus: result.status, staleStatus: stale.status };
+    }, INBOX_PATH);
+    expect(logoutEvidence.logoutStatus).toBe(200);
+    expect([401, 403]).toContain(logoutEvidence.staleStatus);
     await witness([ownerB], 1);
     // The independent signed owner session is still authorized to commit.
     // Its real post-commit signal must not be returned to the revoked waiter.
@@ -608,14 +612,6 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     const rejectionBody = await rejection.json();
     expect(rejectionBody).not.toHaveProperty("changed");
     await witness([ownerB], 0);
-    const staleStatus = await page.evaluate(async path => {
-      const access = localStorage.getItem("access_token");
-      if (!access) throw new Error("Revoked bearer unavailable for backend verification");
-      return (await fetch(path, {
-        headers: { Authorization: "Bearer " + access }, cache: "no-store", redirect: "error", credentials: "same-origin",
-      })).status;
-    }, INBOX_PATH);
-    expect([401, 403]).toContain(staleStatus);
   } finally {
     page.off("request", recordRequest);
     page.off("response", recordResponse);
