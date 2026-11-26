@@ -62,26 +62,40 @@ def http_json(url: str) -> dict:
     return payload
 
 
-def local_storage_origin(raw: str) -> str:
-    """Only the explicitly configured local Docker host gateway may serve fixture bytes."""
+def require_local_docker() -> None:
+    """Reject remote Docker endpoint overrides before inspecting fixture services."""
+    if "DOCKER_HOST" in os.environ or "DOCKER_CONTEXT" in os.environ:
+        raise GuardError("Explicit Docker endpoint overrides are forbidden")
+    contexts = docker_json(["docker", "context", "inspect"])
+    if len(contexts) != 1 or not str(
+        contexts[0].get("Endpoints", {}).get("docker", {}).get("Host", "")
+    ).startswith("unix://"):
+        raise GuardError("Acceptance requires a local Docker daemon")
+
+
+def local_storage_origin(raw: str, *, host_loopback: bool = False) -> str:
+    """Require an exact local origin for the intended execution environment."""
+    host = "127.0.0.1" if host_loopback else "host.docker.internal"
     try:
         parsed = urlsplit(raw)
         port = parsed.port
         valid = (
-            parsed.scheme == "http" and parsed.hostname == "host.docker.internal"
+            parsed.scheme == "http" and parsed.hostname == host
             and port is not None and 1 <= port <= 65535
-            and raw == f"http://host.docker.internal:{port}"
+            and raw == f"http://{host}:{port}"
         )
     except (ValueError, TypeError):
         valid = False
     if not valid:
-        raise GuardError("Local Content Intelligence requires a canonical Docker-host Storage origin")
+        raise GuardError("Local acceptance requires a canonical local Storage origin")
     return raw
 
 
-def verify_local_storage_gateway(database_container: str, origin: str) -> dict:
+def verify_local_storage_gateway(
+    database_container: str, origin: str, *, host_loopback: bool = False,
+) -> dict:
     """Bind the configured Storage endpoint to the running local Supabase project."""
-    port = str(urlsplit(local_storage_origin(origin)).port)
+    port = str(urlsplit(local_storage_origin(origin, host_loopback=host_loopback)).port)
     databases = docker_json(["docker", "inspect", database_container])
     if len(databases) != 1:
         raise GuardError("Local Storage database identity is ambiguous")
@@ -102,6 +116,7 @@ def verify_local_storage_gateway(database_container: str, origin: str) -> dict:
         or gateway.get("State", {}).get("Running") is not True
         or not isinstance(bindings, list) or not bindings
         or any(not isinstance(binding, dict) or binding.get("HostPort") != port
+               or (host_loopback and binding.get("HostIp") != "127.0.0.1")
                for binding in bindings)
         or not isinstance(gateway_id, str) or len(gateway_id) != 64
         or any(ch not in "0123456789abcdef" for ch in gateway_id)
@@ -324,13 +339,7 @@ def main() -> int:
         if artifact_local:
             if origin != "http://127.0.0.1:8010" or args.project != "kcard-" + args.sha[:12]:
                 raise GuardError("Explorer requires the dedicated exact-revision local stack")
-            if "DOCKER_HOST" in os.environ or "DOCKER_CONTEXT" in os.environ:
-                raise GuardError("Explicit Docker endpoint overrides are forbidden")
-            contexts = docker_json(["docker", "context", "inspect"])
-            if len(contexts) != 1 or not str(
-                contexts[0].get("Endpoints", {}).get("docker", {}).get("Host", "")
-            ).startswith("unix://"):
-                raise GuardError("Explorer requires a local Docker daemon")
+            require_local_docker()
             database = "kcard_" + args.sha[:12]
         api = inspect_container(
             args.project, args.sha, "api", explorer_database=database, env_path=env_path,

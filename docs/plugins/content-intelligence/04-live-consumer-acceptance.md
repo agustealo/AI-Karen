@@ -288,3 +288,55 @@ Reports are private and outside the checkout. The explicit retired-fixture
 attestation remains required; a 403 alone is not a revocation proof. The two
 standalone Storage integration tests still require their separate approved real
 Storage fixtures. No consumer acceptance result is claimed by this source change.
+
+
+## KEXP-025: Standalone real Storage proofs without a hosted project
+
+The existing CK-GEN opt-in object-read and signed-range tests also accept a
+private disposable **local** Supabase project. The runtime repository's
+HTTPS/loopback origin, signed path, range, digest, budget and owner checks are
+unchanged. Both tests now accept the canonical immutable `/content` object
+key produced by the governed upload path, as well as the repository's
+explicitly supported historical filename key. They never guess an object key.
+
+Use a local Docker daemon and an explicitly disposable Supabase CLI project
+with its API gateway published **only** on `127.0.0.1`. Start it with an
+approved isolated network and verify the actual port/container names before
+setting the configuration. Do not link, reset or contact a hosted project.
+The local CLI version and stack configuration determine the port; do not
+assume the default. Keep the server credential private and unset proxy
+variables for this dedicated test invocation. No cloud project reference
+may be inherited. The standalone test process runs on the host, not inside
+the API container; its origin is loopback, not `host.docker.internal`.
+
+Retain the existing separately disposable, migrated PostgreSQL
+`karen_code_artifact_test` database on loopback port 5432. Use the canonical
+CK-GEN workflow's schema provisioning and seeded principals; do not reuse or
+modify the personal database. Seed independently approved nonsensitive
+object bytes and matching metadata for the existing live-object and range
+fixture IDs/digests. Verify the bucket is private. These tests are read-only
+and will not create fixtures. Provide all existing tenant/owner/other-owner,
+artifact and SHA-256 variables, with the additional local-only configuration:
+
+- `KAREN_TEST_DISPOSABLE_DATABASE=1` and `KAREN_TEST_SUPABASE_DISPOSABLE=1`
+- `KAREN_TEST_SUPABASE_LOCAL=1`
+- `KAREN_TEST_SUPABASE_LOCAL_PROJECT_ID` matching the running local project's
+  `supabase_db_<project-id>` and `supabase_kong_<project-id>` container names
+- `SUPABASE_PROJECT_URL=http://127.0.0.1:<verified-api-port>`
+- A private local `SUPABASE_SECRET_KEY` or `SUPABASE_SERVICE_ROLE_KEY`
+- Unset `KAREN_TEST_SUPABASE_PROJECT_REF`, remote Docker overrides and proxies.
+
+Then execute both existing trials, separately from hosted/browser acceptance:
+
+```bash
+KAREN_TEST_CODE_ARTIFACT_LIVE_STORAGE=1 KAREN_TEST_CODE_ARTIFACT_LIVE_RANGE=1 \\
+  PYTHONPATH=src python -m pytest -q -rs \\
+  tests/integration/test_live_code_artifact_revocation_postgres.py \\
+  -k 'live_supabase_object_read or live_signed_range_read_uses_real_storage'
+```
+
+Require exactly two executed successful trials with no skips. Local Storage
+must actually return HTTP 206 for the signed-range test; a 200 response is
+not sufficient. Record exact source SHA, sanitized pass/fail output and
+local gateway/private-bucket/fixture provenance. Local success is not a
+hosted deployment receipt or an automatic release authorization.
