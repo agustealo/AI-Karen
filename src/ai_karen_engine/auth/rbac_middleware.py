@@ -91,6 +91,10 @@ class Permission(str, Enum):
     CARD_STUDIO_READ = "card_studio:read"
     CARD_STUDIO_WRITE = "card_studio:write"
 
+    # Personal communications attention, never execution or approval.
+    COMMUNICATIONS_READ = "communications:read"
+    COMMUNICATIONS_WRITE = "communications:write"
+
     # Personal planner commitments (distinct from agent automations)
     PLANNER_READ = "planner:read"
     PLANNER_WRITE = "planner:write"
@@ -237,6 +241,8 @@ def _default_role_entries() -> Dict[str, Dict[str, Any]]:
                 Permission.CHANNEL_LINK.value,
                 Permission.BROWSER.value,
                 Permission.DATA_READ.value,
+                Permission.COMMUNICATIONS_READ.value,
+                Permission.COMMUNICATIONS_WRITE.value,
                 Permission.PLANNER_READ.value,
                 Permission.PLANNER_WRITE.value,
                 Permission.CARD_STUDIO_READ.value,

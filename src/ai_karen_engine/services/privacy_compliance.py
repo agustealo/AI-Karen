@@ -23,6 +23,9 @@ from typing import Any, Dict, List, Optional
 from sqlalchemy import text
 
 from ai_karen_engine.database.client import MultiTenantPostgresClient
+from ai_karen_engine.persistence.repositories.communications_inbox_repository import (
+    CommunicationsInboxRepository,
+)
 
 try:
     from ai_karen_engine.services.audit.audit_logging import get_audit_logger
@@ -403,21 +406,33 @@ class DataExporter:
             ),
             params,
         )
+        inbox_rows = await CommunicationsInboxRepository.export_owned_metadata(
+            session, tenant_id=tenant_id, user_id=user_id
+        )
+        inbox_by_conversation: Dict[str, List[Dict[str, Any]]] = {}
+        for row in inbox_rows:
+            key = str(row["conversation_id"])
+            metadata = _jsonable(row)
+            if not include_pii:
+                metadata = self._redact(metadata)
+            inbox_by_conversation.setdefault(key, []).append(metadata)
+
         by_conversation: Dict[str, List[Dict[str, Any]]] = {}
         for row in messages_result.mappings().all():
             message = _jsonable(dict(row))
+            key = str(message.get("conversation_id"))
             if not include_pii:
                 message = self._redact(message)
-            key = str(message.get("conversation_id"))
             by_conversation.setdefault(key, []).append(message)
 
         conversations: List[Dict[str, Any]] = []
         for row in conversations_result.mappings().all():
             conversation = _jsonable(dict(row))
+            key = str(conversation.get("conversation_id"))
             if not include_pii:
                 conversation = self._redact(conversation)
-            key = str(conversation.get("conversation_id"))
             conversation["messages"] = by_conversation.get(key, [])
+            conversation["communications_inbox"] = inbox_by_conversation.get(key, [])
             conversations.append(conversation)
         return conversations
 
@@ -690,7 +705,7 @@ class DataEraser:
             "action": "hard_delete",
             "affected_records": conversation_count,
             "cascaded_messages": message_count,
-            "cascade_includes": ["messages", "message_tools"],
+            "cascade_includes": ["messages", "message_tools", "communications_inbox_entries"],
         }
 
 
