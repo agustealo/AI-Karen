@@ -6,6 +6,7 @@ import argparse
 import json
 import os
 import subprocess
+import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -60,6 +61,48 @@ def http_json(url: str) -> dict:
     if not isinstance(payload, dict):
         raise GuardError("Required local endpoint returned invalid JSON")
     return payload
+
+
+def local_supabase_database_config(path: Path | None = None) -> tuple[str, int]:
+    """Read the existing local Supabase project identity and database port."""
+    config_path = path or Path(__file__).resolve().parents[2] / "supabase/config.toml"
+    try:
+        with config_path.open("rb") as stream:
+            config = tomllib.load(stream)
+        project = config["project_id"]
+        port = config["db"]["port"]
+    except (OSError, ValueError, KeyError, TypeError):
+        raise GuardError("Canonical local Supabase configuration is unavailable") from None
+    if (
+        not isinstance(project, str) or not 1 <= len(project) <= 64
+        or not project[0].isascii() or not project[0].isalnum()
+        or any(not ch.isascii() or not (ch.isalnum() or ch in "_-") for ch in project)
+        or type(port) is not int or not 1 <= port <= 65535
+    ):
+        raise GuardError("Canonical local Supabase configuration is invalid")
+    return project, port
+
+
+def local_supabase_database_container(project: str, port: int) -> str:
+    """Verify the configured project's actual running PostgreSQL container."""
+    name = "supabase_db_" + project
+    objects = docker_json(["docker", "inspect", name])
+    if len(objects) != 1:
+        raise GuardError("Canonical local Supabase database is absent or ambiguous")
+    container = objects[0]
+    identity = container.get("Id")
+    bindings = container.get("NetworkSettings", {}).get("Ports", {}).get("5432/tcp")
+    if (
+        container.get("Name") != "/" + name
+        or container.get("State", {}).get("Running") is not True
+        or not isinstance(identity, str) or len(identity) != 64
+        or any(ch not in "0123456789abcdef" for ch in identity)
+        or not isinstance(bindings, list) or not bindings
+        or any(not isinstance(binding, dict) or binding.get("HostPort") != str(port)
+               for binding in bindings)
+    ):
+        raise GuardError("Local Supabase database does not match the configured identity")
+    return identity
 
 
 def require_local_docker() -> None:
@@ -149,6 +192,7 @@ def verify_explorer_runtime(
         ):
             raise GuardError("Web ingress is not bound to the approved loopback stack")
         return
+    _, database_port = local_supabase_database_config()
     required = {
         "ENVIRONMENT": "production",
         "AUTH_MODE": "production",
@@ -157,7 +201,7 @@ def verify_explorer_runtime(
         "KARI_AUTH_BYPASS": "false",
         "AUTH_ENABLE_SESSION_VALIDATION": "true",
         "DB_HOST": "host.docker.internal",
-        "DB_PORT": "54322",
+        "DB_PORT": str(database_port),
         "DB_NAME": database,
     }
     if any(values.get(key) != value for key, value in required.items()):
@@ -168,7 +212,7 @@ def verify_explorer_runtime(
             valid = (
                 parsed.scheme in {"postgresql", "postgresql+asyncpg"}
                 and parsed.hostname == "host.docker.internal"
-                and parsed.port == 54322
+                and parsed.port == database_port
                 and parsed.path == "/" + database
                 and not parsed.query and not parsed.fragment
                 and bool(parsed.username) and bool(parsed.password)
@@ -266,35 +310,14 @@ def verify_local_supabase_database(env_path: Path, expected_database: str | None
         raise GuardError("Disposable local Supabase database name is missing")
     if expected_database is not None and db_name != expected_database:
         raise GuardError("Disposable database does not match the reviewed revision")
-    containers = subprocess.run(
-        ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
-        check=False, capture_output=True, text=True, timeout=30,
-    )
-    if containers.returncode != 0:
-        raise GuardError("Docker is unavailable for Supabase database verification")
-    matches = [line.split("\t", 1)[0] for line in containers.stdout.splitlines()
-               if "54322->5432/tcp" in line and line.startswith("supabase_db_")]
-    if len(matches) != 1:
-        raise GuardError("Canonical loopback local Supabase PostgreSQL is absent or ambiguous")
-    target = matches[0]
-    evidence = {"authority": "local_supabase", "database": db_name, "port": 54322, "status": "ready"}
+    project, port = local_supabase_database_config()
+    if values.get("KCARD_DB_PORT") != str(port):
+        raise GuardError("Disposable database port differs from canonical local configuration")
+    target = local_supabase_database_container(project, port)
+    evidence = {"authority": "local_supabase", "database": db_name, "port": port, "status": "ready"}
     query = "SELECT current_database()"
     if expected_database is not None:
-        inspected = docker_json(["docker", "inspect", target])
-        if (
-            len(inspected) != 1
-            or inspected[0].get("Name") != "/" + target
-            or inspected[0].get("State", {}).get("Running") is not True
-        ):
-            raise GuardError("Local PostgreSQL container identity is unavailable")
-        container_id = inspected[0].get("Id")
-        if (
-            not isinstance(container_id, str) or len(container_id) != 64
-            or any(ch not in "0123456789abcdef" for ch in container_id)
-        ):
-            raise GuardError("Local PostgreSQL container ID is invalid")
-        target = container_id
-        evidence["container_id"] = container_id
+        evidence["container_id"] = target
         query = "SELECT current_database(), oid FROM pg_database WHERE datname = current_database()"
     result = subprocess.run(
         ["docker", "exec", target, "psql", "-U", "postgres", "-d", db_name,

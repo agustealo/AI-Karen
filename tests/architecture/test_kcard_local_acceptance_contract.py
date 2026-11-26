@@ -43,7 +43,8 @@ def test_kcard_local_deployment_overlay_is_loopback_and_disposable():
     assert "deploy/compose/docker-compose.prod.yml" in deploy
     assert "deploy/compose/docker-compose.local-card-studio.yml" in deploy
     assert "host.docker.internal" in overlay
-    assert "54322" in overlay
+    assert '${KCARD_DB_PORT:?KCARD_DB_PORT is required}' in overlay
+    assert "54322" not in overlay
     assert "postgres:" not in overlay
 
 
@@ -87,6 +88,7 @@ def test_kcard_negative_local_provenance_cases_fail_closed():
 
 
 def test_disposable_provisioning_generates_all_compose_inputs_without_real_docker(tmp_path, monkeypatch):
+    import json
     import subprocess
     import sys
 
@@ -100,8 +102,12 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     output = tmp_path / "output"
     output.mkdir()
     env_file = output / ".env.production"
-    (tmp_path / ".env").write_text("DB_HOST=localhost\nDB_PORT=54322\nDB_PASSWORD=fixture-secret\n")
+    port = 54342
+    (tmp_path / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=fixture-secret\n")
     (tmp_path / "supabase" / "migrations").mkdir(parents=True)
+    (tmp_path / "supabase" / "config.toml").write_text(
+        f'project_id = "fixture"\n[db]\nport = {port}\n'
+    )
     (tmp_path / "supabase" / "migrations" / "001.sql").write_text("SELECT 1;")
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(sys, "argv", ["-", str(env_file), sha, database, str(output)])
@@ -112,10 +118,13 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
 
     def execute(args, **kwargs):
         calls.append(args)
-        if args[:3] == ["docker", "context", "inspect"]:
-            stdout = '"unix:///var/run/docker.sock"'
-        elif args[:2] == ["docker", "ps"]:
-            stdout = "supabase_db_fixture\t127.0.0.1:54322->5432/tcp\n"
+        if args == ["docker", "context", "inspect"]:
+            stdout = json.dumps([{"Endpoints": {"docker": {"Host": "unix:///var/run/docker.sock"}}}])
+        elif args == ["docker", "inspect", "supabase_db_fixture"]:
+            stdout = json.dumps([{
+                "Name": "/supabase_db_fixture", "Id": "b" * 64, "State": {"Running": True},
+                "NetworkSettings": {"Ports": {"5432/tcp": [{"HostPort": str(port)}]}},
+            }])
         elif "SELECT 1 FROM pg_database" in args[-1]:
             stdout = "1\n" if existing else ""
         elif "createdb" in args or args[:3] == ["docker", "exec", "-i"]:
@@ -129,7 +138,8 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     values = dict(line.split("=", 1) for line in env_file.read_text().splitlines())
     for key in ("DATABASE_URL", "POSTGRES_URL", "AUTH_DATABASE_URL"):
         assert values[key] == values["KCARD_" + key]
-        assert values[key].endswith(":54322/" + database)
+        assert values[key].endswith(f":{port}/" + database)
+    assert values["KCARD_DB_PORT"] == str(port)
     keys = ("SECRET_KEY", "AUTH_SECRET_KEY", "AUTH_JWT_SECRET_KEY", "REDIS_PASSWORD",
             "EXTENSION_SECRET_KEY", "EXTENSION_API_KEY", "GRAFANA_ADMIN_PASSWORD")
     assert len({values[key] for key in keys}) == len(keys)
@@ -137,6 +147,12 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     assert sum("createdb" in args for args in calls) == 1
     assert sum(args[:3] == ["docker", "exec", "-i"] for args in calls) == 1
 
+    calls.clear()
+    (tmp_path / ".env").write_text("DB_HOST=localhost\nDB_PORT=54322\nDB_PASSWORD=fixture-secret\n")
+    with pytest.raises(SystemExit, match="canonical configured"):
+        exec(code, {})
+    assert calls == []
+    (tmp_path / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=fixture-secret\n")
     calls.clear()
     existing = True
     with pytest.raises(SystemExit, match="already exists"):

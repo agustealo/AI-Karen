@@ -248,8 +248,11 @@ def test_explorer_report_rejects_skips_retries_duplicate_and_wrong_scenarios():
 def test_explorer_provenance_rejects_foreign_database_and_web_binding():
     import pytest
 
-    from scripts.ci.verify_local_card_studio_acceptance import GuardError, verify_explorer_runtime
+    from scripts.ci.verify_local_card_studio_acceptance import (
+        GuardError, local_supabase_database_config, verify_explorer_runtime,
+    )
 
+    _, port = local_supabase_database_config()
     project = "kcard-aaaaaaaaaaaa"
     database = "kcard_aaaaaaaaaaaa"
     api = {"Config": {"Labels": {
@@ -264,11 +267,11 @@ def test_explorer_provenance_rejects_foreign_database_and_web_binding():
         "KARI_AUTH_BYPASS": "false",
         "AUTH_ENABLE_SESSION_VALIDATION": "true",
         "DB_HOST": "host.docker.internal",
-        "DB_PORT": "54322",
+        "DB_PORT": str(port),
         "DB_NAME": database,
-        "DATABASE_URL": "postgresql+asyncpg://test:fixture@host.docker.internal:54322/" + database,
-        "POSTGRES_URL": "postgresql://test:fixture@host.docker.internal:54322/" + database,
-        "AUTH_DATABASE_URL": "postgresql+asyncpg://test:fixture@host.docker.internal:54322/" + database,
+        "DATABASE_URL": f"postgresql+asyncpg://test:fixture@host.docker.internal:{port}/" + database,
+        "POSTGRES_URL": f"postgresql://test:fixture@host.docker.internal:{port}/" + database,
+        "AUTH_DATABASE_URL": f"postgresql+asyncpg://test:fixture@host.docker.internal:{port}/" + database,
     }
 
     def environment(data):
@@ -291,8 +294,9 @@ def test_explorer_provenance_rejects_foreign_database_and_web_binding():
                 require_local_storage=True,
             )
     for key, value in (
-        ("DATABASE_URL", "postgresql://test:fixture@example.invalid:54322/" + database),
-        ("AUTH_DATABASE_URL", "postgresql://test:fixture@host.docker.internal:54322/postgres"),
+        ("DATABASE_URL", f"postgresql://test:fixture@example.invalid:{port}/" + database),
+        ("AUTH_DATABASE_URL", f"postgresql://test:fixture@host.docker.internal:{port}/postgres"),
+        ("DB_PORT", str(port + 1)),
         ("POSTGRES_URL", values["POSTGRES_URL"] + "?host=example.invalid"),
         ("DB_NAME", "postgres"),
         ("AUTH_ENABLE_SESSION_VALIDATION", "false"),
@@ -322,20 +326,24 @@ def test_explorer_database_provenance_includes_container_and_database_identity(t
     database = "kcard_aaaaaaaaaaaa"
     container = "b" * 64
     env = tmp_path / "local.env"
-    env.write_text("KCARD_DB_NAME=" + database + "\n")
+    project, port = verifier.local_supabase_database_config()
+    env.write_text(f"KCARD_DB_NAME={database}\nKCARD_DB_PORT={port}\n")
 
     def execute(args, **kwargs):
-        if args[:2] == ["docker", "ps"]:
-            return subprocess.CompletedProcess(args, 0, "supabase_db_fixture\t54322->5432/tcp\n", "")
         assert args[:3] == ["docker", "exec", container]
         assert args[-1] == "SELECT current_database(), oid FROM pg_database WHERE datname = current_database()"
         return subprocess.CompletedProcess(args, 0, database + "|12345\n", "")
 
     monkeypatch.setattr(verifier.subprocess, "run", execute)
-    monkeypatch.setattr(verifier, "docker_json", lambda args: [{
-        "Name": "/supabase_db_fixture", "Id": container, "State": {"Running": True},
-    }])
+    def inspect(args):
+        assert args == ["docker", "inspect", "supabase_db_" + project]
+        return [{
+            "Name": "/supabase_db_" + project, "Id": container, "State": {"Running": True},
+            "NetworkSettings": {"Ports": {"5432/tcp": [{"HostPort": str(port)}]}},
+        }]
+    monkeypatch.setattr(verifier, "docker_json", inspect)
     observed = verifier.verify_local_supabase_database(env, database)
+    assert observed["port"] == port
     assert observed["container_id"] == container
     assert observed["database_oid"] == "12345"
 

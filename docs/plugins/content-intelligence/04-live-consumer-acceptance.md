@@ -340,3 +340,14 @@ must actually return HTTP 206 for the signed-range test; a 200 response is
 not sufficient. Record exact source SHA, sanitized pass/fail output and
 local gateway/private-bucket/fixture provenance. Local success is not a
 hosted deployment receipt or an automatic release authorization.
+
+### Local provisioning configuration convergence
+
+The shared local acceptance provisioner and provenance verifier now derive
+the database project's name and host port from the repository's existing
+`supabase/config.toml`. The generated private env exports `KCARD_DB_PORT`
+for Compose; API connection URLs and the effective container must match
+that exact configured port. Do not substitute the Supabase CLI default
+port or point the acceptance database at a different project. This repository's
+current checked-in database port is 54342. The standalone CK-GEN disposable
+PostgreSQL proof remains independently constrained to port 5432.
