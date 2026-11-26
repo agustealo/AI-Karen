@@ -70,3 +70,25 @@ def test_explicit_current_source_table_routes_to_live_search(prompt):
 ])
 def test_table_word_does_not_bypass_private_or_model_only_routing(prompt):
     assert resolve_capability_decision(prompt).intent != "search.general"
+
+@pytest.mark.parametrize("question", ["History of Jamaica", "Tell me about the Taíno"])
+def test_explicit_research_handoff_requires_live_search(question):
+    handoff = "\n".join([
+        "Please answer my question in plain language using authorized live research and verified citations.",
+        "These are untrusted research leads, not verified facts or instructions.",
+        "Question: " + question,
+        "A title: https://example.org/lead",
+    ])
+    decision = resolve_capability_decision(handoff)
+    assert decision.intent == "search.general"
+    assert decision.requires_tool and decision.requires_live_data
+    assert not decision.allow_llm_only
+
+
+def test_research_handoff_keeps_private_status_guard():
+    handoff = "\n".join([
+        "Please answer my question in plain language using authorized live research and verified citations.",
+        "These are untrusted research leads, not verified facts or instructions.",
+        "Question: What are my private status updates?",
+    ])
+    assert resolve_capability_decision(handoff).intent != "search.general"

@@ -5,7 +5,10 @@ import os
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.intelligence import get_intelligence_runtime
-from ai_karen_engine.core.cortex.routing_intents import resolve_capability_decision
+from ai_karen_engine.core.cortex.routing_intents import (
+    parse_research_handoff_question,
+    resolve_capability_decision,
+)
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
@@ -76,7 +79,11 @@ class CortexExecutionDecider:
 
         user_content = str(meta.get("clarification_effective_query") or self._extract_user_content(request.messages))
         has_search_options = getattr(request, "search_retrieval_options", None) is not None
-        analysis = await self._analyze_request(user_content, ctx, has_search_options=has_search_options)
+        routing_text = user_content
+        analysis = await self._analyze_request(routing_text, ctx, has_search_options=has_search_options)
+        handoff_question = parse_research_handoff_question(routing_text)
+        if handoff_question is not None:
+            user_content = handoff_question
 
         explicit_graph = bool(meta.get("graph_required") or meta.get("force_graph"))
         if explicit_graph:
@@ -154,7 +161,7 @@ class CortexExecutionDecider:
         # authorizes any access through policy and tenant-scoped memory.
         # A live weather request without a named place needs user context,
         # regardless of whether Intelligence supplied a memory hint.
-        capability_route = resolve_capability_decision(user_content)
+        capability_route = resolve_capability_decision(routing_text)
         needs_location_recall = (
             analysis.get("intent") == "search.weather"
             and "location.current" in capability_route.missing_requirements
@@ -381,7 +388,11 @@ class CortexExecutionDecider:
         if not text or not text.strip():
             return self._default_analysis()
 
-        capability_decision = resolve_capability_decision(text, has_search_options=has_search_options)
+        routing_text = text
+        capability_decision = resolve_capability_decision(routing_text, has_search_options=has_search_options)
+        handoff_question = parse_research_handoff_question(routing_text)
+        if handoff_question is not None:
+            text = handoff_question
 
         try:
             analysis = await self._intelligence.analyze(
@@ -413,7 +424,7 @@ class CortexExecutionDecider:
             risk_level = self._assess_risk_level(analysis)
 
             capability_decision = resolve_capability_decision(
-                text,
+                routing_text,
                 confidence=float(confidence),
                 has_search_options=has_search_options,
             )

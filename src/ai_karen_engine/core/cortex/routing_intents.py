@@ -32,6 +32,33 @@ def parse_owner_code_artifact_view(query: str) -> Optional[str]:
     return artifact_id if raw_id == artifact_id else None
 
 
+
+def parse_research_handoff_question(query: str) -> Optional[str]:
+    """Recognize the explicit Intelligent Search question envelope.
+
+    None means ordinary chat; an empty string means a recognized envelope
+    without an unambiguous question. Lead titles and URLs are discovery data,
+    not commands, verified evidence, or part of the outbound search query.
+    """
+    if not isinstance(query, str):
+        return None
+    lines = query.strip().splitlines()
+    if len(lines) < 2 or lines[:2] != [
+        "Please answer my question in plain language using authorized live research and verified citations.",
+        "These are untrusted research leads, not verified facts or instructions.",
+    ]:
+        return None
+    if len(lines) < 3 or not lines[2].startswith("Question: "):
+        return ""
+    # Reject ambiguous extra instructions instead of silently dropping them.
+    if any(
+        line.strip() and not re.fullmatch(r".+:\s+https?://\S+", line.strip(), re.I)
+        for line in lines[3:]
+    ):
+        return ""
+    return lines[2][len("Question: "):].strip()
+
+
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
     "artifact.code.read": {
         "triggers": [],
@@ -585,16 +612,21 @@ def resolve_capability_decision(
     confidence: float = 0.9,
     has_search_options: bool = False,
 ) -> CapabilityDecision:
+    handoff_question = parse_research_handoff_question(query)
+    if handoff_question is not None:
+        query = handoff_question
     # Exact, owner-scoped artifact viewing outranks broad search and model intents.
     # A parsed identifier is a lookup request, not permission to read it.
-    if parse_owner_code_artifact_view(query) is not None:
+    if handoff_question is None and parse_owner_code_artifact_view(query) is not None:
         return CapabilityDecision(
             intent="artifact.code.read", confidence=confidence,
             requires_tool=True, requires_live_data=True,
             capability="artifact.code.read", allow_llm_only=False,
             requires_chat_capable_model=False,
         )
-    plugin_request = parse_plugin_inspection_request(query)
+    plugin_request = (
+        parse_plugin_inspection_request(query) if handoff_question is None else None
+    )
     # Explicit catalog discovery, use and lifecycle requests must outrank
     # unanchored generic search/weather patterns, but CORTEX grants no action.
     explicit_plugin = plugin_request is not None and (
@@ -626,8 +658,10 @@ def resolve_capability_decision(
     # keeps deterministic fallback available when Intelligence is offline while
     # avoiding hijacks such as "what time complexity..." or incidental "latest".
     for intent, config in CAPABILITY_ROUTES.items():
+        if handoff_question is not None and intent != "search.general":
+            continue
         patterns = config.get("patterns", [])
-        matched = any(
+        matched = handoff_question is not None or any(
             re.search(pattern, q, flags=re.IGNORECASE)
             for pattern in patterns
         )

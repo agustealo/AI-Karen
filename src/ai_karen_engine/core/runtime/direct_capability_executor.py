@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from ai_karen_engine.core.cortex.routing_intents import (
     CAPABILITY_ROUTES,
     parse_plugin_inspection_request,
+    parse_research_handoff_question,
 )
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest, SearchRetrievalOptions
 from ai_karen_engine.core.runtime.plugin_management_contract import (
@@ -1647,6 +1648,16 @@ class DirectCapabilityExecutor:
         tool_name = str(route.get("handler") or "").strip()
         mode = str(route.get("plugin_mode") or "").strip() or None
         attempts: List[Dict[str, Any]] = []
+        if decision.intent == "search.general":
+            handoff_question = parse_research_handoff_question(query)
+            if handoff_question is not None:
+                if not handoff_question:
+                    return self._unavailable(
+                        started, capability, tool_name or preferred_plugin,
+                        "A clear research question is required before live retrieval.",
+                        attempts,
+                    )
+                query = handoff_question
         retrieval_options = getattr(request, "search_retrieval_options", None)
         if retrieval_options is not None and (
             not isinstance(retrieval_options, SearchRetrievalOptions)

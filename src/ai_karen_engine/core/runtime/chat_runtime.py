@@ -5030,10 +5030,18 @@ class ChatRuntime:
             if not evidence:
                 return None
             sources = [{"observation": evidence}]
-        if not sources or not await meter.consume_model_call():
-            return None
         query = next((str(m.get("content") or "") for m in reversed(request.messages)
                       if m.get("role") == "user"), "")
+        if decision.intent == "search.general":
+            from ai_karen_engine.core.cortex.routing_intents import parse_research_handoff_question
+
+            handoff_question = parse_research_handoff_question(query)
+            if handoff_question is not None:
+                if not handoff_question:
+                    return None
+                query = handoff_question
+        if not sources or not await meter.consume_model_call():
+            return None
         contract = ResponseContract(
             purpose="chat" if is_observation else "tool_synthesis",
             intent=decision.intent,
