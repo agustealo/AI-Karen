@@ -36,7 +36,7 @@ case "$mode" in
       test "${KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED:-}" = true &&
       test "${KAREN_CHAT_BOOT_ACCEPTANCE:-}" = 1 ||
       { echo "::error::Explicit disposable ordinary-chat approval is required"; exit 1; }
-    for name in KAREN_UX_EMAIL KAREN_UX_PASSWORD KAREN_CHAT_BOOT_REVISION KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT KAREN_SPECIALIST_EXPECTED_PROVIDER KAREN_SPECIALIST_EXPECTED_MODEL KAREN_SPECIALIST_EXPECTED_ENGINE KAREN_SPECIALIST_EXPECTED_AGENT KAREN_SPECIALIST_EXPECTED_TOOL; do
+    for name in KAREN_UX_EMAIL KAREN_UX_PASSWORD KAREN_UX_ACCOUNT_B_EMAIL KAREN_UX_ACCOUNT_B_PASSWORD KAREN_UX_ACCOUNT_C_EMAIL KAREN_UX_ACCOUNT_C_PASSWORD KAREN_CHAT_BOOT_REVISION KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT KAREN_SPECIALIST_EXPECTED_PROVIDER KAREN_SPECIALIST_EXPECTED_MODEL KAREN_SPECIALIST_EXPECTED_ENGINE KAREN_SPECIALIST_EXPECTED_AGENT KAREN_SPECIALIST_EXPECTED_TOOL; do
       test -n "${!name:-}" || { echo "::error::Missing protected ordinary-chat configuration"; exit 1; }
     done
     [[ "$KAREN_CHAT_BOOT_REVISION" =~ ^[a-f0-9]{40}$ ]] ||
@@ -67,8 +67,9 @@ from pathlib import Path
 
 report = json.loads(Path(sys.argv[1]).read_text())
 stats = report.get("stats", {})
-if report.get("errors") != [] or stats.get("expected") != 1 or any(
-    stats.get(key) != 0 for key in ("unexpected", "skipped", "flaky")
+if report.get("errors") != [] or not isinstance(stats, dict) or any(
+    type(stats.get(key)) is not int or stats[key] != expected
+    for key, expected in (("expected", 1), ("unexpected", 0), ("skipped", 0), ("flaky", 0))
 ):
     raise SystemExit(1)
 observed = []

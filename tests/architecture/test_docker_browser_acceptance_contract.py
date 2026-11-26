@@ -183,8 +183,11 @@ def test_signed_docker_specialist_reuses_host_chain_and_private_gate() -> None:
     for flag in ("PARTICIPATION", "LIFECYCLE", "CROSS_TENANT"):
         assert f'KAREN_SPECIALIST_{flag}_ACCEPTANCE: "true"' in proof
     for name in ("KAREN_UX_ACCOUNT_B_EMAIL", "KAREN_UX_ACCOUNT_B_PASSWORD", "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD", "KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID", "KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID", "KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID", "KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID"):
-        assert name + ": " + chr(36) + "{{ secrets." + name + " }}" in proof
-        assert browser.count(name) == proof.count(name)
+        binding = name + ": " + chr(36) + "{{ secrets." + name + " }}"
+        assert proof.count(binding) == 1
+        expected_bindings = 2 if name.endswith(("_EMAIL", "_PASSWORD")) else 1
+        assert browser.count(binding) == expected_bindings
+        assert browser.count(name) == 2 * expected_bindings
         assert name not in before and name not in after
     assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in browser
     assert "upload-artifact" not in browser
@@ -218,8 +221,10 @@ def test_signed_docker_ordinary_specialist_is_explicit_and_step_scoped() -> None
         assert name in proof
         assert name not in before and name not in after
         assert browser.count(name) == proof.count(name)
-    for secret in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
+    for secret in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD", "KAREN_UX_ACCOUNT_B_EMAIL",
+                   "KAREN_UX_ACCOUNT_B_PASSWORD", "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD"):
         assert secret + ": " + chr(36) + "{{ secrets." + secret + " }}" in proof
+    assert "PARTICIPATION_RUN_ID" not in proof
     assert browser.count("python -m scripts.ci.verify_backend_target") == 2
     assert "upload-artifact" not in browser
     assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in browser

@@ -448,7 +448,7 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
     assert "title='ARM-05C.5B real participation receipts survive reload and deny a second account'" in shell
     assert '--grep="$title"' in shell
     assert "--retries=0" in shell and "--workers=1" in shell
-    assert 'stats.get("expected") != 1' in shell
+    assert 'type(stats.get(key)) is not int or stats[key] != expected' in shell
     assert '"unexpected", "skipped", "flaky"' in shell
     assert '"expected", "passed", "chromium", ["passed"]' in shell
     assert "umask 077" in shell and "mktemp -d" in shell
@@ -504,6 +504,9 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
         report(results=[]),
         {**report(), "errors": [{"message": "test-only"}]},
         {**report(), "stats": {"expected": 1}},
+        {**report(), "stats": {"expected": True, "unexpected": 0, "skipped": 0, "flaky": 0}},
+        {**report(), "stats": {"expected": 1, "unexpected": False, "skipped": 0, "flaky": 0}},
+        {**report(), "stats": {"expected": 1.0, "unexpected": 0, "skipped": 0, "flaky": 0}},
         {**report(), "stats": {"expected": 0, "unexpected": 0, "skipped": 1, "flaky": 0}},
         {**report(), "suites": []},
     ]
@@ -597,7 +600,10 @@ def test_ordinary_specialist_runner_rejects_unapproved_modes_before_browser(tmp_
     npx.write_text('#!/bin/sh\n: > "$TEST_LAUNCH_MARKER"\nexit 99\n', encoding="utf-8")
     npx.chmod(0o700)
     required = (
-        "KAREN_UX_EMAIL", "KAREN_UX_PASSWORD", "KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID",
+        "KAREN_UX_EMAIL", "KAREN_UX_PASSWORD",
+        "KAREN_UX_ACCOUNT_B_EMAIL", "KAREN_UX_ACCOUNT_B_PASSWORD",
+        "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID",
         "KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID", "KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT",
         "KAREN_SPECIALIST_EXPECTED_PROVIDER", "KAREN_SPECIALIST_EXPECTED_MODEL",
         "KAREN_SPECIALIST_EXPECTED_ENGINE", "KAREN_SPECIALIST_EXPECTED_AGENT",
@@ -656,3 +662,6 @@ def test_ordinary_specialist_has_distinct_report_identity() -> None:
     assert f'test(approvedSpecialist ? "{title}" :' in source
     assert f"title='{title}'" in shell
     assert 'title=\'persists a real user message and a real assistant reply\'' not in shell
+    assert "await expectFreshSpecialistIsolation(page, target, id!" in source
+    assert "Authorization probes must not start inference" in source
+    assert "Foreign principal must not read the actual fresh run or conversation" in source

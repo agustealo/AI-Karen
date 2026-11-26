@@ -1,5 +1,6 @@
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import { openAutomationWorkspace } from "./fixtures/automation-workspace-navigation";
 import type { Page } from "@playwright/test";
 import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedSpecialist, matchesApprovedSpecialistReceipt, validRuntimeRequestId, verifyFreshSpecialistEvidence, type ApprovedSpecialist } from "./fixtures/specialist-evidence";
 
@@ -16,7 +17,7 @@ import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedS
  */
 async function readAuthorizedSameOriginJson(
   page: Page, apiPath: string,
-): Promise<{ ok: boolean; body: unknown }> {
+): Promise<{ ok: boolean; status: number; body: unknown }> {
   return page.evaluate(async (path) => {
     const url = new URL(path, window.location.origin);
     if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
@@ -29,7 +30,7 @@ async function readAuthorizedSameOriginJson(
       redirect: "error",
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
     });
-    return { ok: response.ok, body: response.ok ? await response.json() : null };
+    return { ok: response.ok, status: response.status, body: response.ok ? await response.json() : null };
   }, apiPath);
 }
 
@@ -214,6 +215,56 @@ async function readFreshSpecialistEvidence(
 
 }
 
+/** Probe the actual new run after the owner has completed and reloaded it.
+ * Existing seeded lifecycle fixtures cannot substitute for these denials. */
+async function expectFreshSpecialistIsolation(
+  page: Page, target: URL, threadId: string, runtimeRequestId: string,
+  approved: ApprovedSpecialist,
+): Promise<void> {
+  const prefix = "/api/agent-runtime/my-runs/" + encodeURIComponent(runtimeRequestId);
+  const evidence = [prefix, prefix + "/transitions", prefix + "/participation", prefix + "/tool-receipts"];
+  const history = "/api/copilotkit/threads/" + encodeURIComponent(threadId) + "/messages";
+  const sameOrigin = () => {
+    if (new URL(page.url()).origin !== target.origin) throw new Error("Unapproved specialist isolation origin");
+  };
+  const signOut = async () => {
+    sameOrigin();
+    await openAutomationWorkspace(page, "My Account", false);
+    sameOrigin();
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page).toHaveURL(/\/login(?:[?#]|$)/, { timeout: 30_000 });
+    sameOrigin();
+    expect(await page.evaluate(() => !!window.localStorage.getItem("access_token")),
+      "Signed-out browser must not retain a bearer").toBe(false);
+    for (const path of evidence) {
+      const denied = await readAuthorizedSameOriginJson(page, path);
+      expect([401, 403], "Signed-out principal must not read fresh evidence").toContain(denied.status);
+    }
+  };
+  await signOut();
+  const seen = new Set([approved.userId]);
+  for (const [index, account] of foreignSpecialistAccounts.entries()) {
+    await signInApprovedKaren(page, account.email!, account.password!);
+    sameOrigin();
+    const session = await readAuthorizedSameOriginJson(page, "/api/auth/validate-session");
+    const body = session.body as { user?: { user_id?: unknown; tenant_id?: unknown } } | null;
+    const userId = body?.user?.user_id;
+    const tenantId = body?.user?.tenant_id;
+    if (!session.ok || typeof userId !== "string" || typeof tenantId !== "string" ||
+        !approvedSpecialistIdentity(body, { ...approved, userId, tenantId })) {
+      throw new Error("Foreign sanitized non-admin principal could not be verified");
+    }
+    expect(seen.has(userId), "Require a distinct foreign user").toBe(false);
+    seen.add(userId);
+    expect(tenantId === approved.tenantId, "Require same-tenant and cross-tenant foreign principals").toBe(index === 0);
+    for (const path of [...evidence, history]) {
+      const denied = await readAuthorizedSameOriginJson(page, path);
+      expect(denied.status, "Foreign principal must not read the actual fresh run or conversation").toBe(404);
+    }
+    await signOut();
+  }
+}
+
 /**
  * A matching Next.js SHA does not establish that the canonical API exists.
  * Do not send approved login credentials to a frontend whose backend is down.
@@ -303,6 +354,15 @@ const approvedSpecialist: ApprovedSpecialist | undefined = ordinarySpecialistAcc
   tool: process.env.KAREN_SPECIALIST_EXPECTED_TOOL || "",
   prompt: process.env.KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT || "",
 } : undefined;
+const foreignSpecialistAccounts = [
+  { email: process.env.KAREN_UX_ACCOUNT_B_EMAIL, password: process.env.KAREN_UX_ACCOUNT_B_PASSWORD },
+  { email: process.env.KAREN_UX_ACCOUNT_C_EMAIL, password: process.env.KAREN_UX_ACCOUNT_C_PASSWORD },
+];
+if (approvedSpecialist && (foreignSpecialistAccounts.some(account => !account.email?.trim() || !account.password) ||
+    new Set([approvedEmail, ...foreignSpecialistAccounts.map(account => account.email)]
+      .map(email => email?.trim().toLowerCase())).size !== 3)) {
+  throw new Error("Fresh isolation requires three distinct sanitized account credentials");
+}
 if (approvedSpecialist && (!releaseMode || localMode || personalContextAcceptance || kcon770FaultAcceptance || authState ||
     process.env.KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED !== "true" ||
     process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
@@ -846,8 +906,11 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       "The actual persisted assistant reply must be rendered after reload",
     ).toBeVisible({ timeout: 30_000 });
     expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
-
-
+    if (approvedSpecialist) {
+      await expectFreshSpecialistIsolation(page, target, id!, firstReceipt.runtimeRequestId!, approvedSpecialist);
+      expect(observedRunRequests, "Authorization probes must not start inference").toHaveLength(1);
+      expect(specialistMutations, "Consumer must not mutate execution authority").toEqual([]);
+    }
   });
 
   for (const scenario of [
