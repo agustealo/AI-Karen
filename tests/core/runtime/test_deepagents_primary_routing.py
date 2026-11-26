@@ -352,7 +352,7 @@ async def test_agent_receipt_failure_remains_nonrecoverable_across_workflow(enab
 @pytest.mark.parametrize("response_id", ["", "other-request"])
 @pytest.mark.parametrize(
     "status",
-    [ResponseStatus.SUCCESS, ResponseStatus.PARTIAL, ResponseStatus.DEGRADED, ResponseStatus.ERROR],
+    list(ResponseStatus),
 )
 async def test_agent_response_request_identity_must_match_before_publication(
     enabled, monkeypatch, response_id, status,

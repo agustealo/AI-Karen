@@ -177,6 +177,8 @@ class FeatureFlags:
     enable_ag_ui_bridge: bool = False
     # CK-07A: opt-in only after migration 43 and live multiworker proof.
     enable_ag_ui_durable_runs: bool = False
+    # KCOMM-02C: opt-in only after canonical marker migration and recovery proof.
+    enable_communications_terminal_producer: bool = False
     # KUI-002D3B2B: mutation transport remains opt-in after authenticated acceptance.
     enable_presentation_pin_mutations: bool = False
     # KGUI-CARD-STUDIO-01C: opt-in authenticated template CRUD, no publication.
@@ -452,6 +454,13 @@ class RuntimeSettings:
         if env_ag_ui_run_ledger is not None:
             self.features.enable_ag_ui_durable_runs = as_bool(env_ag_ui_run_ledger)
 
+        env_communications = env("KARI_ENABLE_COMMUNICATIONS_TERMINAL_PRODUCER")
+        if env_communications is not None:
+            normalized = env_communications.strip().lower()
+            if normalized not in {"1", "0", "true", "false", "yes", "no", "on", "off"}:
+                raise ValueError("KARI_ENABLE_COMMUNICATIONS_TERMINAL_PRODUCER must be a boolean")
+            self.features.enable_communications_terminal_producer = normalized in {"1", "true", "yes", "on"}
+
         env_pin_mutations = env("KARI_ENABLE_PRESENTATION_PIN_MUTATIONS")
         if env_pin_mutations is not None:
             self.features.enable_presentation_pin_mutations = as_bool(env_pin_mutations)
@@ -566,6 +575,13 @@ class RuntimeSettings:
 
         if not isinstance(self.features.enable_verification_strategy_policy_probe, bool):
             issues.append("Verification strategy policy probe flag must be boolean")
+
+        if not isinstance(self.features.enable_communications_terminal_producer, bool):
+            issues.append("Communications terminal producer flag must be boolean")
+        if self.features.enable_communications_terminal_producer and not (
+            self.features.enable_ag_ui_bridge and self.features.enable_ag_ui_durable_runs
+        ):
+            issues.append("Communications terminal producer requires AG-UI bridge and durable runs")
 
         if not isinstance(self.features.enable_card_studio_crud, bool):
             issues.append("Card Studio CRUD flag must be boolean")

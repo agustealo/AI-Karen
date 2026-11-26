@@ -1441,3 +1441,64 @@ async def test_medusa_safe_failure_preserves_original_request_identity(receipt_u
     assert response.metadata["recoverable"] is (not receipt_uncertain)
     manager.mark_failed.assert_awaited_once_with(request.request_id, failure)
     manager.mark_response.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("response_id", ["", "foreign-request"])
+@pytest.mark.parametrize("status", ["success", "partial", "degraded", "error", "timeout"])
+async def test_coordinator_rejects_foreign_response_before_terminal_write(response_id, status):
+    from ai_karen_engine.agent_medusa.contracts.runtime_response import (
+        ResponseStatus, RuntimeResponse,
+    )
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, _, _, _ = _request()
+    manager = SimpleNamespace(
+        register=AsyncMock(), mark_failed=AsyncMock(), mark_response=AsyncMock(),
+    )
+    coordinator = MedusaCoordinator(run_manager=manager)
+    coordinator._handle_request = AsyncMock(return_value=RuntimeResponse(
+        request_id=response_id, status=ResponseStatus(status),
+        content="foreign private output", metadata={"secret": "foreign private metadata"},
+    ))
+    response = await coordinator.handle_request(request)
+    assert response.request_id == request.request_id
+    assert response.status is ResponseStatus.ERROR
+    assert response.metadata["reconciliation_required"] is True
+    assert response.metadata["recoverable"] is False
+    assert "foreign private" not in repr(response.to_dict())
+    manager.mark_response.assert_not_awaited()
+    manager.mark_failed.assert_awaited_once()
+    assert manager.mark_failed.await_args.args[0] == request.request_id
+    assert isinstance(manager.mark_failed.await_args.args[1], OutcomeStoreError)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("proposed", "resolved"),
+    [("success", "orphaned"), ("partial", "failed"), ("degraded", "failed"),
+     ("error", "completed"), ("timeout", "completed"), ("success", None)],
+)
+async def test_coordinator_rejects_unconfirmed_terminal_result(proposed, resolved):
+    from ai_karen_engine.agent_medusa.contracts.runtime_response import (
+        ResponseStatus, RuntimeResponse,
+    )
+    from ai_karen_engine.agent_medusa.execution.run_manager import ExecutionRunStatus
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, _, _, _ = _request()
+    mark_response = (
+        AsyncMock(return_value=ExecutionRunStatus(resolved))
+        if resolved is not None else AsyncMock(side_effect=RuntimeError("private ledger error"))
+    )
+    manager = SimpleNamespace(
+        register=AsyncMock(), mark_failed=AsyncMock(), mark_response=mark_response,
+    )
+    coordinator = MedusaCoordinator(run_manager=manager)
+    coordinator._handle_request = AsyncMock(return_value=RuntimeResponse(
+        request_id=request.request_id, status=ResponseStatus(proposed), content="private result",
+    ))
+    with pytest.raises(OutcomeStoreError, match="terminal outcome could not be confirmed"):
+        await coordinator.handle_request(request)
+    manager.mark_response.assert_awaited_once_with(request.request_id, proposed)
+    manager.mark_failed.assert_not_awaited()
