@@ -66,7 +66,7 @@ describe("Communications Center's canonical visual and authority contract", () =
     stubs.get.mockResolvedValue(LIVE_SNAPSHOT);
     const { container } = render(<CommsCenterPage />);
 
-    expect(screen.getByRole("heading", { name: "Activity & Notifications" })).toBeTruthy();
+    expect(screen.getByRole("heading", { name: "Your communications & activity" })).toBeTruthy();
     expect(container.querySelector('[data-testid="comms-center"] .karen-surface')).toBeTruthy();
     expect(container.querySelector('[data-testid="comms-center"][data-kari-root]')).toBeTruthy();
     expect(container.querySelector('[data-testid="comms-center"] .kari-display')).toBeTruthy();
@@ -91,7 +91,8 @@ describe("Communications Center's canonical visual and authority contract", () =
     render(<CommsCenterPage />);
 
     await waitFor(() => {
-      expect(screen.getByText(/Observability endpoint unavailable/)).toBeTruthy();
+      expect(screen.getByText(/Live observability is unavailable/)).toBeTruthy();
+      expect(screen.queryByText(/Observability endpoint unavailable/)).toBeNull();
     });
     expect(screen.getByTestId("comms-metric-audit").textContent?.trim()).toBe("—");
     expect(screen.getByTestId("comms-metric-writebacks").textContent?.trim()).toBe("—");
@@ -226,6 +227,59 @@ describe("Communications Center's canonical visual and authority contract", () =
     expect(screen.queryByText("Execution private-")).toBeNull();
     expect(screen.getByTestId("comms-owned-run-count").textContent).toContain("Unverified");
     expect(finishSecondRequest).toBeTypeOf("function");
+  });
+
+  it("projects returned execution and warning counts and delegates actions to existing workspaces", async () => {
+    const onOpenAgents = vi.fn();
+    const onOpenTasks = vi.fn();
+    const onOpenChat = vi.fn();
+    stubs.get.mockImplementation(async (path: string) => {
+      if (path === "/api/communications-center/observability") return {
+        ...LIVE_SNAPSHOT,
+        alerts: [...LIVE_SNAPSHOT.alerts, { id: "warning-1", title: "Scoped warning", description: "Verified warning", type: "warning", timestamp: "2026-11-18T15:58:00Z" }],
+      };
+      if (path === "/api/agent-runtime/my-runs") return {
+        runs: ["failed", "orphaned", "queued", "cancelling", "completed"].map((status, index) => ({
+          run_id: "owned-" + index, user_id: "user-one", tenant_id: "tenant-one", status,
+        })),
+        total: 20, generated_at: "2026-11-18T16:00:00Z",
+      };
+      throw new Error("Unexpected endpoint");
+    });
+    render(<CommsCenterPage {...{ onOpenAgents, onOpenTasks, onOpenChat }} />);
+    await waitFor(() => {
+      expect(screen.getByTestId("comms-attention-runs").textContent?.trim()).toBe("2");
+      expect(screen.getByTestId("comms-active-runs").textContent?.trim()).toBe("2");
+      expect(screen.getByTestId("comms-warning-count").textContent?.trim()).toBe("1");
+    });
+    expect(screen.getByText(/returned records only, not a complete inbox/)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: "Open approval workspace" }));
+    fireEvent.click(screen.getByRole("button", { name: "Inspect executions" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open my tasks" }));
+    fireEvent.click(screen.getByRole("button", { name: "Return to Karen" }));
+    expect(onOpenAgents).toHaveBeenCalledTimes(2);
+    expect(onOpenTasks).toHaveBeenCalledTimes(1);
+    expect(onOpenChat).toHaveBeenCalledTimes(1);
+  });
+
+  it("conceals snapshots and disables navigation during authentication revalidation or loss", async () => {
+    stubs.get.mockImplementation(async (path: string) => {
+      if (path === "/api/communications-center/observability") return LIVE_SNAPSHOT;
+      return { runs: [{ run_id: "private-run", user_id: "user-one", tenant_id: "tenant-one", status: "failed" }], total: 1, generated_at: "2026-11-18T16:00:00Z" };
+    });
+    const onOpenAgents = vi.fn();
+    const { rerender } = render(<CommsCenterPage onOpenAgents={onOpenAgents} />);
+    await waitFor(() => expect(screen.getByTestId("comms-attention-runs").textContent?.trim()).toBe("1"));
+    stubs.useAuth.mockReturnValue({ isLoading: true, isAuthenticated: true, user: FIRST_PRINCIPAL });
+    rerender(<CommsCenterPage onOpenAgents={onOpenAgents} />);
+    expect(screen.getByTestId("comms-attention-runs").textContent?.trim()).toBe("—");
+    expect(screen.getByTestId("comms-metric-audit").textContent?.trim()).toBe("—");
+    expect(screen.queryByText("Verified backend audit receipt")).toBeNull();
+    stubs.useAuth.mockReturnValue({ isLoading: false, isAuthenticated: false, user: FIRST_PRINCIPAL });
+    rerender(<CommsCenterPage onOpenAgents={onOpenAgents} />);
+    expect(screen.getByTestId("comms-attention-runs").textContent?.trim()).toBe("—");
+    expect((screen.getByRole("button", { name: "Open approval workspace" }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.queryByText("Verified backend audit receipt")).toBeNull();
   });
 
   it("fetches a fresh snapshot after an explicit Refresh click", async () => {

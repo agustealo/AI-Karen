@@ -216,10 +216,14 @@ function OwnedRunFeed({ runs, loading, error }: {
  * @file CommsCenterPage.tsx
  * @description Communications Center backed by live API data only.
  */
-export default function CommsCenterPage() {
+export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat }: {
+    onOpenAgents?: () => void;
+    onOpenTasks?: () => void;
+    onOpenChat?: () => void;
+} = {}) {
     const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
-    const principal = user?.tenant_id && user?.user_id
-        ? user.tenant_id + ":" + user.user_id
+    const principal = isAuthenticated && !isAuthLoading && user?.tenant_id && user?.user_id
+        ? JSON.stringify([user.tenant_id, user.user_id])
         : null;
     const [snapshot, setSnapshot] = useState<{ principal: string; value: ObservabilitySnapshot } | null>(null);
     // Never render a previous principal's snapshot across an account switch.
@@ -262,7 +266,8 @@ export default function CommsCenterPage() {
                     "/api/communications-center/observability",
                 );
                 if (!isObservabilitySnapshot(result)) {
-                    throw new Error("Live observability response did not match the backend contract");
+                    if (active) setObservabilityError("Live observability response did not match the backend contract");
+                    return;
                 }
                 if (active) setSnapshot({ principal, value: result });
             } catch (error) {
@@ -273,9 +278,8 @@ export default function CommsCenterPage() {
                 } else if (error instanceof ApiError && error.status === 403) {
                     setObservabilityAccessDenied(true);
                 } else {
-                    setObservabilityError(
-                        error instanceof Error ? error.message : "Live observability is unavailable",
-                    );
+                    // Transport exceptions may contain internal details or credentials.
+                    setObservabilityError("Live observability is unavailable");
                 }
             } finally {
                 if (active) setObservabilityLoading(false);
@@ -348,10 +352,14 @@ export default function CommsCenterPage() {
             0,
         )
         : null;
+    const attentionRuns = ownedRuns?.filter((run) => run.status === "failed" || run.status === "orphaned") ?? null;
+    const activeRuns = ownedRuns?.filter((run) => ["queued", "running", "cancelling"].includes(run.status)) ?? null;
+    const warningAlerts = observability ? liveAlerts.filter((alert) => alert.type === "warning") : null;
+    const canNavigate = !!principal;
     const liveStatus = observabilityLoading || isAuthLoading
         ? "Connecting"
         : observability
-            ? "Live snapshot"
+            ? "Snapshot received"
             : observabilityAccessDenied
                 ? "Access restricted"
                 : observabilityAuthRequired
@@ -369,10 +377,9 @@ export default function CommsCenterPage() {
                         <Radio aria-hidden="true" className="h-3.5 w-3.5" />
                         Communications Center
                     </div>
-                    <h2 className="kari-display karen-page-title text-balance md:text-[2.25rem]">Activity &amp; Notifications</h2>
+                    <h2 className="kari-display karen-page-title text-balance md:text-[2.25rem]">Your communications &amp; activity</h2>
                     <p className="karen-page-description mt-3">
-                        A clear view of backend audit activity, system alerts, memory operations and
-                        training signals. Only verified information is shown.
+                        Review updates from Karen’s runtime, find work that may need attention, and open the workspaces where you can act. Only verified account-scoped records are shown.
                     </p>
                 </div>
                 <div className="flex shrink-0 flex-wrap items-center gap-3 lg:flex-col lg:items-end">
@@ -442,6 +449,59 @@ export default function CommsCenterPage() {
                     </Alert>
                 )}
 
+                <section aria-label="What needs your attention" className="space-y-3">
+                    <div>
+                        <h3 className="text-lg font-semibold">What needs your attention</h3>
+                        <p className="text-sm text-muted-foreground">These counts describe returned records only, not a complete inbox or all account activity.</p>
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-3">
+                        <Card className="border-border/70">
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-base">Execution follow-up</CardTitle>
+                                <CardDescription>Failed or orphaned runs in the returned history.</CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <p className="text-2xl font-semibold tabular-nums" data-testid="comms-attention-runs">{metricValue(attentionRuns?.length ?? null)}</p>
+                                <p className="text-xs text-muted-foreground">{attentionRuns === null ? "Execution history unavailable." : attentionRuns.length === 0 ? "None in the returned records." : "Inspect the original execution before deciding what to do next."}</p>
+                                {onOpenAgents && <Button type="button" size="sm" variant="outline" disabled={!canNavigate} onClick={onOpenAgents}>Inspect executions</Button>}
+                            </CardContent>
+                        </Card>
+                        <Card className="border-border/70">
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-base">Work in progress</CardTitle>
+                                <CardDescription>Queued, running or cancelling runs in the returned history.</CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <p className="text-2xl font-semibold tabular-nums" data-testid="comms-active-runs">{metricValue(activeRuns?.length ?? null)}</p>
+                                <p className="text-xs text-muted-foreground">Scheduled tasks are managed separately.</p>
+                                {onOpenTasks && <Button type="button" size="sm" variant="outline" disabled={!canNavigate} onClick={onOpenTasks}>Open my tasks</Button>}
+                            </CardContent>
+                        </Card>
+                        <Card className="border-border/70">
+                            <CardHeader className="pb-3">
+                                <CardTitle className="text-base">Warnings</CardTitle>
+                                <CardDescription>Warnings in the current observability snapshot.</CardDescription>
+                            </CardHeader>
+                            <CardContent className="space-y-3">
+                                <p className="text-2xl font-semibold tabular-nums" data-testid="comms-warning-count">{metricValue(warningAlerts?.length ?? null)}</p>
+                                <p className="text-xs text-muted-foreground">{warningAlerts === null ? "Warning source unavailable." : "Not a system-wide health assessment."}</p>
+                            </CardContent>
+                        </Card>
+                    </div>
+                    <Card className="border-border/70 bg-muted/20">
+                        <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+                            <div className="space-y-1">
+                                <h4 className="font-semibold">Human decisions &amp; conversations</h4>
+                                <p className="text-sm text-muted-foreground">Review authorized requests in the agent workspace, or return to Karen. Pending approval counts and generated briefings are not included in this snapshot.</p>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                                {onOpenAgents && <Button type="button" size="sm" variant="outline" disabled={!canNavigate} onClick={onOpenAgents}>Open approval workspace</Button>}
+                                {onOpenChat && <Button type="button" size="sm" disabled={!canNavigate} onClick={onOpenChat}>Return to Karen</Button>}
+                            </div>
+                        </CardContent>
+                    </Card>
+                </section>
+
                 <section aria-label="Operational snapshot" className="grid gap-3 sm:grid-cols-2 2xl:grid-cols-4">
                     <Card className="overflow-hidden border-primary/25 bg-gradient-to-br from-card to-primary/10">
                         <CardContent className="space-y-4 p-5">
@@ -452,7 +512,7 @@ export default function CommsCenterPage() {
                             <div className="text-3xl font-semibold tracking-tight tabular-nums" data-testid="comms-metric-audit">
                                 {metricValue(observability ? recentAuditEvents.length : null)}
                             </div>
-                            <p className="text-sm text-muted-foreground">Events in the current backend snapshot</p>
+                            <p className="text-sm text-muted-foreground">Recent buffered records, not complete audit history</p>
                         </CardContent>
                     </Card>
                     <Card className="overflow-hidden bg-gradient-to-br from-card to-accent/5">
