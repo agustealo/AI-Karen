@@ -126,6 +126,33 @@ async def get_my_agent_run(
     return record
 
 
+@router.get("/my-runs/{run_id}/transitions")
+async def get_my_run_transitions(
+    run_id: str,
+    current_user: UserData = Depends(get_current_user),
+    control_plane: AgentMedusaControlPlane = Depends(get_run_control_plane),
+) -> Dict[str, Any]:
+    """Read durable history for the active principal; never infer transitions."""
+    tenant_id = str(current_user.tenant_id or "").strip()
+    owner_id = str(current_user.user_id or "").strip()
+    if not current_user.is_active or not owner_id or not tenant_id or tenant_id.lower() in {"default", "dev-tenant"}:
+        raise HTTPException(status_code=403, detail="Verified active user and tenant required")
+    if not run_id or len(run_id) > 128:
+        raise HTTPException(status_code=404, detail="Execution history not found")
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+        DurableRunLedgerUnavailable,
+    )
+    try:
+        receipt = await control_plane.read_run_transitions(
+            run_id=run_id, tenant_id=tenant_id, user_id=owner_id,
+        )
+    except DurableRunLedgerUnavailable as exc:
+        raise HTTPException(status_code=503, detail="Execution history unavailable") from exc
+    if receipt is None or receipt.get("run_id") != run_id:
+        raise HTTPException(status_code=404, detail="Execution history not found")
+    return receipt
+
+
 @router.get("/my-runs/{run_id}/context")
 async def get_my_run_context(
     run_id: str,
