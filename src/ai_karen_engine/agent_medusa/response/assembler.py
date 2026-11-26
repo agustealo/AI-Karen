@@ -1,20 +1,17 @@
-"""Canonical Medusa response assembly (AGENT-LIVE-1 P0-5 / A13).
+"""Medusa response assembly through the existing governed generation bridge.
 
-Replaces the canned `final_content = "Execution complete.""` returned by
-MedusaCoordinator. Synthesizes actual agent step outputs into a final
-assistant response through the existing ResponseContract / ResponseSynthesizer
-path (already imported but unused in the coordinator).
-
-Audited existing services before adding anything:
-- services/response/response_contracts.ResponseContract  (purpose="medusa_synthesis")
-- services/response/response_synthesizer.ResponseSynthesizer
-- services/response/response_sanitizer.ResponseSanitizer
+A completed single Deep Agents answer retains its original provenance.
+Other successful specialist outputs are data for final synthesis, never
+a source of model authorization or provider selection.
 """
 
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
+
+if TYPE_CHECKING:
+    from ..contracts.specialist_execution import SpecialistExecutionContext
 
 from ..contracts.runtime_response import RuntimeResponse, ResponseStatus
 
@@ -33,6 +30,7 @@ class ResponseAssembler:
         latest_user_message: str,
         status: ResponseStatus = ResponseStatus.SUCCESS,
         metadata: Optional[Dict[str, Any]] = None,
+        execution: Optional["SpecialistExecutionContext"] = None,
     ) -> RuntimeResponse:
         if not step_outputs:
             return RuntimeResponse(
@@ -86,28 +84,65 @@ class ResponseAssembler:
                 },
             )
 
-        from ai_karen_engine.services.response.response_contracts import ResponseContract
-        from ai_karen_engine.services.response.response_synthesizer import ResponseSynthesizer
-        from ai_karen_engine.core.model_runtime.routing.llm_router_service import get_llm_router
+        if status not in {ResponseStatus.SUCCESS, ResponseStatus.PARTIAL,
+                          ResponseStatus.DEGRADED}:
+            return RuntimeResponse(
+                request_id=request_id, status=status,
+                content="The agent run did not complete successfully.",
+                intermediate_steps=step_outputs, agent_trace=agent_trace,
+                metadata=metadata or {},
+            )
 
+        from ai_karen_engine.core.runtime.contracts import GenerationRequest
+        from ai_karen_engine.services.response.response_contracts import ResponseContract
+        from ai_karen_engine.services.response.response_prompt_builder import ResponsePromptBuilder
+        from ai_karen_engine.services.response.response_sanitizer import ResponseSanitizer
+        from ai_karen_engine.services.response.response_validator import ResponseValidator
+        from ..specialists.bridges import CanonicalGenerationExecutor
+
+        if execution is None or execution.trajectory_id != request_id:
+            raise PermissionError("medusa_final_synthesis_authority_required")
         contract = ResponseContract(
             purpose="medusa_synthesis",
             intent="agent.multi_agent",
             latest_user_message=latest_user_message,
             specialist_findings=step_outputs,
-            runtime_metadata=metadata or {},
         )
-        synthesizer = ResponseSynthesizer(get_llm_router())
-        text, synth_metadata = await synthesizer.synthesize(
-            contract, conversation_id=request_id
+        result = await CanonicalGenerationExecutor().generate_result(
+            GenerationRequest(
+                request_id=request_id,
+                correlation_id=execution.correlation_id,
+                policy_decision_id=execution.policy_decision_id,
+                messages=ResponsePromptBuilder().build_messages(contract),
+            ),
+            execution=execution,
         )
+        text = ResponseSanitizer().sanitize(result.text)
+        if not ResponseValidator().validate(text, contract).valid:
+            raise RuntimeError("medusa_final_synthesis_validation_failed")
 
+        if result.degraded and status is ResponseStatus.SUCCESS:
+            status = ResponseStatus.DEGRADED
+        receipt = {
+            "response_source": result.response_source,
+            "actual_provider": result.provider,
+            "actual_model": result.model,
+            "runtime_engine": result.runtime_engine,
+            "fallback_level": result.metadata.get("fallback_level", 0),
+            "degraded_mode": result.degraded or status is ResponseStatus.DEGRADED,
+            "degradation_reason": result.degradation_reason,
+            "latency_ms": result.latency_ms,
+            "correlation_id": execution.correlation_id,
+        }
         return RuntimeResponse(
             request_id=request_id,
             status=status,
             content=text,
             intermediate_steps=step_outputs,
             agent_trace=agent_trace,
-            metadata={**(metadata or {}), "synthesis": synth_metadata},
+            metadata={
+                **(metadata or {}),
+                **receipt,
+                "synthesis": {"source": "expression_gateway", **receipt},
+            },
         )
-

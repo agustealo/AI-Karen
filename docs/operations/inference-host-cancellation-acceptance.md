@@ -349,3 +349,31 @@ legacy behavior tests still reference that concrete class; do not
 delete it until those contracts are migrated and the full inventory is
 reviewed. No local test execution, full exact-head CI, deployment or
 physical-host acceptance is claimed.
+
+
+### Final multi-specialist synthesis and citation contract migration (KUI-004B4.48C7Z8E20)
+
+E19 exact-head Chat System Burn passed, including 245 model-runtime
+tests. Its expanded caller inventory (artifact 15081861626, run
+45741750957) found Medusa ResponseAssembler's remaining indirect legacy
+ResponseSynthesizer consumer. E19 Plugin Backend reported 2028 passes
+and one failure: a textual assertion requiring retry implementation
+inside the now-retired facade.
+
+The final multi-specialist stage now uses the same governed
+CanonicalGenerationExecutor as other specialist stages. The coordinator
+passes its original authenticated plan and meter, not serialized
+metadata. The executor exposes the observed ExpressionResult without
+a second generation path; the assembler preserves actual provider/model
+attribution and validates the sanitized answer. A single Deep Agents
+answer still does not trigger another model call. Missing or mismatched
+scope fails closed. The obsolete citation source assertion is retired
+in favor of behavioral validation in ChatRuntime, including a new test
+rejecting fabricated gateway citation metadata. Both citation suites
+are explicitly included in Chat System Burn.
+
+Remaining: actual final synthesis CI, audit of Medusa terminal trajectory
+status relative to synthesis, duplicate ProviderProcessingError classes
+(including raw exception string exposure in the legacy router), legacy
+executor test/telemetry migration and deletion, full exact-head quality
+and physical-host acceptance. No production merge or deployment.

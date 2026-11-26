@@ -456,6 +456,24 @@ class MedusaCoordinator:
                 plan.degradation_metadata.fallback_level.value
             )
 
+        # The final response is another model stage, not a fresh request.
+        # Only the original authenticated plan and meter may admit synthesis.
+        synthesis_scope = (
+            SpecialistExecutionContext(
+                authorized_plan=authorized_plan,
+                tenant_id=request.tenant_id, user_id=request.user_id,
+                session_id=request.session_id,
+                policy_decision_id=authorized_plan.policy_decision_id,
+                trajectory_id=request.request_id,
+                correlation_id=self._correlation_id(request),
+                step_id="medusa.final_synthesis",
+                budget_meter=meter,
+                authenticated_chat_context=trusted_context,
+                preferred_provider=request.context.get("preferred_provider"),
+                preferred_model=request.context.get("preferred_model"),
+            )
+            if trusted_context is not None else None
+        )
         return await self.assembler.assemble(
             request_id=request.request_id,
             step_outputs=step_outputs,
@@ -463,6 +481,7 @@ class MedusaCoordinator:
             latest_user_message=request.query,
             status=final_status,
             metadata=response_metadata,
+            execution=synthesis_scope,
         )
 
     async def _execute_step(

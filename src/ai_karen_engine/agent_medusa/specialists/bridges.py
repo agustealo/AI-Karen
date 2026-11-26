@@ -25,6 +25,7 @@ from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
 from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
 
 if TYPE_CHECKING:
+    from ai_karen_engine.core.expression.contracts import ExpressionResult
     from ..contracts.specialist_execution import SpecialistExecutionContext
 
 logger = logging.getLogger(__name__)
@@ -62,6 +63,14 @@ class CanonicalGenerationExecutor:
         self, request: GenerationRequest, *,
         execution: Optional["SpecialistExecutionContext"] = None,
     ) -> str:
+        result = await self.generate_result(request, execution=execution)
+        return result.text
+
+    async def generate_result(
+        self, request: GenerationRequest, *,
+        execution: Optional["SpecialistExecutionContext"] = None,
+    ) -> "ExpressionResult":
+        """Expose the observed gateway receipt to the final response assembler."""
         from ai_karen_engine.core.expression.contracts import ExpressionTask
         from ai_karen_engine.core.model_runtime.governed_model_admission import (
             GovernedToolModelAdmission,
@@ -154,7 +163,7 @@ class CanonicalGenerationExecutor:
                 raise PermissionError("specialist_generation_evidence_denied")
             if not isinstance(result.text, str) or not result.text.strip():
                 raise RuntimeError("specialist_generation_empty_response")
-            return result.text
+            return result
 
 
 class GenerationBridge:

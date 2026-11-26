@@ -2235,3 +2235,53 @@ async def test_legacy_response_synthesizer_cannot_borrow_provider_authority(stre
             conversation_id="forged-conversation",
             stream=stream,
         )
+
+
+@pytest.mark.asyncio
+async def test_medusa_final_synthesis_preserves_original_meter_and_provenance(monkeypatch):
+    from ai_karen_engine.agent_medusa.contracts.specialist_execution import SpecialistExecutionContext
+    from ai_karen_engine.agent_medusa.contracts.runtime_response import ResponseStatus
+    from ai_karen_engine.agent_medusa.response.assembler import ResponseAssembler
+
+    admission = _scope(calls=1, topology=ExecutionTopology.MULTI_AGENT)
+    _, _, attempts = _workflow_transport(monkeypatch, admission)
+    ctx = admission.authenticated_context
+    execution = SpecialistExecutionContext(
+        authorized_plan=admission.plan, tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id, session_id=ctx.session_id,
+        policy_decision_id=admission.policy_decision_id,
+        trajectory_id=ctx.request_id, correlation_id=ctx.correlation_id,
+        step_id="medusa.final_synthesis", budget_meter=admission.meter,
+        authenticated_chat_context=ctx,
+        preferred_provider="ollama-local", preferred_model="model-a",
+    )
+    assembler = ResponseAssembler()
+
+    async def assemble(scope):
+        return await assembler.assemble(
+            request_id=ctx.request_id, latest_user_message="Summarize results",
+            step_outputs=[{"finding": "first"}, {"finding": "second"}],
+            agent_trace=["analyst", "researcher"], execution=scope,
+            metadata={"actual_provider": "forged", "actual_model": "forged"},
+        )
+
+    for invalid in (
+        None,
+        replace(execution, authorized_plan=replace(admission.plan)),
+        replace(execution, budget_meter=ExecutionBudgetMeter(admission.plan.budget)),
+        replace(execution, trajectory_id="forged"),
+    ):
+        with pytest.raises(PermissionError):
+            await assemble(invalid)
+    assert not attempts and admission.meter.model_calls == 0
+    result = await assemble(execution)
+    assert result.content == "actual observed output"
+    assert result.status is ResponseStatus.SUCCESS
+    assert result.metadata["actual_provider"] == "ollama-local"
+    assert result.metadata["actual_model"] == "model-a"
+    assert result.metadata["synthesis"]["source"] == "expression_gateway"
+    assert len(attempts) == admission.meter.model_calls == 1
+    assert admission.meter.external_requests == 0
+    with pytest.raises(PermissionError):
+        await assemble(execution)
+    assert len(attempts) == 1

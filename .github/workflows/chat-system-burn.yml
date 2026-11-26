@@ -108,6 +108,7 @@ jobs:
             tests/core/expression/test_gateway_fallbacks.py \
             tests/core/expression/test_gateway.py
           pytest -q tests/core/model_runtime/test_provider_completion_integrity.py tests/core/model_runtime/test_provider_execution.py tests/core/model_runtime/test_provider_execution_stream.py tests/core/model_runtime/test_personal_model_transport_grant.py tests/core/model_runtime/test_openai_compatible_client_transport.py tests/core/model_runtime/test_openai_compatible_adapter.py tests/core/model_runtime/test_openai_compatible_client_admission.py tests/core/model_runtime/test_model_execution_truth.py tests/core/model_runtime/test_governed_core_inference_admission.py tests/core/model_runtime/test_legacy_preload_no_inference.py
+          pytest -q tests/services/test_runtime_search_citation_validator.py tests/core/runtime/test_search_answer_runtime_synthesis.py
 
       - name: Prove native host cancellation acceptance fails closed without host evidence
         run: |
