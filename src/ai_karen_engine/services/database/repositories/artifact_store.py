@@ -29,6 +29,8 @@ class Artifact:
     created_at: datetime = field(default_factory=datetime.utcnow)
     deleted_at: Optional[datetime] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+    folder_id: Optional[str] = None
+    organization_revision: Optional[int] = None
 
 
 @dataclass
@@ -57,6 +59,18 @@ class VerifiedArtifactText:
     mime_type: str
     sha256: str
     text: str
+
+
+@dataclass(frozen=True, slots=True)
+class ArtifactFolder:
+    """Owner-scoped logical organization metadata; never a content grant."""
+
+    folder_id: str
+    parent_folder_id: Optional[str]
+    name: str
+    revision: int
+    created_at: datetime
+    updated_at: datetime
 
 
 class ArtifactStore(Repository):
@@ -131,13 +145,80 @@ class ArtifactStore(Repository):
         *,
         limit: int = 100,
         cursor: Optional[str] = None,
+        folder_scoped: bool = False,
+        folder_id: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> RepositoryResult[Sequence[Artifact]]:
         """List only one authenticated owner's active metadata using keyset paging.
 
         The result's metadata carries has_more: bool and next_cursor: str | None.
-        Cursors select a position, never confer access. No bytes or storage
+        Search is a bounded literal case-insensitive filename substring.
+        folder_scoped=False preserves flat inventory; True selects root (None)
+        or one folder. Cursors select a position, never confer access. No bytes or storage
         locations are exposed by the explorer projection.
         """
+
+    async def owner_hierarchy_available(
+        self, tenant_id: str, user_id: str,
+    ) -> RepositoryResult[bool]:
+        """Probe live backend capability, never an actor authorization grant."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def owner_folder_deletion_available(
+        self, tenant_id: str, user_id: str,
+    ) -> RepositoryResult[bool]:
+        """Probe empty-folder deletion support without mutating metadata."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def list_owner_folders(
+        self, tenant_id: str, user_id: str, *,
+        parent_folder_id: Optional[str] = None,
+        after_folder_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> RepositoryResult[Sequence[ArtifactFolder]]:
+        """Bounded metadata only. Caller supplies authenticated actor identity."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def create_owner_folder(
+        self, tenant_id: str, user_id: str, *, name: str,
+        parent_folder_id: Optional[str] = None,
+    ) -> RepositoryResult[ArtifactFolder]:
+        """Create logical metadata for the authenticated owner."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def rename_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        name: str, expected_revision: int,
+    ) -> RepositoryResult[ArtifactFolder]:
+        """Rename with an expected revision, without changing identity."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def resolve_owner_breadcrumbs(
+        self, tenant_id: str, user_id: str, folder_id: str,
+    ) -> RepositoryResult[Sequence[ArtifactFolder]]:
+        """Return complete bounded root-to-folder ancestry, or fail closed."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def move_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        parent_folder_id: Optional[str], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        """Compare-and-swap movement; success returns committed revision."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def move_owner_artifact(
+        self, tenant_id: str, user_id: str, artifact_id: str, *,
+        folder_id: Optional[str], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        """Move active metadata only; return the committed organization revision."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    async def delete_empty_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        expected_revision: int,
+    ) -> RepositoryResult[bool]:
+        """Delete only empty folder metadata; never detach or delete artifacts."""
+        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
     @abstractmethod
     async def delete(self, artifact_id: str, tenant_id: str) -> RepositoryResult[bool]:

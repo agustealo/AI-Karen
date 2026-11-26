@@ -220,6 +220,9 @@ jobs:
           python scripts/architecture/audit_copilotkit_wiring.py
           pytest tests/architecture/test_copilotkit_migration_wiring.py -q
           pytest tests/architecture/test_browser_acceptance_dispatch_security.py -q
+          # Exercise the local browser runner guards and shared provenance/report validators
+          # without provisioning a stack, sending credentials or dispatching live browser tests.
+          python -m pytest tests/architecture/test_file_explorer_protected_browser_dispatch.py tests/architecture/test_kcard_local_acceptance_contract.py -q
           pytest tests/architecture/test_deployment_revision_acceptance.py -q
           # Existing Render beta API is reconciled without provisioning or
           # implicit deployment; keep this exact owner and its secret-free

@@ -3,15 +3,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional
+from typing import Annotated, Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.encoders import jsonable_encoder
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+from ai_karen_engine.auth.rbac_middleware import (
+    FILE_EXPLORER_MUTATION_PERMISSIONS, Permission, get_rbac_manager,
+)
 from ai_karen_engine.auth.session import get_plugin_lifecycle_context
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.persistence.repositories.plugin_lifecycle_repository import (
@@ -32,6 +34,7 @@ from ai_karen_engine.services.error_response_schemas import (
     create_service_error_response,
     get_http_status_for_error_code,
 )
+from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.services.plugin_service import ExecutionStatus, PluginService
 
@@ -126,10 +129,115 @@ class FileExplorerInventoryEntry(BaseModel):
 
 class FileExplorerInventoryResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    # Analysis selection ceiling, not a content access grant.
+    max_selection: int = Field(default=MAX_CONTENT_SOURCE_REFERENCES, strict=True,
+                               ge=MAX_CONTENT_SOURCE_REFERENCES, le=MAX_CONTENT_SOURCE_REFERENCES)
     items: List[FileExplorerInventoryEntry]
     has_more: bool
     next_cursor: Optional[str] = None
     inventory_semantics: Literal["owner_metadata_page_not_live_acl"]
+    request_id: str
+    correlation_id: str
+
+
+class ContentInventoryResponse(FileExplorerInventoryResponse):
+    """Require explicit selection evidence from the authorized content service."""
+
+    max_selection: int = Field(
+        strict=True, ge=MAX_CONTENT_SOURCE_REFERENCES, le=MAX_CONTENT_SOURCE_REFERENCES
+    )
+
+
+class FileExplorerCapabilitiesResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    browse: Literal["available", "unavailable"]
+    operations: Dict[str, Literal["available", "denied", "unavailable"]]
+    semantics: Literal["preflight_not_resource_authorization"]
+    request_id: str
+    correlation_id: str
+
+
+class FileExplorerFolderResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folder_id: UUID
+    parent_folder_id: Optional[UUID]
+    name: str = Field(min_length=1, max_length=256)
+    revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
+class FileExplorerCreateFolderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=256)
+    parent_folder_id: Optional[str] = Field(default=None, min_length=36, max_length=36)
+
+
+class FileExplorerRenameFolderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    name: str = Field(min_length=1, max_length=256)
+    expected_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
+class FileExplorerDeleteFolderRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    expected_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
+class FileExplorerDeleteFolderResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folder_id: UUID
+    deleted: Literal[True]
+    request_id: str
+    correlation_id: str
+
+
+class FileExplorerMoveRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    destination_id: Optional[str] = Field(min_length=36, max_length=36)
+    expected_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
+class FileExplorerMoveResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    kind: Literal["folder", "artifact"]
+    source_id: UUID
+    parent_folder_id: Optional[UUID]
+    organization_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+    request_id: str
+    correlation_id: str
+
+
+class FileExplorerCreateFolderResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    folder: FileExplorerFolderResponse
+    request_id: str
+    correlation_id: str
+
+
+class FileExplorerHierarchyFileResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    source_id: UUID
+    parent_id: Optional[UUID]
+    kind: Literal["file"]
+    name: str
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    sha256: str = Field(pattern=r"^[a-f0-9]{64}$")
+    size_bytes: int = Field(ge=0)
+    organization_revision: str = Field(pattern=r"^[1-9][0-9]{0,18}$")
+
+
+class FileExplorerHierarchyResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # Analysis selection ceiling, not a content access grant.
+    max_selection: int = Field(default=MAX_CONTENT_SOURCE_REFERENCES, strict=True,
+                               ge=MAX_CONTENT_SOURCE_REFERENCES, le=MAX_CONTENT_SOURCE_REFERENCES)
+    available: bool
+    folders: List[FileExplorerFolderResponse]
+    breadcrumbs: List[FileExplorerFolderResponse]
+    has_more: bool
+    next_folder_id: Optional[UUID] = None
+    files: List[FileExplorerHierarchyFileResponse]
+    files_has_more: bool
+    next_file_cursor: Optional[str] = None
     request_id: str
     correlation_id: str
 
@@ -145,7 +253,7 @@ class ContentSourceReference(BaseModel):
 class ContentOwnerSourcesRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     operation: Literal["analyze", "search", "compare"]
-    references: List[ContentSourceReference] = Field(min_length=1, max_length=12)
+    references: List[ContentSourceReference] = Field(min_length=1, max_length=MAX_CONTENT_SOURCE_REFERENCES)
     query: Optional[str] = Field(default=None, min_length=1, max_length=512)
     left_id: Optional[UUID] = None
     right_id: Optional[UUID] = None
@@ -440,6 +548,36 @@ async def get_search_article(
     return {"article_id": article_id, "full_content": document}
 
 
+def _file_explorer_read_scope(
+    request: Request, current_user: Dict[str, Any], operation: str,
+    permission: Permission = Permission.DATA_READ,
+):
+    user_id = str(current_user.get("user_id") or "").strip()
+    tenant_id = str(current_user.get("tenant_id") or "").strip()
+    if not user_id or not tenant_id or tenant_id in {"default", "dev-tenant"}:
+        raise HTTPException(status_code=401, detail="Authenticated user and tenant required")
+
+    rbac = get_rbac_manager()
+    permitted = rbac.has_permission(current_user, permission)
+    meta = _response_meta(request)
+    rbac.audit_access_attempt(
+        current_user,
+        permission,
+        resource=request.url.path,
+        granted=permitted,
+        request=request,
+        additional_context={
+            "operation": operation,
+            "request_id": meta["request_id"],
+            "correlation_id": meta["correlation_id"],
+        },
+    )
+    if not permitted:
+        raise HTTPException(status_code=403, detail="File Explorer access denied")
+
+    return tenant_id, user_id, meta
+
+
 @router.get("/file-explorer/inventory", response_model=FileExplorerInventoryResponse)
 async def list_file_explorer_inventory(
     request: Request,
@@ -447,31 +585,12 @@ async def list_file_explorer_inventory(
     cursor: Optional[str] = Query(None, min_length=1, max_length=768),
     current_user: Dict[str, Any] = Depends(bypass_user_context_func),
     plugin_service: PluginService = Depends(get_plugin_service),
+    search: Annotated[Optional[str], Query(max_length=160)] = None,
 ) -> FileExplorerInventoryResponse:
     """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
-    user_id = str(current_user.get("user_id") or "").strip()
-    tenant_id = str(current_user.get("tenant_id") or "").strip()
-    if not user_id or not tenant_id or tenant_id in {"default", "dev-tenant"}:
-        raise HTTPException(status_code=401, detail="Authenticated user and tenant required")
-
-    rbac = get_rbac_manager()
-    permitted = rbac.has_permission(current_user, Permission.DATA_READ)
-    meta = _response_meta(request)
-    rbac.audit_access_attempt(
-        current_user,
-        Permission.DATA_READ,
-        resource=request.url.path,
-        granted=permitted,
-        request=request,
-        additional_context={
-            "operation": "file_explorer_owner_inventory",
-            "request_id": meta["request_id"],
-            "correlation_id": meta["correlation_id"],
-        },
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_owner_inventory",
     )
-    if not permitted:
-        raise HTTPException(status_code=403, detail="File inventory read access denied")
-
     try:
         page = await plugin_service.list_file_explorer_owner_page(
             user_id=user_id,
@@ -482,6 +601,7 @@ async def list_file_explorer_inventory(
             correlation_id=meta["correlation_id"],
             limit=limit,
             cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
         return FileExplorerInventoryResponse.model_validate(page)
     except PermissionError:
@@ -504,14 +624,219 @@ async def list_file_explorer_inventory(
         ) from None
 
 
-@router.get("/content-intelligence/inventory", response_model=FileExplorerInventoryResponse)
+@router.get("/file-explorer/capabilities", response_model=FileExplorerCapabilitiesResponse)
+async def get_file_explorer_capabilities(
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerCapabilitiesResponse:
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_capabilities",
+    )
+    try:
+        result = await plugin_service.get_file_explorer_capabilities(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+        )
+        return FileExplorerCapabilitiesResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="File Explorer access denied") from None
+    except Exception:
+        logger.warning("file_explorer_capabilities_unavailable", extra=meta)
+        raise HTTPException(status_code=503, detail="File Explorer capabilities unavailable") from None
+
+
+@router.get("/file-explorer/hierarchy", response_model=FileExplorerHierarchyResponse)
+async def list_file_explorer_hierarchy(
+    request: Request,
+    limit: int = Query(100, ge=1, le=200),
+    parent_folder_id: Optional[UUID] = None,
+    after_folder_id: Optional[UUID] = None,
+    file_cursor: Optional[str] = None,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+    search: Annotated[Optional[str], Query(max_length=160)] = None,
+) -> FileExplorerHierarchyResponse:
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_owner_hierarchy",
+    )
+    try:
+        if file_cursor is not None and not 1 <= len(file_cursor) <= 768:
+            raise ValueError("file_explorer_cursor_invalid")
+        page = await plugin_service.list_file_explorer_owner_page(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            limit=limit, hierarchy=True,
+            parent_folder_id=str(parent_folder_id) if parent_folder_id else None,
+            after_folder_id=str(after_folder_id) if after_folder_id else None,
+            file_cursor=file_cursor,
+            **({"search": search} if search is not None else {}),
+        )
+        return FileExplorerHierarchyResponse.model_validate(page)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="File hierarchy access denied") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="File hierarchy request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_hierarchy_unavailable", extra=meta)
+        raise HTTPException(status_code=503, detail="File hierarchy unavailable") from None
+
+
+@router.post("/file-explorer/folders", response_model=FileExplorerCreateFolderResponse, status_code=201)
+async def create_file_explorer_folder(
+    payload: FileExplorerCreateFolderRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerCreateFolderResponse:
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_folder_create", FILE_EXPLORER_MUTATION_PERMISSIONS["file_explorer.folder.create"],
+    )
+    try:
+        result = await plugin_service.create_file_explorer_folder(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            name=payload.name, parent_folder_id=payload.parent_folder_id,
+        )
+        return FileExplorerCreateFolderResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Folder creation denied") from None
+    except FileExplorerFolderConflict:
+        raise HTTPException(status_code=409, detail="Folder destination unavailable or conflicting") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Folder request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_folder_create_unavailable", extra=meta)
+        raise HTTPException(status_code=503, detail="Folder creation not confirmed; refresh before retrying") from None
+
+
+@router.patch("/file-explorer/folders/{folder_id}", response_model=FileExplorerCreateFolderResponse)
+async def rename_file_explorer_folder(
+    folder_id: UUID,
+    payload: FileExplorerRenameFolderRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerCreateFolderResponse:
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_folder_rename", FILE_EXPLORER_MUTATION_PERMISSIONS["file_explorer.folder.rename"],
+    )
+    try:
+        revision = int(payload.expected_revision)
+        if not 1 <= revision <= 9223372036854775806:
+            raise ValueError("file_explorer_folder_revision_invalid")
+        result = await plugin_service.rename_file_explorer_folder(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            folder_id=str(folder_id), name=payload.name, expected_revision=revision,
+        )
+        return FileExplorerCreateFolderResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Folder rename denied") from None
+    except FileExplorerFolderConflict:
+        raise HTTPException(status_code=409, detail="Folder unavailable or revision conflicting") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Folder request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_folder_rename_unavailable", extra=meta)
+        raise HTTPException(status_code=503, detail="Folder rename not confirmed; refresh before retrying") from None
+
+
+@router.post("/file-explorer/move/{kind}/{source_id}", response_model=FileExplorerMoveResponse)
+async def move_file_explorer_item(
+    kind: Literal["folder", "artifact"],
+    source_id: UUID,
+    payload: FileExplorerMoveRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerMoveResponse:
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_item_move", FILE_EXPLORER_MUTATION_PERMISSIONS[f"file_explorer.{kind}.move"],
+    )
+    try:
+        revision = int(payload.expected_revision)
+        if not 1 <= revision <= 9223372036854775806:
+            raise ValueError("file_explorer_move_revision_invalid")
+        result = await plugin_service.move_file_explorer_item(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            kind=kind, source_id=str(source_id), destination_id=payload.destination_id,
+            expected_revision=revision,
+        )
+        return FileExplorerMoveResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Move denied") from None
+    except FileExplorerFolderConflict:
+        raise HTTPException(status_code=409, detail="Source, destination or revision conflicting") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Move request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_move_unconfirmed", extra=meta)
+        raise HTTPException(status_code=503, detail="Move not confirmed; refresh before retrying") from None
+
+
+@router.delete("/file-explorer/folders/{folder_id}", response_model=FileExplorerDeleteFolderResponse)
+async def delete_file_explorer_folder(
+    folder_id: UUID,
+    payload: FileExplorerDeleteFolderRequest,
+    request: Request,
+    current_user: Dict[str, Any] = Depends(bypass_user_context_func),
+    plugin_service: PluginService = Depends(get_plugin_service),
+) -> FileExplorerDeleteFolderResponse:
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    tenant_id, user_id, meta = _file_explorer_read_scope(
+        request, current_user, "file_explorer_folder_delete", FILE_EXPLORER_MUTATION_PERMISSIONS["file_explorer.folder.delete"],
+    )
+    try:
+        revision = int(payload.expected_revision)
+        if not 1 <= revision <= 9223372036854775806:
+            raise ValueError("file_explorer_folder_revision_invalid")
+        result = await plugin_service.delete_file_explorer_folder(
+            user_id=user_id, tenant_id=tenant_id,
+            roles=[str(role) for role in (current_user.get("roles", []) or [])],
+            permissions=_permission_values(current_user),
+            request_id=meta["request_id"], correlation_id=meta["correlation_id"],
+            folder_id=str(folder_id), expected_revision=revision,
+        )
+        return FileExplorerDeleteFolderResponse.model_validate(result)
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Folder deletion denied") from None
+    except FileExplorerFolderConflict:
+        raise HTTPException(status_code=409, detail="Folder nonempty, unavailable or revision conflicting") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Folder deletion request invalid") from None
+    except Exception:
+        logger.warning("file_explorer_folder_delete_unconfirmed", extra=meta)
+        raise HTTPException(status_code=503, detail="Folder deletion not confirmed; refresh before retrying") from None
+
+
+@router.get("/content-intelligence/inventory", response_model=ContentInventoryResponse)
 async def list_content_inventory(
     request: Request,
     limit: int = Query(100, ge=1, le=200),
     cursor: Optional[str] = Query(None, min_length=1, max_length=768),
     current_user: Dict[str, Any] = Depends(bypass_user_context_func),
     plugin_service: PluginService = Depends(get_plugin_service),
-) -> FileExplorerInventoryResponse:
+    search: Annotated[Optional[str], Query(max_length=160)] = None,
+) -> ContentInventoryResponse:
     """Thin authenticated ingress; RuntimePolicy and PluginKernel execute the read."""
     user_id = str(current_user.get("user_id") or "").strip()
     tenant_id = str(current_user.get("tenant_id") or "").strip()
@@ -549,8 +874,13 @@ async def list_content_inventory(
             correlation_id=meta["correlation_id"],
             limit=limit,
             cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
-        return FileExplorerInventoryResponse.model_validate(page)
+        try:
+            return ContentInventoryResponse.model_validate(page)
+        except ValidationError:
+            # Invalid service output is not a client query validation error.
+            raise RuntimeError("content_inventory_evidence_invalid") from None
     except PermissionError:
         raise HTTPException(status_code=403, detail="Content inventory access denied") from None
     except ValueError:

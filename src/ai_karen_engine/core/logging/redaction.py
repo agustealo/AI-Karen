@@ -69,3 +69,27 @@ def install_signed_storage_httpx_log_filter() -> None:
     logger = logging.getLogger("httpx")
     if not any(isinstance(item, SignedStorageURLLogFilter) for item in logger.filters):
         logger.addFilter(SignedStorageURLLogFilter())
+
+
+class RequestTargetPrivacyFilter(logging.Filter):
+    """Keep HTTP access diagnostics without retaining raw URL query values."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.name != "uvicorn.access":
+            return True
+        # Uvicorn's h11 and httptools protocols emit the same five arguments.
+        # Preserve the tuple for AccessFormatter and structured formatters.
+        args = record.args
+        if not isinstance(args, tuple) or len(args) != 5 or not isinstance(args[2], str):
+            # Unknown access-record formats cannot be safely inspected.
+            return False
+        client, method, target, version, status = args
+        record.args = (client, method, target.partition("?")[0], version, status)
+        return True
+
+
+def install_request_target_privacy_filter() -> None:
+    """Install once at the access logger, before any configured log handler."""
+    logger = logging.getLogger("uvicorn.access")
+    if not any(isinstance(item, RequestTargetPrivacyFilter) for item in logger.filters):
+        logger.addFilter(RequestTargetPrivacyFilter())

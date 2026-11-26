@@ -270,3 +270,22 @@ def test_disposable_communications_browser_is_opt_in_and_isolated() -> None:
     assert "API host binding is not the isolated smoke container" in runner
     assert "Exactly one passing browser scenario without skips or retries required" in runner
     assert "DISPOSABLE COMMUNICATIONS SIGNED-SESSION LIFECYCLE PROOF PASSED" in runner
+
+
+def test_canonical_factory_installs_request_target_privacy_before_ingress():
+    source = _read(ROOT / "src/ai_karen_engine/app.py")
+    tree = ast.parse(source)
+    factory = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "create_app")
+    calls = [
+        node.value.func.id
+        for node in factory.body
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+    ]
+    assert calls.count("install_request_target_privacy_filter") == 1
+    assert calls.index("install_request_target_privacy_filter") < calls.index("_validate_environment")
+    smoke = _read(SMOKE)
+    assert "/health/live?search=" in smoke
+    assert 'grep -Fq "$privacy_marker"' in smoke
+    assert "privacy_after <= privacy_before" in smoke
+    assert "PRODUCTION REQUEST TARGET PRIVACY PROOF PASSED" in smoke

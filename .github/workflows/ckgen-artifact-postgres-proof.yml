@@ -12,9 +12,14 @@ on:
       - "tests/services/test_artifact_upload_compensation.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "supabase/migrations/*artifact_upload*.sql"
+      - "supabase/migrations/*artifact_folder*.sql"
+      - "supabase/tests/rls/artifact_folder_foundation.sql"
+      - "tests/services/test_artifact_owner_paging_contract.py"
+      - "tests/unit/test_artifact_owner_search_cursor.py"
       - "tests/services/test_artifact_storage_platform_client.py"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
       - "tests/integration/test_artifact_rls_actor_postgres.py"
+      - "tests/integration/test_artifact_folder_concurrency_postgres.py"
       - "tests/integration/test_upload_session_rls_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   push:
@@ -28,9 +33,14 @@ on:
       - "tests/services/test_artifact_upload_compensation.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "supabase/migrations/*artifact_upload*.sql"
+      - "supabase/migrations/*artifact_folder*.sql"
+      - "supabase/tests/rls/artifact_folder_foundation.sql"
+      - "tests/services/test_artifact_owner_paging_contract.py"
+      - "tests/unit/test_artifact_owner_search_cursor.py"
       - "tests/services/test_artifact_storage_platform_client.py"
       - "tests/integration/test_live_code_artifact_revocation_postgres.py"
       - "tests/integration/test_artifact_rls_actor_postgres.py"
+      - "tests/integration/test_artifact_folder_concurrency_postgres.py"
       - "tests/integration/test_upload_session_rls_postgres.py"
       - ".github/workflows/ckgen-artifact-postgres-proof.yml"
   workflow_dispatch:
@@ -178,6 +188,13 @@ jobs:
                   await db.execute(UPLOAD_LEDGER.read_text(encoding="utf-8"))
                   await db.execute(UPLOAD_TENANT_UUID.read_text(encoding="utf-8"))
                   await db.execute(UPLOAD_UNIQUE_BINDING.read_text(encoding="utf-8"))
+                  # Supabase API roles are absent in plain PostgreSQL; provision
+                  # only disposable no-login equivalents for privilege proof.
+                  for role in ("anon", "authenticated", "service_role"):
+                      if not await db.fetchval("SELECT 1 FROM pg_roles WHERE rolname=$1", role):
+                          await db.execute(f"CREATE ROLE {role} NOLOGIN NOSUPERUSER NOBYPASSRLS")
+                  await db.execute(Path("supabase/migrations/20261125040000_77_artifact_folder_foundation.sql").read_text(encoding="utf-8"))
+                  await db.execute(Path("supabase/tests/rls/artifact_folder_foundation.sql").read_text(encoding="utf-8"))
                   security = Path(
                       "supabase/migrations/20260827040000_04_tenant_security.sql"
                   ).read_text(encoding="utf-8")
@@ -255,12 +272,16 @@ jobs:
             tests/services/test_artifact_storage_platform_client.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
             tests/integration/test_artifact_rls_actor_postgres.py \
+            tests/integration/test_artifact_folder_concurrency_postgres.py \
             tests/integration/test_upload_session_rls_postgres.py
-          pytest tests/services/test_artifact_storage_platform_client.py \
+          pytest tests/services/test_artifact_owner_paging_contract.py \
+            tests/unit/test_artifact_owner_search_cursor.py \
+            tests/services/test_artifact_storage_platform_client.py \
             tests/services/test_upload_session_repository.py \
             tests/services/test_artifact_upload_compensation.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
             tests/integration/test_artifact_rls_actor_postgres.py \
+            tests/integration/test_artifact_folder_concurrency_postgres.py \
             tests/integration/test_upload_session_rls_postgres.py \
             -q -rs --junitxml=ckgen-artifact-postgres-junit.xml
 
