@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import math
 import time
 from typing import Any
 
@@ -107,50 +106,6 @@ class ExpressionGateway:
             "capabilities": task.required_capabilities,
             **extra,
         }
-
-    @staticmethod
-    def _observe_verified_model_success(result: ExpressionResult) -> None:
-        """Report an actual executor's verified model result to the health owner.
-
-        The result is already validated for usable, model-sourced text by the
-        gateway. A configured preference, disabled engine, static fallback or
-        empty model identity is not execution evidence. Health observability
-        must never turn a successful model answer into an HTTP failure.
-        """
-        provider = result.provider
-        model = result.model
-        if (
-            not isinstance(provider, str)
-            or not provider.strip()
-            or not isinstance(model, str)
-            or not model.strip()
-            or result.response_source in {
-                "model_unavailable",
-                "emergency_static",
-                "deterministic_fallback",
-                "persisted_history",
-            }
-        ):
-            return
-
-        try:
-            from ai_karen_engine.core.model_runtime.provider_health_monitor import (
-                record_provider_success,
-            )
-
-            seconds = float(result.latency_ms) / 1000.0
-            latency_seconds = seconds if math.isfinite(seconds) and seconds >= 0 else None
-            record_provider_success(provider.strip(), response_time=latency_seconds)
-        except Exception as exc:
-            # Health reporting is observability, not an inference dependency.
-            # Never turn a verified completed answer into a transport error.
-            logger.warning(
-                "expression.provider_health_observation_unavailable",
-                extra={
-                    "provider": provider,
-                    "error_type": type(exc).__name__,
-                },
-            )
 
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
         if task.remaining_execution_ms is None:
@@ -542,10 +497,8 @@ class ExpressionGateway:
                     # including an engine that swallowed deadline cancellation.
                     await require_deadline()
                     self.circuits.mark_success(f"expression.engine.{engine_id}")
-                    # Only observed, validated model execution may advance the
-                    # canonical health catalog. Do not mark the selected alias
-                    # healthy merely because an engine was configured.
-                    self._observe_verified_model_success(result)
+                    # Provider health is observed by the transport owner.
+                    # Engine receipt validation is not another observation.
                     observed_attempt_ms = (time.perf_counter() - attempt_started) * 1000.0
                     attempt_timings.append({
                         "engine_id": engine_id,

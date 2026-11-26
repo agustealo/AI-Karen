@@ -15,13 +15,17 @@ Ownership:
 from __future__ import annotations
 
 import logging
+import math
 import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
 from dataclasses import dataclass, field
 from enum import Enum
 
 from ai_karen_engine.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
 
 logger = get_logger(__name__)
 
@@ -187,6 +191,54 @@ class ProviderHealthMonitor:
         logger.debug(
             "Updated health for %s: %s", provider_id, health_info.health_status.value
         )
+
+    def record_shared_http_execution(
+        self, endpoint: ProviderEndpoint, *, transport: str,
+        outcome: str, response_time: float,
+    ) -> bool:
+        """Accept only bounded observations for the still-registered shared endpoint.
+
+        Personal/tenant-specific credentials and endpoints must not change the
+        global availability of a provider alias. No request, tenant, model,
+        URL or error body becomes a metrics label.
+        """
+        if (
+            endpoint.tenant_scoped is not False
+            or transport not in {"text", "structured", "sse"}
+            or outcome not in {
+                "success", "http_server_error", "connection_failure",
+                "invalid_provider_response",
+            }
+            or not math.isfinite(response_time)
+            or response_time < 0
+            or self._registry is None
+            or self._registry.get_provider_endpoint(endpoint.provider_id) != endpoint
+        ):
+            return False
+        self.update_provider_health(
+            endpoint.provider_id, is_healthy=outcome == "success",
+            response_time=response_time,
+            error_code=None if outcome == "success" else outcome,
+        )
+        try:
+            from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
+            collector = get_metrics_collector()
+            labels = {"transport": transport, "outcome": outcome}
+            collector.counter(
+                "kari_provider_http_observations_total",
+                "Classified terminal shared provider HTTP observations",
+                ["transport", "outcome"],
+            ).labels(**labels).inc()
+            collector.histogram(
+                "kari_provider_http_observation_duration_seconds",
+                "Elapsed client handoff to classified HTTP outcome",
+                ["transport", "outcome"],
+            ).labels(**labels).observe(response_time)
+        except Exception:
+            # Metrics failure must not reverse an observed health update.
+            pass
+        return True
 
     def _emit_transition_if_changed(
         self,

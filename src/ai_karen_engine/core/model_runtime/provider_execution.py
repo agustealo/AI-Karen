@@ -11,7 +11,9 @@ import json
 import os
 import ipaddress
 import socket
+import time
 from dataclasses import dataclass
+from types import TracebackType
 from typing import TYPE_CHECKING, Any, AsyncIterator, Literal, Mapping, Sequence
 from urllib.parse import urlsplit, urlunsplit
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
@@ -42,6 +44,107 @@ class ProviderExecutionResult:
 
 class ProviderExecutionError(RuntimeError):
     """Raised when a canonical provider endpoint cannot execute a request."""
+
+    # Only the transport observer may set this after shared-health admission.
+    shared_health_failure_observed: bool = False
+
+
+class _HttpExecutionObservation:
+    """Own one terminal observation, not a reservation or inferred dispatch.
+
+    The client handoff starts the latency clock. A response or a classified
+    network exception supplies evidence. Local deadlines, cancellation,
+    request-specific HTTP rejection and unknown errors remain neutral.
+    """
+
+    _INVALID_RESPONSE_CODES = frozenset({
+        "provider_invalid_response_object", "provider_response_too_large",
+        "provider_response_unverified_model", "provider_response_requested_model_mismatch",
+        "provider_response_unsupported_choices", "provider_response_invalid_choice",
+        "provider_response_invalid_message", "provider_response_non_assistant_role",
+        "provider_response_invalid_content", "provider_response_invalid_finish_reason",
+        "tool_call_response_has_no_choices", "tool_call_response_invalid_choice",
+        "tool_call_response_invalid_assistant", "tool_call_response_invalid_content",
+        "tool_call_model_changed_unexpectedly",
+        "provider_stream_invalid_content_type", "provider_stream_invalid_json",
+        "provider_stream_invalid_event", "provider_stream_invalid_model",
+        "provider_stream_model_switched", "provider_stream_requested_model_mismatch",
+        "provider_stream_invalid_choices", "provider_stream_unsupported_choices",
+        "provider_stream_unexpected_choice_index", "provider_stream_invalid_delta",
+        "provider_stream_non_assistant_role", "provider_stream_invalid_content",
+        "provider_stream_invalid_finish_reason", "provider_stream_invalid_frame",
+        "provider_stream_data_after_finish", "provider_stream_unverified_model",
+        "provider_stream_incomplete_frame", "provider_stream_incomplete",
+        "provider_stream_unverified_completion",
+    })
+
+    def __init__(
+        self, endpoint: ProviderEndpoint, *, transport: str, shared: bool,
+    ) -> None:
+        self.endpoint = endpoint
+        self.transport = transport
+        self.shared = shared and endpoint.tenant_scoped is False
+        self.started: float | None = None
+        self.response_status: int | None = None
+        self.connection_failed = False
+        self.finished = False
+
+    def __enter__(self) -> _HttpExecutionObservation:
+        return self
+
+    def handoff(self) -> None:
+        self.started = time.perf_counter()
+
+    def note_http_error(self, exc: BaseException) -> None:
+        import httpx
+
+        # Pool saturation, invalid client options and local protocol errors
+        # are not evidence of endpoint failure.
+        self.connection_failed = isinstance(exc, (
+            httpx.ConnectError, httpx.ReadError, httpx.WriteError,
+            httpx.RemoteProtocolError, httpx.ConnectTimeout,
+            httpx.ReadTimeout, httpx.WriteTimeout,
+        ))
+
+    def _record(self, outcome: str) -> bool:
+        if self.finished or self.started is None or not self.shared:
+            return False
+        self.finished = True
+        try:
+            from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+                get_health_monitor,
+            )
+            return get_health_monitor().record_shared_http_execution(
+                self.endpoint, transport=self.transport, outcome=outcome,
+                response_time=time.perf_counter() - self.started,
+            )
+        except Exception:
+            # Observation is never a model-execution dependency.
+            return False
+
+    def complete(self) -> None:
+        if self.response_status is not None and 200 <= self.response_status < 300:
+            self._record("success")
+
+    def __exit__(
+        self, exc_type: type[BaseException] | None,
+        exc: BaseException | None, traceback: TracebackType | None,
+    ) -> None:
+        if not isinstance(exc, ProviderExecutionError):
+            return
+        status = self.response_status
+        outcome = None
+        if status is not None and 500 <= status < 600:
+            outcome = "http_server_error"
+        elif self.connection_failed and (status is None or 200 <= status < 300):
+            outcome = "connection_failure"
+        elif (
+            status is not None and 200 <= status < 300
+            and str(exc) in self._INVALID_RESPONSE_CODES
+        ):
+            outcome = "invalid_provider_response"
+        if outcome is not None:
+            exc.shared_health_failure_observed = self._record(outcome)
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -435,6 +538,7 @@ async def _post_chat_completions(
     payload: dict[str, Any],
     *,
     personal_key: str | None = None,
+    observation: _HttpExecutionObservation | None = None,
 ) -> dict[str, Any]:
     """Bounded asynchronous JSON transport for text and structured-tool models."""
     import httpx
@@ -446,9 +550,13 @@ async def _post_chat_completions(
     try:
         async with asyncio.timeout(total_seconds):
             async with _provider_http_client(total_seconds) as client:
+                if observation is not None:
+                    observation.handoff()
                 async with client.stream(
                     "POST", f"{base_url}/chat/completions", json=payload, headers=headers,
                 ) as response:
+                    if observation is not None:
+                        observation.response_status = response.status_code
                     if not 200 <= response.status_code < 300:
                         raise ProviderExecutionError(
                             f"provider_http_error:{endpoint.provider_id}:{response.status_code}"
@@ -459,7 +567,9 @@ async def _post_chat_completions(
                         raw.extend(chunk)
     except TimeoutError:
         raise ProviderExecutionError("provider_deadline_exceeded") from None
-    except httpx.HTTPError:
+    except httpx.HTTPError as exc:
+        if observation is not None:
+            observation.note_http_error(exc)
         raise ProviderExecutionError(
             f"provider_connection_error:{endpoint.provider_id}"
         ) from None
@@ -493,6 +603,7 @@ async def _request_structured_chat(
     max_tokens: int,
     temperature: float,
     personal_key: str | None = None,
+    observation: _HttpExecutionObservation | None = None,
 ) -> StructuredChatResult:
     """Emit only explicitly registered tools, never model-side fake calls."""
     if endpoint.protocol is not EndpointProtocol.OPENAI_COMPATIBLE:
@@ -512,7 +623,9 @@ async def _request_structured_chat(
         "max_tokens": max_tokens,
         "temperature": temperature,
     }
-    body = await _post_chat_completions(endpoint, base_url, payload, personal_key=personal_key)
+    body = await _post_chat_completions(
+        endpoint, base_url, payload, personal_key=personal_key, observation=observation,
+    )
     choices = body.get("choices")
     if not isinstance(choices, list) or not choices:
         raise ProviderExecutionError("tool_call_response_has_no_choices")
@@ -567,6 +680,10 @@ async def _request_structured_chat(
     actual_model = str(body.get("model") or model)
     if actual_model != model:
         raise ProviderExecutionError("tool_call_model_changed_unexpectedly")
+    # Preserve the legacy structured result contract, but a requested-model
+    # default is not observed model identity and must not certify health.
+    if observation is not None and body.get("model") == model:
+        observation.complete()
     return StructuredChatResult(
         message={"content": content, "tool_calls": verified_calls},
         provider_id=endpoint.provider_id,
@@ -592,15 +709,19 @@ async def execute_structured_provider_endpoint(
         await _resolve_personal_transport_key(endpoint, model, personal_model_grant)
         if personal_model_grant is not None else None
     )
-    return await _request_structured_chat(
-        endpoint,
-        messages=messages,
-        model=model,
-        tools=tools,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        personal_key=personal_key,
-    )
+    with _HttpExecutionObservation(
+        endpoint, transport="structured", shared=personal_model_grant is None,
+    ) as observation:
+        return await _request_structured_chat(
+            endpoint,
+            messages=messages,
+            model=model,
+            tools=tools,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            personal_key=personal_key,
+            observation=observation,
+        )
 
 
 async def _request_text_chat(
@@ -612,6 +733,7 @@ async def _request_text_chat(
     temperature: float,
     personal_key: str | None = None,
     local_only: bool = False,
+    observation: _HttpExecutionObservation | None = None,
 ) -> ProviderExecutionResult:
     base_url = _resolve_base_url(endpoint)
     if local_only and _resolved_destination_requires_external_permission(endpoint, base_url):
@@ -634,7 +756,9 @@ async def _request_text_chat(
     if request_model:
         payload["model"] = request_model
 
-    body = await _post_chat_completions(endpoint, base_url, payload, personal_key=personal_key)
+    body = await _post_chat_completions(
+        endpoint, base_url, payload, personal_key=personal_key, observation=observation,
+    )
 
     # Non-streaming chat must prove the same model and assistant-content
     # identity as the native SSE terminal contract. Never manufacture an
@@ -720,15 +844,21 @@ async def execute_provider_endpoint(
         await _resolve_personal_transport_key(endpoint, model, personal_model_grant)
         if personal_model_grant is not None else None
     )
-    return await _request_text_chat(
-        endpoint,
-        messages=messages,
-        model=model,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        personal_key=personal_key,
-        **({"local_only": True} if local_only else {}),
-    )
+    with _HttpExecutionObservation(
+        endpoint, transport="text", shared=personal_model_grant is None,
+    ) as observation:
+        result = await _request_text_chat(
+            endpoint,
+            messages=messages,
+            model=model,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            personal_key=personal_key,
+            observation=observation,
+            **({"local_only": True} if local_only else {}),
+        )
+        observation.complete()
+        return result
 
 
 @dataclass(frozen=True)
@@ -875,100 +1005,107 @@ async def stream_provider_endpoint(
     usage: dict[str, int] = {}
     done = False
     data_lines: list[str] = []
-    try:
-        async with asyncio.timeout(total_seconds):
-            async with _provider_http_client(total_seconds) as client:
-                async with client.stream(
-                    "POST", f"{base_url}/chat/completions",
-                    json=payload, headers=headers,
-                ) as response:
-                    if not 200 <= response.status_code < 300:
-                        raise ProviderExecutionError(
-                            f"provider_stream_http_error:{endpoint.provider_id}:{response.status_code}"
-                        )
-                    if "text/event-stream" not in response.headers.get("content-type", "").lower():
-                        raise ProviderExecutionError("provider_stream_invalid_content_type")
-
-                    async for line in response.aiter_lines():
-                        if line.startswith(":"):
-                            continue
-                        if line.startswith("data:"):
-                            data = line[5:].lstrip()
-                            if len(data.encode("utf-8")) > 65536:
-                                raise ProviderExecutionError("provider_stream_event_too_large")
-                            data_lines.append(data)
-                            if sum(len(item) for item in data_lines) > 65536:
-                                raise ProviderExecutionError("provider_stream_event_too_large")
-                            continue
-                        if line.strip():
-                            # Event type / id fields are harmless transport
-                            # metadata; never put them into the user transcript.
-                            if not line.startswith(("event:", "id:", "retry:")):
-                                raise ProviderExecutionError("provider_stream_invalid_frame")
-                            continue
-                        if not data_lines:
-                            continue
-
-                        raw_data = "\n".join(data_lines)
-                        data_lines.clear()
-                        if raw_data.strip() == "[DONE]":
-                            done = True
-                            break
-                        if finish_reason is not None:
-                            # OpenAI-compatible usage-only terminal chunks may
-                            # follow finish_reason; any new text is rejected.
-                            chunk, ending, new_usage, actual_model = _decode_stream_event(
-                                raw_data, expected_model=selected_model,
-                                observed_model=actual_model,
+    with _HttpExecutionObservation(
+        endpoint, transport="sse", shared=personal_model_grant is None,
+    ) as observation:
+        try:
+            async with asyncio.timeout(total_seconds):
+                async with _provider_http_client(total_seconds) as client:
+                    observation.handoff()
+                    async with client.stream(
+                        "POST", f"{base_url}/chat/completions",
+                        json=payload, headers=headers,
+                    ) as response:
+                        observation.response_status = response.status_code
+                        if not 200 <= response.status_code < 300:
+                            raise ProviderExecutionError(
+                                f"provider_stream_http_error:{endpoint.provider_id}:{response.status_code}"
                             )
-                            if chunk or ending is not None:
-                                raise ProviderExecutionError("provider_stream_data_after_finish")
-                        else:
-                            chunk, ending, new_usage, actual_model = _decode_stream_event(
-                                raw_data, expected_model=selected_model,
-                                observed_model=actual_model,
-                            )
-                            if chunk:
-                                if actual_model is None:
-                                    raise ProviderExecutionError("provider_stream_unverified_model")
-                                total_text_bytes += len(chunk.encode("utf-8"))
-                                if total_text_bytes > max_text_bytes:
-                                    raise ProviderExecutionError("provider_stream_output_limit")
-                                text_parts.append(chunk)
-                                yield ProviderStreamEvent(kind="delta", delta=chunk)
-                            if ending is not None:
-                                finish_reason = ending
-                        if new_usage:
-                            usage.update(new_usage)
-                    # Most servers emit a final blank line; do not silently
-                    # drop a frame that was buffered at EOF.
-                    if data_lines and not done:
-                        raw_data = "\n".join(data_lines)
-                        if raw_data.strip() == "[DONE]":
-                            done = True
-                        else:
-                            raise ProviderExecutionError("provider_stream_incomplete_frame")
-    except TimeoutError as exc:
-        raise ProviderExecutionError("provider_stream_deadline_exceeded") from exc
-    except httpx.HTTPError as exc:
-        raise ProviderExecutionError(
-            f"provider_stream_transport_failed:{endpoint.provider_id}"
-        ) from exc
+                        if "text/event-stream" not in response.headers.get("content-type", "").lower():
+                            raise ProviderExecutionError("provider_stream_invalid_content_type")
 
-    if not done or finish_reason is None:
-        raise ProviderExecutionError("provider_stream_incomplete")
-    text = "".join(text_parts)
-    if not text.strip() or not actual_model:
-        raise ProviderExecutionError("provider_stream_unverified_completion")
+                        async for line in response.aiter_lines():
+                            if line.startswith(":"):
+                                continue
+                            if line.startswith("data:"):
+                                data = line[5:].lstrip()
+                                if len(data.encode("utf-8")) > 65536:
+                                    raise ProviderExecutionError("provider_stream_event_too_large")
+                                data_lines.append(data)
+                                if sum(len(item) for item in data_lines) > 65536:
+                                    raise ProviderExecutionError("provider_stream_event_too_large")
+                                continue
+                            if line.strip():
+                                # Event type / id fields are harmless transport
+                                # metadata; never put them into the user transcript.
+                                if not line.startswith(("event:", "id:", "retry:")):
+                                    raise ProviderExecutionError("provider_stream_invalid_frame")
+                                continue
+                            if not data_lines:
+                                continue
 
-    yield ProviderStreamEvent(
-        kind="complete",
-        result=ProviderExecutionResult(
-            text=text,
-            model=actual_model,
-            provider_id=endpoint.provider_id,
-            runtime_engine=endpoint.runtime_engine.value,
-            usage=usage or None,
-            finish_reason=finish_reason,
-        ),
-    )
+                            raw_data = "\n".join(data_lines)
+                            data_lines.clear()
+                            if raw_data.strip() == "[DONE]":
+                                done = True
+                                break
+                            if finish_reason is not None:
+                                # OpenAI-compatible usage-only terminal chunks may
+                                # follow finish_reason; any new text is rejected.
+                                chunk, ending, new_usage, actual_model = _decode_stream_event(
+                                    raw_data, expected_model=selected_model,
+                                    observed_model=actual_model,
+                                )
+                                if chunk or ending is not None:
+                                    raise ProviderExecutionError("provider_stream_data_after_finish")
+                            else:
+                                chunk, ending, new_usage, actual_model = _decode_stream_event(
+                                    raw_data, expected_model=selected_model,
+                                    observed_model=actual_model,
+                                )
+                                if chunk:
+                                    if actual_model is None:
+                                        raise ProviderExecutionError("provider_stream_unverified_model")
+                                    total_text_bytes += len(chunk.encode("utf-8"))
+                                    if total_text_bytes > max_text_bytes:
+                                        raise ProviderExecutionError("provider_stream_output_limit")
+                                    text_parts.append(chunk)
+                                    yield ProviderStreamEvent(kind="delta", delta=chunk)
+                                if ending is not None:
+                                    finish_reason = ending
+                            if new_usage:
+                                usage.update(new_usage)
+                        # Most servers emit a final blank line; do not silently
+                        # drop a frame that was buffered at EOF.
+                        if data_lines and not done:
+                            raw_data = "\n".join(data_lines)
+                            if raw_data.strip() == "[DONE]":
+                                done = True
+                            else:
+                                raise ProviderExecutionError("provider_stream_incomplete_frame")
+        except TimeoutError as exc:
+            raise ProviderExecutionError("provider_stream_deadline_exceeded") from exc
+        except httpx.HTTPError as exc:
+            observation.note_http_error(exc)
+            raise ProviderExecutionError(
+                f"provider_stream_transport_failed:{endpoint.provider_id}"
+            ) from exc
+
+        if not done or finish_reason is None:
+            raise ProviderExecutionError("provider_stream_incomplete")
+        text = "".join(text_parts)
+        if not text.strip() or not actual_model:
+            raise ProviderExecutionError("provider_stream_unverified_completion")
+
+        observation.complete()
+        yield ProviderStreamEvent(
+            kind="complete",
+            result=ProviderExecutionResult(
+                text=text,
+                model=actual_model,
+                provider_id=endpoint.provider_id,
+                runtime_engine=endpoint.runtime_engine.value,
+                usage=usage or None,
+                finish_reason=finish_reason,
+            ),
+        )

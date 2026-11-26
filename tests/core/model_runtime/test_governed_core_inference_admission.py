@@ -131,7 +131,9 @@ def _scope(
     )
 
 
-def _local_manager(monkeypatch, *, observed_model: str | None = "model-a"):
+def _local_manager(
+    monkeypatch, *, observed_model: str | None = "model-a", shared_health: bool = False,
+):
     from ai_karen_engine.core.model_runtime import model_manager as manager_module
     from ai_karen_engine.core.model_runtime import llm_adapter as adapter_module
 
@@ -142,6 +144,7 @@ def _local_manager(monkeypatch, *, observed_model: str | None = "model-a"):
         endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
         base_url="http://127.0.0.1:11434/v1",
         default_model=observed_model,
+        tenant_scoped=not shared_health,
     )
     selection = RuntimeSelection(
         provider_id=endpoint.provider_id,
@@ -2435,4 +2438,30 @@ async def test_expression_admitted_deadline_discards_late_transport_result(monke
         await get_engine("local", "openai_compatible").generate(task)
     assert entered == ["ollama-local"]
     assert attempts == []
+    assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_direct_governed_http_does_not_duplicate_transport_health(monkeypatch):
+    from unittest.mock import Mock
+    from ai_karen_engine.core.model_runtime import provider_health_monitor
+
+    manager, attempts, endpoint = _local_manager(monkeypatch, shared_health=True)
+    monitor = provider_health_monitor.ProviderHealthMonitor(
+        registry=SimpleNamespace(get_provider_endpoint=lambda _: endpoint),
+    )
+    observations = Mock(wraps=monitor.update_provider_health)
+    monkeypatch.setattr(monitor, "update_provider_health", observations)
+    monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
+    caller_observations = Mock()
+    monkeypatch.setattr(manager, "_record_provider_result", caller_observations)
+    admission = _scope(calls=1)
+    receipt = await manager.generate_chat(
+        [{"role": "user", "content": "input"}],
+        execution_admission=admission, return_receipt=True,
+    )
+    assert receipt.text == "actual observed output"
+    assert len(attempts) == 1
+    observations.assert_called_once()
+    caller_observations.assert_not_called()
     assert admission.meter.model_calls == 1

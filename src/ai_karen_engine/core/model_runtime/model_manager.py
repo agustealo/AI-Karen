@@ -28,6 +28,7 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
     ProviderNotAvailable,
 )
 from ai_karen_engine.core.model_runtime.provider_execution import (
+    ProviderExecutionError,
     ProviderExecutionResult,
     execute_provider_endpoint,
     provider_endpoint_requires_external_permission,
@@ -84,7 +85,7 @@ class ModelManager:
     ) -> None:
         self.registry = registry or get_provider_registry_service()
         self.selector = selector
-        self.health_monitor = health_monitor or ProviderHealthMonitor(registry=self.registry)
+        self.health_monitor = health_monitor or self.registry.health_monitor
         self.fallback_manager = fallback_manager or get_resilience_fallback_manager()
         self.embedding_manager = embedding_manager or EmbeddingManager()
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
@@ -465,7 +466,6 @@ class ModelManager:
         breaker: CircuitBreaker,
     ) -> ProviderExecutionResult | str:
         """Use the canonical async executor after exactly one reservation."""
-        start = time.perf_counter()
         try:
             async with admission.admitted_execution_deadline():
                 result = await execute_provider_endpoint(
@@ -484,16 +484,13 @@ class ModelManager:
                     or not result.text.strip()
                 ):
                     raise ProviderNotAvailable("inference_execution_provenance_unavailable")
-            self._record_provider_result(endpoint.provider_id, True, start)
-            breaker.record_success()
+            # The canonical HTTP transport has already observed shared health.
+            if endpoint.tenant_scoped is False:
+                breaker.record_success()
             return result if return_receipt else result.text
         except Exception as exc:
-            # The canonical executor uses bounded codes; do not expose
-            # arbitrary transport exception contents in provider telemetry.
-            self._record_provider_result(
-                endpoint.provider_id, False, start, error_message=type(exc).__name__,
-            )
-            breaker.record_failure()
+            if isinstance(exc, ProviderExecutionError) and exc.shared_health_failure_observed:
+                breaker.record_failure()
             logger.warning(
                 "governed_model_http_failed",
                 extra={"provider_id": endpoint.provider_id, "error_type": type(exc).__name__},
@@ -738,10 +735,10 @@ class ModelManager:
 
     def _provider_is_healthy(self, provider_id: str) -> bool:
         health = self.health_monitor.get_provider_health(provider_id)
-        if health is None or health.status == HealthStatus.UNKNOWN:
+        if health is None or health.health_status == HealthStatus.UNKNOWN:
             status = self.registry.get_provider_status(provider_id)
             return bool(status and status.is_available)
-        return health.status in {HealthStatus.HEALTHY, HealthStatus.DEGRADED}
+        return health.health_status in {HealthStatus.HEALTHY, HealthStatus.DEGRADED}
 
     def _get_breaker(self, provider_id: str) -> CircuitBreaker:
         breaker_registry = get_breaker_registry()

@@ -353,3 +353,85 @@ async def test_async_json_transport_has_total_wire_deadline(monkeypatch):
             timeout=2,
         )
     assert closed.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("case,expected", [
+    ("success", "success"), ("server_error", "http_server_error"),
+    ("bad_json", "invalid_provider_response"), ("connect_error", "connection_failure"),
+    ("unauthorized", None), ("rate_limit", None), ("redirect", None),
+    ("pool_timeout", None), ("credential_missing", None), ("tenant_scoped", None),
+    ("registry_drift", None),
+])
+async def test_canonical_json_transport_owns_shared_health_once(
+    monkeypatch, structured, case, expected,
+):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from ai_karen_engine.core.model_runtime import provider_execution, provider_health_monitor
+
+    endpoint = replace(_endpoint("ollama-local"), capabilities=("chat_completion", "tools"))
+    if case == "credential_missing":
+        endpoint = replace(endpoint, api_key_env="KAREN_TEST_MISSING_HTTP_KEY")
+        monkeypatch.delenv("KAREN_TEST_MISSING_HTTP_KEY", raising=False)
+    if case == "tenant_scoped":
+        endpoint = replace(endpoint, tenant_scoped=True)
+    registered = replace(endpoint, base_url="http://localhost:9999/v1") if case == "registry_drift" else endpoint
+    monitor = provider_health_monitor.ProviderHealthMonitor(
+        registry=SimpleNamespace(get_provider_endpoint=lambda _: registered),
+    )
+    observations = []
+    original = monitor.update_provider_health
+
+    def observe(*args, **kwargs):
+        observations.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(monitor, "update_provider_health", observe)
+    monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
+    from ai_karen_engine.platform.observability.metrics import MetricsCollector
+    from ai_karen_engine.platform.observability import metrics
+    collector = MetricsCollector()
+    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: collector)
+
+    wire = []
+    def respond(request):
+        wire.append(request)
+        if case == "connect_error":
+            raise httpx.ConnectError("secret upstream detail", request=request)
+        if case == "pool_timeout":
+            raise httpx.PoolTimeout("private local detail", request=request)
+        if case == "bad_json":
+            return httpx.Response(200, content=b"not-json")
+        code = {"server_error": 503, "unauthorized": 401, "rate_limit": 429, "redirect": 302}.get(case, 200)
+        return httpx.Response(code, json={
+            "model": "test-model",
+            "choices": [{"message": {"role": "assistant", "content": "Verified output"}}],
+        })
+
+    _mock_client(monkeypatch, respond)
+    kwargs = dict(messages=[], model="test-model", max_tokens=16, temperature=0.0)
+    call = (
+        provider_execution.execute_structured_provider_endpoint(endpoint, tools=[], **kwargs)
+        if structured else provider_execution.execute_provider_endpoint(endpoint, **kwargs)
+    )
+    if case in {"success", "tenant_scoped", "registry_drift"}:
+        await call
+    else:
+        with pytest.raises(provider_execution.ProviderExecutionError):
+            await call
+    assert len(wire) == (0 if case == "credential_missing" else 1)
+    assert len(observations) == int(expected is not None)
+    snapshot = collector.snapshot()
+    counters = snapshot["counters"]
+    if expected is None:
+        assert "kari_provider_http_observations_total" not in counters
+        assert monitor.get_provider_health(endpoint.provider_id).health_status is provider_health_monitor.HealthStatus.UNKNOWN
+    else:
+        _, update = observations[0]
+        assert update["is_healthy"] is (expected == "success")
+        assert update["error_code"] == (None if expected == "success" else expected)
+        key = ("structured" if structured else "text", expected)
+        assert counters["kari_provider_http_observations_total"]["values"] == {key: 1.0}
+        assert snapshot["histograms"]["kari_provider_http_observation_duration_seconds"]["values"][key].count == 1

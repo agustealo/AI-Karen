@@ -465,3 +465,51 @@ async def test_native_sse_never_accepts_redirect_response_as_completion(monkeypa
     with pytest.raises(ProviderExecutionError, match="provider_stream_http_error:.*:302"):
         await _events()
     assert len(requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case,expected", [
+    ("success", "success"), ("incomplete", "invalid_provider_response"),
+    ("server_error", "http_server_error"), ("rate_limit", None),
+    ("consumer_close", None),
+])
+async def test_sse_transport_owns_terminal_health_not_delta_delivery(monkeypatch, case, expected):
+    from ai_karen_engine.core.model_runtime import provider_health_monitor
+
+    endpoint = _endpoint()
+    monitor = provider_health_monitor.ProviderHealthMonitor(
+        registry=SimpleNamespace(get_provider_endpoint=lambda _: endpoint),
+    )
+    observations = []
+    original = monitor.update_provider_health
+
+    def observe(*args, **kwargs):
+        observations.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(monitor, "update_provider_health", observe)
+    monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
+    code = {"server_error": 503, "rate_limit": 429}.get(case, 200)
+    body = _chunk("Verified text") + _chunk(None, finish="stop")
+    if case != "incomplete":
+        body += "data: [DONE]\n\n"
+    _transport_client(monkeypatch, lambda _: httpx.Response(
+        code, headers={"content-type": "text/event-stream"}, content=body.encode(),
+    ))
+    if case == "consumer_close":
+        stream = stream_provider_endpoint(
+            endpoint, messages=[], model="smollm2:135m",
+            max_tokens=20, temperature=0.0, timeout_ms=5000,
+        )
+        assert (await anext(stream)).kind == "delta"
+        assert not observations
+        await stream.aclose()
+    elif case == "success":
+        events = await _events()
+        assert events[-1].kind == "complete"
+    else:
+        with pytest.raises(ProviderExecutionError):
+            await _events()
+    assert len(observations) == int(expected is not None)
+    if expected is not None:
+        assert observations[0][1]["error_code"] == (None if expected == "success" else expected)
