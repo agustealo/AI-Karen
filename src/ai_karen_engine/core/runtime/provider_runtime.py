@@ -1586,6 +1586,8 @@ class ProviderRuntime:
         return default
 
     def _infer_degraded_reason(self, failure_records: List[Dict[str, str]]):
+        from ai_karen_engine.core.runtime.degraded_mode import DegradedModeReason
+
         if not failure_records:
             return DegradedModeReason.ALL_PROVIDERS_FAILED
 
@@ -1854,24 +1856,7 @@ class ProviderRuntime:
                         }
                     )
 
-                    if PROVIDER_METRICS_AVAILABLE and record_provider_event:
-                        try:
-                            record_provider_event(
-                                event_type=ProviderEventType.SELECTED,
-                                provider_id=provider_name,
-                                requested_provider=requested_provider,
-                                requested_model=requested_model,
-                                actual_provider=provider_name,
-                                actual_model=actual_model,
-                                runtime_engine=provider_name.replace("builtin_", ""),
-                                response_source="live_model",
-                                fallback_level=fallback_level,
-                                degraded_mode=True,
-                                degradation_reason=self._safe_error_detail(failure_reason),
-                                success=True,
-                            )
-                        except Exception as metrics_error:
-                            logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
+                    self._record_selection_metric(provider_name, "fallback_success")
 
                     llm_metadata = self._build_llm_metadata(
                         requested_provider=requested_provider,
@@ -1927,19 +1912,10 @@ class ProviderRuntime:
                     "latency_ms": 0.0,
                 })
 
-                if PROVIDER_METRICS_AVAILABLE and record_provider_event:
-                    try:
-                        record_provider_event(
-                            event_type=ProviderEventType.INVOCATION_FAILED,
-                            provider_id=provider_name,
-                            requested_provider=requested_provider,
-                            requested_model=requested_model,
-                            success=False,
-                            error_type="ProviderNotAvailable",
-                            error_code=type(exc).__name__,
-                        )
-                    except Exception as metrics_error:
-                        logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
+                PROVIDER_FAILURE_COUNTER.labels(
+                    provider=provider_name,
+                    error_type=self._normalize_metric_label(type(exc).__name__),
+                ).inc()
 
                 continue
 
@@ -1962,19 +1938,10 @@ class ProviderRuntime:
                     "latency_ms": 0.0,
                 })
 
-                if PROVIDER_METRICS_AVAILABLE and record_provider_event:
-                    try:
-                        record_provider_event(
-                            event_type=ProviderEventType.GENERATION_FAILED,
-                            provider_id=provider_name,
-                            requested_provider=requested_provider,
-                            requested_model=requested_model,
-                            success=False,
-                            error_type="GenerationFailed",
-                            error_code=type(exc).__name__,
-                        )
-                    except Exception as metrics_error:
-                        logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
+                PROVIDER_FAILURE_COUNTER.labels(
+                    provider=provider_name,
+                    error_type=self._normalize_metric_label(type(exc).__name__),
+                ).inc()
 
                 continue
 

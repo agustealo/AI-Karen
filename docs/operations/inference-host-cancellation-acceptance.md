@@ -158,3 +158,21 @@ transport. Do not treat the compatibility route, arbitrary SDK/tool callbacks,
 or Medusa's independent durable ledger as proven native cessation. The
 candidate must not merge until the live workflow dispatch boundary is resolved
 and full exact-head verification is available.
+
+
+### Workflow model authority (KUI-004B4.48C7Z8E11)
+
+Workflow generation no longer calls the legacy provider runtime. The Runtime
+binds the original authenticated context, policy plan and budget meter in a
+revocable in-process scope while driving graph execution. Serialized graph
+state alone cannot authorize synthesis. The existing prompt owner assembles
+workflow context; the canonical expression gateway selects the endpoint;
+its governed non-streaming HTTP adapter reserves each concrete attempt on
+the original meter, verifies model provenance and respects its deadline.
+No new router or retry chain is introduced. Native or streaming model
+transport is not enabled by this workflow adapter. The graph may still
+stream observed workflow activity and the completed synthesis.
+
+This source change does not certify arbitrary graph-local evidence sources,
+tool side effects, SDK callbacks or remote device cessation. Exact-head
+tests and independent review remain required before merge.

@@ -812,7 +812,7 @@ class LangGraphOrchestrator:
 
             return final_state
 
-        except NativeRetirementUnverified as exc:
+        except (NativeRetirementUnverified, PermissionError) as exc:
             error_message = str(exc)
             raise
         except Exception as e:
@@ -871,7 +871,7 @@ class LangGraphOrchestrator:
             finally:
                 await graph_stream.aclose()
 
-        except NativeRetirementUnverified as exc:
+        except (NativeRetirementUnverified, PermissionError) as exc:
             error_message = str(exc)
             raise
         except Exception as e:

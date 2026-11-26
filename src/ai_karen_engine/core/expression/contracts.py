@@ -1,7 +1,10 @@
 from __future__ import annotations
 import math
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
 
 from .errors import ExecutionDeadlineExceeded, PrivateEvidenceAuthorizationError
 
@@ -50,6 +53,12 @@ class ExpressionTask:
 
     # Trusted runtime meter callback, never supplied by client metadata.
     remaining_execution_ms: Callable[[], Awaitable[float]] | None = field(
+        default=None, repr=False, compare=False,
+    )
+
+    # Workflow synthesis carries the original in-process grant. The canonical
+    # endpoint adapter reserves actual transport attempts, not engine guesses.
+    execution_admission: GovernedToolModelAdmission | None = field(
         default=None, repr=False, compare=False,
     )
 

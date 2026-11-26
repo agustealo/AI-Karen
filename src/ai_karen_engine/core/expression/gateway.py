@@ -280,6 +280,9 @@ class ExpressionGateway:
 
         for level, engine_id in enumerate(sequence):
             await require_deadline()
+            if (task.execution_admission is not None and attempted_model_engines
+                    and not task.execution_admission.plan.degraded_allowed):
+                break
             cfg = self.settings.engines.get(engine_id)
             logger.debug("Gateway evaluating configured engine %s", engine_id)
 
@@ -296,6 +299,8 @@ class ExpressionGateway:
                 )
                 continue
 
+            if task.execution_admission is not None and cfg.type != "openai_compatible":
+                continue
             if task.local_only and (engine_id == "cloud" or cfg.type != "openai_compatible"):
                 skipped_engines.append(
                     {"engine_id": engine_id, "reason": "private_evidence_local_only"}
@@ -397,7 +402,8 @@ class ExpressionGateway:
                 )
                 raise
 
-            if attempted_model_engines and task.reserve_additional_model_call is not None:
+            if (task.execution_admission is None and attempted_model_engines
+                    and task.reserve_additional_model_call is not None):
                 try:
                     permitted = await task.reserve_additional_model_call()
                 except Exception:
@@ -604,6 +610,9 @@ class ExpressionGateway:
                 raise
             except NativeRetirementUnverified:
                 attempt_outcome = "native_retirement_unverified"
+                raise
+            except PermissionError:
+                attempt_outcome = "authorization_denied"
                 raise
             except Exception as exc:
                 self.circuits.mark_failure(f"expression.engine.{engine_id}")

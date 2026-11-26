@@ -100,6 +100,7 @@ class GovernedToolModelAdmission:
         required = constraints.get("provider")
         eligible = constraints.get("eligible_providers")
         forbidden = constraints.get("forbidden_providers")
+        allowed_providers = constraints.get("allowed_providers")
         if required and required != provider_id:
             raise PermissionError("governed_model_provider_not_authorized")
         if eligible is not None:
@@ -108,6 +109,13 @@ class GovernedToolModelAdmission:
             ):
                 raise PermissionError("governed_model_provider_constraints_invalid")
             if eligible and provider_id not in eligible:
+                raise PermissionError("governed_model_provider_not_authorized")
+        if allowed_providers is not None:
+            if not isinstance(allowed_providers, (list, tuple, set)) or not all(
+                isinstance(item, str) and item for item in allowed_providers
+            ):
+                raise PermissionError("governed_model_provider_constraints_invalid")
+            if allowed_providers and provider_id not in allowed_providers:
                 raise PermissionError("governed_model_provider_not_authorized")
         if forbidden is not None:
             if not isinstance(forbidden, (list, tuple, set)) or not all(

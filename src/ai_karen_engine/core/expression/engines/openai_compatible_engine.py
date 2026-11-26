@@ -15,6 +15,8 @@ from ...model_runtime.provider_execution import (
     provider_endpoint_requires_external_permission,
 )
 from ...model_runtime.provider_policy import evaluate_provider_policy
+from ...model_runtime.governed_model_admission import GovernedToolModelAdmission
+from ...model_runtime.provider_contracts import NativeRetirementUnverified
 from ...model_runtime.runtime_engine import EndpointKind
 
 logger = logging.getLogger(__name__)
@@ -104,7 +106,33 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         provider_first_delta_ms: float | None = None
         await task.require_private_evidence_authorization()
         try:
-            if task.token_sink is not None and endpoint.supports_streaming:
+            if task.execution_admission is not None:
+                admission = task.execution_admission
+                if not isinstance(admission, GovernedToolModelAdmission) or task.token_sink is not None:
+                    raise PermissionError("governed_expression_transport_invalid")
+                effective_model = model or endpoint.default_model
+                if effective_model == "auto":
+                    effective_model = None
+                await task.require_remaining_execution_ms()
+                await admission.reserve_transport(endpoint, model=effective_model)
+                async with admission.admitted_execution_deadline():
+                    await task.require_remaining_execution_ms()
+                    execution = await execute_provider_endpoint(
+                        endpoint, messages=task.messages, model=effective_model,
+                        max_tokens=task.max_tokens, temperature=task.temperature,
+                        **({"local_only": True} if task.local_only else {}),
+                    )
+                    await task.require_remaining_execution_ms()
+                    if (
+                        execution.provider_id != endpoint.provider_id
+                        or execution.runtime_engine != endpoint.runtime_engine.value
+                        or not isinstance(execution.model, str)
+                        or not execution.model.strip()
+                        or execution.model.strip().lower() == "auto"
+                        or (effective_model is not None and execution.model != effective_model)
+                    ):
+                        raise ProviderExecutionError("inference_execution_provenance_unavailable")
+            elif task.token_sink is not None and endpoint.supports_streaming:
                 # The same registered/authorized provider is used for both
                 # transports. Forward only verified model SSE deltas, and
                 # accept a final result only after its terminal wire receipt.
@@ -150,7 +178,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             actual_model = execution.model
             runtime_engine = execution.runtime_engine or "openai_compatible"
             provider_usage = dict(execution.usage or {})
-        except PrivateEvidenceAuthorizationError:
+        except (PrivateEvidenceAuthorizationError, NativeRetirementUnverified, PermissionError):
             raise
         except Exception as exc:
             # An upstream exception can contain an authenticated URL,

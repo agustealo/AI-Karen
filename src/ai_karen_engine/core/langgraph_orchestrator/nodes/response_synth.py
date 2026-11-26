@@ -92,7 +92,7 @@ class ResponseSynthesisNode:
             if self.config.apply_safety_filter:
                 state = self._apply_safety_filter(state)
             logger.info("Response synthesis completed")
-        except NativeRetirementUnverified:
+        except (NativeRetirementUnverified, PermissionError):
             raise
         except Exception as exc:
             logger.error("Response synthesis error: %s", exc)

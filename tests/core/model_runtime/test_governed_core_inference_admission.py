@@ -1555,3 +1555,58 @@ async def test_late_native_retirement_failure_survives_repeated_cancellation():
     with pytest.raises(NativeRetirementUnverified):
         await task
     assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_workflow_serialized_plan_is_not_model_authority():
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRequest, WorkflowGenerationRuntime,
+    )
+
+    admission = _scope()
+    request = WorkflowGenerationRequest(
+        request_id=admission.request_id, correlation_id=admission.correlation_id,
+        tenant_id=admission.tenant_id, user_id=admission.user_id,
+        conversation_id="conversation-a", policy_decision_id=admission.policy_decision_id,
+        messages=[{"role": "user", "content": "task"}],
+        authorized_plan={"execution_id": admission.plan.execution_id,
+                         "policy_decision_id": admission.policy_decision_id},
+    )
+    with pytest.raises(PermissionError, match="authority_required"):
+        await WorkflowGenerationRuntime().execute(request)
+    assert admission.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_workflow_authority_revocation_invalidates_copied_task_context():
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationAuthority, WorkflowGenerationRequest,
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope()
+    authority = WorkflowGenerationAuthority.create(
+        ChatExecutionRequest(context=admission.authenticated_context,
+                             messages=[{"role": "user", "content": "task"}]),
+        SimpleNamespace(), admission.plan, admission.meter,
+    )
+    request = WorkflowGenerationRequest(
+        request_id=admission.request_id, correlation_id=admission.correlation_id,
+        tenant_id=admission.tenant_id, user_id=admission.user_id,
+        conversation_id="conversation-a", policy_decision_id=admission.policy_decision_id,
+        messages=[], authorized_plan={},
+    )
+    start = asyncio.Event()
+
+    async def copied_context():
+        await start.wait()
+        await WorkflowGenerationRuntime().execute(request)
+
+    with bind_workflow_generation(authority):
+        task = asyncio.create_task(copied_context())
+    authority.revoke()
+    start.set()
+    with pytest.raises(PermissionError, match="authority_revoked"):
+        await task
+    assert admission.meter.model_calls == 0

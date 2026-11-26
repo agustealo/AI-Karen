@@ -16,6 +16,9 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 )
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.workflow_generation import (
+    WorkflowGenerationAuthority, bind_workflow_generation,
+)
 
 logger = get_logger(__name__)
 
@@ -56,12 +59,18 @@ class WorkflowRuntime:
             return result
 
         orchestrator = await self._get_orchestrator()
-        final_state = await orchestrator.process(
-            messages=self._to_langchain(request.messages),
-            user_id=ctx.user_id,
-            session_id=conversation_id,
-            config=config,
-        )
+        authority = self._generation_authority(request, decision, plan, budget_meter)
+        try:
+            with bind_workflow_generation(authority):
+                final_state = await orchestrator.process(
+                    messages=self._to_langchain(request.messages),
+                    user_id=ctx.user_id,
+                    session_id=conversation_id,
+                    config=config,
+                )
+        finally:
+            if authority is not None:
+                authority.revoke()
         answer, metadata = self._extract_payload(final_state)
         if not isinstance(answer, str) or not answer.strip():
             # A completed graph without answer text is not successful model
@@ -199,8 +208,14 @@ class WorkflowRuntime:
             session_id=conversation_id,
             config=config,
         )
+        authority = self._generation_authority(request, decision, plan, budget_meter)
         try:
-            async for chunk in graph_stream:
+            while True:
+                try:
+                    with bind_workflow_generation(authority):
+                        chunk = await anext(graph_stream)
+                except StopAsyncIteration:
+                    break
                 for activity_chunk in self._extract_agent_activity_chunks(
                     chunk,
                     correlation_id=ctx.correlation_id,
@@ -220,7 +235,21 @@ class WorkflowRuntime:
                         metadata=meta,
                     )
         finally:
-            await graph_stream.aclose()
+            if authority is not None:
+                authority.revoke()
+            with bind_workflow_generation(authority):
+                await graph_stream.aclose()
+
+    @staticmethod
+    def _generation_authority(
+        request: ChatExecutionRequest, decision: ExecutionDecision | None,
+        plan: AuthorizedExecutionPlan | None, meter: ExecutionBudgetMeter | None,
+    ) -> WorkflowGenerationAuthority | None:
+        # Compatibility graph inspection can run without a model grant.
+        # The synthesis port itself denies any model execution in that case.
+        if decision is None or plan is None or meter is None:
+            return None
+        return WorkflowGenerationAuthority.create(request, decision, plan, meter)
 
     @staticmethod
     def _project_medusa_event(
