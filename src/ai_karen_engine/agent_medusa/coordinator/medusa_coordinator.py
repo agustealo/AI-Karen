@@ -202,7 +202,9 @@ class MedusaCoordinator:
             response = await self._handle_request(request)
             if response.request_id != request.request_id:
                 # Validate before the terminal ledger consumes the result.
-                raise OutcomeStoreError("Medusa response identity could not be confirmed")
+                raise OutcomeStoreError(
+                    "Medusa response identity could not be confirmed"
+                )
         except asyncio.CancelledError:
             try:
                 await self.run_manager.mark_cancelled(request.request_id)
@@ -293,7 +295,9 @@ class MedusaCoordinator:
                 # The canonical run manager still owns the terminal outcome.
                 raise asyncio.CancelledError
             if resolved is not expected:
-                raise OutcomeStoreError("Medusa terminal outcome could not be confirmed")
+                raise OutcomeStoreError(
+                    "Medusa terminal outcome could not be confirmed"
+                )
             logger.info(
                 "medusa_run_finished",
                 extra={
