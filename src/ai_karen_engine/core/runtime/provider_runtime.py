@@ -7,13 +7,17 @@ import re
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, AsyncIterator, Sequence, TYPE_CHECKING
+from typing import Any, Dict, List, Optional, AsyncIterator, TYPE_CHECKING
 
 import asyncio
 import inspect
 
 from ai_karen_engine.config.runtime_provider_manager import RuntimeProviderManager
 from ai_karen_engine.core.model_runtime.llm_adapter import ProviderNotAvailable, GenerationFailed
+from ai_karen_engine.core.model_runtime.provider_contracts import (
+    NativeRetirementUnverified,
+    ProviderProcessingError as ProviderProcessingError,
+)
 from ai_karen_engine.core.model_runtime.provider_policy import (
     BUILTIN_EXPRESSION_ENGINES,
     EXTERNAL_PROVIDER_OPTIONS,
@@ -166,20 +170,6 @@ def _is_simple_chat_request(message: str) -> bool:
 
     return False
 
-
-class ProviderProcessingError(RuntimeError):
-    def __init__(self, provider_name: str, errors: Sequence[BaseException]):
-        self.provider_name = provider_name
-        self.errors = list(errors)
-        self.last_error: Optional[BaseException] = self.errors[-1] if self.errors else None
-        unique_messages: List[str] = []
-        for error in self.errors:
-            message = type(error).__name__
-            if message and message not in unique_messages:
-                unique_messages.append(message)
-        attempts = len(self.errors) or 1
-        summary = "; ".join(unique_messages) if unique_messages else "unknown error"
-        super().__init__(f"{provider_name} failed after {attempts} attempts: {summary}")
 
 class ProviderRuntime:
     """
@@ -447,6 +437,8 @@ class ProviderRuntime:
                 }
             )
             
+        except NativeRetirementUnverified:
+            raise
         except Exception as exc:
             logger.warning("Primary provider %s failed (%s). Attempting fallbacks.", current_provider, type(exc).__name__)
             provider_attempts.append({
@@ -567,6 +559,8 @@ class ProviderRuntime:
                 metadata={"source": "primary_execution"}
             )
             
+        except NativeRetirementUnverified:
+            raise
         except Exception as exc:
             logger.warning("Primary provider %s failed during stream (%s).", current_provider, type(exc).__name__)
             provider_attempts.append({
@@ -659,6 +653,8 @@ class ProviderRuntime:
                         metadata={"source": "fallback_execution"}
                     )
                     return
+                except NativeRetirementUnverified:
+                    raise
                 except Exception as fall_exc:
                     provider_attempts.append({
                         "provider": fallback_provider,
@@ -757,6 +753,8 @@ class ProviderRuntime:
                         "tokens_per_second": llm_metadata.get("tokens_per_second")
                     }
                 )
+            except NativeRetirementUnverified:
+                raise
             except Exception as fall_exc:
                 provider_attempts.append({
                     "provider": fallback_provider,
@@ -1146,6 +1144,8 @@ class ProviderRuntime:
                     success=True,
                 )
                 return
+            except NativeRetirementUnverified:
+                raise
             except Exception as exc:
                 duration = time.time() - start_time
                 errors.append(exc)
@@ -1202,6 +1202,8 @@ class ProviderRuntime:
                 provider_name, request, model_name
             ):
                 yield chunk
+        except NativeRetirementUnverified:
+            raise
         except Exception as exc:
             if not isinstance(exc, ProviderProcessingError):
                 raise ProviderProcessingError(provider_name, [exc]) from exc
@@ -1573,6 +1575,8 @@ class ProviderRuntime:
         return default
 
     def _infer_degraded_reason(self, failure_records: List[Dict[str, str]]):
+        from ai_karen_engine.core.runtime.degraded_mode import DegradedModeReason
+
         if not failure_records:
             return DegradedModeReason.ALL_PROVIDERS_FAILED
 
@@ -1841,24 +1845,7 @@ class ProviderRuntime:
                         }
                     )
 
-                    if PROVIDER_METRICS_AVAILABLE and record_provider_event:
-                        try:
-                            record_provider_event(
-                                event_type=ProviderEventType.SELECTED,
-                                provider_id=provider_name,
-                                requested_provider=requested_provider,
-                                requested_model=requested_model,
-                                actual_provider=provider_name,
-                                actual_model=actual_model,
-                                runtime_engine=provider_name.replace("builtin_", ""),
-                                response_source="live_model",
-                                fallback_level=fallback_level,
-                                degraded_mode=True,
-                                degradation_reason=self._safe_error_detail(failure_reason),
-                                success=True,
-                            )
-                        except Exception as metrics_error:
-                            logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
+                    self._record_selection_metric(provider_name, "fallback_success")
 
                     llm_metadata = self._build_llm_metadata(
                         requested_provider=requested_provider,
@@ -1893,6 +1880,8 @@ class ProviderRuntime:
                         },
                     }
 
+            except NativeRetirementUnverified:
+                raise
             except ProviderNotAvailable as exc:
                 logger.warning(
                     f"Provider {provider_name} is not available during fallback",
@@ -1912,19 +1901,10 @@ class ProviderRuntime:
                     "latency_ms": 0.0,
                 })
 
-                if PROVIDER_METRICS_AVAILABLE and record_provider_event:
-                    try:
-                        record_provider_event(
-                            event_type=ProviderEventType.INVOCATION_FAILED,
-                            provider_id=provider_name,
-                            requested_provider=requested_provider,
-                            requested_model=requested_model,
-                            success=False,
-                            error_type="ProviderNotAvailable",
-                            error_code=type(exc).__name__,
-                        )
-                    except Exception as metrics_error:
-                        logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
+                PROVIDER_FAILURE_COUNTER.labels(
+                    provider=provider_name,
+                    error_type=self._normalize_metric_label(type(exc).__name__),
+                ).inc()
 
                 continue
 
@@ -1947,19 +1927,10 @@ class ProviderRuntime:
                     "latency_ms": 0.0,
                 })
 
-                if PROVIDER_METRICS_AVAILABLE and record_provider_event:
-                    try:
-                        record_provider_event(
-                            event_type=ProviderEventType.GENERATION_FAILED,
-                            provider_id=provider_name,
-                            requested_provider=requested_provider,
-                            requested_model=requested_model,
-                            success=False,
-                            error_type="GenerationFailed",
-                            error_code=type(exc).__name__,
-                        )
-                    except Exception as metrics_error:
-                        logger.debug("Failed to record provider metrics (%s)", type(metrics_error).__name__)
+                PROVIDER_FAILURE_COUNTER.labels(
+                    provider=provider_name,
+                    error_type=self._normalize_metric_label(type(exc).__name__),
+                ).inc()
 
                 continue
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from types import SimpleNamespace
 
 import pytest
@@ -18,6 +19,7 @@ USER = "11111111-1111-1111-1111-111111111111"
 THREAD = "44444444-4444-4444-8444-444444444444"
 ASSISTANT = "22222222-2222-5222-8222-222222222222"
 REQUEST = "33333333-3333-4333-8333-333333333333"
+SNAPSHOT_SESSION = object()
 
 
 def snapshot(*, rich=False):
@@ -45,8 +47,25 @@ def snapshot(*, rich=False):
     )
 
 
+class RecoveryLedger:
+    async def read_recovery_run(self, **kwargs):
+        assert kwargs == {
+            "tenant_id": TENANT, "user_id": USER, "conversation_id": THREAD,
+            "db_session": SNAPSHOT_SESSION,
+        }
+        return None
+
+
 @pytest.fixture
 def replay_on(monkeypatch):
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway
+
+    @asynccontextmanager
+    async def snapshot_scope(tenant_id, *, user_id, read_only_snapshot):
+        assert tenant_id == TENANT and user_id == USER and read_only_snapshot is True
+        yield SNAPSHOT_SESSION
+
+    monkeypatch.setattr(conversation_runtime_gateway, "async_transaction_scope", snapshot_scope)
     monkeypatch.setattr(route, "get_runtime_settings", lambda: SimpleNamespace(
         features=SimpleNamespace(
             enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=True,
@@ -61,11 +80,17 @@ async def test_backend_governed_history_uses_canonical_owner_and_ledger_only(
     calls = []
 
     class Owned:
-        async def get_owned_snapshot(self, ctx, *, message_limit):
+        async def get_owned_snapshot(self, ctx, *, message_limit, db_session):
+            assert db_session is SNAPSHOT_SESSION
             calls.append(("owned", ctx.tenant_id, ctx.user_id, ctx.conversation_id, message_limit))
             return snapshot(rich=True)
 
-    class Attestation:
+    class Attestation(RecoveryLedger):
+        async def read_recovery_run(self, **kwargs):
+            await super().read_recovery_run(**kwargs)
+            return {"runId": "interrupted-run", "submissionId": "original-turn",
+                    "status": "interrupted"}
+
         async def completed_replay_attestations(self, **kwargs):
             calls.append(("attested", kwargs))
             saved = snapshot(rich=True).messages[1]
@@ -88,6 +113,9 @@ async def test_backend_governed_history_uses_canonical_owner_and_ledger_only(
     assert body["threadId"] == THREAD
     assert body["owner_user_id"] == USER
     assert body["owner_tenant_id"] == TENANT
+    assert body["recovery_run"] == {
+        "runId": "interrupted-run", "submissionId": "original-turn", "status": "interrupted",
+    }
     assert [e["name"] for e in body["replayEvents"]] == [
         "karen.execution_receipt.v1",
     ]
@@ -95,6 +123,7 @@ async def test_backend_governed_history_uses_canonical_owner_and_ledger_only(
     assert calls[0] == ("owned", TENANT, USER, THREAD, 501)
     assert calls[1] == ("attested", {
         "tenant_id": TENANT, "user_id": USER, "conversation_id": THREAD,
+            "db_session": SNAPSHOT_SESSION,
     })
 
 
@@ -113,22 +142,25 @@ async def test_owned_text_continuation_is_explicit_and_requires_completed_run_di
     recorded_digest = canonical_message_digest(original.messages[1])
 
     class Owned:
-        async def get_owned_snapshot(self, context, *, message_limit):
+        async def get_owned_snapshot(self, context, *, message_limit, db_session):
+            assert db_session is SNAPSHOT_SESSION
             assert context.tenant_id == TENANT
             assert context.user_id == USER
             assert message_limit == 501
             return original
 
-        async def get_owned_recent_snapshot(self, context, *, message_limit):
+        async def get_owned_recent_snapshot(self, context, *, message_limit, db_session):
+            assert db_session is SNAPSHOT_SESSION
             assert context.tenant_id == TENANT
             assert context.user_id == USER
             assert message_limit == 501
             return original
 
-    class Attestation:
+    class Attestation(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             assert kwargs == {
                 "tenant_id": TENANT, "user_id": USER, "conversation_id": THREAD,
+            "db_session": SNAPSHOT_SESSION,
             }
             return {ASSISTANT: (REQUEST, recorded_digest)}
 
@@ -209,15 +241,17 @@ async def test_long_original_thread_continuation_reads_only_newest_500_attested_
     )
 
     class Owned:
-        async def get_owned_recent_snapshot(self, context, *, message_limit):
+        async def get_owned_recent_snapshot(self, context, *, message_limit, db_session):
+            assert db_session is SNAPSHOT_SESSION
             assert context.tenant_id == TENANT and context.user_id == USER
             assert message_limit == 501
             return latest
 
-        async def get_owned_snapshot(self, context, *, message_limit):
+        async def get_owned_snapshot(self, context, *, message_limit, db_session):
+            assert db_session is SNAPSHOT_SESSION
             raise AssertionError("Text continuation must not fetch the oldest page")
 
-    class Attestation:
+    class Attestation(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             return {last.id: (REQUEST, recorded_digest)}
 
@@ -277,12 +311,13 @@ async def test_first_prompt_verified_direct_capability_surface_returns_200_not_4
     })
 
     class Owned:
-        async def get_owned_snapshot(self, context, *, message_limit):
+        async def get_owned_snapshot(self, context, *, message_limit, db_session):
+            assert db_session is SNAPSHOT_SESSION
             assert context.tenant_id == TENANT and context.user_id == USER
             assert message_limit == 501
             return original
 
-    class Attestation:
+    class Attestation(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             return {ASSISTANT: (
                 REQUEST, canonical_message_digest(original.messages[1]),
@@ -315,7 +350,8 @@ async def test_governed_history_refuses_foreign_conversation_and_skips_attestati
     calls = []
 
     class Forbidden:
-        async def get_owned_snapshot(self, ctx, *, message_limit):
+        async def get_owned_snapshot(self, ctx, *, message_limit, db_session):
+            assert db_session is SNAPSHOT_SESSION
             raise PermissionError("conversation_user_mismatch")
 
     class NoLedger:
@@ -341,10 +377,11 @@ async def test_unknown_or_unattested_rich_history_refuses_entire_snapshot(
     monkeypatch, replay_on, caplog,
 ):
     class Owned:
-        async def get_owned_snapshot(self, ctx, *, message_limit):
+        async def get_owned_snapshot(self, ctx, *, message_limit, db_session):
+            assert db_session is SNAPSHOT_SESSION
             return snapshot(rich=True)
 
-    class NoAttestation:
+    class NoAttestation(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             return {}
 
@@ -382,7 +419,8 @@ async def test_governed_history_allows_brand_new_empty_owned_conversation(
     from ai_karen_engine.core.runtime import conversation_runtime_gateway
 
     class Owned:
-        async def get_owned_snapshot(self, ctx, *, message_limit):
+        async def get_owned_snapshot(self, ctx, *, message_limit, db_session):
+            assert db_session is SNAPSHOT_SESSION
             assert message_limit == 501
             return ConversationSnapshot(
                 conversation=Conversation(
@@ -391,7 +429,7 @@ async def test_governed_history_allows_brand_new_empty_owned_conversation(
                 messages=(),
             )
 
-    class NoRuns:
+    class NoRuns(RecoveryLedger):
         async def completed_replay_attestations(self, **kwargs):
             return {}
 

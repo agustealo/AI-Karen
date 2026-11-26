@@ -279,7 +279,7 @@ class HierarchicalTruncationPolicy:
                 break
 
         for index, message in enumerate(request.messages):
-            if index == latest_user_index:
+            if index == latest_user_index or message.get("source") == "verified_attachment_data":
                 continue
             role = str(message.get("role", "")).lower()
             if role in {"user", "assistant"}:

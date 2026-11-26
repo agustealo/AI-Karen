@@ -7,6 +7,11 @@ from typing import Any
 
 from .base import BaseExpressionEngine
 from ..contracts import ExpressionResult, ExpressionTask
+from ..errors import (
+    ExecutionAdmissionRejected,
+    ExecutionDeadlineExceeded,
+    PrivateEvidenceAuthorizationError,
+)
 from ...model_runtime.provider_execution import (
     execute_provider_endpoint,
     stream_provider_endpoint,
@@ -14,6 +19,12 @@ from ...model_runtime.provider_execution import (
     provider_endpoint_requires_external_permission,
 )
 from ...model_runtime.provider_policy import evaluate_provider_policy
+from ...model_runtime.governed_model_admission import (
+    GovernedToolModelAdmission,
+    ModelAdmissionBudgetExhausted,
+    ModelAdmissionDeadlineExceeded,
+)
+from ...model_runtime.provider_contracts import NativeRetirementUnverified
 from ...model_runtime.runtime_engine import EndpointKind
 
 logger = logging.getLogger(__name__)
@@ -57,11 +68,26 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                 requested_provider=requested_provider,
             )
 
+        if (
+            task.execution_admission is not None
+            and not task.execution_admission.plan.degraded_allowed
+            and requested_provider.lower() != "auto"
+            and not self._provider_ids_equivalent(
+                requested_provider, endpoint.provider_id, registry,
+            )
+        ):
+            raise PermissionError("governed_model_fallback_not_authorized")
+
         # Endpoint type and configured locality are not sufficient network
         # evidence. Custom and env-overridden "local" endpoints may resolve to
         # remote URLs; require the original RuntimePolicy-bound approval before
         # sending either a streaming or non-streaming model request.
         if provider_endpoint_requires_external_permission(endpoint):
+            if task.local_only:
+                return self._failure_result(
+                    task, started, "private_evidence_local_only",
+                    provider=provider_id, requested_provider=requested_provider,
+                )
             try:
                 approved = (
                     await task.authorize_external_engine_attempt()
@@ -96,8 +122,39 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         # First provider delta is only observable for native streamed results.
         # It includes provider setup/queueing and is not an isolated load time.
         provider_first_delta_ms: float | None = None
+        await task.require_private_evidence_authorization()
+        transport_entered = False
         try:
-            if task.token_sink is not None and endpoint.supports_streaming:
+            if task.execution_admission is not None:
+                admission = task.execution_admission
+                if not isinstance(admission, GovernedToolModelAdmission) or task.token_sink is not None:
+                    raise PermissionError("governed_expression_transport_invalid")
+                effective_model = model or endpoint.default_model
+                if effective_model == "auto":
+                    effective_model = None
+                await task.require_remaining_execution_ms()
+                await admission.reserve_transport(endpoint, model=effective_model)
+                async with admission.admitted_execution_deadline():
+                    await task.require_remaining_execution_ms()
+                    # Entering the adapter is not proof of network dispatch.
+                    # The transport owner must observe actual I/O separately.
+                    transport_entered = True
+                    execution = await execute_provider_endpoint(
+                        endpoint, messages=task.messages, model=effective_model,
+                        max_tokens=task.max_tokens, temperature=task.temperature,
+                        **({"local_only": True} if task.local_only else {}),
+                    )
+                    await task.require_remaining_execution_ms()
+                    if (
+                        execution.provider_id != endpoint.provider_id
+                        or execution.runtime_engine != endpoint.runtime_engine.value
+                        or not isinstance(execution.model, str)
+                        or not execution.model.strip()
+                        or execution.model.strip().lower() == "auto"
+                        or (effective_model is not None and execution.model != effective_model)
+                    ):
+                        raise ProviderExecutionError("inference_execution_provenance_unavailable")
+            elif task.token_sink is not None and endpoint.supports_streaming:
                 # The same registered/authorized provider is used for both
                 # transports. Forward only verified model SSE deltas, and
                 # accept a final result only after its terminal wire receipt.
@@ -113,9 +170,11 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                         max_tokens=task.max_tokens,
                         temperature=task.temperature,
                         timeout_ms=task.timeout_ms,
+                        **({"local_only": True} if task.local_only else {}),
                 )) as provider_events:
                     async for part in provider_events:
                         if part.kind == "delta" and part.delta:
+                            await task.require_private_evidence_authorization()
                             if provider_first_delta_ms is None:
                                 provider_first_delta_ms = (
                                     time.perf_counter() - attempt_started
@@ -123,6 +182,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                             task.stream_started = True
                             await task.token_sink(part.delta)
                         elif part.kind == "complete":
+                            await task.require_private_evidence_authorization()
                             execution = part.result
                 if execution is None:
                     raise ProviderExecutionError("provider_stream_missing_terminal")
@@ -133,13 +193,29 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                     model=model,
                     max_tokens=task.max_tokens,
                     temperature=task.temperature,
+                    **({"local_only": True} if task.local_only else {}),
                 )
             text = execution.text
             actual_provider = execution.provider_id
             actual_model = execution.model
             runtime_engine = execution.runtime_engine or "openai_compatible"
             provider_usage = dict(execution.usage or {})
+        except (
+            PrivateEvidenceAuthorizationError,
+            NativeRetirementUnverified,
+            PermissionError,
+            ExecutionDeadlineExceeded,
+        ):
+            raise
+        except ModelAdmissionBudgetExhausted:
+            raise ExecutionAdmissionRejected("governed_model_execution_budget_exhausted") from None
+        except ModelAdmissionDeadlineExceeded:
+            raise ExecutionDeadlineExceeded("governed_model_execution_deadline_exhausted") from None
         except Exception as exc:
+            if task.execution_admission is not None and not transport_entered:
+                # Unexpected local admission errors also fail closed without
+                # exposing internal exception text or inventing provider evidence.
+                raise ExecutionAdmissionRejected("governed_model_admission_unavailable") from None
             # An upstream exception can contain an authenticated URL,
             # credentials, or response body. Keep only its class and a
             # bounded internal error code in the runtime's public receipt.
@@ -284,6 +360,8 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                     continue
                 if not self._matches_engine_locality(endpoint, is_cloud):
                     continue
+                if task.local_only and provider_endpoint_requires_external_permission(endpoint):
+                    continue
                 resolve_capabilities = getattr(
                     registry, "effective_endpoint_capabilities", None,
                 )
@@ -306,6 +384,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
             target
             for target in targets
             if self._matches_engine_locality(target, is_cloud)
+            and (not task.local_only or not provider_endpoint_requires_external_permission(target))
         ]
         return targets[0].provider_id if targets else None
 

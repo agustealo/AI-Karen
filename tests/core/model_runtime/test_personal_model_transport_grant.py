@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import json
 import uuid
-from contextlib import contextmanager
 from dataclasses import replace
 from types import SimpleNamespace
 
@@ -144,6 +143,15 @@ def _no_workspace_credential(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(transport, "_resolve_api_key", forbidden)
 
 
+def _mock_json_client(monkeypatch, handler):
+    original = httpx.AsyncClient
+    def client(**kwargs):
+        assert kwargs["trust_env"] is False
+        assert kwargs["follow_redirects"] is False
+        return original(transport=httpx.MockTransport(handler), **kwargs)
+    monkeypatch.setattr(httpx, "AsyncClient", client)
+
+
 def _execute(endpoint, grant):
     return transport.execute_provider_endpoint(
         endpoint,
@@ -170,12 +178,11 @@ async def test_personal_key_flows_only_to_selected_sync_request(monkeypatch):
                 "model": "authorized-model",
             }).encode()
 
-    @contextmanager
-    def open_request(request, timeout):
-        wire.append((request.full_url, request.get_header("Authorization")))
-        yield Response()
+    def open_request(request):
+        wire.append((str(request.url), request.headers.get("Authorization")))
+        return httpx.Response(200, content=Response().read())
 
-    monkeypatch.setattr(transport, "_open_provider_request", open_request)
+    _mock_json_client(monkeypatch, open_request)
     result = await _execute(endpoint, grant)
 
     assert result.text == "Approved model reply"
@@ -269,12 +276,11 @@ async def test_structured_tool_transport_uses_same_one_shot_personal_key(monkeyp
                 }],
             }).encode()
 
-    @contextmanager
-    def open_request(request, timeout):
-        seen.append(request.get_header("Authorization"))
-        yield Response()
+    def open_request(request):
+        seen.append(request.headers.get("Authorization"))
+        return httpx.Response(200, content=Response().read())
 
-    monkeypatch.setattr(transport, "_open_provider_request", open_request)
+    _mock_json_client(monkeypatch, open_request)
     result = await transport.execute_structured_provider_endpoint(
         endpoint,
         messages=[{"role": "user", "content": "Classify this"}],
@@ -313,7 +319,7 @@ async def test_personal_grant_refuses_other_target_before_vault_and_network(
         wire.append("called")
         raise AssertionError("no network for mismatched provider")
 
-    monkeypatch.setattr(transport, "_open_provider_request", forbidden)
+    monkeypatch.setattr(httpx, "AsyncClient", forbidden)
     with pytest.raises(transport.ProviderExecutionError, match="personal_model_transport_denied"):
         await _execute(endpoint, _grant())
     assert vault_reads == []
@@ -346,7 +352,7 @@ async def test_current_provider_config_drift_blocks_personal_key_before_vault(
         wire.append(True)
         raise AssertionError("disabled or changed provider must not execute")
 
-    monkeypatch.setattr(transport, "_open_provider_request", forbidden)
+    monkeypatch.setattr(httpx, "AsyncClient", forbidden)
     with pytest.raises(transport.ProviderExecutionError, match="personal_model_transport_denied"):
         await _execute(_endpoint(), _grant())
     assert vault_reads == []
@@ -358,7 +364,7 @@ async def test_model_mismatch_prevents_audit_and_network(monkeypatch):
     vault_reads = _fake_vault(monkeypatch)
     wire = []
     monkeypatch.setattr(
-        transport, "_open_provider_request", lambda *_args, **_kw: wire.append(True)
+        httpx, "AsyncClient", lambda *_args, **_kw: wire.append(True)
     )
     with pytest.raises(transport.ProviderExecutionError, match="personal_model_transport_denied"):
         await _execute(_endpoint(), _grant(model_id="different-model"))
@@ -373,7 +379,7 @@ async def test_vault_audit_failure_blocks_transport_without_secret_leak(monkeypa
     )
     wire = []
     monkeypatch.setattr(
-        transport, "_open_provider_request", lambda *_args, **_kw: wire.append(True)
+        httpx, "AsyncClient", lambda *_args, **_kw: wire.append(True)
     )
     with pytest.raises(transport.ProviderExecutionError) as error:
         await _execute(_endpoint(), _grant())
@@ -417,12 +423,11 @@ async def test_concurrent_users_same_provider_keep_distinct_bearer_headers(monke
                 "choices": [{"message": {"content": "Response"}}],
             }).encode()
 
-    @contextmanager
-    def open_request(request, timeout):
-        wires.append(request.get_header("Authorization"))
-        yield Response()
+    def open_request(request):
+        wires.append(request.headers.get("Authorization"))
+        return httpx.Response(200, content=Response().read())
 
-    monkeypatch.setattr(transport, "_open_provider_request", open_request)
+    _mock_json_client(monkeypatch, open_request)
     results = await asyncio.gather(
         _execute(endpoint, left), _execute(endpoint, right)
     )

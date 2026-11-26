@@ -17,8 +17,8 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 )
 from ai_karen_engine.core.model_runtime.provider_execution import (
     ProviderExecutionError,
-    _sync_structured_chat_request,
-    _sync_openai_compatible_request,
+    execute_structured_provider_endpoint,
+    execute_provider_endpoint,
 )
 from ai_karen_engine.core.model_runtime.runtime_engine import RuntimeEngine
 
@@ -68,8 +68,8 @@ CALL = {
 }
 
 
-def execute():
-    return _sync_structured_chat_request(
+async def execute():
+    return await execute_structured_provider_endpoint(
         endpoint(),
         messages=[{"role": "user", "content": "Search"}],
         model="verified-local-model",
@@ -79,12 +79,13 @@ def execute():
     )
 
 
-def test_structured_call_preserves_real_tool_identity_and_args():
+@pytest.mark.asyncio
+async def test_structured_call_preserves_real_tool_identity_and_args():
     with patch(
         "ai_karen_engine.core.model_runtime.provider_execution._post_chat_completions",
         return_value=reply(calls=[CALL]),
     ) as transport:
-        result = execute()
+        result = await execute()
     payload = transport.call_args.args[2]
     assert payload["model"] == "verified-local-model"
     assert payload["tools"] == [TOOL]
@@ -102,30 +103,33 @@ def test_structured_call_preserves_real_tool_identity_and_args():
     ([{"id": "call-1", "function": {"name": "karen_approved_tool", "arguments": "[]"}}],
      "arguments_not_object"),
 ])
-def test_structured_response_rejects_unsupported_or_invalid_calls(calls, error):
+@pytest.mark.asyncio
+async def test_structured_response_rejects_unsupported_or_invalid_calls(calls, error):
     with patch(
         "ai_karen_engine.core.model_runtime.provider_execution._post_chat_completions",
         return_value=reply(calls=calls),
     ):
         with pytest.raises(ProviderExecutionError, match=error):
-            execute()
+            await execute()
 
 
-def test_structured_response_rejects_unexpected_model_swap():
+@pytest.mark.asyncio
+async def test_structured_response_rejects_unexpected_model_swap():
     with patch(
         "ai_karen_engine.core.model_runtime.provider_execution._post_chat_completions",
         return_value=reply(content="Hello", model="another-provider-model"),
     ):
         with pytest.raises(ProviderExecutionError, match="model_changed"):
-            execute()
+            await execute()
 
 
-def test_existing_text_only_provider_path_still_uses_same_transport():
+@pytest.mark.asyncio
+async def test_existing_text_only_provider_path_still_uses_same_transport():
     with patch(
         "ai_karen_engine.core.model_runtime.provider_execution._post_chat_completions",
         return_value=reply(content="Unchanged answer"),
     ):
-        result = _sync_openai_compatible_request(
+        result = await execute_provider_endpoint(
             endpoint(),
             messages=[{"role": "user", "content": "Hello"}],
             model="verified-local-model",
@@ -135,9 +139,10 @@ def test_existing_text_only_provider_path_still_uses_same_transport():
     assert result.text == "Unchanged answer"
 
 
-def test_tool_execution_never_defaults_to_unspecified_model():
+@pytest.mark.asyncio
+async def test_tool_execution_never_defaults_to_unspecified_model():
     with pytest.raises(ProviderExecutionError, match="model_identity"):
-        _sync_structured_chat_request(
+        await execute_structured_provider_endpoint(
             endpoint(),
             messages=[{"role": "user", "content": "Research"}],
             model="auto",

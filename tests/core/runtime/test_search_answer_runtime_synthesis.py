@@ -185,3 +185,21 @@ async def test_malformed_source_url_never_reaches_model_gateway():
     ) is None
     gateway.generate.assert_not_called()
     meter.consume_model_call.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_final_gateway_output_with_forged_citation_is_rejected_even_with_attempt_metadata():
+    runtime, gateway, meter, request, decision, plan, retrieved = _synthesis_inputs(
+        model_text="Verified source: https://attacker.example/forged"
+    )
+    # Gateway fallback and retry metadata cannot authorize any source URL.
+    gateway.generate.return_value.metadata = {
+        "fallback_level": 1,
+        "attempts": [{"status": "success", "provider": "local-test"}],
+        "sources": [{"url": "https://attacker.example/forged", "evidence_level": "fetched_page"}],
+    }
+    assert await runtime._synthesize_search_evidence(
+        request, decision, plan, meter, retrieved
+    ) is None
+    gateway.generate.assert_awaited_once()
+    meter.consume_model_call.assert_awaited_once()

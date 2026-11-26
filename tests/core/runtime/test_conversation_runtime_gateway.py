@@ -1313,3 +1313,130 @@ async def test_runtime_transcript_error_redacts_sql_and_bound_values(
             "conversation_history_read_failed", "transcript_persistence_failed",
             "completed_turn_write_failed",
         }
+
+
+@pytest.mark.asyncio
+async def test_private_reconciliation_forwards_original_execution(monkeypatch) -> None:
+    from ai_karen_engine.auth.models import UserData
+
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "11111111-1111-1111-1111-111111111111"
+    context = ChatExecutionContext(
+        tenant_id=tenant, user_id=user,
+        conversation_id="22222222-2222-2222-2222-222222222222",
+        request_id="req-private", correlation_id="corr-private", session_id="session-1",
+        authenticated_user=UserData(user_id=user, tenant_id=tenant),
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "has_runtime_attachment_scope", lambda self: True,
+    )
+
+    class PrivateReadbackRepository(_Repository):
+        async def read_committed_turn(self, **kwargs):
+            assert kwargs["private_execution"] is context
+            return RepositoryResult(success=False, error="committed_turn_reconciliation_unavailable")
+
+    receipt = await ConversationRuntimeGateway(
+        repository=PrivateReadbackRepository(),
+    ).reconcile_interrupted_turn(
+        context, user_text="hello", assistant_text="private answer",
+    )
+    assert receipt.status == "unverified"
+    assert not receipt.success
+
+
+@pytest.mark.asyncio
+async def test_leased_reconciliation_delegates_finality_to_canonical_readback() -> None:
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "11111111-1111-1111-1111-111111111111"
+    conversation = "22222222-2222-2222-2222-222222222222"
+    context = ChatExecutionContext(
+        tenant_id=tenant, user_id=user, conversation_id=conversation,
+        request_id="req-lease", correlation_id="corr-lease", session_id="session-1",
+        authenticated_user=UserData(user_id=user, tenant_id=tenant),
+    )
+    run = ChatRunLease(
+        execution_id="33333333-3333-3333-3333-333333333333",
+        lease_token="44444444-4444-4444-4444-444444444444",
+        tenant_id=tenant, user_id=user, conversation_id=conversation,
+        transport_run_id="run-lease", request_id=context.request_id,
+        correlation_id=context.correlation_id,
+    )
+
+    class FinalityRepository(_Repository):
+        async def read_committed_turn(self, **kwargs):
+            assert kwargs["run_lease"] is run
+            return RepositoryResult(success=False, error="chat_run_finality_unverified")
+
+    receipt = await ConversationRuntimeGateway(
+        repository=FinalityRepository(),
+    ).reconcile_interrupted_turn(
+        context, user_text="hello", assistant_text="answer", run_lease=run,
+    )
+    assert receipt.status == "unverified"
+    assert receipt.reason == "chat_run_finality_unverified"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["committed", "missing", "unavailable", "rollback", "denied", "conflict"])
+async def test_only_uncertain_commit_receipts_trigger_readback(case) -> None:
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
+
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "11111111-1111-1111-1111-111111111111"
+    context = ChatExecutionContext(
+        tenant_id=tenant, user_id=user,
+        conversation_id="22222222-2222-2222-2222-222222222222",
+        request_id="req-ack", correlation_id="corr-ack", session_id="session-1",
+        authenticated_user=UserData(user_id=user, tenant_id=tenant),
+    )
+    uncertain = case in {"committed", "missing", "unavailable"}
+
+    class ReceiptRepository(_Repository):
+        writes = 0
+        reads = 0
+        attempted_digest = ""
+
+        async def add_completed_turn(self, user_message, assistant_message):
+            self.writes += 1
+            self.attempted_digest = canonical_message_digest(assistant_message)
+            if case == "committed":
+                result = await super().add_completed_turn(user_message, assistant_message)
+                assert result.success
+            error = {
+                "denied": "attachment_session_denied",
+                "conflict": "message_idempotency_conflict",
+            }.get(case, "completed_turn_write_failed")
+            return RepositoryResult(
+                success=False, error=error,
+                metadata={"commit_outcome_uncertain": case != "rollback"},
+            )
+
+        async def read_committed_turn(self, **kwargs):
+            self.reads += 1
+            assert kwargs["expected_assistant_digest"] == self.attempted_digest
+            assert kwargs["request_id"] == context.request_id
+            return RepositoryResult(
+                success=case != "unavailable", data=case == "committed",
+            )
+
+    repository = ReceiptRepository()
+    receipt = await ConversationRuntimeGateway(repository=repository).persist_completed_turn(
+        context, user_text="hello", assistant_text="answer",
+        response_metadata={"actual_provider": "test-provider"},
+    )
+    assert repository.writes == 1
+    assert repository.reads == int(uncertain)
+    assert len(repository.messages) == (2 if case == "committed" else 0)
+    assert receipt.status == {
+        "committed": "already_persisted", "missing": "unverified",
+        "unavailable": "unverified", "rollback": "failed",
+        "denied": "rejected", "conflict": "failed",
+    }[case]
+    assert receipt.success is (case == "committed")
+    if case in {"missing", "unavailable"}:
+        assert receipt.reason == "transcript_commit_outcome_unverified"

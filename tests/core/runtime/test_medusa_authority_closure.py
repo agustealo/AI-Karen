@@ -16,6 +16,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.agent_medusa.agent_medusa_node import medusa_node
 from ai_karen_engine.agent_medusa.coordinator.medusa_coordinator import MedusaCoordinator
+from ai_karen_engine.agent_medusa.execution.run_manager import ExecutionRunStatus
 from ai_karen_engine.core.langgraph_orchestrator.contracts.orchestration_state import (
     create_initial_state,
 )
@@ -325,7 +326,7 @@ class TestMedusaCoordinatorUsesAuthorizedPlan:
 
         run_manager = MagicMock()
         run_manager.register = AsyncMock()
-        run_manager.mark_response = AsyncMock()
+        run_manager.mark_response = AsyncMock(return_value=ExecutionRunStatus.COMPLETED)
         run_manager.mark_failed = AsyncMock()
         run_manager.mark_cancelled = AsyncMock()
         coordinator = MedusaCoordinator(run_manager=run_manager)

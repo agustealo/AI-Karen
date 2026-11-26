@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import hashlib
+import json
 import time
 import uuid
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
@@ -45,6 +46,7 @@ from ai_karen_engine.core.runtime.direct_capability_executor import (
     get_direct_capability_executor,
 )
 from ai_karen_engine.core.runtime.workflow_runtime import get_workflow_runtime
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.runtime_fallback import build_runtime_fallback
 from ai_karen_engine.core.runtime.chat_runtime_control_plane import (
     ApprovalRequiredResponse,
@@ -131,6 +133,10 @@ _CANONICAL_META_KEYS = (
 )
 
 
+class AttachmentAdmissionDenied(PermissionError):
+    """A selected document failed before model or fallback execution."""
+
+
 def _stream_fallback_allowed(emitted_text: str) -> bool:
     """Never mix primary streamed output with another provider's response."""
     return not emitted_text
@@ -152,6 +158,191 @@ class ChatRuntime:
         )
         self._outcome_recorder = OutcomeRecorder(store=self._composition.outcome_store)
         self._emitter = get_observability_emitter()
+
+    @staticmethod
+    def _attachment_artifact_store() -> Any:
+        """Use the canonical repository factory, not a second Storage client."""
+        from ai_karen_engine.database.factory import DatabaseServiceFactory
+
+        factory = DatabaseServiceFactory()
+        factory.create_canonical_repositories()
+        store = factory.get_service("artifact_store")
+        if store is None:
+            raise AttachmentAdmissionDenied("attachment_store_unavailable")
+        return store
+
+    async def _admit_attachments(
+        self, request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter,
+    ) -> None:
+        """All-or-nothing selection and bounded content admission before inference."""
+        references = request.attachment_references
+        if references == []:
+            if (
+                plan.resource_scope.get("attachment_references")
+                or request.context.has_runtime_attachment_scope()
+            ):
+                raise AttachmentAdmissionDenied("attachment_selection_changed")
+            return
+        from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+        from ai_karen_engine.services.database.repositories.artifact_store import (
+            VerifiedArtifactText,
+        )
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            validate_draft_attachment_references,
+        )
+
+        ctx = request.context
+        try:
+            selected = validate_draft_attachment_references(references)
+            ctx.bind_runtime_attachment_scope(plan, meter, selected)
+            config = ArtifactStorageConfig.from_environment()
+            remaining_ms = await meter.remaining_duration_ms()
+            if remaining_ms <= 0:
+                raise AttachmentAdmissionDenied("attachment_execution_deadline")
+            store = self._attachment_artifact_store()
+            deadline = min(
+                config.chat_attachment_integrity_total_timeout_seconds,
+                remaining_ms / 1000,
+            )
+            documents: list[dict[str, str]] = []
+            used = 0
+            async with asyncio.timeout(deadline):
+                await ctx.revalidate_runtime_attachment_session()
+                snapshot = await self._freeze_persona_snapshot(request)
+                if snapshot.status not in {"none", "ready"} or (
+                    snapshot.memory_filter_required and not snapshot.persona_id
+                ):
+                    raise AttachmentAdmissionDenied("attachment_persona_scope_unavailable")
+                gateway = self._conversation_gateway or get_conversation_runtime_gateway()
+                await gateway.ensure_conversation(
+                    ctx,
+                    first_user_message=self._extract_user_message(request.messages),
+                    persona_scope_id=(
+                        snapshot.persona_id if snapshot.memory_filter_required else None
+                    ),
+                )
+                await gateway.require_owned_conversation(ctx)
+                for reference in selected:
+                    await ctx.revalidate_runtime_attachment_session()
+                    if not ctx.is_runtime_model_plan_authorized(plan, meter):
+                        raise AttachmentAdmissionDenied("attachment_authority_changed")
+                    allowance = min(
+                        config.chat_attachment_max_source_bytes,
+                        config.chat_attachment_max_total_bytes - used,
+                    )
+                    if allowance < 1:
+                        raise AttachmentAdmissionDenied("attachment_budget_exhausted")
+                    result = await store.read_owner_active_text_bounded(
+                        reference["source_id"], ctx.tenant_id, ctx.user_id,
+                        max_bytes=allowance,
+                    )
+                    if not result.success or not isinstance(
+                        result.data, VerifiedArtifactText
+                    ):
+                        raise AttachmentAdmissionDenied("attachment_reader_denied")
+                    source = result.data
+                    if not isinstance(source.text, str):
+                        raise AttachmentAdmissionDenied("attachment_text_invalid")
+                    raw = source.text.encode("utf-8")
+                    if (
+                        source.artifact_id != reference["source_id"]
+                        or source.tenant_id != ctx.tenant_id
+                        or source.user_id != ctx.user_id
+                        or source.sha256 != reference["revision"]
+                        or source.mime_type != "text/plain"
+                        or not source.text.strip()
+                        or not 1 <= len(raw) <= allowance
+                        or hashlib.sha256(raw).hexdigest() != reference["revision"]
+                    ):
+                        raise AttachmentAdmissionDenied("attachment_integrity_denied")
+                    used += len(raw)
+                    documents.append({
+                        "source_id": reference["source_id"],
+                        "revision": reference["revision"],
+                        "text": source.text,
+                    })
+                await ctx.revalidate_runtime_attachment_session()
+            if not await meter.check_duration():
+                raise AttachmentAdmissionDenied("attachment_execution_deadline")
+            ctx.bind_runtime_attachment_documents(plan, meter, documents)
+            logger.info(
+                "chat_attachment_admission_complete",
+                extra={
+                    "request_id": ctx.request_id,
+                    "correlation_id": ctx.correlation_id,
+                    "source_count": len(documents),
+                    "total_bytes": used,
+                },
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "chat_attachment_admission_denied",
+                extra={
+                    "request_id": ctx.request_id,
+                    "correlation_id": ctx.correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise AttachmentAdmissionDenied("attachment_admission_denied") from None
+
+    @staticmethod
+    def _attachment_restriction_required(request: ChatExecutionRequest) -> bool:
+        return bool(
+            request.attachment_references
+            or request.context.has_runtime_attachment_scope()
+        )
+
+    def _require_supported_attachment_execution(
+        self, request: ChatExecutionRequest, decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan,
+    ) -> None:
+        """Reject execution paths without a verified attachment prompt contract."""
+        if not ChatRuntime._attachment_restriction_required(request):
+            return
+        if (
+            decision.topology.value != "direct"
+            or decision.is_graph_required
+            or self._should_execute_authorized_reasoning(decision, plan)
+            or self._is_explicit_save_turn(request)
+            or self._grounded_personal_response(
+                decision, tenant_id=request.context.tenant_id,
+                user_id=request.context.user_id,
+            ) is not None
+            or get_direct_capability_executor().can_handle(decision)
+            or decision.intent in {"planner.create", "planner.update"}
+        ):
+            raise AttachmentAdmissionDenied("attachment_execution_topology_unsupported")
+
+    @staticmethod
+    def _prompt_messages_with_admitted_attachments(
+        request: ChatExecutionRequest,
+    ) -> List[Dict[str, Any]]:
+        messages = [dict(message) for message in request.messages]
+        if not ChatRuntime._attachment_restriction_required(request):
+            return messages
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            validate_draft_attachment_references,
+        )
+
+        documents = request.context.runtime_attachment_documents()
+        selected = validate_draft_attachment_references(request.attachment_references)
+        if (
+            not documents or not messages
+            or [(item["source_id"], item["revision"]) for item in selected]
+            != [(item["source_id"], item["revision"]) for item in documents]
+            or str(messages[-1].get("role", "")).lower() != "user"
+        ):
+            raise AttachmentAdmissionDenied("attachment_admission_missing")
+        from ai_karen_engine.core.runtime.prompt.prompt_assembler import (
+            PromptAssembler,
+        )
+
+        return PromptAssembler.build_verified_attachment_messages(
+            messages, documents,
+        )
 
     async def get_orchestrator(self) -> Any:
         """Return the graph orchestrator adapter for health/availability checks."""
@@ -458,6 +649,28 @@ class ChatRuntime:
         meter = ExecutionBudgetMeter(plan.budget)
         request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
+        try:
+            await self._admit_attachments(request, plan, meter)
+            self._require_supported_attachment_execution(request, decision, plan)
+        except AttachmentAdmissionDenied:
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="denied",
+                metadata={"error_code": "CHAT_ATTACHMENT_ADMISSION_DENIED"},
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    requested_provider=request.preferred_provider,
+                    requested_model=request.preferred_model,
+                    degraded_mode=True,
+                    degradation_reason="attachment_admission_denied",
+                    mode="denied",
+                    extra={"error_code": "CHAT_ATTACHMENT_ADMISSION_DENIED"},
+                ),
+            )
         trajectory = self._trajectory_recorder.start()
         try:
             decision_observation_id = await self._record_learning_decision(
@@ -596,7 +809,9 @@ class ChatRuntime:
                     request, decision, plan, meter
                 )
             elif grounded is None and not self._is_explicit_save_turn(request) and decision.is_graph_required and decision.topology.value != "reasoning":
-                text, provider_meta = await self._run_graph(request, decision, plan, meter)
+                text, provider_meta = await self._run_graph(
+                    request, decision, plan, meter, trajectory_id=trajectory.trajectory_id,
+                )
             elif grounded is None and not self._is_explicit_save_turn(request):
                 text, provider_meta = await self._run_simple(request, decision, plan, meter)
         except asyncio.CancelledError:
@@ -604,6 +819,8 @@ class ChatRuntime:
             await self._observe_request_cancellation(
                 trajectory, decision, request, plan, meter, start,
             )
+            raise
+        except NativeRetirementUnverified:
             raise
         except Exception as exc:
             # A source revoked during provider generation is the same
@@ -649,7 +866,9 @@ class ChatRuntime:
                 # to invoke a different model or persist a fallback answer.
                 fallback = (
                     None
-                    if str(exc) == "memory_source_revoked_or_unverifiable"
+                    if ChatRuntime._attachment_restriction_required(request)
+                    or isinstance(exc, AttachmentAdmissionDenied)
+                    or str(exc) == "memory_source_revoked_or_unverifiable"
                     else await build_runtime_fallback(
                         runtime=self,
                         request=request,
@@ -714,6 +933,27 @@ class ChatRuntime:
                             "target": "transcript",
                             "error_code": "CHAT_TRANSCRIPT_PERSISTENCE_FAILED",
                         },
+                    )
+                if transcript_result.status == "unverified":
+                    # The fallback response is subject to the same finality
+                    # gate as ordinary generation.
+                    self._emitter.emit(
+                        RuntimeEventType.REQUEST_FAILED,
+                        status="unverified",
+                        metadata={"error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"},
+                    )
+                    return ChatExecutionResult(
+                        answer="", status=ChatExecutionStatus.ERROR,
+                        metadata=ChatRuntimeMetadata(
+                            correlation_id=ctx.correlation_id,
+                            latency_ms=(time.time() - start) * 1000.0,
+                            degraded_mode=True,
+                            degradation_reason="transcript_commit_outcome_unverified",
+                            extra={
+                                **transcript_result.to_metadata(),
+                                "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                            },
+                        ),
                     )
                 transcript_meta = transcript_result.to_metadata()
                 recovery_meta.update(transcript_meta)
@@ -924,7 +1164,48 @@ class ChatRuntime:
                 pending_memory_meta=memory_recall_meta,
             )
             raise
+        if transcript_result.reason == "attachment_session_denied":
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="denied",
+                error_type="AttachmentAdmissionDenied",
+                metadata={"error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    latency_ms=(time.time() - start) * 1000.0,
+                    mode="emergency",
+                    degraded_mode=True,
+                    degradation_reason="attachment_session_denied",
+                    extra={"error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+                ),
+            )
         provider_meta.update(transcript_result.to_metadata())
+        if transcript_result.status == "unverified":
+            # No final trajectory or adaptive-learning outcome may be derived
+            # from uncertain durable state. Do not return private answer bytes.
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="unverified",
+                metadata={"error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"},
+            )
+            return ChatExecutionResult(
+                answer="",
+                status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    latency_ms=(time.time() - start) * 1000.0,
+                    degraded_mode=True,
+                    degradation_reason="transcript_commit_outcome_unverified",
+                    extra={
+                        **transcript_result.to_metadata(),
+                        "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                    },
+                ),
+            )
         transcript_failed = not transcript_result.success
         if transcript_failed:
             # Conversation durability is independent of successful inference.
@@ -1189,6 +1470,37 @@ class ChatRuntime:
         meter = ExecutionBudgetMeter(plan.budget)
         request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
+        try:
+            await self._admit_attachments(request, plan, meter)
+            self._require_supported_attachment_execution(request, decision, plan)
+        except AttachmentAdmissionDenied:
+            denial = {
+                "status": "error",
+                "error_code": "CHAT_ATTACHMENT_ADMISSION_DENIED",
+                "actual_provider": None,
+                "actual_model": None,
+                "response_source": "unavailable",
+                "degraded_mode": True,
+                "degradation_reason": "attachment_admission_denied",
+            }
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="denied",
+                metadata={"error_code": denial["error_code"]},
+            )
+            for event_type, body in (
+                (ChatStreamEventType.ERROR, "Selected attachments are unavailable."),
+                (ChatStreamEventType.COMPLETE, ""),
+            ):
+                yield self._enrich_chunk(
+                    ChatStreamChunk(
+                        type=event_type, content=body,
+                        correlation_id=ctx.correlation_id, metadata=denial,
+                    ),
+                    sequence, request_id, response_id, conversation_id,
+                )
+                sequence += 1
+            return
         trajectory = self._trajectory_recorder.start()
         stream_start = time.time()
         try:
@@ -1337,6 +1649,7 @@ class ChatRuntime:
                             plan,
                             meter,
                             _meta=provider_meta,
+                            trajectory_id=trajectory.trajectory_id,
                         )
                         if decision.is_graph_required and decision.topology.value != "reasoning"
                         else self._run_simple_stream(
@@ -1428,15 +1741,22 @@ class ChatRuntime:
             # suspended at its previous yield. Close it deterministically;
             # otherwise the model or graph may continue running after the
             # canonical request cancellation has been observed.
+            retirement_unverified = False
             try:
                 close_stream = getattr(gen, "aclose", None)
                 if callable(close_stream):
                     await close_stream()
+            except NativeRetirementUnverified:
+                retirement_unverified = True
+                raise
             finally:
-                await self._observe_request_cancellation(
-                    trajectory, decision, request, plan, meter, stream_start,
-                    request_id=request_id, conversation_id=conversation_id,
-                )
+                if not retirement_unverified:
+                    await self._observe_request_cancellation(
+                        trajectory, decision, request, plan, meter, stream_start,
+                        request_id=request_id, conversation_id=conversation_id,
+                    )
+            raise
+        except NativeRetirementUnverified:
             raise
         except Exception as exc:
             if str(exc) == "memory_source_revoked_or_unverifiable":
@@ -1476,6 +1796,8 @@ class ChatRuntime:
                 # delivered to the client by a different provider/model.
                 if (
                     _stream_fallback_allowed(streamed_text)
+                    and not ChatRuntime._attachment_restriction_required(request)
+                    and not isinstance(exc, AttachmentAdmissionDenied)
                     and str(exc) != "memory_source_revoked_or_unverifiable"
                 ):
                     fallback = await build_runtime_fallback(
@@ -1494,6 +1816,8 @@ class ChatRuntime:
                     trajectory, decision, request, plan, meter, stream_start,
                     request_id=request_id, conversation_id=conversation_id,
                 )
+                raise
+            except NativeRetirementUnverified:
                 raise
             except Exception as fallback_exc:
                 if str(fallback_exc) == "memory_source_revoked_or_unverifiable":
@@ -1906,11 +2230,71 @@ class ChatRuntime:
                 )
                 raise
 
+        if transcript_result.reason == "attachment_session_denied":
+            generation_error = AttachmentAdmissionDenied("attachment_session_denied")
+            provider_meta["generation_error"] = True
+            provider_meta["degraded_mode"] = True
+            provider_meta["degradation_reason"] = "attachment_session_denied"
+            provider_meta["error_code"] = "CHAT_ATTACHMENT_SESSION_DENIED"
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="denied",
+                error_type="AttachmentAdmissionDenied",
+                metadata={"error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+            )
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.ERROR,
+                    content="The response could not be authorized.",
+                    correlation_id=ctx.correlation_id,
+                    metadata={
+                        "error_code": "CHAT_ATTACHMENT_SESSION_DENIED",
+                        "error_type": "AttachmentAdmissionDenied",
+                        "correlation_id": ctx.correlation_id,
+                        "requested_provider": request.preferred_provider,
+                        "requested_model": request.preferred_model,
+                        "actual_provider": provider_meta.get("actual_provider"),
+                        "actual_model": provider_meta.get("actual_model"),
+                        "runtime_engine": provider_meta.get("runtime_engine"),
+                        "response_source": provider_meta.get("response_source"),
+                        "fallback_level": provider_meta.get("fallback_level", 0),
+                        "degraded_mode": True,
+                        "degradation_reason": "attachment_session_denied",
+                        "fallback_reason": None,
+                    },
+                ),
+                sequence, request_id, response_id, conversation_id,
+            )
+            sequence += 1
         transcript_meta = transcript_result.to_metadata()
         transcript_persistence_failed = transcript_result.status in {
             "failed",
             "rejected",
+            "unverified",
         }
+
+        if transcript_result.status == "unverified":
+            # Retain unresolved trajectory truth. COMPLETE here is a runtime
+            # envelope, not permission for transports to announce success.
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED,
+                status="unverified",
+                metadata={"error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"},
+            )
+            yield self._enrich_chunk(
+                ChatStreamChunk(
+                    type=ChatStreamEventType.COMPLETE, content="",
+                    correlation_id=ctx.correlation_id,
+                    metadata={
+                        **transcript_meta,
+                        "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                        "status": "error", "degraded_mode": True,
+                        "requires_retry": False,
+                    },
+                ),
+                sequence, request_id, response_id, conversation_id,
+            )
+            return
 
         # A provider may emit text and subsequently emit a stream error.
         # A partial answer is not a successful outcome for adaptive learning.
@@ -2067,6 +2451,17 @@ class ChatRuntime:
             durable.pop("presentation_replay_incomplete", None)
         return durable
 
+    @staticmethod
+    async def _private_persistence_authorized(request: ChatExecutionRequest) -> bool:
+        """Revalidate private evidence against the original execution authority."""
+        if not ChatRuntime._attachment_restriction_required(request):
+            return True
+        binding = vars(request.context).get("_runtime_model_authority")
+        if not isinstance(binding, tuple) or len(binding) != 2:
+            return False
+        plan, meter = binding
+        return await ChatRuntime._private_evidence_authorized(request, plan, meter)
+
     async def _persist_transcript(
         self,
         request: ChatExecutionRequest,
@@ -2118,6 +2513,23 @@ class ChatRuntime:
             snapshot.persona_id if snapshot.memory_filter_required else None
         )
         durable_meta = self._durable_presentation_metadata(provider_meta)
+
+        if (
+            ChatRuntime._attachment_restriction_required(request)
+            and not ctx.has_runtime_attachment_scope()
+        ) or not await ChatRuntime._private_persistence_authorized(request):
+            self._emitter.emit(
+                RuntimeEventType.PERSISTENCE_FAILED,
+                status="denied",
+                error_type="AttachmentAdmissionDenied",
+                metadata={"target": "transcript", "error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+            )
+            return TranscriptPersistenceResult(
+                status="rejected",
+                conversation_id=conversation_id,
+                reason="attachment_session_denied",
+                error_type="AttachmentAdmissionDenied",
+            )
 
         result = await gateway.persist_completed_turn(
             ctx,
@@ -2754,6 +3166,11 @@ class ChatRuntime:
         try:
             from ai_karen_engine.core.memory import get_memory_manager
 
+            if not await ChatRuntime._private_persistence_authorized(request):
+                memory_recall_meta["memory_persistence_status"] = "denied_by_policy"
+                memory_recall_meta["memory_degraded"] = True
+                memory_recall_meta["memory_degradation_reason"] = "attachment_session_denied"
+                return {"status": "rejected", "reason": "attachment_session_denied", "persisted": 0}
             mem = get_memory_manager()
             result = await mem.process_interaction(
                 text=user_message,
@@ -2776,6 +3193,7 @@ class ChatRuntime:
                 session_id=ctx.session_id,
                 conversation_id=ctx.conversation_id,
                 policy_context=policy_context,
+                **({"private_execution": ctx} if ChatRuntime._attachment_restriction_required(request) else {}),
             )
 
             persisted = int(result.get("persisted") or 0)
@@ -3448,6 +3866,12 @@ class ChatRuntime:
             allowed_tools=allowed_tools,
             allowed_plugins=allowed_plugins,
             allowed_agents=allowed_agents,
+            resource_scope={
+                "attachment_references": [
+                    dict(item) for item in
+                    (policy_constraints.get("attachment_references") or [])
+                ],
+            } if policy_constraints.get("attachment_references") else {},
             budget=budget,
             memory_scope=decision.memory_scope,
             reasoning_modes=list(decision.reasoning_modes),
@@ -4444,6 +4868,7 @@ class ChatRuntime:
             request_id=request.context.request_id,
             metadata={"execution_mode": "surface_layout_plan"},
             reserve_additional_model_call=meter.consume_model_call,
+            remaining_execution_ms=lambda: meter.remaining_duration_ms(),
             authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
         try:
@@ -4656,6 +5081,7 @@ class ChatRuntime:
             request_id=request.context.request_id,
             metadata={"execution_mode": "grounded_search", "evidence_count": len(sources)},
             reserve_additional_model_call=meter.consume_model_call,
+            remaining_execution_ms=lambda: meter.remaining_duration_ms(),
             authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
         try:
@@ -4794,6 +5220,19 @@ class ChatRuntime:
         if current is not True:
             raise RuntimeError("memory_source_revoked_or_unverifiable")
 
+    @staticmethod
+    async def _private_evidence_authorized(
+        request: ChatExecutionRequest,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+    ) -> bool:
+        try:
+            async with asyncio.timeout((await meter.remaining_duration_ms()) / 1000):
+                await request.context.revalidate_runtime_attachment_session()
+            return request.context.is_runtime_model_plan_authorized(plan, meter)
+        except Exception:
+            return False
+
     async def _run_simple(
         self,
         request: ChatExecutionRequest,
@@ -4820,6 +5259,9 @@ class ChatRuntime:
         await ChatRuntime._authorize_selected_memory_before_generation(
             request, decision
         )
+        async def authorize_private_evidence() -> bool:
+            return await ChatRuntime._private_evidence_authorized(request, plan, meter)
+
         task = ExpressionTask(
             task_id=f"expr_{ctx.correlation_id}",
             kind="chat",
@@ -4848,7 +5290,10 @@ class ChatRuntime:
                 "topology": plan.topology.value,
             },
             token_sink=token_sink,
+            local_only=ChatRuntime._attachment_restriction_required(request),
+            authorize_private_evidence_attempt=authorize_private_evidence,
             reserve_additional_model_call=meter.consume_model_call,
+            remaining_execution_ms=lambda: meter.remaining_duration_ms(),
             authorize_external_engine_attempt=ChatRuntime._external_engine_attempt_guard(self, request, plan),
         )
 
@@ -4860,7 +5305,14 @@ class ChatRuntime:
             intent=decision.intent,
         )
 
-        result = await gateway.generate(task)
+        from ai_karen_engine.core.expression.errors import PrivateEvidenceAuthorizationError
+
+        try:
+            await task.require_private_evidence_authorization()
+            result = await gateway.generate(task)
+            await task.require_private_evidence_authorization()
+        except PrivateEvidenceAuthorizationError:
+            raise AttachmentAdmissionDenied("attachment_session_denied") from None
 
         # A provider can outlive its pre-dispatch permission snapshot.
         # Revalidate after generation before returning a successful answer.
@@ -4958,11 +5410,23 @@ class ChatRuntime:
         observed_deltas: list[str] = []
         first_delta_latency_ms: float | None = None
 
+        restricted = ChatRuntime._attachment_restriction_required(request)
+
+        async def authorize_delivery() -> None:
+            if restricted and not await ChatRuntime._private_evidence_authorized(
+                request, plan, meter
+            ):
+                raise AttachmentAdmissionDenied("attachment_session_denied")
+
         async def send_token(delta: str) -> None:
             if isinstance(delta, str) and delta:
+                await authorize_delivery()
                 await events.put(("delta", delta))
 
+        retirement_failure: NativeRetirementUnverified | None = None
+
         async def produce() -> None:
+            nonlocal retirement_failure
             try:
                 result = await self._run_simple(
                     request, decision, plan, meter, memory_recall_meta,
@@ -4970,6 +5434,14 @@ class ChatRuntime:
                     reasoning_preflight=reasoning_preflight,
                 )
                 await events.put(("complete", result))
+            except NativeRetirementUnverified as exc:
+                retirement_failure = exc
+                # When the consumer has stopped, do not wait on a queue
+                # that no longer has a reader. The join preserves the failure.
+                owner = asyncio.current_task()
+                if owner is not None and owner.cancelling():
+                    raise
+                await events.put(("error", exc))
             except Exception as exc:
                 # Never log the exception text or issue a new model attempt
                 # here. ChatRuntime's outer stream owns error/fallback policy.
@@ -4980,6 +5452,7 @@ class ChatRuntime:
             while True:
                 kind, payload = await events.get()
                 if kind == "delta":
+                    await authorize_delivery()
                     observed_deltas.append(payload)
                     if first_delta_latency_ms is None:
                         first_delta_latency_ms = (
@@ -5007,6 +5480,7 @@ class ChatRuntime:
                 if kind != "complete":
                     raise RuntimeError("unexpected_expression_stream_event")
 
+                await authorize_delivery()
                 text, normalized = payload
                 if observed_deltas and "".join(observed_deltas) != text:
                     # A transport/engine that emits different content than
@@ -5047,6 +5521,9 @@ class ChatRuntime:
                 await worker
             except asyncio.CancelledError:
                 pass
+            finally:
+                if retirement_failure is not None:
+                    raise retirement_failure
 
     async def _run_graph(
         self,
@@ -5054,6 +5531,7 @@ class ChatRuntime:
         decision: ExecutionDecision,
         plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
+        *, trajectory_id: str | None = None,
     ) -> Tuple[str, Dict[str, Any]]:
         """Graph-required path: routed exclusively through WorkflowRuntime."""
         text, response_metadata = await get_workflow_runtime().run(
@@ -5061,6 +5539,7 @@ class ChatRuntime:
             decision,
             plan,
             budget_meter=meter,
+            **({"trajectory_id": trajectory_id} if trajectory_id is not None else {}),
         )
         return text, self._normalize_graph_meta(response_metadata, request)
 
@@ -5071,9 +5550,11 @@ class ChatRuntime:
         plan: AuthorizedExecutionPlan,
         meter: ExecutionBudgetMeter,
         _meta: Optional[Dict[str, Any]] = None,
+        *, trajectory_id: str | None = None,
     ) -> AsyncIterator[ChatStreamChunk]:
         workflow_stream = get_workflow_runtime().stream(
             request, decision, plan, budget_meter=meter,
+            **({"trajectory_id": trajectory_id} if trajectory_id is not None else {}),
         )
         try:
             async for chunk in workflow_stream:
@@ -5286,13 +5767,17 @@ class ChatRuntime:
         )
 
         objective = self._extract_user_message(request.messages)
-        activation = get_runtime_reasoning_bridge().activate(
+        if not await meter.check_duration():
+            raise RuntimeError("Execution budget exhausted: max_duration_ms")
+        activation = await get_runtime_reasoning_bridge().activate(
             objective=objective,
             evidence=[item.content for item in evidence if item.content],
             decision=decision,
             plan=plan,
             preferred_provider=request.preferred_provider,
             preferred_model=request.preferred_model,
+            authenticated_context=ctx,
+            execution_meter=meter,
         )
 
         canonical_request = ReasoningRequest(
@@ -5338,10 +5823,18 @@ class ChatRuntime:
         result = await activation.executor.execute(canonical_request, plan, context)
         reasoning_duration_ms = (time.perf_counter() - reasoning_started) * 1000.0
 
-        consumed_model_calls = int(result.diagnostics.get("model_calls", 0) or 0)
-        for _ in range(consumed_model_calls):
-            if not await meter.consume_model_call():
-                raise RuntimeError("Execution budget exhausted: max_model_calls")
+        reserved_model_calls = getattr(activation, "reserved_model_calls", None)
+        if reserved_model_calls is not None:
+            # The trusted Runtime composition already reserved every native
+            # attempt on this meter. Strategy diagnostics cannot waive charges.
+            consumed_model_calls = reserved_model_calls()
+            if type(consumed_model_calls) is not int or not 0 <= consumed_model_calls <= meter.model_calls:
+                raise RuntimeError("Invalid governed reasoning attempt accounting")
+        else:
+            consumed_model_calls = int(result.diagnostics.get("model_calls", 0) or 0)
+            for _ in range(consumed_model_calls):
+                if not await meter.consume_model_call():
+                    raise RuntimeError("Execution budget exhausted: max_model_calls")
         consumed_steps = int(result.diagnostics.get("steps", 0) or 0)
         for _ in range(consumed_steps):
             if not await meter.consume_reasoning_step():
@@ -5638,11 +6131,28 @@ class ChatRuntime:
                    else {}),
             },
             token_budget=decision.token_budget,
-            messages=[dict(msg) for msg in request.messages],
+            messages=ChatRuntime._prompt_messages_with_admitted_attachments(request),
         )
 
         assembly_started = time.perf_counter()
         result = await get_prompt_runtime_service().assemble_prompt(assembly_request)
+        if ChatRuntime._attachment_restriction_required(request):
+            expected = [
+                (item.get("role"), item.get("content"))
+                for item in assembly_request.messages
+                if item.get("source") in {
+                    "verified_attachment_data", "runtime_attachment_data_boundary",
+                }
+            ]
+            actual = [
+                (item.get("role"), item.get("content"))
+                for item in result.messages
+                if item.get("source") in {
+                    "verified_attachment_data", "runtime_attachment_data_boundary",
+                }
+            ]
+            if not expected or actual != expected or result.token_estimate > assembly_request.token_budget:
+                raise AttachmentAdmissionDenied("attachment_prompt_integrity_denied")
         prompt_telemetry = dict(
             (result.metadata or {}).get("consumer_token_telemetry") or {}
         )

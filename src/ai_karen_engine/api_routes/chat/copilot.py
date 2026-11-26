@@ -23,7 +23,7 @@ from ai_karen_engine.api_routes.chat.execution_identity import (
     can_execute_copilot_action,
     require_execution_identity,
 )
-from ai_karen_engine.api_routes.chat.runtime import _sse
+from ai_karen_engine.api_routes.chat.runtime import _runtime_error_response, _sse
 from ai_karen_engine.core.runtime.chat_runtime import get_chat_runtime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionRequest,
@@ -454,6 +454,9 @@ async def copilot_assist(
             content=payload,
             headers={"X-Correlation-Id": correlation_id},
         )
+
+    if result.status == ChatExecutionStatus.ERROR:
+        return _runtime_error_response(result, correlation_id)
 
     metadata = _json_safe(result.metadata.to_dict())
     metadata["llm"] = {

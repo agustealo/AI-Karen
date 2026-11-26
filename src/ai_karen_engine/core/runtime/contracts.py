@@ -115,11 +115,17 @@ class ExecutionBudgetMeter:
         if self._exhausted:
             return False
         self.start()
-        assert self._start_ms is not None
-        if time.monotonic() * 1000.0 - self._start_ms >= self._authorized_limits["max_duration_ms"]:
+        return self._remaining_started_duration_ms() > 0
+
+    def _remaining_started_duration_ms(self) -> float:
+        """Read the same original clock without starting or renewing it."""
+        if self._start_ms is None:
+            return 0.0
+        elapsed_ms = time.monotonic() * 1000.0 - self._start_ms
+        remaining = max(0.0, float(self._authorized_limits["max_duration_ms"]) - elapsed_ms)
+        if remaining <= 0:
             self._exhausted = True
-            return False
-        return True
+        return remaining
 
     async def check_duration(self) -> bool:
         async with self._lock:
@@ -132,11 +138,20 @@ class ExecutionBudgetMeter:
         this deadline. A zero result means an explicit denied execution.
         """
         async with self._lock:
-            if not self._within_deadline():
+            if self._exhausted:
                 return 0.0
-            assert self._start_ms is not None
-            elapsed_ms = time.monotonic() * 1000.0 - self._start_ms
-            return max(0.0, float(self._authorized_limits["max_duration_ms"]) - elapsed_ms)
+            self.start()
+            return self._remaining_started_duration_ms()
+
+    async def remaining_admitted_duration_ms(self) -> float:
+        """Time left for already-reserved work, not permission to start work.
+
+        A rejected sibling reservation must not invalidate an earlier
+        accepted reservation. All new reservations still fail closed when
+        the meter is exhausted. This read never starts or renews the clock.
+        """
+        async with self._lock:
+            return self._remaining_started_duration_ms()
 
     async def _reserve(self, field: str, limit: int, amount: int = 1) -> bool:
         """Commit an authorized nonnegative reservation exactly once.

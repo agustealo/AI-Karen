@@ -721,3 +721,291 @@ def test_credential_env_endpoints_are_rebuilt_instead_of_reusing_bearers() -> No
     assert manager.resolve_runtime(selection) is not manager.resolve_runtime(selection)
     assert len(instances) == 2
     assert manager._runtime_cache == {}
+
+
+def test_transformers_constructor_does_not_spawn_warmup(monkeypatch):
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("construction must not launch model loading")
+
+    monkeypatch.setattr(module.TransformersRuntime, "warm", forbidden)
+    monkeypatch.setattr(module.threading, "Thread", forbidden)
+    runtime = module.TransformersRuntime(model_path="selected-local-model")
+    assert runtime._pipeline is None
+    assert runtime.model_path == "selected-local-model"
+
+
+def test_governed_warm_never_downloads_or_tries_unselected_model(monkeypatch, tmp_path):
+    import sys
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    selected = str(tmp_path / "selected")
+    calls = []
+
+    def unavailable(path, **kwargs):
+        calls.append((path, kwargs))
+        raise OSError("local model unavailable")
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    monkeypatch.setenv("TRANSFORMERS_OFFLINE", "false")
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False),
+    ))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoTokenizer=SimpleNamespace(from_pretrained=unavailable),
+        AutoModelForCausalLM=SimpleNamespace(from_pretrained=unavailable),
+        pipeline=lambda *a, **kw: pytest.fail("unavailable model must not create a pipeline"),
+    ))
+    runtime = module.TransformersRuntime(model_path=selected)
+    with pytest.raises(ProviderNotAvailable, match="native_authorized_model_unavailable"):
+        runtime.generate_text_with_model("private input", required_model=selected)
+    assert calls == [(selected, {"local_files_only": True})]
+    assert runtime._pipeline is None
+
+
+@pytest.mark.parametrize("load_succeeds", [False, True])
+def test_governed_generation_never_invokes_stale_pipeline(monkeypatch, load_succeeds):
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    runtime = module.TransformersRuntime(model_path="old-model")
+    runtime._pipeline = lambda *args, **kwargs: pytest.fail("wrong model must not see prompt")
+    calls = []
+
+    def warm(model_path, *, exact_only, checkpoint=None):
+        calls.append((model_path, exact_only))
+        return load_succeeds
+
+    monkeypatch.setattr(runtime, "warm", warm)
+    with pytest.raises(ProviderNotAvailable, match="native_authorized_model_"):
+        runtime.generate_text_with_model("private input", required_model="selected-model")
+    assert calls == [("selected-model", True)]
+
+
+def test_governed_generation_checks_deadline_after_loading_and_lock(monkeypatch):
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    runtime = module.TransformersRuntime(model_path="selected-model")
+    runtime._pipeline = lambda *args, **kwargs: pytest.fail("expired request must not generate")
+
+    def expired():
+        raise ProviderNotAvailable("governed_model_execution_deadline_exhausted")
+
+    with pytest.raises(ProviderNotAvailable, match="execution_deadline_exhausted"):
+        runtime.generate_text_with_model(
+            "private input", required_model="selected-model", before_generate=expired,
+        )
+
+
+def test_native_lock_wait_observes_cancellation_without_acquiring():
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    attempts = []
+
+    class ContendedLock:
+        def acquire(self, *, timeout):
+            attempts.append(timeout)
+            return False
+
+        def release(self):
+            pytest.fail("must not release a lock that was never acquired")
+
+    def checkpoint():
+        if attempts:
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    with pytest.raises(ProviderNotAvailable, match="execution_cancelled"):
+        with module._checkpointed_lock(ContendedLock(), checkpoint):
+            pytest.fail("cancelled worker must not enter the critical section")
+    assert len(attempts) == 1
+
+
+def test_cancelled_native_load_never_starts_next_loading_stage(monkeypatch):
+    import sys
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    stopped = threading.Event()
+    calls = []
+
+    def tokenizer(path, **kwargs):
+        calls.append(path)
+        stopped.set()
+        return object()
+
+    def checkpoint():
+        if stopped.is_set():
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(is_available=lambda: False),
+    ))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoTokenizer=SimpleNamespace(from_pretrained=tokenizer),
+        AutoModelForCausalLM=SimpleNamespace(
+            from_pretrained=lambda *a, **kw: pytest.fail("cancelled load must not load model"),
+        ),
+        pipeline=lambda *a, **kw: pytest.fail("cancelled load must not create pipeline"),
+    ))
+    runtime = module.TransformersRuntime(model_path="selected-model")
+    with pytest.raises(ProviderNotAvailable, match="execution_cancelled"):
+        runtime.generate_text_with_model(
+            "private input", required_model="selected-model", before_generate=checkpoint,
+        )
+    assert calls == ["selected-model"]
+    assert runtime._pipeline is None
+
+
+def test_native_generation_stopping_criteria_uses_host_checkpoint(monkeypatch):
+    import sys
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    stopped = threading.Event()
+    tokens = []
+
+    def checkpoint():
+        if stopped.is_set():
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    class Pipeline:
+        device = SimpleNamespace(type="cpu", index=None)
+        tokenizer = SimpleNamespace(eos_token_id=0)
+
+        def __call__(self, prompt, **kwargs):
+            criteria = kwargs["stopping_criteria"]
+            assert len(criteria) == 1
+            assert criteria[0](None, None) is False
+            tokens.append("first token")
+            stopped.set()
+            criteria[0](None, None)
+            pytest.fail("stopped generation must not return a partial response")
+
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        StoppingCriteria=object, StoppingCriteriaList=list,
+    ))
+    runtime = module.TransformersRuntime(model_path="selected-model")
+    runtime._pipeline = Pipeline()
+    with pytest.raises(ProviderNotAvailable, match="execution_cancelled"):
+        runtime.generate_text_with_model(
+            "private input", required_model="selected-model", before_generate=checkpoint,
+        )
+    assert tokens == ["first token"]
+
+
+@pytest.mark.parametrize("failure", ["constructor", "cancelled", "wrong_device", "fence"])
+def test_governed_pipeline_placement_fences_even_before_publication(monkeypatch, failure):
+    import sys
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as module
+
+    events = []
+    stopped = threading.Event()
+    monkeypatch.setattr(module.TransformersRuntime, "_native_retirement_hold", threading.Event())
+    monkeypatch.setattr(module, "_lazy_import_transformers", lambda: True)
+    device = SimpleNamespace(type="cuda", index=2)
+    runtime = module.TransformersRuntime(model_path="selected-model", device="cuda:2")
+
+    def checkpoint():
+        if stopped.is_set():
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    def make_pipeline(*args, **kwargs):
+        assert kwargs["device"] == 2
+        assert runtime._generation_lock._is_owned()
+        events.append("placement")
+        if failure == "constructor":
+            raise RuntimeError("constructor failed after enqueue")
+        if failure == "cancelled":
+            stopped.set()
+        actual = SimpleNamespace(type="cuda", index=3) if failure == "wrong_device" else device
+        return SimpleNamespace(device=actual)
+
+    def synchronize(observed):
+        assert observed is device
+        assert runtime._generation_lock._is_owned()
+        events.append("fence")
+        if failure == "fence":
+            raise RuntimeError("driver failure")
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        device=lambda kind, index=None: device if (kind, index) == ("cuda", 2) else pytest.fail("unexpected placement"),
+        cuda=SimpleNamespace(is_available=lambda: True, synchronize=synchronize),
+        float16=object(),
+    ))
+    monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+        AutoTokenizer=SimpleNamespace(from_pretrained=lambda *a, **kw: object()),
+        AutoModelForCausalLM=SimpleNamespace(from_pretrained=lambda *a, **kw: object()),
+        pipeline=make_pipeline,
+    ))
+    if failure == "constructor":
+        assert runtime.warm("selected-model", exact_only=True, checkpoint=checkpoint) is False
+    else:
+        expected = "execution_cancelled" if failure == "cancelled" else "retirement_unverified"
+        with pytest.raises(ProviderNotAvailable, match=expected):
+            runtime.warm("selected-model", exact_only=True, checkpoint=checkpoint)
+    assert events == ["placement", "fence"]
+    assert runtime._pipeline is None
+    assert module.TransformersRuntime._native_retirement_hold.is_set() == (
+        failure in {"wrong_device", "fence"}
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["returned", "empty", "raised"])
+async def test_compatibility_call_cannot_change_canonical_provider_health(monkeypatch, caplog, outcome):
+    from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+        HealthStatus, ProviderHealthMonitor,
+    )
+    from ai_karen_engine.core.runtime.resilience.circuit_breaker import CircuitBreaker
+
+    manager = object.__new__(ModelManager)
+    monitor = ProviderHealthMonitor()
+    manager.health_monitor = monitor
+    selection = RuntimeSelection(
+        provider_id="local", display_name="Local",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        model="registered-model", runtime_engine="ollama",
+    )
+    def generate(_prompt):
+        if outcome == "raised":
+            raise RuntimeError("private upstream exception body")
+        return "" if outcome == "empty" else "plain compatibility response"
+
+    monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: SimpleNamespace(generate_text=generate))
+    monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
+    compatibility = CircuitBreaker("compatibility.local", failure_threshold=1)
+    canonical = CircuitBreaker("local", failure_threshold=1)
+    keys = []
+    def get_breaker(key):
+        keys.append(key)
+        return compatibility if key == "compatibility.local" else canonical
+
+    monkeypatch.setattr(manager, "_get_breaker", get_breaker)
+    if outcome == "raised":
+        with pytest.raises(RuntimeError, match="private upstream exception body"):
+            await manager.generate_chat([{"role": "user", "content": "hello"}])
+    else:
+        response = await manager.generate_chat([{"role": "user", "content": "hello"}])
+        assert response == ("" if outcome == "empty" else "plain compatibility response")
+    assert keys == ["compatibility.local"]
+    assert canonical.failures == 0
+    assert monitor.get_provider_health("local").health_status is HealthStatus.UNKNOWN
+    assert "private upstream exception body" not in caplog.text
+
+
+def test_compatibility_diagnostic_never_stores_raw_error(monkeypatch, caplog):
+    from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+        HealthStatus, ProviderHealthMonitor,
+    )
+    manager = object.__new__(ModelManager)
+    manager.health_monitor = ProviderHealthMonitor()
+    manager._record_provider_result(
+        "local", False, 0.0, error_message="private upstream exception body",
+    )
+    assert manager.health_monitor.get_provider_health("local").health_status is HealthStatus.UNKNOWN
+    assert "private upstream exception body" not in caplog.text

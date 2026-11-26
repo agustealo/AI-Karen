@@ -11,6 +11,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.model_runtime.runtime_contracts import ProviderExecutionResult
 from ai_karen_engine.core.runtime.workflow_generation import (
     WorkflowGenerationRequest,
@@ -91,6 +92,8 @@ class ResponseSynthesisNode:
             if self.config.apply_safety_filter:
                 state = self._apply_safety_filter(state)
             logger.info("Response synthesis completed")
+        except (NativeRetirementUnverified, PermissionError):
+            raise
         except Exception as exc:
             logger.error("Response synthesis error: %s", exc)
             state.setdefault("errors", []).append(f"Response synthesis error: {exc}")

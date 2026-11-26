@@ -140,22 +140,35 @@ def test_runtime_owns_workflow_prompt_routing_and_provider_execution() -> None:
     calls = _calls(WORKFLOW_GENERATION)
 
     assert "get_prompt_runtime_service" in source
-    assert "ProviderRuntime" in source
-    assert "select_provider" in calls
-    assert "execute_chat" in calls
-    assert "provider_constraints" in source
-    assert "model_unavailable" in source
-    assert "emergency_static" in source
-    assert "text=\"\"" in source
+    assert "ProviderRuntime" not in source
+    assert "select_provider" not in calls
+    assert "execute_chat" not in calls
+    assert "get_expression_gateway" in calls
+    assert "ExpressionTask" in calls
+    assert "execution_admission=admission" in source
+    assert "await gateway.generate(task)" in source
+    assert "actual_provider=result.provider" in source
+    assert "actual_model=result.model" in source
+    gateway = _source(CORE / "expression" / "gateway.py")
+    assert "raise EngineUnavailableError(" in gateway
+    assert "not task.execution_admission.plan.degraded_allowed" in gateway
 
 
 def test_workflow_generation_preserves_runtime_policy_identity() -> None:
     source = _source(WORKFLOW_GENERATION)
     assert "policy_decision_id" in source
-    assert "plan_policy_id != request.policy_decision_id" in source
-    assert "provider_not_authorized_by_runtime_policy" in source
-    assert "provider_forbidden_by_runtime_policy" in source
-    assert "model_not_authorized_by_runtime_policy" in source
+    assert "request.policy_decision_id != admission.policy_decision_id" in source
+    assert 'request.authorized_plan.get("policy_decision_id") != plan.policy_decision_id' in source
+    assert 'request.authorized_plan.get("execution_id") != plan.execution_id' in source
+    assert "request.tenant_id != admission.tenant_id" in source
+    assert "request.user_id != admission.user_id" in source
+    assert "authority.require_live()" in source
+    assert "execution_admission=admission" in source
+    admission = _source(CORE / "model_runtime" / "governed_model_admission.py")
+    assert "self._require_scope(external=external)" in admission
+    assert "self._require_constraints(endpoint, model, external=external)" in admission
+    assert "governed_model_provider_not_authorized" in admission
+    assert "self.meter.reserve_model_execution(external=external)" in admission
 
 
 def test_workflow_runtime_preserves_trusted_identity_and_authorization() -> None:

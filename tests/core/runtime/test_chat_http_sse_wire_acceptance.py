@@ -9,6 +9,8 @@ stream are controlled, not claims of real PostgreSQL authentication or inference
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import secrets
 import json
 import os
 import socket
@@ -26,6 +28,7 @@ from fastapi import FastAPI
 
 from ai_karen_engine.api_routes.chat import runtime as chat_ingress
 from ai_karen_engine.auth import auth_middleware, auth_service
+from ai_karen_engine.services.auth.auth_service import AuthService as CoreAuthService
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatStreamChunk, ChatStreamEventType,
 )
@@ -43,13 +46,41 @@ async def test_canonical_chat_sse_over_signed_authenticated_http_socket(
     session_records: dict[str, SimpleNamespace] = {}
     verified_tokens: list[str] = []
 
-    class CanonicalSessionProbe:
+    class CanonicalSessionProbe(CoreAuthService):
+        """Real AuthService witness sealing; only PostgreSQL readback is controlled."""
+
+        def __init__(self):
+            self._runtime_witness_key = secrets.token_bytes(32)
+
         async def validate_session(
             self, token: str, *, strict_errors: bool = False,
+            _witness_sink=None,
         ) -> SimpleNamespace | None:
             assert strict_errors is True
             verified_tokens.append(token)
-            return session_records.get(token)
+            account = session_records.get(token)
+            if account is not None and _witness_sink is not None:
+                _witness_sink(self._issue_session_witness(
+                    session_id=account.session_id, user_id=account.id,
+                    tenant_id=account.tenant_id,
+                    access_token_digest=hashlib.sha256(
+                        token.encode("utf-8")
+                    ).hexdigest(),
+                ))
+            return account
+
+        async def revalidate_session_identity(
+            self, *, session_id, user_id, tenant_id, access_token_digest,
+        ) -> SimpleNamespace | None:
+            for token, account in session_records.items():
+                if (
+                    account.session_id == session_id
+                    and account.id == user_id and account.tenant_id == tenant_id
+                    and hashlib.sha256(token.encode("utf-8")).hexdigest()
+                    == access_token_digest
+                ):
+                    return account
+            return None
 
     session_authority = CanonicalSessionProbe()
 
@@ -94,7 +125,8 @@ async def test_canonical_chat_sse_over_signed_authenticated_http_socket(
     def register(token: str, owner: str, tenant: str) -> None:
         session_records[token] = SimpleNamespace(
             id=owner, tenant_id=tenant, roles=["user"],
-            email="current@example.invalid",
+            email="current@example.invalid", status="active",
+            is_verified=True, session_id=str(uuid4()),
         )
 
     token_a, token_b = bearer(owner_a, tenant_a), bearer(owner_b, tenant_b)

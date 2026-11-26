@@ -75,7 +75,7 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             );
             CREATE TABLE public.messages (
                 message_id uuid PRIMARY KEY,
-                conversation_id uuid NOT NULL REFERENCES public.conversations(conversation_id),
+                conversation_id uuid NOT NULL REFERENCES public.conversations(conversation_id) ON DELETE CASCADE,
                 role text NOT NULL,
                 content text NOT NULL,
                 message_metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
@@ -113,6 +113,21 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             / "supabase/migrations/20261124010000_73_composer_draft_attachment_references.sql"
         ).read_text(encoding="utf-8")
         await raw.execute(attachment_migration)
+        active_run_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261125010000_74_runtime_chat_single_active_run.sql"
+        ).read_text()
+        await raw.execute(active_run_migration)
+        submission_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261125020000_75_runtime_chat_submission_identity.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(submission_migration)
+        unresolved_migration = (
+            Path(__file__).resolve().parents[2]
+            / "supabase/migrations/20261125030000_76_runtime_chat_unresolved_run.sql"
+        ).read_text(encoding="utf-8")
+        await raw.execute(unresolved_migration)
         await raw.execute(
             "INSERT INTO public.tenants(id) VALUES($1),($2)",
             uuid.UUID(tenant_a), uuid.UUID(tenant_b),
@@ -165,6 +180,79 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
                 "conversation_id": thread,
                 "transport_run_id": run_id,
             }
+
+        # Two distinct run IDs on independent connections must not both
+        # acquire execution authority. Identical run IDs remain permanently
+        # fenced even after the winner has reached a terminal state.
+        admissions = await asyncio.gather(
+            worker_a.admit(
+                **identity(run_id="tab-a"),
+                request_id="tab-request-a", correlation_id="tab-trace-a",
+            ),
+            worker_b.admit(
+                **identity(run_id="tab-b"),
+                request_id="tab-request-b", correlation_id="tab-trace-b",
+            ),
+        )
+        winners = [item for item in admissions if item is not None]
+        assert len(winners) == 1
+        winner = winners[0]
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.runtime_chat_runs "
+            "WHERE tenant_id=$1 AND user_id=$2 AND conversation_id=$3 "
+            "AND status IN ('running', 'cancelling')",
+            uuid.UUID(tenant_a), uuid.UUID(user_a), uuid.UUID(thread),
+        ) == 1
+        assert await worker_b.admit(
+            **identity(run_id="tab-third"),
+            request_id="third", correlation_id="third",
+        ) is None
+        assert await worker_a.request_cancel(
+            **identity(run_id=winner.transport_run_id),
+        ) == "cancelling"
+        assert await worker_b.admit(
+            **identity(run_id="tab-while-cancelling"),
+            request_id="while-cancelling", correlation_id="while-cancelling",
+        ) is None
+        assert await worker_a.finish(
+            winner, status="cancelled", error_code="CHAT_STREAM_CANCELLED",
+        )
+        assert await worker_b.admit(
+            **identity(run_id=winner.transport_run_id),
+            request_id="repeat", correlation_id="repeat",
+        ) is None
+
+        # Sequential retry with a NEW transport ID must not run the same
+        # original user submission after its first terminal execution.
+        submitted = await worker_a.admit(
+            **identity(run_id="submission-first"), request_id="submission-request",
+            correlation_id="submission-trace", submission_id="user-turn-1",
+        )
+        assert submitted is not None
+        assert await worker_b.read_recovery_run(
+            tenant_id=tenant_a, user_id=user_a, conversation_id=thread,
+        ) == {"runId": "submission-first", "submissionId": "user-turn-1", "status": "running"}
+        assert await worker_b.read_recovery_run(
+            tenant_id=tenant_b, user_id=user_b, conversation_id=thread,
+        ) is None
+        assert await worker_a.finish(
+            submitted, status="failed", error_code="CHAT_TEST_TERMINAL",
+        )
+        assert await worker_b.read_recovery_run(
+            tenant_id=tenant_a, user_id=user_a, conversation_id=thread,
+        ) is None
+        assert await worker_b.admit(
+            **identity(run_id="submission-retry"), request_id="retry-request",
+            correlation_id="retry-trace", submission_id="user-turn-1",
+        ) is None
+        distinct_submission = await worker_b.admit(
+            **identity(run_id="submission-next"), request_id="next-request",
+            correlation_id="next-trace", submission_id="user-turn-2",
+        )
+        assert distinct_submission is not None
+        assert await worker_b.finish(
+            distinct_submission, status="failed", error_code="CHAT_TEST_TERMINAL",
+        )
 
         lease = await worker_a.admit(
             **identity(), request_id="request-a", correlation_id="trace-a",
@@ -504,6 +592,127 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             draft_thread, tenant_a, user_id=user_a,
         )).data["text"] == "Newer draft"
 
+        # The revision-bound handoff keeps text durable until transcript commit.
+        # A stale or mismatched submission must roll back the staged ledger row.
+        draft_identity = {
+            "tenant_id": tenant_a, "user_id": user_a, "conversation_id": draft_thread,
+        }
+        with pytest.raises(module.DraftSubmissionConflict):
+            await worker_a.admit(
+                **draft_identity, transport_run_id="draft-stale", request_id="draft-stale",
+                correlation_id="draft-stale", submission_id="draft-v1-1",
+                submitted_text="Unsent across windows",
+            )
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.runtime_chat_runs WHERE transport_run_id='draft-stale'",
+        ) == 0
+        with pytest.raises(module.DraftSubmissionConflict):
+            await worker_a.admit(
+                **draft_identity, transport_run_id="draft-mismatch", request_id="draft-mismatch",
+                correlation_id="draft-mismatch", submission_id="draft-v1-2",
+                submitted_text="different text",
+            )
+        draft_lease = await worker_a.admit(
+            **draft_identity, transport_run_id="draft-admitted", request_id="draft-request",
+            correlation_id="draft-trace", submission_id="draft-v1-2",
+            submitted_text="Newer draft",
+        )
+        assert draft_lease is not None
+        assert (await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data == {"text": "Newer draft", "revision": 2}
+        # A failed run does not erase the only recoverable user content.
+        assert await worker_a.finish(draft_lease, status="failed", error_code="CHAT_TEST_TERMINAL")
+        assert (await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data == {"text": "Newer draft", "revision": 2}
+        # A new explicit edit creates the next submission revision.
+        assert (await conversations.put_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+            content="Complete this draft", expected_revision=2,
+        )).success
+        draft_lease = await worker_a.admit(
+            **draft_identity, transport_run_id="draft-complete", request_id="draft-complete",
+            correlation_id="draft-complete", submission_id="draft-v1-3",
+            submitted_text="Complete this draft",
+        )
+        assert draft_lease is not None
+        draft_messages = [
+            Message(
+                id=str(uuid.uuid4()), conversation_id=draft_thread,
+                tenant_id=tenant_a, role=role, content=content,
+                metadata={
+                    "authorized_user_id": user_a,
+                    "request_id": draft_lease.request_id,
+                    "correlation_id": draft_lease.correlation_id,
+                    "transcript_actor": role,
+                },
+            )
+            for role, content in (("user", "Complete this draft"), ("assistant", "Done"))
+        ]
+        assert (await conversations.add_completed_turn(*draft_messages, run_lease=draft_lease)).success
+        assert (await conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data == {"text": "", "revision": 4}
+
+        # A terminal label cannot substitute for its exact transcript.
+        completed_identity = dict(draft_identity, transport_run_id="draft-complete")
+        assert (await worker_b.read_status(**completed_identity))["status"] == "completed"
+        await raw.execute(
+            "UPDATE public.messages SET message_metadata = message_metadata - 'request_id' "
+            "WHERE message_id=$1", uuid.UUID(draft_messages[1].id),
+        )
+        try:
+            with pytest.raises(RuntimeError, match="unverified_chat_run_completion_binding"):
+                await worker_b.read_status(**completed_identity)
+            with pytest.raises(RuntimeError, match="unverified_chat_run_completion_binding"):
+                await worker_b.read_recovery_run(**draft_identity)
+        finally:
+            await raw.execute(
+                "UPDATE public.messages SET message_metadata = message_metadata || "
+                "jsonb_build_object('request_id', $2::text) WHERE message_id=$1",
+                uuid.UUID(draft_messages[1].id), draft_lease.request_id,
+            )
+        assert (await worker_b.read_status(**completed_identity))["status"] == "completed"
+
+        # A repeatable-read recovery snapshot cannot mix an older ledger
+        # state with a newer completion committed by another connection.
+        snapshot_lease = await worker_a.admit(
+            **draft_identity, transport_run_id="snapshot-race",
+            request_id="snapshot-race", correlation_id="snapshot-race",
+            submission_id="snapshot-original",
+        )
+        assert snapshot_lease is not None
+        async with factory() as read_session:
+            async with read_session.begin():
+                await read_session.execute(text(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                ))
+                await read_session.execute(text(
+                    "SELECT set_config('app.current_tenant_id', :tenant, true)"
+                ), {"tenant": tenant_a})
+                await read_session.execute(text(
+                    "SELECT set_config('app.current_user_id', :owner, true)"
+                ), {"owner": user_a})
+                first_recovery = await worker_a.read_recovery_run(
+                    **draft_identity, db_session=read_session,
+                )
+                assert first_recovery == {
+                    "runId": "snapshot-race", "submissionId": "snapshot-original",
+                    "status": "running",
+                }
+                assert await worker_b.finish(
+                    snapshot_lease, status="failed", error_code="CHAT_TEST_TERMINAL",
+                )
+                assert await worker_b.read_recovery_run(**draft_identity) is None
+                assert await worker_a.read_recovery_run(
+                    **draft_identity, db_session=read_session,
+                ) == first_recovery
+                assert await worker_a.completed_replay_attestations(
+                    **draft_identity, db_session=read_session,
+                )
+        assert await worker_a.read_recovery_run(**draft_identity) is None
+
         # Actual PostgreSQL RLS must hold for a least-privilege login;
         # superuser-only repository queries do not prove policy isolation.
         await raw.execute(
@@ -540,10 +749,14 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
                 assert await reader.fetchval(
                     "SELECT count(*) FROM public.runtime_chat_run_events"
                 ) == 3
-                assert await reader.fetchval(
-                    "SELECT draft_text FROM public.conversation_composer_drafts "
+                # The owner must see the actual retired row, not a missing
+                # row or the text from before the completed transcript.
+                owned_draft = await reader.fetchrow(
+                    "SELECT draft_text, revision FROM public.conversation_composer_drafts "
                     "WHERE conversation_id=$1", uuid.UUID(draft_thread),
-                ) == "Newer draft"
+                )
+                assert owned_draft is not None
+                assert dict(owned_draft) == {"draft_text": "", "revision": 4}
                 assert await reader.fetchval(
                     "SELECT count(*) FROM public.runtime_chat_runs "
                     "WHERE transport_run_id='run-journal'"
@@ -570,6 +783,50 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         finally:
             await reader.close()
 
+        # A newer edit from a separate repository must survive completion
+        # of the previously admitted revision. A new transport ID does not
+        # grant the original submission another execution.
+        assert (await conversations.put_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+            content="Original in-flight draft", expected_revision=4,
+        )).success
+        editing_lease = await worker_a.admit(
+            **draft_identity, transport_run_id="draft-edit-race",
+            request_id="draft-edit-race", correlation_id="draft-edit-race",
+            submission_id="draft-v1-5", submitted_text="Original in-flight draft",
+        )
+        assert editing_lease is not None
+        other_conversations = PostgresConversationRepository(factory)
+        newer = await other_conversations.put_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+            content="New unsent question", expected_revision=5,
+        )
+        assert newer.success and newer.data["revision"] == 6
+        editing_messages = [
+            Message(
+                id=str(uuid.uuid4()), conversation_id=draft_thread,
+                tenant_id=tenant_a, role=role, content=content,
+                metadata={
+                    "authorized_user_id": user_a,
+                    "request_id": editing_lease.request_id,
+                    "correlation_id": editing_lease.correlation_id,
+                    "transcript_actor": role,
+                },
+            )
+            for role, content in (("user", "Original in-flight draft"), ("assistant", "Done"))
+        ]
+        assert (await conversations.add_completed_turn(
+            *editing_messages, run_lease=editing_lease,
+        )).success
+        assert (await other_conversations.get_composer_draft(
+            draft_thread, tenant_a, user_id=user_a,
+        )).data == {"text": "New unsent question", "revision": 6}
+        assert await worker_b.admit(
+            **draft_identity, transport_run_id="draft-edit-replay",
+            request_id="draft-edit-replay", correlation_id="draft-edit-replay",
+            submission_id="draft-v1-5", submitted_text="Original in-flight draft",
+        ) is None
+
         deleted_draft_parent = await conversations.delete_conversation(
             draft_thread, tenant_a, user_id=user_a,
         )
@@ -581,6 +838,14 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         assert not (await conversations.get_composer_draft(
             draft_thread, tenant_a, user_id=user_a,
         )).success
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.messages WHERE conversation_id=$1",
+            uuid.UUID(draft_thread),
+        ) == 0
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.runtime_chat_runs WHERE conversation_id=$1",
+            uuid.UUID(draft_thread),
+        ) == 0
 
         expired = await worker_a.admit(
             **identity(run_id="run-expired"),
@@ -602,6 +867,21 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
             "cancel_requested": False,
             "cancellation_confirmed": False,
         }
+        # Competing new identities cannot bypass an expired lease. Admission
+        # reconciles it to orphaned without releasing the uniqueness fence.
+        bypasses = await asyncio.gather(
+            worker_a.admit(
+                **identity(run_id="expired-bypass-a"),
+                request_id="bypass-a", correlation_id="bypass-a",
+                submission_id="new-original-a",
+            ),
+            worker_b.admit(
+                **identity(run_id="expired-bypass-b"),
+                request_id="bypass-b", correlation_id="bypass-b",
+                submission_id="new-original-b",
+            ),
+        )
+        assert bypasses == [None, None]
         assert await worker_b.request_cancel(
             **identity(run_id="run-expired")
         ) == "orphaned"
@@ -612,6 +892,20 @@ async def test_real_postgres_exact_run_stop_and_terminal_race(monkeypatch):
         }
         assert not await worker_a.finish(expired, status="cancelled")
         assert not await worker_a.cancel_requested(expired)
+        assert await worker_b.admit(
+            **identity(run_id="orphan-bypass"),
+            request_id="orphan-bypass", correlation_id="orphan-bypass",
+            submission_id="another-original",
+        ) is None
+        assert await worker_b.read_recovery_run(
+            tenant_id=tenant_a, user_id=user_a, conversation_id=thread,
+        ) == {"runId": "run-expired", "submissionId": None, "status": "orphaned"}
+        assert await raw.fetchval(
+            "SELECT count(*) FROM public.runtime_chat_runs "
+            "WHERE conversation_id=$1 AND transport_run_id IN "
+            "('expired-bypass-a', 'expired-bypass-b', 'orphan-bypass')",
+            uuid.UUID(thread),
+        ) == 0
 
         # RLS and explicit query scoping are both present; a separate
         # tenant may have the same transport run ID, but cannot touch ours.

@@ -9,18 +9,21 @@ not discover providers, models, prompts, or policy on their own.
 """
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
 from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
+    ExecutionBudgetMeter,
     ExecutionTopology,
 )
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
 from ai_karen_engine.core.runtime.policy import ResponseStrategyPolicyProbe
 
 if TYPE_CHECKING:
+    from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
     from ai_karen_engine.core.runtime.soft_reasoning_composition import (
         ComposedSoftReasoning,
     )
@@ -52,6 +55,8 @@ class ReasoningActivation:
     reasoning_modes: tuple[str, ...]
     request_metadata: dict[str, Any] = field(default_factory=dict)
     runtime_metadata: dict[str, Any] = field(default_factory=dict)
+    # Host-owned accounting, never request or strategy diagnostic metadata.
+    reserved_model_calls: Callable[[], int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -229,7 +234,7 @@ class RuntimeReasoningBridge:
             model_in_registered_inventory=model_registered,
         )
 
-    def activate(
+    async def activate(
         self,
         *,
         objective: str,
@@ -238,6 +243,8 @@ class RuntimeReasoningBridge:
         plan: AuthorizedExecutionPlan,
         preferred_provider: str | None,
         preferred_model: str | None,
+        authenticated_context: ChatExecutionContext | None = None,
+        execution_meter: ExecutionBudgetMeter | None = None,
     ) -> ReasoningActivation:
         requested_modes = tuple(
             normalize_reasoning_modes(list(decision.reasoning_modes))
@@ -264,6 +271,7 @@ class RuntimeReasoningBridge:
             )
 
         optional_strategies = []
+        reserved_model_calls = None
         request_metadata: dict[str, Any] = {}
         runtime_metadata: dict[str, Any] = {
             "reasoning_modes": list(requested_modes),
@@ -271,13 +279,32 @@ class RuntimeReasoningBridge:
         }
 
         if SOFT_EXPLORATION_MODE in requested_modes:
-            composed = self._compose_soft_reasoning(
-                objective=objective,
-                evidence=evidence,
-                preferred_provider=preferred_provider,
-                preferred_model=preferred_model,
+            admission = self._require_soft_admission(
+                plan, authenticated_context, execution_meter,
             )
-            self._validate_soft_budget(composed, plan)
+            # Fail before resolving a provider, loading weights or mutating a
+            # shared tokenizer. The composer must receive the original grant.
+            from ai_karen_engine.core.reasoning.soft_reasoning.exploration import SoftExplorationConfig
+
+            required = SoftExplorationConfig.paper_2025().maximum_total_model_calls
+            self._validate_soft_budget(required, admission)
+            composed = await admission.run_admitted_preparation(
+                lambda checkpoint: self._compose_soft_reasoning(
+                    objective=objective,
+                    evidence=evidence,
+                    preferred_provider=preferred_provider,
+                    preferred_model=preferred_model,
+                    execution_admission=admission,
+                    preparation_checkpoint=checkpoint,
+                )
+            )
+            self._validate_soft_budget(composed.maximum_total_model_calls, admission)
+            reserved_model_calls = composed.reserved_model_calls
+            if not callable(reserved_model_calls):
+                raise ReasoningActivationError(
+                    "soft_reasoning_accounting_unavailable",
+                    "Soft Reasoning requires host-owned attempt accounting",
+                )
             optional_strategies.append(composed.strategy)
             request_metadata.update(
                 {
@@ -304,11 +331,18 @@ class RuntimeReasoningBridge:
             get_default_strategies,
         )
         strategies = get_default_strategies(optional_strategies=optional_strategies)
+        if reserved_model_calls is not None and any(
+            item.supports_model_calls and item not in optional_strategies for item in strategies
+        ):
+            raise ReasoningActivationError(
+                "reasoning_model_accounting_conflict", "Mixed model accounting is not authorized",
+            )
         return ReasoningActivation(
             executor=ReasoningExecutor(strategies=strategies),
             reasoning_modes=requested_modes,
             request_metadata=request_metadata,
             runtime_metadata=runtime_metadata,
+            reserved_model_calls=reserved_model_calls,
         )
 
     @staticmethod
@@ -318,6 +352,8 @@ class RuntimeReasoningBridge:
         evidence: Sequence[str],
         preferred_provider: str | None,
         preferred_model: str | None,
+        execution_admission: GovernedToolModelAdmission,
+        preparation_checkpoint: Callable[[], None],
     ) -> ComposedSoftReasoning:
         from ai_karen_engine.core.runtime.soft_reasoning_composition import (
             SoftReasoningCompositionUnavailable,
@@ -329,6 +365,8 @@ class RuntimeReasoningBridge:
                 evidence=evidence,
                 preferred_provider=preferred_provider,
                 preferred_model=preferred_model,
+                execution_admission=execution_admission,
+                preparation_checkpoint=preparation_checkpoint,
             )
         except SoftReasoningCompositionUnavailable as exc:
             raise ReasoningActivationError(
@@ -337,12 +375,47 @@ class RuntimeReasoningBridge:
             ) from exc
 
     @staticmethod
-    def _validate_soft_budget(
-        composed: ComposedSoftReasoning,
+    def _require_soft_admission(
         plan: AuthorizedExecutionPlan,
+        context: ChatExecutionContext | None,
+        meter: ExecutionBudgetMeter | None,
+    ) -> GovernedToolModelAdmission:
+        from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
+        from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+        if (
+            not isinstance(context, ChatExecutionContext)
+            or not isinstance(meter, ExecutionBudgetMeter)
+            or context.original_runtime_model_plan(meter) is not plan
+        ):
+            raise ReasoningActivationError(
+                "soft_reasoning_original_admission_required",
+                "Soft Reasoning requires the original authenticated runtime admission",
+            )
+        admission = GovernedToolModelAdmission(
+            plan=plan, meter=meter, user_id=context.user_id,
+            tenant_id=context.tenant_id, session_id=context.session_id,
+            policy_decision_id=plan.policy_decision_id, request_id=context.request_id,
+            correlation_id=context.correlation_id, authenticated_context=context,
+        )
+        try:
+            admission._require_scope()
+        except PermissionError as exc:
+            raise ReasoningActivationError(
+                "soft_reasoning_original_admission_required",
+                "Soft Reasoning requires the original authenticated runtime admission",
+            ) from exc
+        return admission
+
+    @staticmethod
+    def _validate_soft_budget(
+        required: int,
+        admission: GovernedToolModelAdmission,
     ) -> None:
-        available = int(plan.budget.max_model_calls)
-        required = int(composed.maximum_total_model_calls)
+        meter = admission.meter
+        available = 0 if meter.exhausted else max(
+            0, admission.plan.budget.max_model_calls - meter.model_calls,
+        )
         if available < required:
             raise ReasoningActivationError(
                 "soft_reasoning_model_budget_insufficient",

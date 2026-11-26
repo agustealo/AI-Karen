@@ -1,6 +1,12 @@
 from __future__ import annotations
+import math
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Literal
+from typing import TYPE_CHECKING, Any, Awaitable, Callable, Literal
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
+
+from .errors import ExecutionDeadlineExceeded, PrivateEvidenceAuthorizationError
 
 @dataclass(slots=True)
 class ExpressionTask:
@@ -38,6 +44,54 @@ class ExpressionTask:
     # Tracked by the canonical gateway to prohibit switching models after a
     # partial response has already been made visible to the consumer.
     stream_started: bool = field(default=False, repr=False, compare=False)
+    # Host-only restriction for private evidence; never derived from client metadata.
+    local_only: bool = False
+    # Host-only live authorization; never populated from request metadata.
+    authorize_private_evidence_attempt: Callable[[], Awaitable[bool]] | None = field(
+        default=None, repr=False, compare=False,
+    )
+
+    # Trusted runtime meter callback, never supplied by client metadata.
+    remaining_execution_ms: Callable[[], Awaitable[float]] | None = field(
+        default=None, repr=False, compare=False,
+    )
+
+    # Workflow synthesis carries the original in-process grant. The canonical
+    # endpoint adapter reserves actual transport attempts, not engine guesses.
+    execution_admission: GovernedToolModelAdmission | None = field(
+        default=None, repr=False, compare=False,
+    )
+
+    async def require_remaining_execution_ms(self) -> float:
+        """Read the original execution deadline without renewing its budget."""
+        if self.remaining_execution_ms is None:
+            raise ExecutionDeadlineExceeded("execution_deadline_authority_unavailable")
+        try:
+            remaining = await self.remaining_execution_ms()
+            if (
+                type(remaining) not in (int, float)
+                or not math.isfinite(remaining)
+                or remaining <= 0
+            ):
+                raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+        except ExecutionDeadlineExceeded:
+            raise
+        except Exception:
+            raise ExecutionDeadlineExceeded("execution_deadline_authority_unavailable") from None
+        return float(remaining)
+
+    async def require_private_evidence_authorization(self) -> None:
+        if not self.local_only:
+            return
+        try:
+            authorized = (
+                await self.authorize_private_evidence_attempt()
+                if self.authorize_private_evidence_attempt is not None else False
+            )
+        except Exception:
+            raise PrivateEvidenceAuthorizationError("attachment_session_denied") from None
+        if authorized is not True:
+            raise PrivateEvidenceAuthorizationError("attachment_session_denied")
 
 @dataclass(slots=True)
 class ExpressionResult:

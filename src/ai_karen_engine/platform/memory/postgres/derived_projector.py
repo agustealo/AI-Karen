@@ -72,6 +72,7 @@ class PostgresDerivedMemoryProjector:
         source_type: str,
         source_ref: str | None,
         metadata: dict[str, Any] | None = None,
+        project_episode_state: bool = False,
     ) -> dict[str, bool]:
         tenant_uuid = uuid.UUID(str(tenant_id))
         user_uuid = uuid.UUID(str(user_id))
@@ -94,6 +95,7 @@ class PostgresDerivedMemoryProjector:
 
         event_data = {
             "event_id": str(event_uuid),
+            "project_episode_state": project_episode_state is True,
             "tenant_id": str(tenant_uuid),
             "user_id": str(user_uuid),
             "conversation_id": merged.get("conversation_id"),

@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+
+import httpx
+import pytest
+
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
     BUILTIN_PROVIDER_ENDPOINTS,
     ProviderEndpoint,
@@ -7,6 +12,15 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 )
 from ai_karen_engine.core.model_runtime.provider_execution import _resolve_base_url
 from ai_karen_engine.core.model_runtime.runtime_engine import RuntimeEngine
+
+
+def _mock_client(monkeypatch, handler) -> None:
+    original = httpx.AsyncClient
+    def client(**kwargs):
+        assert kwargs["trust_env"] is False
+        assert kwargs["follow_redirects"] is False
+        return original(transport=httpx.MockTransport(handler), **kwargs)
+    monkeypatch.setattr(httpx, "AsyncClient", client)
 
 
 def _endpoint(provider_id: str) -> ProviderEndpoint:
@@ -59,9 +73,9 @@ def test_explicit_ollama_override_path_remains_authoritative(monkeypatch) -> Non
     assert _resolve_base_url(endpoint) == "http://ollama:11434/custom-openai/v1"
 
 
-def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
+@pytest.mark.asyncio
+async def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
     import json
-    from contextlib import contextmanager
 
     from ai_karen_engine.core.model_runtime import provider_execution
 
@@ -76,12 +90,11 @@ def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
                 "usage": {"completion_tokens": 32},
             }).encode()
 
-    @contextmanager
-    def fake_urlopen(request, timeout):
-        yield Response()
+    def fake_urlopen(request):
+        return httpx.Response(200, content=Response().read())
 
-    monkeypatch.setattr(provider_execution, "_open_provider_request", fake_urlopen)
-    result = provider_execution._sync_openai_compatible_request(
+    _mock_client(monkeypatch, fake_urlopen)
+    result = await provider_execution.execute_provider_endpoint(
         _endpoint("ollama-local"),
         messages=[{"role": "user", "content": "Explain"}],
         model="qwen3:4b",
@@ -94,13 +107,13 @@ def test_openai_compatible_executor_retains_finish_reason(monkeypatch) -> None:
 
 
 
-def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
+@pytest.mark.asyncio
+async def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
     monkeypatch,
 ) -> None:
     import json
     import sys
     import types
-    from contextlib import contextmanager
     from types import SimpleNamespace
 
     import pytest
@@ -162,13 +175,12 @@ def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
                 "model": "Hermes-4.3-36B",
             }).encode()
 
-    @contextmanager
-    def fake_urlopen(request, timeout):
+    def fake_urlopen(request):
         requests.append(request)
-        yield Response()
+        return httpx.Response(200, content=Response().read())
 
-    monkeypatch.setattr(provider_execution, "_open_provider_request", fake_urlopen)
-    result = provider_execution._sync_openai_compatible_request(
+    _mock_client(monkeypatch, fake_urlopen)
+    result = await provider_execution.execute_provider_endpoint(
         endpoint,
         messages=[{"role": "user", "content": "Hello Hermes"}],
         model="Hermes-4.3-36B",
@@ -178,9 +190,9 @@ def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
     assert result.text == "Real adapter response"
     assert result.provider_id == "nous"
     assert result.model == "Hermes-4.3-36B"
-    assert requests[0].full_url == "https://inference-api.nousresearch.com/v1/chat/completions"
-    assert requests[0].get_header("Authorization") == "Bearer credential-from-settings"
-    payload = json.loads(requests[0].data)
+    assert str(requests[0].url) == "https://inference-api.nousresearch.com/v1/chat/completions"
+    assert requests[0].headers.get("Authorization") == "Bearer credential-from-settings"
+    payload = json.loads(requests[0].content)
     assert payload["model"] == "Hermes-4.3-36B"
     assert payload["messages"] == [{"role": "user", "content": "Hello Hermes"}]
     assert "NOUS_API_KEY" not in __import__("os").environ
@@ -190,7 +202,7 @@ def test_nous_chat_uses_settings_stored_key_without_environment_mutation(
         provider_execution.ProviderExecutionError,
         match="provider_credential_unavailable",
     ):
-        provider_execution._sync_openai_compatible_request(
+        await provider_execution.execute_provider_endpoint(
             endpoint,
             messages=[{"role": "user", "content": "Hello Hermes"}],
             model="Hermes-4.3-36B",
@@ -208,5 +220,218 @@ def test_streaming_uses_same_governed_credential_resolver_as_sync_transport() ->
         / "src/ai_karen_engine/core/model_runtime/provider_execution.py"
     ).read_text(encoding="utf-8")
     assert "personal_key if personal_key is not None else _resolve_api_key(endpoint)" in source
-    assert source.count("provider_credential_unavailable") == 2
+    assert source.count("provider_credential_unavailable") == 1
     assert "get_provider_config_manager()" in source
+
+
+@pytest.mark.asyncio
+async def test_private_attachment_http_payload_preserves_complete_ordered_evidence(monkeypatch):
+    import hashlib
+    import json
+
+    from ai_karen_engine.core.model_runtime import provider_execution
+    from ai_karen_engine.core.runtime.prompt.prompt_assembler import PromptAssembler
+
+    bodies = ["First source: café \\ path", "Second source: 日本語\nsecond line"]
+    documents = [
+        {"source_id": source, "revision": hashlib.sha256(body.encode()).hexdigest(),
+         "text": body}
+        for source, body in zip(
+            ["aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+             "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"], bodies,
+        )
+    ]
+    messages = PromptAssembler.build_verified_attachment_messages(
+        [{"role": "user", "content": "Compare both documents."}], documents,
+    )
+    seen = []
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+
+    class Response:
+        def read(self):
+            return json.dumps({
+                "model": "qwen3:4b",
+                "choices": [{"message": {"content": "Compared."}, "finish_reason": "stop"}],
+            }).encode()
+
+    def capture(request):
+        assert str(request.url) == "http://127.0.0.1:11434/v1/chat/completions"
+        seen.append(json.loads(request.content))
+        return httpx.Response(200, content=Response().read())
+
+    _mock_client(monkeypatch, capture)
+    result = await provider_execution.execute_provider_endpoint(
+        _endpoint("ollama-local"), messages=messages, model="qwen3:4b",
+        max_tokens=64, temperature=0.1, local_only=True,
+    )
+    assert result.text == "Compared."
+    assert len(seen) == 1
+    assert seen[0]["messages"] == messages
+    assert seen[0]["stream"] is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured", [False, True])
+async def test_cancelled_json_transport_closes_response(monkeypatch, structured):
+    from dataclasses import replace
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    entered = asyncio.Event()
+    closed = asyncio.Event()
+
+    class Paused(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            entered.set()
+            await asyncio.Event().wait()
+            yield b""
+
+        async def aclose(self):
+            closed.set()
+
+    _mock_client(monkeypatch, lambda _: httpx.Response(200, stream=Paused()))
+    endpoint = replace(_endpoint("ollama-local"), capabilities=("chat_completion", "tools"))
+    kwargs = dict(messages=[], model="test-model", max_tokens=8, temperature=0.0)
+    if structured:
+        invoke = provider_execution.execute_structured_provider_endpoint(
+            endpoint, tools=[], **kwargs,
+        )
+    else:
+        invoke = provider_execution.execute_provider_endpoint(endpoint, **kwargs)
+    task = asyncio.create_task(invoke)
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=2)
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status,body,error", [
+    (302, b"redirect", "provider_http_error:.*:302"),
+    (200, b"not JSON", "provider_invalid_response_object"),
+    (200, b"{}", None),
+    (200, b"x" * (2 * 1024 * 1024 + 1), "provider_response_too_large"),
+])
+async def test_async_json_wire_rejects_untrusted_envelopes(monkeypatch, status, body, error):
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    _mock_client(monkeypatch, lambda _: httpx.Response(status, content=body))
+    endpoint = _endpoint("ollama-local")
+    base_url = provider_execution._resolve_base_url(endpoint)
+    if error:
+        with pytest.raises(provider_execution.ProviderExecutionError, match=error):
+            await provider_execution._post_chat_completions(endpoint, base_url, {})
+    else:
+        assert await provider_execution._post_chat_completions(endpoint, base_url, {}) == {}
+
+
+@pytest.mark.asyncio
+async def test_async_json_transport_has_total_wire_deadline(monkeypatch):
+    from dataclasses import replace
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    closed = asyncio.Event()
+
+    class Trickle(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            while True:
+                yield b"x"
+                await asyncio.sleep(0.01)
+
+        async def aclose(self):
+            closed.set()
+
+    _mock_client(monkeypatch, lambda _: httpx.Response(200, stream=Trickle()))
+    endpoint = replace(_endpoint("ollama-local"), timeout_seconds=0.08)
+    with pytest.raises(provider_execution.ProviderExecutionError, match="provider_deadline_exceeded"):
+        await asyncio.wait_for(
+            provider_execution.execute_provider_endpoint(
+                endpoint, messages=[], model="test-model", max_tokens=8, temperature=0,
+            ),
+            timeout=2,
+        )
+    assert closed.is_set()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("structured", [False, True])
+@pytest.mark.parametrize("case,expected", [
+    ("success", "success"), ("server_error", "http_server_error"),
+    ("bad_json", "invalid_provider_response"), ("connect_error", "connection_failure"),
+    ("unauthorized", None), ("rate_limit", None), ("redirect", None),
+    ("pool_timeout", None), ("credential_missing", None), ("tenant_scoped", None),
+    ("registry_drift", None),
+])
+async def test_canonical_json_transport_owns_shared_health_once(
+    monkeypatch, structured, case, expected,
+):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from ai_karen_engine.core.model_runtime import provider_execution, provider_health_monitor
+
+    endpoint = replace(_endpoint("ollama-local"), capabilities=("chat_completion", "tools"))
+    if case == "credential_missing":
+        endpoint = replace(endpoint, api_key_env="KAREN_TEST_MISSING_HTTP_KEY")
+        monkeypatch.delenv("KAREN_TEST_MISSING_HTTP_KEY", raising=False)
+    if case == "tenant_scoped":
+        endpoint = replace(endpoint, tenant_scoped=True)
+    registered = replace(endpoint, base_url="http://localhost:9999/v1") if case == "registry_drift" else endpoint
+    monitor = provider_health_monitor.ProviderHealthMonitor(
+        registry=SimpleNamespace(get_provider_endpoint=lambda _: registered),
+    )
+    observations = []
+    original = monitor.update_provider_health
+
+    def observe(*args, **kwargs):
+        observations.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(monitor, "update_provider_health", observe)
+    monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
+    from ai_karen_engine.platform.observability.metrics import MetricsCollector
+    from ai_karen_engine.platform.observability import metrics
+    collector = MetricsCollector()
+    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: collector)
+
+    wire = []
+    def respond(request):
+        wire.append(request)
+        if case == "connect_error":
+            raise httpx.ConnectError("secret upstream detail", request=request)
+        if case == "pool_timeout":
+            raise httpx.PoolTimeout("private local detail", request=request)
+        if case == "bad_json":
+            return httpx.Response(200, content=b"not-json")
+        code = {"server_error": 503, "unauthorized": 401, "rate_limit": 429, "redirect": 302}.get(case, 200)
+        return httpx.Response(code, json={
+            "model": "test-model",
+            "choices": [{"message": {"role": "assistant", "content": "Verified output"}}],
+        })
+
+    _mock_client(monkeypatch, respond)
+    kwargs = dict(messages=[], model="test-model", max_tokens=16, temperature=0.0)
+    call = (
+        provider_execution.execute_structured_provider_endpoint(endpoint, tools=[], **kwargs)
+        if structured else provider_execution.execute_provider_endpoint(endpoint, **kwargs)
+    )
+    if case in {"success", "tenant_scoped", "registry_drift"}:
+        await call
+    else:
+        with pytest.raises(provider_execution.ProviderExecutionError):
+            await call
+    assert len(wire) == (0 if case == "credential_missing" else 1)
+    assert len(observations) == int(expected is not None)
+    snapshot = collector.snapshot()
+    counters = snapshot["counters"]
+    if expected is None:
+        assert "kari_provider_http_observations_total" not in counters
+        assert monitor.get_provider_health(endpoint.provider_id).health_status is provider_health_monitor.HealthStatus.UNKNOWN
+    else:
+        _, update = observations[0]
+        assert update["is_healthy"] is (expected == "success")
+        assert update["error_code"] == (None if expected == "success" else expected)
+        key = ("structured" if structured else "text", expected)
+        assert counters["kari_provider_http_observations_total"]["values"] == {key: 1.0}
+        assert snapshot["histograms"]["kari_provider_http_observation_duration_seconds"]["values"][key].count == 1

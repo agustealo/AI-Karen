@@ -9,10 +9,11 @@ parallel model instance or bypass ProviderRegistryService.
 
 import asyncio
 import inspect
+import math
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Dict, Iterable, Iterator, List, Mapping, Optional
+from typing import Any, AsyncIterator, Callable, Dict, Iterable, Iterator, List, Mapping, Optional
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
@@ -27,7 +28,9 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
     ProviderNotAvailable,
 )
 from ai_karen_engine.core.model_runtime.provider_execution import (
+    ProviderExecutionError,
     ProviderExecutionResult,
+    execute_provider_endpoint,
     provider_endpoint_requires_external_permission,
 )
 from ai_karen_engine.core.model_runtime.provider_endpoint import (
@@ -36,6 +39,7 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 )
 from ai_karen_engine.core.model_runtime.provider_health_monitor import (
     HealthStatus,
+    NativeExecutionObservation,
     ProviderHealthMonitor,
 )
 from ai_karen_engine.core.model_runtime.provider_registry_service import (
@@ -82,7 +86,7 @@ class ModelManager:
     ) -> None:
         self.registry = registry or get_provider_registry_service()
         self.selector = selector
-        self.health_monitor = health_monitor or ProviderHealthMonitor(registry=self.registry)
+        self.health_monitor = health_monitor or self.registry.health_monitor
         self.fallback_manager = fallback_manager or get_resilience_fallback_manager()
         self.embedding_manager = embedding_manager or EmbeddingManager()
         self.circuit_breakers: Dict[str, CircuitBreaker] = {}
@@ -304,7 +308,13 @@ class ModelManager:
         if not self._provider_is_healthy(selection.provider_id):
             raise ProviderNotAvailable(f"Provider unhealthy: {selection.provider_id}")
 
-        breaker = self._get_breaker(selection.provider_id)
+        # Compatibility calls do not own canonical transport evidence. Keep
+        # their resilience penalties separate from admitted provider calls.
+        breaker_key = (
+            selection.provider_id if execution_admission is not None
+            else f"compatibility.{selection.provider_id}"
+        )
+        breaker = self._get_breaker(breaker_key)
         if not breaker.allow_request():
             raise ProviderNotAvailable(f"Circuit breaker open: {selection.provider_id}")
 
@@ -314,17 +324,70 @@ class ModelManager:
             endpoint = self._resolve_endpoint(selection.provider_id)
             if endpoint is None:
                 raise ProviderNotAvailable("governed_model_endpoint_unavailable")
-            if endpoint.endpoint_type != selection.endpoint_type:
-                raise ProviderNotAvailable("governed_model_selection_registry_drift")
-            # Unscoped compatibility client must remain local-only. Authorized
-            # external execution uses the separately governed canonical
-            # provider executor, never an HTTP allow flag on this raw shim.
+            # Preserve the existing local-only Core inference boundary. Moving
+            # to the canonical executor must not silently enable cloud access.
+            if endpoint.endpoint_type == ProviderEndpointType.OPENAI_COMPATIBLE:
+                if provider_endpoint_requires_external_permission(endpoint):
+                    raise ProviderNotAvailable("governed_external_compatibility_requires_canonical_transport")
             if (
-                provider_endpoint_requires_external_permission(endpoint)
-                and endpoint.endpoint_type == ProviderEndpointType.OPENAI_COMPATIBLE
+                not endpoint.enabled
+                or endpoint.provider_id != selection.provider_id
+                or endpoint.endpoint_type != selection.endpoint_type
+                or endpoint.base_url != selection.base_url
+                or endpoint.default_model != selection.model
+                or (
+                    selection.runtime_engine is not None
+                    and endpoint.runtime_engine.value != selection.runtime_engine
+                )
             ):
-                raise ProviderNotAvailable("governed_external_compatibility_requires_canonical_transport")
-            await execution_admission.reserve_transport(endpoint, model=selection.model)
+                raise ProviderNotAvailable("governed_model_selection_registry_drift")
+            if endpoint.endpoint_type == ProviderEndpointType.OPENAI_COMPATIBLE:
+                # The compatibility iterator owns no admitted streaming
+                # lifetime. Reject rather than hand out an unbounded iterator.
+                if stream:
+                    raise ProviderNotAvailable("governed_model_stream_unsupported")
+                if set(kwargs) - {"model", "max_tokens", "temperature"}:
+                    raise ProviderNotAvailable("governed_model_execution_options_unsupported")
+                max_tokens = kwargs.get("max_tokens", 512)
+                temperature = kwargs.get("temperature", 0.7)
+                if (
+                    type(max_tokens) is not int
+                    or max_tokens <= 0
+                    or type(temperature) not in (int, float)
+                    or not math.isfinite(temperature)
+                    or temperature < 0
+                ):
+                    raise ProviderNotAvailable("governed_model_execution_options_invalid")
+                if not messages or any(
+                    not isinstance(message, dict)
+                    or set(message) != {"role", "content"}
+                    or message.get("role") not in ("system", "user", "assistant")
+                    or not isinstance(message.get("content"), str)
+                    for message in messages
+                ):
+                    raise ProviderNotAvailable("governed_model_messages_invalid")
+                await execution_admission.reserve_transport(endpoint, model=selection.model)
+                return await self._execute_admitted_http(
+                    endpoint, execution_admission, messages=messages,
+                    model=selection.model, max_tokens=max_tokens,
+                    temperature=float(temperature), return_receipt=return_receipt,
+                    breaker=breaker,
+                )
+            if endpoint.endpoint_type == ProviderEndpointType.BUILTIN_TRANSFORMERS:
+                if stream:
+                    raise ProviderNotAvailable("governed_model_stream_unsupported")
+                if {"required_model", "before_generate"} & kwargs.keys():
+                    raise ProviderNotAvailable("governed_model_execution_options_unsupported")
+                target = self.resolve_native_target(selection)
+                # Check policy against the concrete target, not an auto alias.
+                await execution_admission.reserve_native_generation(endpoint, model=target)
+                return await self._execute_admitted_native(
+                    selection, execution_admission, endpoint=endpoint, prompt=prompt, target=target,
+                    return_receipt=return_receipt, breaker=breaker, options=kwargs,
+                )
+            # No other endpoint has an owned, admitted executor here. Never
+            # fall through to a compatibility runtime after charging quota.
+            raise ProviderNotAvailable("governed_model_execution_protocol_unsupported")
         provider = self.resolve_runtime(selection)
 
         start = time.perf_counter()
@@ -393,10 +456,132 @@ class ModelManager:
                 selection.provider_id,
                 False,
                 start,
-                error_message=str(exc),
+                error_message=type(exc).__name__,
             )
             breaker.record_failure()
-            logger.exception("Primary provider %s failed", selection.provider_id)
+            logger.warning(
+                "compatibility_model_call_failed",
+                extra={"provider_id": selection.provider_id, "error_type": type(exc).__name__},
+            )
+            raise
+
+    async def _execute_admitted_http(
+        self,
+        endpoint: ProviderEndpoint,
+        admission: GovernedToolModelAdmission,
+        *,
+        messages: List[Dict[str, Any]],
+        model: str | None,
+        max_tokens: int,
+        temperature: float,
+        return_receipt: bool,
+        breaker: CircuitBreaker,
+    ) -> ProviderExecutionResult | str:
+        """Use the canonical async executor after exactly one reservation."""
+        try:
+            async with admission.admitted_execution_deadline():
+                result = await execute_provider_endpoint(
+                    endpoint, messages=messages, model=model,
+                    max_tokens=max_tokens, temperature=temperature, local_only=True,
+                )
+                if (
+                    not isinstance(result, ProviderExecutionResult)
+                    or result.provider_id != endpoint.provider_id
+                    or result.runtime_engine != endpoint.runtime_engine.value
+                    or not isinstance(result.model, str)
+                    or not result.model.strip()
+                    or result.model.strip().lower() == "auto"
+                    or (model not in (None, "", "auto") and result.model != model)
+                    or not isinstance(result.text, str)
+                    or not result.text.strip()
+                ):
+                    raise ProviderNotAvailable("inference_execution_provenance_unavailable")
+            # The canonical HTTP transport has already observed shared health.
+            if endpoint.tenant_scoped is False:
+                breaker.record_success()
+            return result if return_receipt else result.text
+        except Exception as exc:
+            if isinstance(exc, ProviderExecutionError) and exc.shared_health_failure_observed:
+                breaker.record_failure()
+            logger.warning(
+                "governed_model_http_failed",
+                extra={"provider_id": endpoint.provider_id, "error_type": type(exc).__name__},
+            )
+            raise
+
+    @staticmethod
+    def resolve_native_target(selection: RuntimeSelection) -> str:
+        """Resolve the concrete local model once, before policy validation."""
+        target = selection.model
+        if target in (None, "", "auto"):
+            from ai_karen_engine.config.config_manager import get_default_model
+
+            target = get_default_model("builtin_transformers")
+        if not isinstance(target, str) or not target.strip() or target.strip().lower() == "auto":
+            raise ProviderNotAvailable("native_authorized_model_unavailable")
+        return target
+
+    async def _execute_admitted_native(
+        self,
+        selection: RuntimeSelection,
+        admission: GovernedToolModelAdmission,
+        *,
+        endpoint: ProviderEndpoint,
+        prompt: str,
+        target: str,
+        return_receipt: bool,
+        breaker: CircuitBreaker,
+        options: Dict[str, Any],
+    ) -> ProviderExecutionResult | str:
+        """Own native generation and verify its observed model before success."""
+        from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+            TransformersRuntime,
+        )
+
+        observation = NativeExecutionObservation("generation", endpoint=endpoint)
+        try:
+            async with admission.admitted_execution_deadline():
+                provider = self.resolve_runtime(selection)
+                if not isinstance(provider, TransformersRuntime):
+                    raise ProviderNotAvailable("model_execution_provenance_unsupported")
+
+                def generate_selected(checkpoint: Callable[[], None]) -> tuple[str, str]:
+                    checkpoint()
+                    with observation.bind():
+                        text, observed = provider.generate_text_with_model(
+                            prompt, required_model=target, before_generate=checkpoint, **options,
+                        )
+                    if not isinstance(observed, str) or os.path.realpath(target) != os.path.realpath(observed):
+                        raise ProviderNotAvailable("executed_model_registry_identity_drift")
+                    return text, observed
+
+                response, observed_model = await admission.run_admitted_blocking(generate_selected)
+                if (
+                    not isinstance(observed_model, str)
+                    or not observed_model.strip()
+                    or observed_model.strip().lower() == "auto"
+                ):
+                    raise ProviderNotAvailable("native_execution_model_unobserved")
+                if (
+                    selection.model not in (None, "", "auto")
+                    and os.path.realpath(selection.model) != os.path.realpath(observed_model)
+                ):
+                    raise ProviderNotAvailable("executed_model_registry_identity_drift")
+                if not isinstance(response, str) or not response.strip():
+                    raise ProviderNotAvailable("native_execution_empty_response")
+                receipt = ProviderExecutionResult(
+                    text=response, model=observed_model,
+                    provider_id=selection.provider_id, runtime_engine=selection.runtime_engine,
+                )
+            if observation.finish("success"):
+                breaker.record_success()
+            return receipt if return_receipt else receipt.text
+        except (Exception, asyncio.CancelledError) as exc:
+            observation.finish_exception(exc)
+            logger.warning(
+                "governed_model_native_failed",
+                extra={"provider_id": selection.provider_id, "error_type": type(exc).__name__},
+            )
             raise
 
     async def generate_embedding(
@@ -427,7 +612,22 @@ class ModelManager:
         await execution_admission.reserve_local_embedding(
             model=self.embedding_manager.model_name,
         )
-        return await asyncio.to_thread(self.embedding_manager.embed_authoritative, text)
+        observation = NativeExecutionObservation("embedding")
+
+        def encode(checkpoint: Callable[[], None]) -> List[float]:
+            checkpoint()
+            with observation.bind():
+                vector = self.embedding_manager.embed_authoritative(text)
+            checkpoint()
+            return vector
+
+        try:
+            vector = await execution_admission.run_admitted_blocking(encode)
+        except (Exception, asyncio.CancelledError) as exc:
+            observation.finish_exception(exc)
+            raise
+        observation.finish("success")
+        return vector
 
     @classmethod
     async def invoke_provider(cls, provider: Any, prompt: str, **kwargs: Any) -> Any:
@@ -555,10 +755,10 @@ class ModelManager:
 
     def _provider_is_healthy(self, provider_id: str) -> bool:
         health = self.health_monitor.get_provider_health(provider_id)
-        if health is None or health.status == HealthStatus.UNKNOWN:
+        if health is None or health.health_status == HealthStatus.UNKNOWN:
             status = self.registry.get_provider_status(provider_id)
             return bool(status and status.is_available)
-        return health.status in {HealthStatus.HEALTHY, HealthStatus.DEGRADED}
+        return health.health_status in {HealthStatus.HEALTHY, HealthStatus.DEGRADED}
 
     def _get_breaker(self, provider_id: str) -> CircuitBreaker:
         breaker_registry = get_breaker_registry()
@@ -574,13 +774,24 @@ class ModelManager:
         *,
         error_message: Optional[str] = None,
     ) -> None:
+        """Compatibility-call diagnostic; never a shared health observation.
+
+        A returned value or raised exception from an ungoverned adapter does
+        not establish actual transport or native execution. Retain the
+        existing private helper contract until the compatibility caller audit.
+        Do not persist its legacy error_message argument: callers may supply
+        raw upstream text.
+        """
         elapsed = time.perf_counter() - start_time
         try:
-            self.health_monitor.record_provider_interaction(
-                provider_name=provider_id,
-                success=success,
-                response_time=elapsed,
-                error_message=error_message,
+            logger.info(
+                "compatibility_model_call_resolved",
+                extra={
+                    "provider_id": provider_id,
+                    "outcome": "returned" if success else "raised",
+                    "duration_ms": elapsed * 1000.0,
+                    "execution_layer": "compatibility",
+                },
             )
         except Exception:
             pass

@@ -165,6 +165,11 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements/ci/chat.txt
+      - name: Prove atomic ordered episode writes on live Redis
+        env:
+          KAREN_TEST_REAL_REDIS_GRAPH: "1"
+        run: pytest tests/memory/test_redis_stm_adapter.py tests/memory/test_stm_closure_1b.py -q -rs
+
       - name: Initialize isolated memory ledger tables
         run: |
           python - <<'PY'

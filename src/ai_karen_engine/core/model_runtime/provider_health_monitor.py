@@ -15,13 +15,19 @@ Ownership:
 from __future__ import annotations
 
 import logging
+import math
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set
 from dataclasses import dataclass, field
 from enum import Enum
 
 from ai_karen_engine.core.logging import get_logger
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
 
 logger = get_logger(__name__)
 
@@ -58,6 +64,154 @@ class ProviderHealthInfo:
     error_type: Optional[str] = None
 
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# This is worker-local evidence, not a grant, reservation, or model registry.
+_native_observation: ContextVar[NativeExecutionObservation | None] = ContextVar(
+    "native_execution_observation", default=None,
+)
+
+
+@dataclass(slots=True)
+class NativeExecutionObservation:
+    """One governed native computation, published only by the owning coroutine."""
+
+    operation: str
+    endpoint: ProviderEndpoint | None = None
+    started: float | None = None
+    compute_calls: int = 0
+    compute_returned: bool = False
+    finished: bool = False
+    soft_attempt: bool = False
+    sealed_at: float | None = None
+
+    @contextmanager
+    def bind(self) -> Iterator[None]:
+        token = _native_observation.set(self)
+        try:
+            yield
+        finally:
+            _native_observation.reset(token)
+
+    def finish(self, outcome: str) -> bool:
+        """Report a bounded outcome after the admitted worker has retired.
+
+        Model-specific failures are not evidence that every model on a shared
+        native provider is unhealthy. Embeddings do not certify chat health.
+        """
+        if self.finished or self.started is None:
+            return False
+        self.finished = True
+        if self.compute_calls != 1 or (outcome == "success" and not self.compute_returned):
+            outcome = "unverified_result"
+        elapsed = (
+            self.sealed_at if self.sealed_at is not None else time.perf_counter()
+        ) - self.started
+        try:
+            return get_health_monitor().record_native_execution(
+                self.endpoint, operation=self.operation,
+                outcome=outcome, response_time=elapsed,
+            )
+        except Exception:
+            return False
+
+    def finish_exception(self, exc: BaseException) -> None:
+        import asyncio
+        from ai_karen_engine.core.model_runtime.governed_model_admission import (
+            ModelAdmissionDeadlineExceeded,
+        )
+        from ai_karen_engine.core.model_runtime.provider_contracts import (
+            NativeRetirementUnverified,
+        )
+
+        if isinstance(exc, NativeRetirementUnverified):
+            outcome = "retirement_unverified"
+        elif isinstance(exc, asyncio.CancelledError):
+            outcome = "cancelled"
+        elif isinstance(exc, ModelAdmissionDeadlineExceeded):
+            outcome = "deadline_exceeded"
+        elif self.compute_returned:
+            outcome = "unverified_result"
+        else:
+            outcome = "execution_failed"
+        self.finish(outcome)
+
+
+@contextmanager
+def observe_native_compute(operation: str) -> Iterator[None]:
+    """Mark the actual library invocation inside the already-owned worker."""
+    observation = _native_observation.get()
+    if observation is None:
+        yield
+        return
+    if observation.soft_attempt:
+        # The batch verifier reuses the canonical pipeline generation owner.
+        # Relabel only within the admitted exploration attempt, never globally.
+        role = {
+            "generation": "soft_verifier",
+            "soft_reference": "soft_reference",
+            "soft_guided": "soft_guided",
+        }.get(operation)
+        if role is None:
+            yield
+            return
+        if observation.compute_calls == 0:
+            observation.operation = role
+    elif observation.operation != operation:
+        yield
+        return
+    observation.compute_calls += 1
+    if observation.started is None:
+        observation.started = time.perf_counter()
+    yield
+    observation.compute_returned = True
+
+
+class NativeExecutionSequence:
+    """Collect bounded per-attempt evidence inside one owned exploration worker.
+
+    The existing exploration budget bounds the list. No telemetry is emitted
+    inside the worker or while the native model lock is held. An attempt scope
+    must enclose the canonical borrow/device fence, not just the library call.
+    """
+
+    def __init__(self) -> None:
+        self._attempts: list[tuple[NativeExecutionObservation, BaseException | None]] = []
+        self._finished = False
+
+    @contextmanager
+    def attempt(self) -> Iterator[None]:
+        observation = NativeExecutionObservation("soft_attempt", soft_attempt=True)
+        failure: BaseException | None = None
+        try:
+            with observation.bind():
+                yield
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            if observation.started is not None:
+                observation.sealed_at = time.perf_counter()
+                self._attempts.append((observation, failure))
+
+    def finish(self, failure: BaseException | None = None) -> None:
+        """Publish only after the sequence owner resolves its deadline/retirement."""
+        if self._finished:
+            return
+        self._finished = True
+        for observation, attempt_failure in self._attempts:
+            if attempt_failure is not None:
+                # The owning coroutine has the authoritative cancellation or
+                # deadline result, including a failed retirement fence.
+                observation.finish_exception(failure or attempt_failure)
+            elif failure is not None:
+                # The attempt returned, but the overall authorized sequence
+                # did not complete. Do not promote intermediate work into
+                # a successful admitted outcome.
+                observation.finish("sequence_aborted")
+            else:
+                observation.finish("success")
+        self._attempts.clear()
 
 
 class ProviderHealthMonitor:
@@ -143,7 +297,9 @@ class ProviderHealthMonitor:
                 last_checked_at=now,
             )
 
-        prev_status = health_info.health_status
+        # An expired snapshot is UNKNOWN to readers. A fresh observation
+        # must not silently suppress a transition from that visible state.
+        prev_status = self.get_provider_health(provider_key).health_status
 
         if is_healthy:
             health_info.health_status = HealthStatus.HEALTHY
@@ -182,11 +338,107 @@ class ProviderHealthMonitor:
 
         self._health_cache[provider_key] = health_info
 
-        self._emit_transition_if_changed(provider_id, prev_status, health_info.health_status)
+        self._emit_transition_if_changed(provider_key, prev_status, health_info.health_status)
 
         logger.debug(
             "Updated health for %s: %s", provider_id, health_info.health_status.value
         )
+
+    def record_shared_http_execution(
+        self, endpoint: ProviderEndpoint, *, transport: str,
+        outcome: str, response_time: float,
+    ) -> bool:
+        """Accept only bounded observations for the still-registered shared endpoint.
+
+        Personal/tenant-specific credentials and endpoints must not change the
+        global availability of a provider alias. No request, tenant, model,
+        URL or error body becomes a metrics label.
+        """
+        if (
+            endpoint.tenant_scoped is not False
+            or transport not in {"text", "structured", "sse"}
+            or outcome not in {
+                "success", "http_server_error", "connection_failure",
+                "invalid_provider_response",
+            }
+            or not math.isfinite(response_time)
+            or response_time < 0
+            or self._registry is None
+            or self._registry.get_provider_endpoint(endpoint.provider_id) != endpoint
+        ):
+            return False
+        self.update_provider_health(
+            endpoint.provider_id, is_healthy=outcome == "success",
+            response_time=response_time,
+            error_code=None if outcome == "success" else outcome,
+        )
+        try:
+            from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
+            collector = get_metrics_collector()
+            labels = {"transport": transport, "outcome": outcome}
+            collector.counter(
+                "kari_provider_http_observations_total",
+                "Classified terminal shared provider HTTP observations",
+                ["transport", "outcome"],
+            ).labels(**labels).inc()
+            collector.histogram(
+                "kari_provider_http_observation_duration_seconds",
+                "Elapsed client handoff to classified HTTP outcome",
+                ["transport", "outcome"],
+            ).labels(**labels).observe(response_time)
+        except Exception:
+            # Metrics failure must not reverse an observed health update.
+            pass
+        return True
+
+    def record_native_execution(
+        self, endpoint: ProviderEndpoint | None, *, operation: str,
+        outcome: str, response_time: float,
+    ) -> bool:
+        """Observe native execution without conflating reasoning, encoder and chat health."""
+        if (
+            operation not in {
+                "generation", "embedding", "soft_reference", "soft_guided", "soft_verifier",
+            }
+            or outcome not in {
+                "success", "cancelled", "deadline_exceeded", "execution_failed",
+                "unverified_result", "retirement_unverified", "sequence_aborted",
+            }
+            or not math.isfinite(response_time)
+            or response_time < 0
+        ):
+            return False
+        try:
+            from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
+            collector = get_metrics_collector()
+            labels = {"operation": operation, "outcome": outcome}
+            collector.counter(
+                "kari_native_execution_observations_total",
+                "Governed native execution outcomes after worker retirement",
+                ["operation", "outcome"],
+            ).labels(**labels).inc()
+            collector.histogram(
+                "kari_native_execution_observation_duration_seconds",
+                "Elapsed native invocation to attempt or admitted terminal outcome",
+                ["operation", "outcome"],
+            ).labels(**labels).observe(response_time)
+        except Exception:
+            pass
+        if (
+            operation == "generation" and outcome == "success"
+            and endpoint is not None and endpoint.tenant_scoped is False
+            and self._registry is not None
+            and self._registry.get_provider_endpoint(endpoint.provider_id) == endpoint
+        ):
+            from ai_karen_engine.core.model_runtime.runtime_engine import EndpointProtocol
+            if endpoint.protocol is EndpointProtocol.NATIVE:
+                self.update_provider_health(
+                    endpoint.provider_id, is_healthy=True, response_time=response_time,
+                )
+                return True
+        return False
 
     def _emit_transition_if_changed(
         self,
@@ -198,66 +450,25 @@ class ProviderHealthMonitor:
         if prev_status == new_status:
             return
 
-        transition = (prev_status, new_status)
-        meaningful = {
-            (HealthStatus.HEALTHY, HealthStatus.DEGRADED),
-            (HealthStatus.DEGRADED, HealthStatus.UNHEALTHY),
-            (HealthStatus.UNHEALTHY, HealthStatus.HEALTHY),
-            (HealthStatus.UNKNOWN, HealthStatus.HEALTHY),
-            (HealthStatus.UNKNOWN, HealthStatus.UNHEALTHY),
-            (HealthStatus.DEGRADED, HealthStatus.HEALTHY),
-        }
-        if transition not in meaningful:
-            return
-
-        event_type = None
-        if new_status == HealthStatus.UNHEALTHY:
-            event_type = "provider.unavailable"
-        elif new_status == HealthStatus.DEGRADED:
-            event_type = "provider.health.changed"
-        elif new_status == HealthStatus.HEALTHY:
-            event_type = "provider.available"
-
-        if event_type is None:
-            return
-
         try:
             from ai_karen_engine.core.observability.emitter import get_observability_emitter
             from ai_karen_engine.core.observability.contracts import RuntimeEventType
 
-            emitter = get_observability_emitter()
-            if event_type == "provider.available":
-                emitter.emit(
-                    RuntimeEventType.PROVIDER_ATTEMPT_COMPLETED,
-                    provider=provider_id,
-                    status="recovered",
-                    metadata={
-                        "previous_status": prev_status.value,
-                        "new_status": new_status.value,
-                    },
-                )
-            elif event_type == "provider.unavailable":
-                emitter.emit(
-                    RuntimeEventType.PROVIDER_ATTEMPT_FAILED,
-                    provider=provider_id,
-                    status="unavailable",
-                    metadata={
-                        "previous_status": prev_status.value,
-                        "new_status": new_status.value,
-                    },
-                )
-            else:
-                emitter.emit(
-                    RuntimeEventType.RUNTIME_DEGRADED,
-                    provider=provider_id,
-                    degraded_mode=True,
-                    status=new_status.value,
-                    metadata={
-                        "previous_status": prev_status.value,
-                        "new_status": new_status.value,
-                    },
-                )
+            # Use a health event, never an execution completion/failure or a
+            # request-level degraded-mode signal. Unknown -> degraded is a
+            # real first failed observation, not an event to discard.
+            get_observability_emitter().emit(
+                RuntimeEventType.PROVIDER_HEALTH_CHANGED,
+                provider=provider_id,
+                status=new_status.value,
+                execution_layer="provider_health_monitor",
+                metadata={
+                    "previous_status": prev_status.value,
+                    "new_status": new_status.value,
+                },
+            )
         except Exception:
+            # Observability cannot make provider execution unavailable.
             pass
 
     def record_provider_interaction(

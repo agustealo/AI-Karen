@@ -8,10 +8,7 @@ correlation-aware logging, and circuit breaker support.
 
 import time
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Dict, List
-
-if TYPE_CHECKING:
-    from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
+from typing import Any, Dict, List
 
 from ai_karen_engine.utils.dependency_checks import import_fastapi
 from ai_karen_engine.core.runtime.resilience.connection_health_manager import (
@@ -293,44 +290,6 @@ async def _check_local_model_capabilities() -> Dict[str, int]:
     return capabilities
 
 
-def _collect_remote_provider_outages(
-    system_status: Dict[str, Any],
-    registry_service: "ProviderRegistryService",
-) -> List[str]:
-    """Identify remote providers that are currently unavailable."""
-
-    outages: List[str] = []
-    provider_details = system_status.get("provider_details", {})
-
-    try:
-        base_registry = registry_service.base_registry
-
-        for provider_name, detail in provider_details.items():
-            provider_info = base_registry.get_provider_info(provider_name)
-            if not provider_info:
-                continue
-
-            is_remote = bool(provider_info.requires_api_key)
-            if is_remote and not detail.get("is_available", False):
-                outages.append(provider_name)
-    except Exception:
-        # If we fail to inspect provider metadata, fall back to any providers marked unavailable
-        outages.extend(
-            name
-            for name, detail in provider_details.items()
-            if not detail.get("is_available", False)
-        )
-
-    # Deduplicate while preserving order
-    seen = set()
-    ordered_outages = []
-    for name in outages:
-        if name not in seen:
-            seen.add(name)
-            ordered_outages.append(name)
-    return ordered_outages
-
-
 async def _build_degraded_mode_status() -> Dict[str, Any]:
     """Compute the canonical degraded mode status payload."""
 
@@ -429,10 +388,9 @@ async def _build_degraded_mode_status() -> Dict[str, Any]:
         provider_service = get_provider_registry_service()
         system_status = provider_service.get_system_status()
 
-        # Remote provider outages (missing keys or unhealthy)
-        remote_provider_outages = _collect_remote_provider_outages(
-            system_status, provider_service
-        )
+        # Project observed outages from the canonical registry. Missing
+        # configuration and local availability failures are not remote outages.
+        remote_provider_outages = list(system_status.get("remote_provider_outages", []))
 
         # Check canonical provider registry for working models
         llm_models_available = 0

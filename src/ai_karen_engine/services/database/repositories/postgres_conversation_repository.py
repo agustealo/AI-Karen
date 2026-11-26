@@ -9,12 +9,18 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Dict, List, Optional, Sequence
+from contextlib import nullcontext
+from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+from ai_karen_engine.persistence.repositories.chat_run_repository import (
+    ChatRunLease, draft_revision_from_submission_id,
+)
 from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
 
 from ai_karen_engine.services.database.repositories.conversation_repository import (
@@ -61,6 +67,7 @@ _ALLOWED_TURN_FAILURE_CODES = frozenset({
     "conversation_persona_scope_mismatch",
     "message_idempotency_conflict",
     "incomplete_turn_replay",
+    "attachment_session_denied",
 })
 
 
@@ -176,10 +183,13 @@ class PostgresConversationRepository(ConversationRepository):
         operation="get_conversation", repository="PostgresConversationRepository"
     )
     async def get_conversation(
-        self, conversation_id: str, tenant_id: str
+        self, conversation_id: str, tenant_id: str,
+        *, db_session: Optional[AsyncSession] = None,
     ) -> RepositoryResult[Optional[Conversation]]:
         try:
-            async with await self._session() as session:
+            async with (
+                nullcontext(db_session) if db_session is not None else await self._session()
+            ) as session:
                 result = await session.execute(
                     text(
                         f"""
@@ -576,6 +586,30 @@ class PostgresConversationRepository(ConversationRepository):
             expected_revision=expected_revision, attachment_references=references,
         )
 
+    @staticmethod
+    async def lock_matching_submission_draft(
+        session: AsyncSession, *, tenant_id: str, user_id: str,
+        conversation_id: str, revision: int, submitted_text: Optional[str],
+    ) -> bool:
+        """Lock the exact text-only draft in the caller's authenticated transaction."""
+        result = await session.execute(text("""
+            SELECT draft_text FROM public.conversation_composer_drafts
+            WHERE tenant_id = CAST(:tenant AS uuid)
+              AND user_id = CAST(:owner AS uuid)
+              AND conversation_id = CAST(:conversation AS uuid)
+              AND revision = :revision
+              AND attachment_references = '[]'::jsonb
+            FOR UPDATE
+        """), {
+            "tenant": tenant_id, "owner": user_id,
+            "conversation": conversation_id, "revision": revision,
+        })
+        saved = result.scalar_one_or_none()
+        return (
+            isinstance(saved, str) and isinstance(submitted_text, str)
+            and bool(saved.strip()) and saved.strip() == submitted_text.strip()
+        )
+
     async def _put_composer_draft(
         self, conversation_id: str, tenant_id: str, *, user_id: str,
         content: str, expected_revision: int,
@@ -817,6 +851,9 @@ class PostgresConversationRepository(ConversationRepository):
         user_text: str,
         assistant_text: str,
         persona_scope_id: Optional[str] = None,
+        private_execution: Optional["ChatExecutionContext"] = None,
+        run_lease: Optional["ChatRunLease"] = None,
+        expected_assistant_digest: Optional[str] = None,
     ) -> RepositoryResult[bool]:
         """Read back the exact transaction outcome without changing finality.
 
@@ -830,6 +867,21 @@ class PostgresConversationRepository(ConversationRepository):
             user_message_id, assistant_message_id, user_text, assistant_text,
         )) or user_message_id == assistant_message_id:
             return RepositoryResult(success=False, error="invalid_committed_turn_scope")
+        if run_lease is not None and (
+            run_lease.tenant_id != tenant_id
+            or run_lease.user_id != user_id
+            or run_lease.conversation_id != conversation_id
+            or run_lease.request_id != request_id
+            or run_lease.correlation_id != correlation_id
+        ):
+            return RepositoryResult(success=False, error="invalid_committed_turn_scope")
+
+        # For a leased run, missing or conflicting transcript evidence alone
+        # cannot distinguish cancellation from a damaged completed receipt.
+        missing = RepositoryResult(
+            success=run_lease is None, data=False if run_lease is None else None,
+            error=None if run_lease is None else "chat_run_finality_unverified",
+        )
         try:
             async with await self._session() as session:
                 async with session.begin():
@@ -840,14 +892,30 @@ class PostgresConversationRepository(ConversationRepository):
                         "user_message": user_message_id,
                         "assistant_message": assistant_message_id,
                     }
-                    await session.execute(
-                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
-                        scope,
+                    from ai_karen_engine.persistence.postgres.transactions import (
+                        apply_authenticated_transaction_context,
                     )
-                    await session.execute(
-                        text("SELECT set_config('app.current_user_id', :owner, true)"),
-                        scope,
+                    await apply_authenticated_transaction_context(
+                        session, tenant_id=tenant_id, user_id=user_id,
                     )
+                    if private_execution is not None:
+                        from ai_karen_engine.core.runtime.chat_runtime_contract import (
+                            ChatExecutionContext,
+                        )
+                        if (
+                            type(private_execution) is not ChatExecutionContext
+                            or private_execution.tenant_id != tenant_id
+                            or private_execution.user_id != user_id
+                            or private_execution.conversation_id != conversation_id
+                            or private_execution.request_id != request_id
+                            or private_execution.correlation_id != correlation_id
+                            or private_execution.session_id != session_id
+                            or not private_execution.has_runtime_attachment_scope()
+                        ):
+                            raise PermissionError("attachment_session_denied")
+                        await private_execution.revalidate_runtime_attachment_session(
+                            db_session=session,
+                        )
                     owner = await session.execute(
                         text("""
                             SELECT 1 FROM public.conversations
@@ -859,7 +927,7 @@ class PostgresConversationRepository(ConversationRepository):
                         scope,
                     )
                     if owner.scalar_one_or_none() is None:
-                        return RepositoryResult(success=True, data=False)
+                        return missing
                     found = await session.execute(
                         text("""
                             SELECT m.message_id::text AS message_id,
@@ -871,6 +939,7 @@ class PostgresConversationRepository(ConversationRepository):
                                   CAST(:user_message AS uuid),
                                   CAST(:assistant_message AS uuid)
                               )
+                            FOR SHARE
                         """),
                         scope,
                     )
@@ -879,15 +948,16 @@ class PostgresConversationRepository(ConversationRepository):
                         for row in found.mappings().all()
                     }
                     if len(rows) != 2:
-                        return RepositoryResult(success=True, data=False)
+                        return missing
                     expected = (
                         (user_message_id, "user", user_text, "user"),
                         (assistant_message_id, "assistant", assistant_text, "assistant"),
                     )
+                    assistant_digest: str | None = None
                     for message_id, role, content, actor in expected:
                         row = rows.get(message_id)
                         if row is None or row["role"] != role or row["content"] != content:
-                            return RepositoryResult(success=True, data=False)
+                            return missing
                         meta = row["message_metadata"]
                         if isinstance(meta, str):
                             meta = json.loads(meta)
@@ -902,7 +972,32 @@ class PostgresConversationRepository(ConversationRepository):
                             and meta.get("authorized_user_id") == user_id
                             and meta.get("persona_scope_id") == persona_scope_id
                         ):
-                            return RepositoryResult(success=True, data=False)
+                            return missing
+                        if role == "assistant" and (
+                            run_lease is not None or expected_assistant_digest is not None
+                        ):
+                            assistant_digest = canonical_message_digest(Message(
+                                id=message_id, conversation_id=conversation_id,
+                                tenant_id=tenant_id, role=role, content=content,
+                                metadata=meta,
+                            ))
+                    if (
+                        expected_assistant_digest is not None
+                        and assistant_digest != expected_assistant_digest
+                    ):
+                        return RepositoryResult(
+                            success=False, error="committed_turn_digest_mismatch",
+                        )
+                    if run_lease is not None:
+                        from ai_karen_engine.persistence.repositories.chat_run_repository import (
+                            SqlChatRunRepository,
+                        )
+                        if assistant_digest is None or not await SqlChatRunRepository().committed_turn(
+                            run_lease, user_message_id=user_message_id,
+                            assistant_message_id=assistant_message_id,
+                            expected_assistant_digest=assistant_digest, db_session=session,
+                        ):
+                            return missing
                     return RepositoryResult(success=True, data=True)
         except Exception as exc:
             logger.warning(
@@ -916,6 +1011,7 @@ class PostgresConversationRepository(ConversationRepository):
     async def add_completed_turn(
         self, user_message: Message, assistant_message: Message,
         *, run_lease: Optional[ChatRunLease] = None,
+        private_execution: Optional[ChatExecutionContext] = None,
     ) -> RepositoryResult[int]:
         """Commit both messages under one locked, tenant-owned transaction."""
         if (
@@ -928,28 +1024,57 @@ class PostgresConversationRepository(ConversationRepository):
             or user_message.metadata.get("persona_scope_id") != assistant_message.metadata.get("persona_scope_id")
         ):
             return RepositoryResult(success=False, error="invalid_completed_turn")
+        commit_boundary_reached = False
         try:
             async with await self._session() as session:
                 async with session.begin():
+                    if private_execution is not None:
+                        try:
+                            from ai_karen_engine.core.runtime.chat_runtime_contract import (
+                                ChatExecutionContext,
+                            )
+                            if (
+                                type(private_execution) is not ChatExecutionContext
+                                or private_execution.tenant_id != user_message.tenant_id
+                                or private_execution.user_id != user_message.metadata["authorized_user_id"]
+                                or private_execution.conversation_id != user_message.conversation_id
+                                or private_execution.request_id != user_message.metadata.get("request_id")
+                                or private_execution.correlation_id != user_message.metadata.get("correlation_id")
+                                or private_execution.request_id != assistant_message.metadata.get("request_id")
+                                or private_execution.correlation_id != assistant_message.metadata.get("correlation_id")
+                                or not private_execution.has_runtime_attachment_scope()
+                            ):
+                                raise PermissionError("attachment_session_denied")
+                            from ai_karen_engine.persistence.postgres.transactions import (
+                                apply_authenticated_transaction_context,
+                            )
+                            await apply_authenticated_transaction_context(
+                                session, tenant_id=private_execution.tenant_id,
+                                user_id=private_execution.user_id,
+                            )
+                            await private_execution.revalidate_runtime_attachment_session(
+                                db_session=session,
+                            )
+                        except Exception:
+                            raise ValueError("attachment_session_denied") from None
                     if run_lease is not None:
-                        # Set the canonical RLS scope ON THIS transaction.
-                        # No independent run-ledger session is opened.
-                        await session.execute(
-                            text("SELECT set_config('app.current_tenant_id', :tid, true)"),
-                            {"tid": run_lease.tenant_id},
-                        )
-                        await session.execute(
-                            text("SELECT set_config('app.current_user_id', :uid, true)"),
-                            {"uid": run_lease.user_id},
-                        )
+                        # Validate the lease before installing its scope.
                         if (
                             user_message.tenant_id != run_lease.tenant_id
                             or user_message.conversation_id != run_lease.conversation_id
                             or user_message.metadata.get("authorized_user_id") != run_lease.user_id
                             or user_message.metadata.get("request_id") != run_lease.request_id
                             or assistant_message.metadata.get("request_id") != run_lease.request_id
+                            or user_message.metadata.get("correlation_id") != run_lease.correlation_id
+                            or assistant_message.metadata.get("correlation_id") != run_lease.correlation_id
                         ):
                             raise ValueError("chat_run_transcript_scope_mismatch")
+                        from ai_karen_engine.persistence.postgres.transactions import (
+                            apply_authenticated_transaction_context,
+                        )
+                        await apply_authenticated_transaction_context(
+                            session, tenant_id=run_lease.tenant_id, user_id=run_lease.user_id,
+                        )
                         # Lock run FIRST, then conversation. The stop endpoint
                         # locks the same row. The winner defines linearizable
                         # terminal truth for both transcript messages.
@@ -963,6 +1088,7 @@ class PostgresConversationRepository(ConversationRepository):
                                   AND conversation_id = CAST(:conversation AS uuid)
                                   AND request_id = :request_id
                                   AND correlation_id = :correlation_id
+                                  AND submission_id IS NOT DISTINCT FROM :submission_id
                                   AND lease_token = CAST(:token AS uuid)
                                   AND lease_expires_at > NOW()
                                   AND status = 'running'
@@ -976,6 +1102,7 @@ class PostgresConversationRepository(ConversationRepository):
                                 "conversation": run_lease.conversation_id,
                                 "request_id": run_lease.request_id,
                                 "correlation_id": run_lease.correlation_id,
+                                "submission_id": run_lease.submission_id,
                                 "token": run_lease.lease_token,
                             },
                         )
@@ -1131,24 +1258,56 @@ class PostgresConversationRepository(ConversationRepository):
                         )
                         if finished.scalar_one_or_none() is None:
                             raise ValueError("chat_run_commit_not_authorized")
+                        # Retire only the submitted draft revision, in the same
+                        # commit as the completed transcript and ledger receipt.
+                        # A newer draft (including attachments) remains untouched.
+                        draft_revision = draft_revision_from_submission_id(run_lease.submission_id)
+                        if draft_revision is not None and await self.lock_matching_submission_draft(
+                            session, tenant_id=run_lease.tenant_id,
+                            user_id=run_lease.user_id,
+                            conversation_id=run_lease.conversation_id,
+                            revision=draft_revision, submitted_text=user_message.content,
+                        ):
+                            await session.execute(text("""
+                                UPDATE public.conversation_composer_drafts
+                                SET draft_text = '', revision = revision + 1,
+                                    updated_at = clock_timestamp()
+                                WHERE tenant_id = CAST(:tenant AS uuid)
+                                  AND user_id = CAST(:owner AS uuid)
+                                  AND conversation_id = CAST(:conversation AS uuid)
+                                  AND revision = :revision
+                                  AND attachment_references = '[]'::jsonb
+                            """), {
+                                "tenant": run_lease.tenant_id, "owner": run_lease.user_id,
+                                "conversation": run_lease.conversation_id, "revision": draft_revision,
+                            })
+                    # Only the transaction exit can commit this staged pair.
+                    # An exception during commit or later cleanup is uncertain;
+                    # an earlier exception cannot have committed this attempt.
+                    commit_boundary_reached = True
                 return RepositoryResult(
                     success=True, data=persisted,
                     metadata={"idempotent_replay": persisted == 0},
                 )
         except ValueError as exc:
             if (
-                len(exc.args) == 1
+                not commit_boundary_reached
+                and len(exc.args) == 1
                 and isinstance(exc.args[0], str)
                 and exc.args[0] in _ALLOWED_TURN_FAILURE_CODES
             ):
                 return RepositoryResult(success=False, error=exc.args[0])
-            return _repository_failure(
+            result = _repository_failure(
                 "add_completed_turn", exc, error_code="completed_turn_write_failed",
             )
+            result.metadata["commit_outcome_uncertain"] = commit_boundary_reached
+            return result
         except Exception as exc:
-            return _repository_failure(
+            result = _repository_failure(
                 "add_completed_turn", exc, error_code="completed_turn_write_failed",
             )
+            result.metadata["commit_outcome_uncertain"] = commit_boundary_reached
+            return result
 
     @instrument_repository(
         operation="get_messages", repository="PostgresConversationRepository"
@@ -1161,6 +1320,7 @@ class PostgresConversationRepository(ConversationRepository):
         offset: int = 0,
         *,
         newest_first: bool = False,
+        db_session: Optional[AsyncSession] = None,
     ) -> RepositoryResult[List[Message]]:
         start = time.perf_counter()
         # Static, controlled SQL ordering only. Never interpolate request
@@ -1176,7 +1336,9 @@ class PostgresConversationRepository(ConversationRepository):
             "m.message_id ASC"
         )
         try:
-            async with await self._session() as session:
+            async with (
+                nullcontext(db_session) if db_session is not None else await self._session()
+            ) as session:
                 result = await session.execute(
                     text(
                         f"""

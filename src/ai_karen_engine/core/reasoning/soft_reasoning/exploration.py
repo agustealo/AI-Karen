@@ -21,8 +21,9 @@ from __future__ import annotations
 import hashlib
 import math
 import random
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
-from typing import Sequence
+from typing import Callable, ContextManager, Iterator, Sequence
 
 from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
     SoftBatchVerifierPort,
@@ -92,6 +93,13 @@ class SoftExplorationConfig:
         if not self.research_profile.strip():
             raise ValueError("research_profile must not be empty")
 
+    @property
+    def maximum_total_model_calls(self) -> int:
+        """Conservative reference, generation and verifier attempt ceiling."""
+        if self.research_profile == "paper_2025":
+            return 1 + self.initial_samples + self.max_iterations * self.batch_size + 1 + self.max_iterations
+        return 1 + 2 * (self.initial_samples + self.max_iterations)
+
     @classmethod
     def paper_2025(cls) -> "SoftExplorationConfig":
         """Strict paper-equation profile.
@@ -131,11 +139,13 @@ class SoftExplorationEngine:
         verifier: SoftVerifierPort,
         batch_verifier: SoftBatchVerifierPort | None = None,
         config: SoftExplorationConfig | None = None,
+        model_scope: Callable[[], ContextManager[object]] | None = None,
     ) -> None:
         self._generation = generation
         self._verifier = verifier
         self._batch_verifier = batch_verifier
         self._config = config or SoftExplorationConfig()
+        self._model_scope = model_scope or nullcontext
         self._paper_reward = PaperRewardComposer(
             PaperRewardConfig(
                 coherence_mode=CoherenceMode.PAPER_SEQUENCE_LOG_PROBABILITY
@@ -151,17 +161,52 @@ class SoftExplorationEngine:
         max_model_calls: int,
         max_output_tokens: int,
         correlation_id: str = "",
+        on_model_attempt: Callable[[], None] | None = None,
     ) -> SoftExplorationTrace:
+        """Bound reference preparation, candidates and verification together."""
         self._validate_request(prompt, objective, max_output_tokens)
-        capabilities = self._generation.capabilities()
+        paper = self._config.research_profile == "paper_2025"
+        if paper and self._batch_verifier is None:
+            raise SoftReasoningUnavailable(
+                "paper_2025 requires a Runtime-injected Multi-Generate batch verifier"
+            )
+        # Conservatively charge reference preparation as one model attempt:
+        # the paper profile performs a real greedy forward for this step.
+        required = 1 + (
+            self._config.initial_samples + 1 if paper
+            else self._config.initial_samples * 2
+        )
+        if type(max_model_calls) is not int or max_model_calls < required:
+            raise SoftReasoningBudgetError(
+                f"soft exploration requires at least {required} total model calls"
+            )
+
+        attempts = 0
+
+        @contextmanager
+        def reserve_attempt() -> Iterator[None]:
+            nonlocal attempts
+            if attempts >= max_model_calls:
+                raise SoftReasoningBudgetError("soft exploration total model-call budget exhausted")
+            if on_model_attempt is not None:
+                on_model_attempt()
+            attempts += 1
+            # Admission runs before borrowing the native lock; never wait on
+            # the event-loop meter while holding model lifecycle locks.
+            with self._model_scope():
+                yield
+
+        with self._model_scope():
+            capabilities = self._generation.capabilities()
         if not capabilities.supports_first_token_embedding_control:
             raise SoftReasoningUnavailable(
                 f"runtime {capabilities.runtime_engine!r} does not expose first-token embedding control"
             )
 
-        base_embedding = tuple(
-            float(value) for value in self._generation.first_token_embedding(prompt)
-        )
+        with reserve_attempt():
+            base_embedding = tuple(
+                float(value) for value in self._generation.first_token_embedding(prompt)
+            )
         if len(base_embedding) != capabilities.hidden_size or not base_embedding:
             raise SoftReasoningUnavailable(
                 "runtime first-token embedding does not match declared hidden_size"
@@ -181,7 +226,8 @@ class SoftExplorationEngine:
                 prompt=prompt,
                 objective=objective,
                 evidence=evidence,
-                max_model_calls=max_model_calls,
+                max_model_calls=max_model_calls - 1,
+                reserve_attempt=reserve_attempt,
                 max_output_tokens=max_output_tokens,
                 correlation_id=correlation_id,
                 seed=seed,
@@ -196,7 +242,8 @@ class SoftExplorationEngine:
             prompt=prompt,
             objective=objective,
             evidence=evidence,
-            max_model_calls=max_model_calls,
+            max_model_calls=max_model_calls - 1,
+            reserve_attempt=reserve_attempt,
             max_output_tokens=max_output_tokens,
             correlation_id=correlation_id,
             seed=seed,
@@ -214,6 +261,7 @@ class SoftExplorationEngine:
         objective: str,
         evidence: Sequence[str],
         max_model_calls: int,
+        reserve_attempt: Callable[[], ContextManager[None]],
         max_output_tokens: int,
         correlation_id: str,
         seed: int,
@@ -228,10 +276,8 @@ class SoftExplorationEngine:
             raise SoftReasoningUnavailable(
                 "paper_2025 requires a Runtime-injected Multi-Generate batch verifier"
             )
-        if max_model_calls < self._config.initial_samples:
-            raise SoftReasoningBudgetError(
-                f"paper_2025 requires at least {self._config.initial_samples} model calls"
-            )
+        if max_model_calls < self._config.initial_samples + 1:
+            raise SoftReasoningBudgetError("paper_2025 requires a complete verified initial batch")
 
         optimizer = BayesianOptimizer(self._optimizer_config(seed, paper=True))
         all_candidates: list[SoftCandidate] = []
@@ -255,8 +301,8 @@ class SoftExplorationEngine:
             if round_index == 0:
                 latents = initial_latents
             else:
-                remaining = max_model_calls - model_calls
-                if remaining < self._config.batch_size:
+                remaining = max_model_calls - model_calls - verifier_calls
+                if remaining < self._config.batch_size + 1:
                     convergence_reason = "model_call_budget"
                     break
                 latents = optimizer.suggest(
@@ -274,21 +320,23 @@ class SoftExplorationEngine:
                     projection=projection,
                     scale=self._config.embedding_scale,
                 )
-                output = self._generation.generate_with_first_token_embedding(
-                    prompt,
-                    guided_embedding,
-                    max_tokens=max_output_tokens,
-                    seed=seed + model_calls,
-                )
+                with reserve_attempt():
+                    output = self._generation.generate_with_first_token_embedding(
+                        prompt,
+                        guided_embedding,
+                        max_tokens=max_output_tokens,
+                        seed=seed + model_calls,
+                    )
                 model_calls += 1
                 outputs.append(output)
                 guided_embeddings.append(guided_embedding)
 
-            verification_batch = batch_verifier.verify_batch(
-                objective,
-                [output.text for output in outputs],
-                evidence=evidence,
-            )
+            with reserve_attempt():
+                verification_batch = batch_verifier.verify_batch(
+                    objective,
+                    [output.text for output in outputs],
+                    evidence=evidence,
+                )
             verifier_calls += 1
             batches += 1
             if len(verification_batch.candidate_scores) != len(outputs):
@@ -347,7 +395,7 @@ class SoftExplorationEngine:
                 break
             previous_batch_objective = batch_objective
 
-            if model_calls >= max_model_calls:
+            if model_calls + verifier_calls >= max_model_calls:
                 convergence_reason = "model_call_budget"
                 break
 
@@ -383,6 +431,7 @@ class SoftExplorationEngine:
         objective: str,
         evidence: Sequence[str],
         max_model_calls: int,
+        reserve_attempt: Callable[[], ContextManager[None]],
         max_output_tokens: int,
         correlation_id: str,
         seed: int,
@@ -392,13 +441,12 @@ class SoftExplorationEngine:
         runtime_engine: str,
         model_id: str,
     ) -> SoftExplorationTrace:
-        if max_model_calls < self._config.initial_samples:
-            raise SoftReasoningBudgetError(
-                f"soft exploration requires at least {self._config.initial_samples} model calls"
-            )
+        candidate_limit = max_model_calls // 2
+        if candidate_limit < self._config.initial_samples:
+            raise SoftReasoningBudgetError("soft exploration requires verified initial candidates")
         max_iterations = min(
             self._config.max_iterations,
-            max(0, max_model_calls - self._config.initial_samples),
+            max(0, candidate_limit - self._config.initial_samples),
         )
         optimizer = BayesianOptimizer(
             replace(
@@ -418,12 +466,12 @@ class SoftExplorationEngine:
 
         def score_latent(latent: list[float]) -> float:
             nonlocal model_calls, verifier_calls
-            if model_calls >= max_model_calls:
-                return 0.0
             key = tuple(round(float(value), 12) for value in latent)
             existing = candidates.get(key)
             if existing is not None:
                 return self._candidate_score(existing)
+            if model_calls >= candidate_limit:
+                raise SoftReasoningBudgetError("soft exploration candidate budget exhausted")
 
             guided_embedding = self._apply_projection(
                 base_embedding=base_embedding,
@@ -431,18 +479,20 @@ class SoftExplorationEngine:
                 projection=projection,
                 scale=self._config.embedding_scale,
             )
-            output = self._generation.generate_with_first_token_embedding(
-                prompt,
-                guided_embedding,
-                max_tokens=max_output_tokens,
-                seed=seed + model_calls,
-            )
+            with reserve_attempt():
+                output = self._generation.generate_with_first_token_embedding(
+                    prompt,
+                    guided_embedding,
+                    max_tokens=max_output_tokens,
+                    seed=seed + model_calls,
+                )
             model_calls += 1
-            verification = self._verifier.score(
-                objective,
-                output.text,
-                evidence=evidence,
-            )
+            with reserve_attempt():
+                verification = self._verifier.score(
+                    objective,
+                    output.text,
+                    evidence=evidence,
+                )
             verifier_calls += 1
             search_score = float(verification.score)
             candidate = SoftCandidate(

@@ -49,3 +49,27 @@ async def test_deepagents_missing_or_failed_result_cannot_fake_success():
     )
     assert failed.status == ResponseStatus.ERROR
     assert failed.content != "interrupted"
+
+
+@pytest.mark.asyncio
+async def test_single_deepagents_preserves_specialist_degradation():
+    result = await ResponseAssembler().assemble(
+        request_id="run-degraded",
+        step_outputs=[{
+            "harness": "deepagents",
+            "context_found": "Completed with limited capabilities.",
+        }],
+        agent_trace=["researcher"],
+        latest_user_message="Research",
+        status=ResponseStatus.SUCCESS,
+        metadata={
+            "degraded_mode": True,
+            "degradation_reason": "Specialist dependencies unavailable",
+            "fallback_level": "partial",
+        },
+    )
+    assert result.status is ResponseStatus.DEGRADED
+    assert result.metadata["degraded_mode"] is True
+    assert result.metadata["degradation_reason"] == "Specialist dependencies unavailable"
+    assert result.metadata["fallback_level"] == "partial"
+    assert result.metadata["synthesis"]["additional_model_calls"] == 0

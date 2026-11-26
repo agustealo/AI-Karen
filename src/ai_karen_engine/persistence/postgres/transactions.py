@@ -283,6 +283,7 @@ async def rollback_async_transaction(session: AsyncSession) -> None:
 async def async_transaction_scope(
     tenant_id: Optional[str] = None,
     *, user_id: Optional[str] = None,
+    read_only_snapshot: bool = False,
 ) -> AsyncGenerator[AsyncSession, None]:
     """Provide tenant and authenticated-principal scoped async transaction.
 
@@ -295,26 +296,20 @@ async def async_transaction_scope(
     close_in_caller = True
     try:
         try:
+            if read_only_snapshot:
+                if tenant_id is None or user_id is None:
+                    raise ValueError("authenticated_snapshot_identity_required")
+                # Must precede the first scope-setting SELECT, which can
+                # establish the PostgreSQL MVCC snapshot.
+                await session.execute(text(
+                    "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY"
+                ))
             if user_id is not None:
-                try:
-                    tenant_id = str(uuid.UUID(str(tenant_id).strip()))
-                except (AttributeError, TypeError, ValueError) as exc:
-                    raise ValueError(
-                        "authenticated transaction tenant must be a UUID"
-                    ) from exc
-            if tenant_id is not None:
-                await _apply_tenant_context_async(session, tenant_id)
-            if user_id is not None:
-                try:
-                    principal = str(uuid.UUID(str(user_id).strip()))
-                except (AttributeError, TypeError, ValueError) as exc:
-                    raise ValueError(
-                        "authenticated transaction principal must be a UUID"
-                    ) from exc
-                await session.execute(
-                    text("SELECT set_config('app.current_user_id', :user, true)"),
-                    {"user": principal},
+                await apply_authenticated_transaction_context(
+                    session, tenant_id=tenant_id, user_id=user_id,
                 )
+            elif tenant_id is not None:
+                await _apply_tenant_context_async(session, tenant_id)
             yield session
             await session.commit()
         except _RollbackStillActive:
@@ -333,6 +328,26 @@ async def async_transaction_scope(
     finally:
         if close_in_caller:
             await context_manager.__aexit__(None, None, None)
+
+
+async def apply_authenticated_transaction_context(
+    session: AsyncSession, *, tenant_id: Optional[str], user_id: str,
+) -> None:
+    """Apply validated identity to an owned transaction before protected SQL.
+
+    The caller must have established authenticated runtime authority; this
+    helper only installs transaction-local database scope, not a grant.
+    """
+    try:
+        tenant = str(uuid.UUID(str(tenant_id).strip()))
+        principal = str(uuid.UUID(str(user_id).strip()))
+    except (AttributeError, TypeError, ValueError) as exc:
+        raise ValueError("authenticated transaction tenant and principal must be UUIDs") from exc
+    await _apply_tenant_context_async(session, tenant)
+    await session.execute(
+        text("SELECT set_config('app.current_user_id', :user, true)"),
+        {"user": principal},
+    )
 
 
 def _apply_tenant_context_sync(session: Session, tenant_id: str) -> None:
@@ -369,4 +384,5 @@ __all__ = [
     "transaction_scope",
     "async_transaction_scope",
     "rollback_async_transaction",
+    "apply_authenticated_transaction_context",
 ]

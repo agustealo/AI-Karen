@@ -1,18 +1,22 @@
 from __future__ import annotations
 
+import asyncio
 import logging
-import math
 import time
 from typing import Any
 
 from .circuit_breakers import ExpressionCircuitBreakers
 from .contracts import ExpressionResult, ExpressionTask
-from .errors import EngineUnavailableError
+from .errors import (
+    EngineUnavailableError, ExecutionAdmissionRejected, ExecutionDeadlineExceeded,
+    PrivateEvidenceAuthorizationError,
+)
 from .observability import emit_expression_event
 from .registry import get_engine
 from ai_karen_engine.core.errors.response_validation import validate_response_text
 from ai_karen_engine.core.expression.settings import get_expression_settings
 from ai_karen_engine.core.logging.events import RoutingEvents
+from ..model_runtime.provider_contracts import NativeRetirementUnverified
 from ..model_runtime.provider_policy import evaluate_provider_policy
 
 logger = logging.getLogger(__name__)
@@ -103,51 +107,49 @@ class ExpressionGateway:
             **extra,
         }
 
-    @staticmethod
-    def _observe_verified_model_success(result: ExpressionResult) -> None:
-        """Report an actual executor's verified model result to the health owner.
-
-        The result is already validated for usable, model-sourced text by the
-        gateway. A configured preference, disabled engine, static fallback or
-        empty model identity is not execution evidence. Health observability
-        must never turn a successful model answer into an HTTP failure.
-        """
-        provider = result.provider
-        model = result.model
-        if (
-            not isinstance(provider, str)
-            or not provider.strip()
-            or not isinstance(model, str)
-            or not model.strip()
-            or result.response_source in {
-                "model_unavailable",
-                "emergency_static",
-                "deterministic_fallback",
-                "persisted_history",
-            }
-        ):
-            return
-
-        try:
-            from ai_karen_engine.core.model_runtime.provider_health_monitor import (
-                record_provider_success,
-            )
-
-            seconds = float(result.latency_ms) / 1000.0
-            latency_seconds = seconds if math.isfinite(seconds) and seconds >= 0 else None
-            record_provider_success(provider.strip(), response_time=latency_seconds)
-        except Exception as exc:
-            # Health reporting is observability, not an inference dependency.
-            # Never turn a verified completed answer into a transport error.
-            logger.warning(
-                "expression.provider_health_observation_unavailable",
-                extra={
-                    "provider": provider,
-                    "error_type": type(exc).__name__,
-                },
-            )
-
     async def generate(self, task: ExpressionTask) -> ExpressionResult:
+        if task.remaining_execution_ms is None:
+            # Existing non-runtime expression consumers retain their contract.
+            return await self._generate(task)
+        if type(task.timeout_ms) is not int or task.timeout_ms <= 0:
+            raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+
+        # One scope covers authorization, every attempt, fallback and result
+        # validation. Rescheduling may only shorten the original task cap.
+        loop = asyncio.get_running_loop()
+        task_deadline = loop.time() + task.timeout_ms / 1000
+        scope = asyncio.timeout_at(task_deadline)
+        try:
+            async with scope:
+                sampled_at = loop.time()
+                remaining = await task.require_remaining_execution_ms()
+                deadline = min(task_deadline, sampled_at + remaining / 1000)
+                scope.reschedule(deadline)
+                result = await self._generate(task, deadline=deadline)
+                await task.require_remaining_execution_ms()
+                # An engine may catch cancellation and return late. Never
+                # convert such a result into a verified model response.
+                if scope.expired() or loop.time() >= deadline:
+                    raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+                return result
+        except TimeoutError:
+            if scope.expired():
+                raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration") from None
+            raise
+
+    async def _generate(
+        self, task: ExpressionTask, *, deadline: float | None = None,
+    ) -> ExpressionResult:
+        async def require_deadline() -> None:
+            if deadline is None:
+                return
+            loop = asyncio.get_running_loop()
+            if loop.time() >= deadline:
+                raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+            await task.require_remaining_execution_ms()
+            if loop.time() >= deadline:
+                raise ExecutionDeadlineExceeded("execution_budget_exhausted_duration")
+
         active_engine = (
             "local" if self.settings.active_engine == "builtin" else self.settings.active_engine
         )
@@ -233,6 +235,12 @@ class ExpressionGateway:
         attempted_model_engines = 0
 
         for level, engine_id in enumerate(sequence):
+            await require_deadline()
+            # A disabled, circuit-open or ineligible primary engine must not
+            # silently turn into an authorized fallback.
+            if (task.execution_admission is not None and level > 0
+                    and not task.execution_admission.plan.degraded_allowed):
+                break
             cfg = self.settings.engines.get(engine_id)
             logger.debug("Gateway evaluating configured engine %s", engine_id)
 
@@ -246,6 +254,21 @@ class ExpressionGateway:
                     request_id=task.request_id,
                     engine_id=engine_id,
                     reason="disabled",
+                )
+                continue
+
+            if task.execution_admission is not None and cfg.type != "openai_compatible":
+                continue
+            if task.local_only and (engine_id == "cloud" or cfg.type != "openai_compatible"):
+                skipped_engines.append(
+                    {"engine_id": engine_id, "reason": "private_evidence_local_only"}
+                )
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="private_evidence_local_only",
                 )
                 continue
 
@@ -325,7 +348,20 @@ class ExpressionGateway:
                     )
                     continue
 
-            if attempted_model_engines and task.reserve_additional_model_call is not None:
+            try:
+                await task.require_private_evidence_authorization()
+            except PrivateEvidenceAuthorizationError:
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="attachment_session_denied",
+                )
+                raise
+
+            if (task.execution_admission is None and attempted_model_engines
+                    and task.reserve_additional_model_call is not None):
                 try:
                     permitted = await task.reserve_additional_model_call()
                 except Exception:
@@ -410,7 +446,9 @@ class ExpressionGateway:
             attempt_recorded = False
             attempt_outcome = "exception"
             try:
+                await require_deadline()
                 result = await engine.generate(task)
+                await require_deadline()
                 # Generated text can contain private user facts or tool evidence.
                 # Keep payloads out of runtime logs, even at DEBUG level.
 
@@ -455,11 +493,12 @@ class ExpressionGateway:
                     if (result.metadata or {}).get("output_truncated") is True:
                         result.degraded = True
                         result.degradation_reason = "output_token_limit"
+                    # Never record a verified success after the shared cap,
+                    # including an engine that swallowed deadline cancellation.
+                    await require_deadline()
                     self.circuits.mark_success(f"expression.engine.{engine_id}")
-                    # Only observed, validated model execution may advance the
-                    # canonical health catalog. Do not mark the selected alias
-                    # healthy merely because an engine was configured.
-                    self._observe_verified_model_success(result)
+                    # Provider health is observed by the transport owner.
+                    # Engine receipt validation is not another observation.
                     observed_attempt_ms = (time.perf_counter() - attempt_started) * 1000.0
                     attempt_timings.append({
                         "engine_id": engine_id,
@@ -519,6 +558,28 @@ class ExpressionGateway:
                 )
                 attempt_outcome = "invalid_output"
                 last_error = reason
+            except PrivateEvidenceAuthorizationError:
+                attempt_outcome = "authorization_denied"
+                raise
+            except ExecutionDeadlineExceeded:
+                attempt_outcome = "deadline_exhausted"
+                raise
+            except ExecutionAdmissionRejected:
+                attempt_outcome = "admission_rejected"
+                _emit_routing_event(
+                    RoutingEvents.REJECTED,
+                    correlation_id=task.correlation_id,
+                    request_id=task.request_id,
+                    engine_id=engine_id,
+                    reason="model_admission_rejected",
+                )
+                raise
+            except NativeRetirementUnverified:
+                attempt_outcome = "native_retirement_unverified"
+                raise
+            except PermissionError:
+                attempt_outcome = "authorization_denied"
+                raise
             except Exception as exc:
                 self.circuits.mark_failure(f"expression.engine.{engine_id}")
                 if task.stream_started:

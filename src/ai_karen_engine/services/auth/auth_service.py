@@ -7,13 +7,17 @@ user management, session management, and token validation.
 
 import asyncio
 import hashlib
+import hmac
+import json
 import os
 import secrets
 import time
 import uuid
+import weakref
+import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple, AsyncGenerator
+from typing import Any, Dict, List, Optional, Tuple, AsyncGenerator, Callable
 from dataclasses import dataclass, field
 from enum import Enum
 from contextvars import ContextVar
@@ -100,6 +104,16 @@ class Session:
     is_active: bool = True
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+@dataclass(frozen=True, repr=False, eq=False)
+class _IssuedSessionWitness:
+    """Issuer-sealed, non-executable session authority."""
+
+    session_id: str
+    user_id: str
+    tenant_id: str
+    access_token_digest: str
+    mac: str
+
 
 class AuthService(BaseService):
     """Canonical authentication service.
@@ -123,6 +137,7 @@ class AuthService(BaseService):
         # Bounded runtime caches (optimization only; database is the authority)
         self._active_sessions: Dict[str, Session] = {}
         self._user_cache: Dict[str, UserAccount] = {}
+        self._runtime_witness_key = secrets.token_bytes(32)
 
         logger.debug(
             "AuthService initialized with environment=%s, jwt_algorithm=%s",
@@ -883,6 +898,165 @@ class AuthService(BaseService):
         logger.info("Session created for user %s", user_id)
         return session
 
+
+    def _sign_session_witness(
+        self, session_id: str, user_id: str, tenant_id: str,
+        access_token_digest: str,
+    ) -> str:
+        """Bind canonical session identity and token to this service instance."""
+        key = self.__dict__.get("_runtime_witness_key")
+        if not isinstance(key, bytes) or len(key) < 32:
+            raise RuntimeError("Session witness issuer unavailable")
+        payload = json.dumps(
+            ["chat-session-witness-v1", session_id, user_id, tenant_id,
+             access_token_digest],
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return hmac.new(key, payload, hashlib.sha256).hexdigest()
+
+    def _issue_session_witness(
+        self, *, session_id: str, user_id: str, tenant_id: str,
+        access_token_digest: str,
+    ) -> _IssuedSessionWitness:
+        """Only canonical successful session validation may invoke issuance."""
+        witness = _IssuedSessionWitness(
+            session_id=session_id, user_id=user_id, tenant_id=tenant_id,
+            access_token_digest=access_token_digest,
+            mac=self._sign_session_witness(
+                session_id, user_id, tenant_id, access_token_digest,
+            ),
+        )
+
+        with self._witness_binding_lock():
+            self._witness_bindings()[witness] = (None, None)
+        return witness
+
+    def _witness_binding_lock(self):
+        return self.__dict__.setdefault("_runtime_witness_binding_lock", threading.RLock())
+
+    def _witness_bindings(self):
+        return self.__dict__.setdefault("_runtime_witness_bindings", weakref.WeakKeyDictionary())
+
+    def bind_issued_session_principal(self, witness: object, principal: Any) -> bool:
+        """Register the original ingress principal exactly once."""
+        if not self.is_issued_session_witness(witness):
+            return False
+        if (str(principal.user_id) != witness.user_id
+                or str(principal.tenant_id) != witness.tenant_id):
+            return False
+        with self._witness_binding_lock():
+            bindings = self._witness_bindings()
+            entry = bindings.get(witness)
+            if entry is None:
+                return False
+            if entry[0] is not None:
+                return entry[0]() is principal
+            bindings[witness] = (weakref.ref(principal), None)
+            return True
+
+    def bind_issued_session_execution(
+        self, witness: object, principal: Any, context: Any,
+    ) -> bool:
+        """Claim one execution per ingress witness, without extending lifetimes."""
+        if not self.is_issued_session_witness(witness):
+            return False
+        with self._witness_binding_lock():
+            bindings = self._witness_bindings()
+            entry = bindings.get(witness)
+            if entry is None or entry[0] is None or entry[0]() is not principal:
+                return False
+            if entry[1] is not None:
+                return entry[1]() is context
+            bindings[witness] = (entry[0], weakref.ref(context))
+            return True
+
+    def is_issued_session_witness(self, witness: object) -> bool:
+        """Reject arbitrary callbacks and tampered or foreign-issued proofs."""
+        if type(witness) is not _IssuedSessionWitness:
+            return False
+        if not isinstance(witness.mac, str) or len(witness.mac) != 64:
+            return False
+        try:
+            expected = self._sign_session_witness(
+                witness.session_id, witness.user_id, witness.tenant_id,
+                witness.access_token_digest,
+            )
+            return secrets.compare_digest(expected, witness.mac)
+        except (TypeError, ValueError, RuntimeError):
+            return False
+
+    async def revalidate_issued_session_witness(
+        self, witness: object,
+    ) -> Optional[UserAccount]:
+        """Recheck database authority only after a valid issuer signature."""
+        if not self.is_issued_session_witness(witness):
+            return None
+        return await self.revalidate_session_identity(
+            session_id=witness.session_id, user_id=witness.user_id,
+            tenant_id=witness.tenant_id,
+            access_token_digest=witness.access_token_digest,
+        )
+
+    async def revalidate_issued_session_in_transaction(
+        self, witness: object, principal: Any, context: Any, db_session: AsyncSession,
+    ) -> Optional[UserAccount]:
+        """Fence revocation against the caller's PostgreSQL transaction."""
+        if not db_session.in_transaction() or db_session.get_bind().dialect.name != "postgresql":
+            return None
+        if not self.is_issued_session_witness(witness):
+            return None
+        with self._witness_binding_lock():
+            entry = self._witness_bindings().get(witness)
+            if (entry is None or entry[0] is None or entry[1] is None
+                    or entry[0]() is not principal or entry[1]() is not context):
+                return None
+        user_uuid = uuid.UUID(witness.user_id)
+        # Match password-change lock ordering. Locks live until caller commit.
+        account_row = await db_session.execute(
+            select(AuthUser).where(AuthUser.user_id == user_uuid)
+            .with_for_update().execution_options(populate_existing=True)
+        )
+        if account_row.scalar_one_or_none() is None:
+            return None
+        session_row = await db_session.execute(
+            select(AuthSession).where(
+                AuthSession.session_token == uuid.UUID(witness.session_id),
+                AuthSession.user_id == user_uuid, AuthSession.is_active,
+            ).with_for_update().execution_options(populate_existing=True)
+        )
+        row = session_row.scalar_one_or_none()
+        if row is None or not row.access_token:
+            return None
+        if not secrets.compare_digest(
+            hashlib.sha256(row.access_token.encode("utf-8")).hexdigest(),
+            witness.access_token_digest,
+        ):
+            return None
+        # Reuse the existing JWT, expiry and account checks on these locked rows.
+        token = _db_session_ctx.set(db_session)
+        try:
+            account = await self.validate_session(row.access_token, strict_errors=True)
+        finally:
+            _db_session_ctx.reset(token)
+        if (account is None or account.id != witness.user_id
+                or account.tenant_id != witness.tenant_id):
+            return None
+        return account
+
+    async def validate_session_with_witness(
+        self, session_token: str,
+    ) -> Tuple[Optional[UserAccount], Optional[_IssuedSessionWitness]]:
+        """Return durable account truth and opaque issuer-authenticated proof."""
+        witnesses: List[_IssuedSessionWitness] = []
+        account = await self.validate_session(
+            session_token, strict_errors=True, _witness_sink=witnesses.append,
+        )
+        if account is None or len(witnesses) != 1:
+            return None, None
+        if not self.is_issued_session_witness(witnesses[0]):
+            return None, None
+        return account, witnesses[0]
+
     async def validate_session(
         self,
         session_token: str,
@@ -890,6 +1064,7 @@ class AuthService(BaseService):
         user_agent: str = "",
         *,
         strict_errors: bool = False,
+        _witness_sink: Optional[Callable[[_IssuedSessionWitness], None]] = None,
     ) -> Optional[UserAccount]:
         """Verify a signed access token against an active, tenant-owned DB session.
 
@@ -924,7 +1099,7 @@ class AuthService(BaseService):
                         AuthSession.user_id == user_uuid,
                         AuthSession.access_token == session_token,
                         AuthSession.is_active,
-                    )
+                    ).execution_options(populate_existing=True)
                 )
                 db_auth_session = result.scalar_one_or_none()
                 if not db_auth_session:
@@ -945,12 +1120,15 @@ class AuthService(BaseService):
                         )
                 user_result = await db_session.execute(
                     select(AuthUser).where(AuthUser.user_id == user_uuid)
+                    .execution_options(populate_existing=True)
                 )
                 auth_user = user_result.scalar_one_or_none()
                 if (
                     not auth_user
                     or not auth_user.is_active
                     or not auth_user.is_verified
+                    or (getattr(auth_user, "locked_until", None) is not None
+                        and auth_user.locked_until > datetime.utcnow())
                     or not auth_user.tenant_id
                     or str(auth_user.tenant_id) != token_tenant_id
                 ):
@@ -959,6 +1137,15 @@ class AuthService(BaseService):
                 await db_session.flush()
                 user = self._build_user_account(auth_user)
                 self._user_cache[user.id] = user
+                if _witness_sink is not None:
+                    _witness_sink(self._issue_session_witness(
+                        session_id=str(db_auth_session.session_token),
+                        user_id=str(user_uuid),
+                        tenant_id=token_tenant_id,
+                        access_token_digest=hashlib.sha256(
+                            session_token.encode("utf-8")
+                        ).hexdigest(),
+                    ))
                 return user
         except Exception as exc:
             logger.error(
@@ -968,6 +1155,64 @@ class AuthService(BaseService):
             if strict_errors:
                 raise RuntimeError("Session verification unavailable") from exc
             return None
+
+    async def revalidate_session_identity(
+        self,
+        *,
+        session_id: str,
+        user_id: str,
+        tenant_id: str,
+        access_token_digest: str,
+    ) -> Optional[UserAccount]:
+        """Revalidate an already authenticated session without exporting credentials.
+
+        The caller must hold an ingress-issued execution witness. A session ID
+        alone is not an authentication grant. Rotation invalidates its digest.
+        """
+        if not self._initialized:
+            await self.initialize()
+        try:
+            session_uuid = uuid.UUID(session_id)
+            user_uuid = uuid.UUID(user_id)
+            if not tenant_id or tenant_id == "default":
+                return None
+            if len(access_token_digest) != 64:
+                return None
+        except (ValueError, TypeError, AttributeError):
+            return None
+
+        try:
+            async with self._session_scope() as db_session:
+                result = await db_session.execute(
+                    select(AuthSession).where(
+                        AuthSession.session_token == session_uuid,
+                        AuthSession.user_id == user_uuid,
+                        AuthSession.is_active,
+                    ).execution_options(populate_existing=True)
+                )
+                row = result.scalar_one_or_none()
+                if row is None or not row.access_token:
+                    return None
+                token = row.access_token
+                digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+                if not secrets.compare_digest(digest, access_token_digest):
+                    return None
+            # Reuse the canonical token, expiry, durable session and account
+            # checks. A rotation between these reads invalidates the old token.
+            account = await self.validate_session(token, strict_errors=True)
+            if (
+                account is None
+                or str(account.id) != user_id
+                or str(account.tenant_id) != tenant_id
+            ):
+                return None
+            return account
+        except Exception as exc:
+            logger.error(
+                "Durable session identity revalidation failed: %s",
+                type(exc).__name__,
+            )
+            raise RuntimeError("Session verification unavailable") from exc
 
     async def list_sessions(
         self,

@@ -229,3 +229,20 @@ async def test_original_remaining_deadline_cannot_be_extended_by_child_runtime(m
     assert await meter.remaining_duration_ms() == 0.0
     assert meter.exhausted is True
     assert await meter.reserve_model_execution() is False
+
+
+@pytest.mark.asyncio
+async def test_admitted_duration_survives_sibling_quota_denial_but_never_expiry(monkeypatch):
+    clock = _clock(monkeypatch)
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=1, max_duration_ms=1000))
+    assert await meter.remaining_admitted_duration_ms() == 0
+    assert await meter.reserve_model_execution()
+    assert not await meter.reserve_model_execution()
+    assert meter.exhausted
+    assert await meter.remaining_duration_ms() == 0
+    clock["seconds"] = 100.4
+    assert await meter.remaining_admitted_duration_ms() == pytest.approx(600.0)
+    clock["seconds"] = 101.0
+    assert await meter.remaining_admitted_duration_ms() == 0
+    assert not await meter.reserve_model_execution()
+    assert meter.model_calls == 1

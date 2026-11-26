@@ -27,7 +27,11 @@ from ..contracts.specialist_execution import SpecialistExecutionContext
 from ..contracts.trace import ExecutionTrajectory
 from ..execution.event_emitter import EventEmitter
 from ..execution.failure_policy import aggregate_status
-from ..execution.run_manager import MedusaRunManager, get_medusa_run_manager
+from ..execution.run_manager import (
+    ExecutionRunStatus,
+    MedusaRunManager,
+    get_medusa_run_manager,
+)
 from ..lifecycle.lifecycle_manager import LifecycleStatus, MedusaAgentLifecycle
 from ..planning.capability_planner import CapabilityAwareMedusaPlanner
 from ..registry import get_medusa_registry
@@ -200,7 +204,7 @@ class MedusaCoordinator:
             raise
         except Exception as exc:
             await self.run_manager.mark_failed(request.request_id, exc)
-            logger.exception(
+            logger.error(
                 "medusa_run_failed",
                 extra={
                     "run_id": request.request_id,
@@ -212,10 +216,23 @@ class MedusaCoordinator:
             )
             return to_safe_response(exc, correlation_id=requirements.correlation_id)
         else:
-            await self.run_manager.mark_response(
+            resolved = await self.run_manager.mark_response(
                 request.request_id,
                 response.status.value,
             )
+            if resolved is ExecutionRunStatus.CANCELLED:
+                logger.info(
+                    "medusa_run_cancelled",
+                    extra={
+                        "run_id": request.request_id,
+                        "correlation_id": requirements.correlation_id,
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                    },
+                )
+                # A specialist may catch cancellation and return content.
+                # The canonical run manager still owns the terminal outcome.
+                raise asyncio.CancelledError
             logger.info(
                 "medusa_run_finished",
                 extra={
@@ -324,6 +341,10 @@ class MedusaCoordinator:
             trajectory_id=request.request_id,
         )
         request_emitter = EventEmitter(sinks=list(self._global_sinks))
+        # Publish a running trajectory before any specialist or final synthesis.
+        # It remains observational, not an authorization or a durable run ledger.
+        trajectory.events = request_emitter._events
+        self.trajectories[request.request_id] = trajectory
         self.active_plans[request.request_id] = plan
         degraded_agents: List[str] = []
         degradation_reasons: Dict[str, Any] = {}
@@ -452,53 +473,80 @@ class MedusaCoordinator:
                     else:
                         step_outputs.append(result)
                         agent_trace.append(step.agent_specialist)
+            if degraded_agents:
+                plan.degraded_mode = True
+                plan.degradation_metadata = DegradationMetadata(
+                    degraded=True,
+                    degradation_reason=(
+                        f"Agents {', '.join(degraded_agents)} ran in degraded mode"
+                    ),
+                    affected_agent=", ".join(degraded_agents),
+                    fallback_level=DegradationLevel.PARTIAL,
+                    capabilities_lost=degradation_reasons.get("capabilities_lost", []),
+                    original_requirement=degradation_reasons.get(
+                        "original_requirement",
+                        "full agent execution",
+                    ),
+                )
+
+            final_status = aggregate_status([step.status.value for step in plan.steps])
+            response_metadata: Dict[str, Any] = {
+                "plan": plan.to_dict(),
+                "trajectory": trajectory.to_dict(),
+                "execution_topology": "multi_agent",
+                "policy_decision_id": authorized_plan.policy_decision_id,
+            }
+            if plan.degraded_mode and plan.degradation_metadata is not None:
+                response_metadata["degraded_mode"] = True
+                response_metadata["degradation_reason"] = (
+                    plan.degradation_metadata.degradation_reason
+                )
+                response_metadata["affected_agents"] = degraded_agents
+                response_metadata["fallback_level"] = (
+                    plan.degradation_metadata.fallback_level.value
+                )
+
+            # The final response is another model stage, not a fresh request.
+            # Only the original authenticated plan and meter may admit synthesis.
+            synthesis_scope = (
+                SpecialistExecutionContext(
+                    authorized_plan=authorized_plan,
+                    tenant_id=request.tenant_id,
+                    user_id=request.user_id,
+                    session_id=request.session_id,
+                    policy_decision_id=authorized_plan.policy_decision_id,
+                    trajectory_id=request.request_id,
+                    correlation_id=self._correlation_id(request),
+                    step_id="medusa.final_synthesis",
+                    budget_meter=meter,
+                    authenticated_chat_context=trusted_context,
+                    preferred_provider=request.context.get("preferred_provider"),
+                    preferred_model=request.context.get("preferred_model"),
+                )
+                if trusted_context is not None
+                else None
+            )
+            response = await self.assembler.assemble(
+                request_id=request.request_id,
+                step_outputs=step_outputs,
+                agent_trace=agent_trace,
+                latest_user_message=request.query,
+                status=final_status,
+                metadata=response_metadata,
+                execution=synthesis_scope,
+            )
+            trajectory.complete(response.status.value)
+            response.metadata["trajectory"] = trajectory.to_dict()
+            return response
+
+        except asyncio.CancelledError:
+            trajectory.complete("cancelled")
+            raise
+        except Exception:
+            trajectory.complete("error")
+            raise
         finally:
             self.active_plans.pop(request.request_id, None)
-
-        if degraded_agents:
-            plan.degraded_mode = True
-            plan.degradation_metadata = DegradationMetadata(
-                degraded=True,
-                degradation_reason=(
-                    f"Agents {', '.join(degraded_agents)} ran in degraded mode"
-                ),
-                affected_agent=", ".join(degraded_agents),
-                fallback_level=DegradationLevel.PARTIAL,
-                capabilities_lost=degradation_reasons.get("capabilities_lost", []),
-                original_requirement=degradation_reasons.get(
-                    "original_requirement",
-                    "full agent execution",
-                ),
-            )
-
-        final_status = aggregate_status([step.status.value for step in plan.steps])
-        trajectory.complete(final_status.value)
-        trajectory.events = request_emitter._events
-        self.trajectories[request.request_id] = trajectory
-        response_metadata: Dict[str, Any] = {
-            "plan": plan.to_dict(),
-            "trajectory": trajectory.to_dict(),
-            "execution_topology": "multi_agent",
-            "policy_decision_id": authorized_plan.policy_decision_id,
-        }
-        if plan.degraded_mode and plan.degradation_metadata is not None:
-            response_metadata["degraded_mode"] = True
-            response_metadata["degradation_reason"] = (
-                plan.degradation_metadata.degradation_reason
-            )
-            response_metadata["affected_agents"] = degraded_agents
-            response_metadata["fallback_level"] = (
-                plan.degradation_metadata.fallback_level.value
-            )
-
-        return await self.assembler.assemble(
-            request_id=request.request_id,
-            step_outputs=step_outputs,
-            agent_trace=agent_trace,
-            latest_user_message=request.query,
-            status=final_status,
-            metadata=response_metadata,
-        )
 
     async def _execute_step(
         self,

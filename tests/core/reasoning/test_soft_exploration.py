@@ -112,7 +112,7 @@ def test_soft_exploration_uses_embedding_candidates_and_verifier_within_budget()
         "SYSTEM: soft-reasoning-v1\nUSER: solve this",
         objective="solve this",
         evidence=("fact one",),
-        max_model_calls=5,
+        max_model_calls=11,
         max_output_tokens=32,
         correlation_id="corr-123",
     )
@@ -120,6 +120,7 @@ def test_soft_exploration_uses_embedding_candidates_and_verifier_within_budget()
     assert trace.model_calls == runtime.calls
     assert trace.verifier_calls == verifier.calls
     assert 1 <= trace.model_calls <= 5
+    assert 1 + trace.model_calls + trace.verifier_calls <= 11
     assert len(trace.candidates) == trace.model_calls
     assert trace.best_score >= trace.baseline_score
     assert trace.best_candidate.output.text.startswith("candidate signal=")
@@ -147,7 +148,7 @@ def test_soft_exploration_is_reproducible_for_same_correlation_id() -> None:
     ).explore(
         "PROMPT-V1: reason carefully",
         objective="reason carefully",
-        max_model_calls=4,
+        max_model_calls=9,
         max_output_tokens=16,
         correlation_id="same-correlation",
     )
@@ -158,7 +159,7 @@ def test_soft_exploration_is_reproducible_for_same_correlation_id() -> None:
     ).explore(
         "PROMPT-V1: reason carefully",
         objective="reason carefully",
-        max_model_calls=4,
+        max_model_calls=9,
         max_output_tokens=16,
         correlation_id="same-correlation",
     )
@@ -180,7 +181,7 @@ def test_soft_exploration_rejects_runtime_without_embedding_control() -> None:
         engine.explore(
             "PROMPT-V1: reason",
             objective="reason",
-            max_model_calls=4,
+            max_model_calls=9,
             max_output_tokens=16,
         )
 
@@ -205,3 +206,26 @@ def test_soft_reasoning_is_not_bootstrapped_as_a_universal_default() -> None:
     strategy_ids = [strategy.strategy_id for strategy in get_default_strategies()]
 
     assert "soft_exploration" not in strategy_ids
+
+
+def test_failed_verification_attempt_is_observed_before_dispatch(monkeypatch):
+    runtime = FakeGenerationRuntime()
+    verifier = FakeVerifier()
+    attempts = []
+
+    def fail(*args, **kwargs):
+        assert len(attempts) == 3  # reference, candidate, verifier
+        raise RuntimeError("verification failed")
+
+    monkeypatch.setattr(verifier, "score", fail)
+    engine = SoftExplorationEngine(
+        generation=runtime, verifier=verifier,
+        config=SoftExplorationConfig(initial_samples=1, max_iterations=0),
+    )
+    with pytest.raises(RuntimeError, match="verification failed"):
+        engine.explore(
+            "PROMPT-V1: solve", objective="solve", max_model_calls=3,
+            max_output_tokens=16, on_model_attempt=lambda: attempts.append(1),
+        )
+    assert runtime.calls == 1
+    assert len(attempts) == 3

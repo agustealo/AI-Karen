@@ -17,6 +17,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("reported_calls", [0, 1])
+@pytest.mark.parametrize("reserved_calls", [None, 0, 2])
 @pytest.mark.parametrize(
     ("executed", "modes", "verifier_executed"),
     [
@@ -27,7 +28,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ],
 )
 async def test_reasoning_strategy_cannot_forge_observed_model_provenance(
-    reported_calls, executed, modes, verifier_executed,
+    reported_calls, reserved_calls, executed, modes, verifier_executed,
 ):
     """No executable provider receipt means no claimed actual provider/model."""
     runtime = ChatRuntime.__new__(ChatRuntime)
@@ -54,6 +55,7 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(
     )
     activation = SimpleNamespace(
         reasoning_modes=modes,
+        reserved_model_calls=(None if reserved_calls is None else lambda: reserved_calls),
         request_metadata={},
         runtime_metadata={
             "reasoning_activation": "runtime_composed",
@@ -74,7 +76,7 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(
     )
     activation_calls = []
 
-    def activate(**kwargs):
+    async def activate(**kwargs):
         activation_calls.append(kwargs)
         return activation
 
@@ -92,6 +94,7 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(
         ),
     )
     meter = SimpleNamespace(
+        model_calls=reserved_calls or 0,
         consume_model_call=AsyncMock(return_value=True),
         consume_reasoning_step=AsyncMock(return_value=True),
         check_duration=AsyncMock(return_value=True),
@@ -112,14 +115,18 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(
     assert metadata["actual_provider"] is None
     assert metadata["actual_model"] is None
     assert metadata["response_source"] == "reasoning"
-    assert metadata["reasoning_model_calls"] == reported_calls
+    expected_calls = reported_calls if reserved_calls is None else reserved_calls
+    assert metadata["reasoning_model_calls"] == expected_calls
+    assert meter.consume_model_call.await_count == (
+        reported_calls if reserved_calls is None else 0
+    )
     assert metadata["reasoning_steps"] == 1
     assert metadata["reasoning_id"] == "reason-1"
     assert metadata["reasoning_status"] == "success"
     assert metadata["execution_spans"][0]["name"] == "reasoning_executor"
     assert metadata["verification_strategy_executed"] is verifier_executed
     assert metadata["reasoning_model_attribution_status"] == (
-        "unverified" if reported_calls else "not_executed"
+        "unverified" if expected_calls else "not_executed"
     )
     assert activation.executor.execute.await_count == 1
     assert len(activation_calls) == 1
@@ -127,3 +134,5 @@ async def test_reasoning_strategy_cannot_forge_observed_model_provenance(
     assert activation_calls[0]["preferred_model"] == "requested-model"
     assert activation_calls[0]["plan"] is plan
     assert activation_calls[0]["decision"] is decision
+    assert activation_calls[0]["authenticated_context"] is request.context
+    assert activation_calls[0]["execution_meter"] is meter
