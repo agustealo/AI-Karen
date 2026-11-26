@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
+from textwrap import dedent
 
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW_PATH = ROOT / ".github/workflows/karen-history-browser-acceptance.yml"
@@ -409,3 +413,107 @@ def test_kcon490_real_personal_followup_dispatch_requires_verified_live_backend(
     assert "page.route(" not in source
     assert "route.fulfill(" not in source
 
+
+
+def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_credentials() -> None:
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    job = workflow.split("  authenticated-settings-visual-acceptance:", 1)[1]
+    assert "          - specialist-participation" in workflow
+    assert "inputs.scenario == 'specialist-participation'" in job
+    assert "github.ref == 'refs/heads/main'" in job
+    assert "environment: karen-sanitized-browser-acceptance" in job
+    assert "vars.KAREN_SPECIALIST_ACCEPTANCE_URL" in job
+    assert 'test "$TARGET_SHA" = "$GITHUB_SHA"' in job
+    assert job.count("python scripts/ci/verify_vercel_deployment.py") == 2
+    assert job.count("python scripts/ci/verify_deployment_revision.py") == 2
+    assert job.count("python -m scripts.ci.verify_backend_target") == 2
+    title = "Prove protected specialist lifecycle and cross-tenant readback"
+    step = job.split("      - name: " + title, 1)[1].split("\n      - name:", 1)[0]
+    assert "if: inputs.scenario == 'specialist-participation'" in step
+    assert "if: inputs.scenario != 'specialist-participation'" in job
+    for flag in ("PARTICIPATION", "LIFECYCLE", "CROSS_TENANT"):
+        assert f'KAREN_SPECIALIST_{flag}_ACCEPTANCE: "true"' in step
+    for name in (
+        "KAREN_UX_ACCOUNT_B_EMAIL", "KAREN_UX_ACCOUNT_B_PASSWORD",
+        "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD",
+        "KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID",
+        "KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID",
+    ):
+        assert name + ": " + chr(36) + "{{ secrets." + name + " }}" in step
+        assert job.count(name) == step.count(name)
+    assert "--grep='ARM-05C.5B real participation receipts survive reload and deny a second account'" in step
+    assert "--retries=0" in step and "--workers=1" in step
+    assert 'stats.get("expected") != 1' in step
+    assert '"unexpected", "skipped", "flaky"' in step
+    assert '"expected", "passed", "chromium", ["passed"]' in step
+    assert "umask 077" in step and "mktemp -d" in step
+    assert "trap 'rm -rf --" in step
+    assert "upload-artifact" not in job
+    assert job.index("python scripts/ci/verify_vercel_deployment.py") < job.index(title)
+    assert job.index(title) < job.rindex("python scripts/ci/verify_vercel_deployment.py")
+    spec = (
+        ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/automation-two-account-acceptance.spec.ts"
+    ).read_text(encoding="utf-8")
+    assert 'from "./fixtures/verified-search-deployment"' in spec
+    assert 'trace: "off", screenshot: "off", video: "off"' in spec
+    assert "page.route(" not in spec
+
+
+def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> None:
+    """Execute the actual inline gate on synthetic test-only report fixtures."""
+    workflow = WORKFLOW_PATH.read_text(encoding="utf-8")
+    step = workflow.split(
+        "      - name: Prove protected specialist lifecycle and cross-tenant readback", 1
+    )[1].split("\n      - name:", 1)[0]
+    shell = dedent(step.split("        run: |\n", 1)[1])
+    subprocess.run(["bash", "-n"], input=shell, text=True, check=True)
+    validator = shell.split("<<'PY'\n", 1)[1].split("\nPY\n", 1)[0]
+    title = "ARM-05C.5B real participation receipts survive reload and deny a second account"
+
+    def report(**test_overrides):
+        test = {
+            "status": "expected",
+            "expectedStatus": "passed",
+            "projectName": "chromium",
+            "results": [{"status": "passed"}],
+            **test_overrides,
+        }
+        return {
+            "errors": [],
+            "stats": {"expected": 1, "unexpected": 0, "skipped": 0, "flaky": 0},
+            "suites": [{"suites": [{"specs": [{"title": title, "tests": [test]}]}]}],
+        }
+
+    path = tmp_path / "report.json"
+
+    def validate(payload: str) -> int:
+        path.write_text(payload, encoding="utf-8")
+        return subprocess.run(
+            [sys.executable, "-c", validator, str(path)],
+            capture_output=True,
+            check=False,
+        ).returncode
+
+    assert validate(json.dumps(report())) == 0
+    invalid = [
+        report(status="skipped"),
+        report(expectedStatus="failed"),
+        report(projectName="firefox"),
+        report(results=[{"status": "failed"}, {"status": "passed"}]),
+        report(results=[]),
+        {**report(), "errors": [{"message": "test-only"}]},
+        {**report(), "stats": {"expected": 1}},
+        {**report(), "stats": {"expected": 0, "unexpected": 0, "skipped": 1, "flaky": 0}},
+        {**report(), "suites": []},
+    ]
+    wrong_title = report()
+    wrong_title["suites"][0]["suites"][0]["specs"][0]["title"] = "test-only wrong scenario"
+    invalid.append(wrong_title)
+    duplicate = report()
+    duplicate["suites"].append(duplicate["suites"][0])
+    invalid.append(duplicate)
+    for payload in invalid:
+        assert validate(json.dumps(payload)) != 0
+    assert validate("{malformed") != 0
