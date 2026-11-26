@@ -1,6 +1,8 @@
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import { openAutomationWorkspace } from "./fixtures/automation-workspace-navigation";
 import type { Page } from "@playwright/test";
+import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedSpecialist, matchesApprovedSpecialistReceipt, validRuntimeRequestId, verifyFreshSpecialistEvidence, verifyAttestedSpecialistActivity, type ApprovedSpecialist } from "./fixtures/specialist-evidence";
 
 /**
  * The preview route previously owned this CSS, so the dashboard could render
@@ -15,7 +17,7 @@ import type { Page } from "@playwright/test";
  */
 async function readAuthorizedSameOriginJson(
   page: Page, apiPath: string,
-): Promise<{ ok: boolean; body: unknown }> {
+): Promise<{ ok: boolean; status: number; body: unknown }> {
   return page.evaluate(async (path) => {
     const url = new URL(path, window.location.origin);
     if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
@@ -28,7 +30,7 @@ async function readAuthorizedSameOriginJson(
       redirect: "error",
       headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
     });
-    return { ok: response.ok, body: response.ok ? await response.json() : null };
+    return { ok: response.ok, status: response.status, body: response.ok ? await response.json() : null };
   }, apiPath);
 }
 
@@ -135,7 +137,9 @@ function isVerifiedGenerativeResponseSource(responseSource: string): boolean {
  */
 async function expectVerifiedExecutionReceipt(
   page: Page, conversationId: string, persistedAnswer: string,
-): Promise<void> {
+  specialist?: ApprovedSpecialist,
+): Promise<{ assistantId: string; runtimeRequestId: string | null }> {
+  let verified: { assistantId: string; runtimeRequestId: string | null } | undefined;
   await expect.poll(async () => {
     const { ok, body } = await readAuthorizedSameOriginJson(
       page, `/api/copilotkit/threads/${conversationId}/messages`,
@@ -171,12 +175,99 @@ async function expectVerifiedExecutionReceipt(
     // canned fallback, or replay. Require a generative provenance category.
     // This is provider-agnostic and accepts local, remote and fallback models.
     const responseSource = (metadata.response_source as string).trim().toLowerCase();
-    return isVerifiedGenerativeResponseSource(responseSource);
+    if (specialist ? !matchesApprovedSpecialistReceipt(metadata, specialist) :
+        !isVerifiedGenerativeResponseSource(responseSource)) return false;
+    verified = {
+      assistantId: matching[0].id as string,
+      runtimeRequestId: validRuntimeRequestId(metadata.runtime_request_id) ? metadata.runtime_request_id : null,
+    };
+    return true;
   }, {
     timeout: 30_000,
     intervals: [500, 1000, 2000],
     message: "The exact saved assistant turn must have backend-verified model execution provenance",
   }).toBe(true);
+  if (!verified) throw new Error("Verified assistant receipt unavailable");
+  return verified;
+}
+
+async function readFreshSpecialistEvidence(
+  page: Page, target: URL, conversationId: string, transportRunId: string,
+  runtimeRequestId: string, assistantId: string, approved: ApprovedSpecialist,
+) {
+  if (new URL(page.url()).origin !== target.origin) throw new Error("Unapproved specialist readback origin");
+  const status = await readAuthorizedSameOriginJson(page,
+    `/api/copilotkit/agent/default/runs/${conversationId}/${transportRunId}/status`);
+  expect(status.ok).toBe(true);
+  expect(status.body).toMatchObject({ status: "completed", cancel_requested: false, cancellation_confirmed: false });
+  const path = `/api/agent-runtime/my-runs/${encodeURIComponent(runtimeRequestId)}`;
+  const [run, lifecycle, participation, tools] = await Promise.all(
+    ["", "/transitions", "/participation", "/tool-receipts"].map(suffix => readAuthorizedSameOriginJson(page, path + suffix)),
+  );
+  if (![run, lifecycle, participation, tools].every(result => result.ok)) {
+    throw new Error("Fresh owned specialist evidence is unavailable");
+  }
+  const proof = verifyFreshSpecialistEvidence(runtimeRequestId, approved, run.body, lifecycle.body, participation.body, tools.body);
+  const history = await readAuthorizedSameOriginJson(page, `/api/copilotkit/threads/${conversationId}/messages`);
+  if (!history.ok) throw new Error("Fresh attested activity history unavailable");
+  const activity = verifyAttestedSpecialistActivity(history.body, conversationId, assistantId, transportRunId,
+    runtimeRequestId, approved, proof.stepId);
+  // Compare the complete durable receipt inventories on replay, not only IDs.
+  // Keep the live run snapshot out of equality: worker-local and durable
+  // projections legitimately differ while their immutable identity agrees.
+  return { proof, activity, lifecycle: lifecycle.body, participation: participation.body, tools: tools.body };
+
+}
+
+/** Probe the actual new run after the owner has completed and reloaded it.
+ * Existing seeded lifecycle fixtures cannot substitute for these denials. */
+async function expectFreshSpecialistIsolation(
+  page: Page, target: URL, threadId: string, runtimeRequestId: string,
+  approved: ApprovedSpecialist,
+): Promise<void> {
+  const prefix = "/api/agent-runtime/my-runs/" + encodeURIComponent(runtimeRequestId);
+  const evidence = [prefix, prefix + "/transitions", prefix + "/participation", prefix + "/tool-receipts"];
+  const history = "/api/copilotkit/threads/" + encodeURIComponent(threadId) + "/messages";
+  const sameOrigin = () => {
+    if (new URL(page.url()).origin !== target.origin) throw new Error("Unapproved specialist isolation origin");
+  };
+  const signOut = async () => {
+    sameOrigin();
+    await openAutomationWorkspace(page, "My Account", false);
+    sameOrigin();
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page).toHaveURL(/\/login(?:[?#]|$)/, { timeout: 30_000 });
+    sameOrigin();
+    expect(await page.evaluate(() => !!window.localStorage.getItem("access_token")),
+      "Signed-out browser must not retain a bearer").toBe(false);
+    for (const path of evidence) {
+      const denied = await readAuthorizedSameOriginJson(page, path);
+      expect([401, 403], "Signed-out principal must not read fresh evidence").toContain(denied.status);
+    }
+  };
+  await signOut();
+  const seen = new Set([approved.userId]);
+  for (const [index, account] of foreignSpecialistAccounts.entries()) {
+    await requireLiveCanonicalBackend(page, target);
+    await signInApprovedKaren(page, account.email!, account.password!, { allowLocalLoopback: localMode });
+    sameOrigin();
+    const session = await readAuthorizedSameOriginJson(page, "/api/auth/validate-session");
+    const body = session.body as { user?: { user_id?: unknown; tenant_id?: unknown } } | null;
+    const userId = body?.user?.user_id;
+    const tenantId = body?.user?.tenant_id;
+    if (!session.ok || typeof userId !== "string" || typeof tenantId !== "string" ||
+        !approvedSpecialistIdentity(body, { ...approved, userId, tenantId })) {
+      throw new Error("Foreign sanitized non-admin principal could not be verified");
+    }
+    expect(seen.has(userId), "Require a distinct foreign user").toBe(false);
+    seen.add(userId);
+    expect(tenantId === approved.tenantId, "Require same-tenant and cross-tenant foreign principals").toBe(index === 0);
+    for (const path of [...evidence, history]) {
+      const denied = await readAuthorizedSameOriginJson(page, path);
+      expect(denied.status, "Foreign principal must not read the actual fresh run or conversation").toBe(404);
+    }
+    await signOut();
+  }
 }
 
 /**
@@ -257,6 +348,42 @@ const expectedRevision = process.env.KAREN_CHAT_BOOT_REVISION;
 const approvedUrl = process.env.KAREN_BASE_URL;
 const approvedEmail = process.env.KAREN_UX_EMAIL;
 const approvedPassword = process.env.KAREN_UX_PASSWORD;
+const ordinarySpecialistAcceptance = process.env.KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE === "true";
+const approvedSpecialist: ApprovedSpecialist | undefined = ordinarySpecialistAcceptance ? {
+  tenantId: process.env.KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID || "",
+  userId: process.env.KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID || "",
+  provider: process.env.KAREN_SPECIALIST_EXPECTED_PROVIDER || "",
+  model: process.env.KAREN_SPECIALIST_EXPECTED_MODEL || "",
+  engine: process.env.KAREN_SPECIALIST_EXPECTED_ENGINE || "",
+  agent: process.env.KAREN_SPECIALIST_EXPECTED_AGENT || "",
+  tool: process.env.KAREN_SPECIALIST_EXPECTED_TOOL || "",
+  prompt: process.env.KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT || "",
+} : undefined;
+const foreignSpecialistAccounts = [
+  { email: process.env.KAREN_UX_ACCOUNT_B_EMAIL, password: process.env.KAREN_UX_ACCOUNT_B_PASSWORD },
+  { email: process.env.KAREN_UX_ACCOUNT_C_EMAIL, password: process.env.KAREN_UX_ACCOUNT_C_PASSWORD },
+];
+if (approvedSpecialist && (foreignSpecialistAccounts.some(account => !account.email?.trim() || !account.password) ||
+    new Set([approvedEmail, ...foreignSpecialistAccounts.map(account => account.email)]
+      .map(email => email?.trim().toLowerCase())).size !== 3)) {
+  throw new Error("Fresh isolation requires three distinct sanitized account credentials");
+}
+const localSpecialistMode = ordinarySpecialistAcceptance && localMode && !releaseMode &&
+  process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM === "local" &&
+  process.env.KAREN_LOCAL_SEARCH_ACCEPTANCE === "1" &&
+  process.env.KAREN_SANITIZED_ACCOUNT === "true" &&
+  approvedUrl === "http://127.0.0.1:8010";
+const signedSpecialistMode = releaseMode && !localMode &&
+  process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM === "docker";
+if (approvedSpecialist && ((!signedSpecialistMode && !localSpecialistMode) ||
+    personalContextAcceptance || kcon770FaultAcceptance || authState ||
+    process.env.KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED !== "true" ||
+    process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== "true" ||
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined ||
+    !expectedRevision || !/^[0-9a-f]{40}$/.test(expectedRevision) ||
+    !approvedEmail || !approvedPassword || !validApprovedSpecialist(approvedSpecialist))) {
+  throw new Error("Fresh specialist trial requires explicit signed Docker or sanitized loopback approval and complete configuration");
+}
 
 if (releaseMode && localMode) {
   throw new Error("Local and release chat boot acceptance cannot run in the same invocation");
@@ -288,9 +415,9 @@ if (enabled) {
 }
 
 async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
-  // Local dev builds may not expose an attested deployment revision. Release
-  // acceptance always requires the exact reviewed SHA and cannot skip it.
-  if (!releaseMode) return;
+  // Generic local dev builds may omit the revision endpoint. Signed release
+  // and explicit local specialist acceptance both require the reviewed SHA.
+  if (!releaseMode && !localSpecialistMode) return;
   const response = await page.context().request.get(
     new URL("/api/deployment-revision", target).toString(),
     { failOnStatusCode: false, maxRedirects: 0, timeout: 20_000 },
@@ -298,6 +425,11 @@ async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
   expect(response.status()).toBe(200);
   const body: unknown = await response.json();
   expect(body).toBeTruthy();
+  if (localSpecialistMode) {
+    expect(response.headers()["content-type"] ?? "").toMatch(/^application\/json(?:;|$)/i);
+    expect(response.headers()["cache-control"] ?? "").toContain("no-store");
+    expect(body).toEqual({ status: "ok", revision: expectedRevision });
+  }
   const revision = body as Record<string, unknown>;
   expect(revision.revision ?? revision.sha ?? revision.commit_sha ?? revision.git_sha)
     .toBe(expectedRevision);
@@ -313,8 +445,11 @@ test.use({
 test.describe("canonical consumer chat cold-load acceptance", () => {
   test.skip(!enabled, "Set KAREN_LOCAL_CHAT_ACCEPTANCE=1 or KAREN_CHAT_BOOT_ACCEPTANCE=1 for real backend/browser proof");
 
-  test("persists a real user message and a real assistant reply", async ({ page }, testInfo) => {
-    test.setTimeout(personalContextAcceptance ? 18 * 60_000 : 180_000);
+  const specialistTitle = localSpecialistMode
+    ? "ARM-08 local ordinary-chat specialist execution survives reload"
+    : "ARM-08 fresh ordinary-chat specialist execution survives reload";
+  test(approvedSpecialist ? specialistTitle : "persists a real user message and a real assistant reply", async ({ page }, testInfo) => {
+    test.setTimeout(approvedSpecialist ? 12 * 60_000 : personalContextAcceptance ? 18 * 60_000 : 180_000);
     const target = new URL(approvedUrl!);
     const browserErrors: string[] = [];
     page.on("pageerror", error => {
@@ -360,6 +495,13 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       timeout: 30_000,
     });
     await expectRealCopilotKitStyles(page);
+    if (approvedSpecialist) {
+      if (new URL(page.url()).origin !== target.origin) throw new Error("Unapproved specialist browser origin");
+      const session = await readAuthorizedSameOriginJson(page, "/api/auth/validate-session");
+      if (!session.ok || !approvedSpecialistIdentity(session.body, approvedSpecialist)) {
+        throw new Error("Approved disposable specialist principal was not verified");
+      }
+    }
 
     // Never inject acceptance prompts into an arbitrary existing user thread.
     // Create a separate durable conversation through the actual user UI.
@@ -378,21 +520,46 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
 
     const id = await shell.getAttribute("data-conversation-id");
     expect(id).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i);
-    const prompt = `Karen live acceptance ${crypto.randomUUID()}: Please respond with a brief greeting.`;
+    if (approvedSpecialist) {
+      if (new URL(page.url()).origin !== target.origin) throw new Error("Unapproved specialist browser origin");
+      const empty = await readAuthorizedSameOriginJson(page, `/api/copilotkit/threads/${id}/messages`);
+      expect(empty.ok && emptyFreshSpecialistHistory(empty.body, id!),
+        "Fresh conversation must have no pre-existing evidence or unresolved execution").toBe(true);
+    }
+    const prompt = approvedSpecialist ?
+      `${approvedSpecialist.prompt}\n\nAcceptance reference: ${crypto.randomUUID()}` :
+      `Karen live acceptance ${crypto.randomUUID()}: Please respond with a brief greeting.`;
     const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
     await expect(composer, "CopilotKit must present a usable composer").toBeVisible();
     // This must reproduce the original consumer defect: Enter immediately
     // after typing while the debounced draft CAS may still be pending.
     // Waiting for autosave here would make the acceptance test meaningless.
     const observedRunRequests: string[] = [];
+    const specialistTransportIds: string[] = [];
+    const specialistMutations: string[] = [];
     page.on("request", (request) => {
-      const pathname = new URL(request.url()).pathname;
+      const url = new URL(request.url());
+      const pathname = url.pathname;
+      if (approvedSpecialist && url.origin === target.origin &&
+          !["GET", "HEAD", "OPTIONS"].includes(request.method()) &&
+          (pathname.startsWith("/api/agent-runtime/") || pathname.startsWith("/api/admin/agents/"))) {
+        specialistMutations.push(request.method());
+      }
       if (request.method() === "POST" && (
         pathname === "/api/copilotkit/agent/default/run" ||
         pathname === "/api/chat/ag-ui" ||
-        pathname === "/api/chat/stream"
+        pathname === "/api/chat/stream" || (approvedSpecialist && pathname === "/api/chat")
       )) {
         observedRunRequests.push(pathname);
+        if (approvedSpecialist && pathname === "/api/copilotkit/agent/default/run" && new URL(request.url()).origin === target.origin) {
+          try {
+            const submitted = request.postDataJSON() as Record<string, unknown>;
+            if (submitted.threadId === id && typeof submitted.runId === "string" &&
+                submitted.runId.length <= 100 && validRuntimeRequestId(submitted.runId)) {
+              specialistTransportIds.push(submitted.runId);
+            }
+          } catch { /* Unverified transport is rejected by the assertion below. */ }
+        }
       }
     });
     // Capture only whitelisted endpoint types, HTTP statuses and validated
@@ -535,7 +702,14 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         { clearing: false, status: 200, revision: 1 },
         { clearing: true, status: 200, revision: 2 },
       ]);
-    await expectVerifiedExecutionReceipt(page, id!, persistedAnswer);
+    const firstReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);
+    let specialistEvidence: Awaited<ReturnType<typeof readFreshSpecialistEvidence>> | undefined;
+    if (approvedSpecialist) {
+      expect(observedRunRequests).toEqual(["/api/copilotkit/agent/default/run"]);
+      expect(specialistTransportIds).toHaveLength(1);
+      if (!firstReceipt.runtimeRequestId) throw new Error("Attested runtime request identity missing");
+      specialistEvidence = await readFreshSpecialistEvidence(page, target, id!, specialistTransportIds[0], firstReceipt.runtimeRequestId, firstReceipt.assistantId, approvedSpecialist);
+    }
     // A saved backend answer alone is not a functioning consumer chat.
     // The active CopilotKit view must render the real assistant response
     // before any reload, not only during a later history replay.
@@ -737,7 +911,13 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       timeout: 30_000,
     });
     await expectRealCopilotKitStyles(page);
-    await expectVerifiedExecutionReceipt(page, id!, persistedAnswer);
+    const replayedReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);
+    if (approvedSpecialist) {
+      expect(replayedReceipt).toEqual(firstReceipt);
+      expect(await readFreshSpecialistEvidence(page, target, id!, specialistTransportIds[0], firstReceipt.runtimeRequestId!, firstReceipt.assistantId, approvedSpecialist)).toEqual(specialistEvidence);
+      expect(observedRunRequests, "Reload must not resubmit inference").toHaveLength(1);
+      expect(specialistMutations, "Consumer must not mutate execution authority").toEqual([]);
+    }
     await expect(restored.getByTestId("karen-copilot-rail-unverified")).toHaveCount(0, {
       timeout: 30_000,
     });
@@ -747,8 +927,15 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
       "The actual persisted assistant reply must be rendered after reload",
     ).toBeVisible({ timeout: 30_000 });
     expect(browserErrors, "Chat submit and restore must not cause browser or chunk errors").toEqual([]);
-
-
+    if (approvedSpecialist) {
+      await expectFreshSpecialistIsolation(page, target, id!, firstReceipt.runtimeRequestId!, approvedSpecialist);
+      expect(observedRunRequests, "Authorization probes must not start inference").toHaveLength(1);
+      expect(specialistMutations, "Consumer must not mutate execution authority").toEqual([]);
+      if (localSpecialistMode) {
+        await requireReviewedRevision(page, target);
+        await requireLiveCanonicalBackend(page, target);
+      }
+    }
   });
 
   for (const scenario of [
