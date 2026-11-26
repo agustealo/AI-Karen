@@ -1387,3 +1387,9 @@ completion, content-size or presentation validation to silence the UI.
 
 - Exact head 42ad98b failed Reasoning Smoke (10 passed, 1 failed) and Cognitive Proof reasoning capability suite (148 passed, 1 failed) on the same assertion: an explicitly requested 30-call ExecutionDecision was incorrectly expected to hold 31. Restore the caller-value preservation assertion; separately parameterize the real authenticated activation budget denial at 10 and 30 calls. No production quota change, bypass, or test removal.
 - Stabilize the existing candidate before expanding execution authority. Original-meter per-attempt reservations, owned asynchronous specialist preparation/exploration and duplicate-charge prevention remain outstanding. Fresh exact-head CI and review required; no deployment or orphan release authorized.
+
+
+## KCON-470 / KCON-471 / KCON-770: ARM-09 cancellation rollback fence (2026-11-26, SOURCE_CANDIDATE)
+
+- Local required durable cancellation admission can fail after concurrent terminal closure. Reuse the existing heartbeat rollback condition at the local admin cancellation boundary: only the exact same run still in CANCELLING may return to RUNNING. Never resurrect cancelled/orphaned terminal truth, completion timestamp, error or outcome. No new runtime, recovery store or retry authority.
+- Extend `tests/agent_medusa/test_cancel_durable_first.py` with deterministic event-controlled late PostgreSQL conflict/unavailability across explicit cancellation and unverified retirement, asserting unchanged snapshot, no task cancellation signal and no duplicate terminal write. Existing no-race rollback tests remain authoritative. Exact-head CI and real PostgreSQL/Redis failure acceptance remain required. This narrow repair does not certify atomic admission/terminal arbitration or uncertain native cessation; all affected tasks remain unchecked. External hosted deployment availability is not a source-integration gate.

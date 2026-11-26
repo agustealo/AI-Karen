@@ -454,7 +454,13 @@ class MedusaRunManager:
                     if self._settings.durable_run_ledger_required:
                         async with self._lock:
                             current = self._runs.get(run_id)
-                            if current is local_run:
+                            # Durable admission may fail after a concurrent
+                            # terminal transition. Roll back only our pending
+                            # cancellation state, never reopen terminal truth.
+                            if (
+                                current is local_run
+                                and current.status is ExecutionRunStatus.CANCELLING
+                            ):
                                 current.status = ExecutionRunStatus.RUNNING
                         raise
             if local_run.shared_registered:

@@ -123,3 +123,96 @@ async def test_local_cancel_never_signals_redis_before_required_durable_transiti
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["unavailable", "conflict"])
+@pytest.mark.parametrize("terminal", ["orphaned", "cancelled"])
+async def test_failed_cancel_admission_cannot_reopen_concurrent_terminal_run(
+    failure: str, terminal: str
+) -> None:
+    """A failed late durable response cannot undo an independently closed run."""
+    manager = MedusaRunManager(
+        settings=AgentMedusaRuntimeSettings(
+            distributed_run_control_enabled=False,
+            durable_run_ledger_enabled=False,
+            durable_run_ledger_required=False,
+            worker_id="test-worker",
+        )
+    )
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    terminal_writes: list[dict[str, object]] = []
+
+    class BlockingLedger(_RecordingDurableControl):
+        async def mark_cancelling(self, **kwargs: object) -> None:
+            entered.set()
+            await release.wait()
+            if failure == "unavailable":
+                raise DurableRunLedgerUnavailable("test-only late outage")
+            raise DurableRunLedgerConflict("test-only late conflict")
+
+        async def mark_terminal(self, **kwargs: object) -> None:
+            terminal_writes.append(kwargs)
+
+    task = asyncio.create_task(asyncio.sleep(60))
+    cancellation: asyncio.Task | None = None
+    try:
+        run = await manager.register(
+            run_id="run-race",
+            correlation_id="corr-race",
+            tenant_id="tenant-a",
+            user_id="owner-a",
+            task=task,
+        )
+        run.durable_registered = True
+        manager._durable_ledger = BlockingLedger([], failure)
+        manager._settings = AgentMedusaRuntimeSettings(
+            distributed_run_control_enabled=False,
+            durable_run_ledger_enabled=True,
+            durable_run_ledger_required=True,
+            worker_id="test-worker",
+        )
+        cancellation = asyncio.create_task(
+            manager.cancel(
+                run_id=run.run_id,
+                tenant_id=run.tenant_id,
+                audit_event_ref="audit-race",
+            )
+        )
+        await asyncio.wait_for(entered.wait(), timeout=5)
+        assert run.status is ExecutionRunStatus.CANCELLING
+
+        if terminal == "orphaned":
+            await manager.mark_retirement_unverified(run.run_id)
+        else:
+            await manager.mark_cancelled(run.run_id)
+        snapshot = await manager.get(run_id=run.run_id, tenant_id=run.tenant_id)
+        assert snapshot["status"] == terminal
+        assert snapshot["completed_at"] is not None
+        assert snapshot["cancellable"] is False
+        assert len(terminal_writes) == 1
+        assert terminal_writes[0]["status"] == terminal
+
+        release.set()
+        error = (
+            DurableRunLedgerUnavailable
+            if failure == "unavailable"
+            else DurableRunLedgerConflict
+        )
+        with pytest.raises(error):
+            await asyncio.wait_for(cancellation, timeout=5)
+
+        assert await manager.get(
+            run_id=run.run_id, tenant_id=run.tenant_id
+        ) == snapshot
+        assert task.cancelling() == 0
+        assert len(terminal_writes) == 1
+    finally:
+        release.set()
+        if cancellation is not None:
+            if not cancellation.done():
+                cancellation.cancel()
+            await asyncio.gather(cancellation, return_exceptions=True)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
