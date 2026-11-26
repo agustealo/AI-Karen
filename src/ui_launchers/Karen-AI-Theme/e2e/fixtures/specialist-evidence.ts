@@ -1,4 +1,4 @@
-import { isRunToolReceiptsResponse } from "../../src/lib/governed-tool-receipts";
+import { evidenceInstant, isRunToolReceiptsResponse } from "../../src/lib/governed-tool-receipts";
 
 export const phases = {
   started: "Method entered",
@@ -28,22 +28,6 @@ function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<
     && keys.every(key => Object.prototype.hasOwnProperty.call(value, key));
 }
 
-// PostgreSQL timestamps retain microseconds; Date.parse alone truncates them.
-// Compare millisecond time and remaining fractional digits separately so the
-// full supported timestamp range stays exact without BigInt or rounding.
-function evidenceInstant(value: unknown): { millis: number; micros: number } | null {
-  if (typeof value !== "string" || value.length > 64 || value.trim() !== value) return null;
-  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
-  if (!match) return null;
-  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
-  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
-  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
-  if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1] ||
-      Number(match[4]) > 23 || Number(match[5]) > 59 || Number(match[6]) > 59) return null;
-  const millis = Date.parse(value);
-  if (!Number.isFinite(millis)) return null;
-  return { millis, micros: Number((match[7] ?? "").padEnd(6, "0").slice(3)) };
-}
 
 function compareEvidenceTime(left: NonNullable<ReturnType<typeof evidenceInstant>>,
   right: NonNullable<ReturnType<typeof evidenceInstant>>): number {

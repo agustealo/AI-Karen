@@ -44,6 +44,23 @@ function boundedText(value: unknown, max = 256): value is string {
     && value.trim() === value && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
+// PostgreSQL timestamps retain microseconds; Date.parse alone truncates them.
+// Compare millisecond time and remaining fractional digits separately so the
+// full supported timestamp range stays exact without BigInt or rounding.
+export function evidenceInstant(value: unknown): { millis: number; micros: number } | null {
+  if (typeof value !== "string" || value.length > 64 || value.trim() !== value) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,6}))?(?:Z|[+-]\d{2}:\d{2})$/.exec(value);
+  if (!match) return null;
+  const year = Number(match[1]), month = Number(match[2]), day = Number(match[3]);
+  const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+  const days = [31, leap ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (year < 1 || month < 1 || month > 12 || day < 1 || day > days[month - 1] ||
+      Number(match[4]) > 23 || Number(match[5]) > 59 || Number(match[6]) > 59) return null;
+  const millis = Date.parse(value);
+  if (!Number.isFinite(millis)) return null;
+  return { millis, micros: Number((match[7] ?? "").padEnd(6, "0").slice(3)) };
+}
+
 /** Strict owner-run projection. Legacy saved-task fields may be nullable;
  * the correlated run API requires concrete tool, agent, step and policy IDs. */
 export function isRunToolReceiptsResponse(value: unknown): value is RunToolReceiptsResponse {
@@ -69,9 +86,7 @@ export function isRunToolReceiptsResponse(value: unknown): value is RunToolRecei
       || (row.success && row.error_type !== null)
       || (row.result_sha256 !== null && (typeof row.result_sha256 !== "string"
         || row.result_sha256.length !== 64 || /[^0-9a-f]/.test(row.result_sha256)))
-      || typeof row.recorded_at !== "string" || row.recorded_at.length > 64
-      || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(row.recorded_at)
-      || /\s$/.test(row.recorded_at) || !Number.isFinite(Date.parse(row.recorded_at))
+      || evidenceInstant(row.recorded_at) === null
       || row.execution_scope !== "tool_runtime_acknowledgment" || row.independently_verified !== false) return false;
     calls.add(row.tool_call_id);
   }
