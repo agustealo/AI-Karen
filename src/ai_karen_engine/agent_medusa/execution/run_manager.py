@@ -23,6 +23,7 @@ from ai_karen_engine.core.logging import get_logger
 from .distributed_run_store import (
     DistributedRunNotCancellable,
     DistributedRunNotFound,
+    DistributedRunOwnershipLost,
     DistributedRunStore,
     DistributedRunStoreUnavailable,
     DistributedRunTenantMismatch,
@@ -81,6 +82,7 @@ class ExecutionRun:
     heartbeat_task: asyncio.Task[None] | None = field(default=None, repr=False)
     cancel_admission_pending: bool = field(default=False, repr=False)
     cancel_signal_sent: bool = field(default=False, repr=False)
+    shared_ownership_lost: bool = field(default=False, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -299,16 +301,18 @@ class MedusaRunManager:
             outcome_status="success",
         )
 
-    async def mark_failed(self, run_id: str, exc: BaseException) -> None:
-        await self._mark_terminal(
+    async def mark_failed(
+        self, run_id: str, exc: BaseException
+    ) -> ExecutionRunStatus | None:
+        return await self._mark_terminal(
             run_id,
             ExecutionRunStatus.FAILED,
             error_type=type(exc).__name__,
             outcome_status="error",
         )
 
-    async def mark_cancelled(self, run_id: str) -> None:
-        await self._mark_terminal(
+    async def mark_cancelled(self, run_id: str) -> ExecutionRunStatus | None:
+        return await self._mark_terminal(
             run_id,
             ExecutionRunStatus.CANCELLED,
             outcome_status="cancelled",
@@ -341,6 +345,16 @@ class MedusaRunManager:
             run = self._runs.get(run_id)
             if run is None:
                 return None
+            if run.shared_ownership_lost:
+                # The worker has no authority to publish any terminal outcome.
+                # Retain the active task identity until its finalizer observes
+                # local retirement; never infer native cessation from this.
+                if (
+                    run.task.done() or run.task is asyncio.current_task()
+                ) and run_id not in self._terminal_order:
+                    self._terminal_order.append(run_id)
+                    self._prune_locked()
+                return ExecutionRunStatus.ORPHANED
             if (
                 run.status is ExecutionRunStatus.CANCELLING
                 and status is not ExecutionRunStatus.ORPHANED
@@ -480,14 +494,41 @@ class MedusaRunManager:
             if (
                 self._runs.get(run.run_id) is run
                 and run.status is ExecutionRunStatus.CANCELLING
-                and not run.task.done()
-                and not run.cancel_signal_sent
             ):
-                # Cleanup may consume CancelledError and call uncancel().
-                # A subsequent heartbeat must not interrupt that cleanup.
-                run.cancel_signal_sent = True
-                if not run.task.cancelling():
-                    run.task.cancel()
+                self._signal_task_once_locked(run)
+
+    @staticmethod
+    def _signal_task_once_locked(run: ExecutionRun) -> None:
+        # Cleanup may consume CancelledError and call uncancel().
+        # Do not interrupt it with a second runtime-owned signal.
+        if not run.task.done() and not run.cancel_signal_sent:
+            run.cancel_signal_sent = True
+            if not run.task.cancelling():
+                run.task.cancel()
+
+    async def _record_shared_ownership_loss(self, run: ExecutionRun) -> None:
+        """Fence a definitively rejected lease without writing as its owner."""
+        async with self._lock:
+            if self._runs.get(run.run_id) is not run or run.status not in {
+                ExecutionRunStatus.RUNNING,
+                ExecutionRunStatus.CANCELLING,
+            }:
+                return
+            run.shared_ownership_lost = True
+            run.status = ExecutionRunStatus.ORPHANED
+            run.completed_at = None
+            run.error_type = "WorkerLeaseExpired"
+            run.outcome_status = None
+            run.heartbeat_task = None
+            # Stop cooperatively, not a user cancellation acknowledgement.
+            self._signal_task_once_locked(run)
+            if run.task.done() and run.run_id not in self._terminal_order:
+                self._terminal_order.append(run.run_id)
+                self._prune_locked()
+        logger.warning(
+            "Medusa run live ownership lost",
+            extra={"run_id": run.run_id, "tenant_id": run.tenant_id},
+        )
 
     async def cancel(
         self,
@@ -822,6 +863,9 @@ class MedusaRunManager:
                         extra={"run_id": run.run_id},
                     )
                     continue
+                except (DistributedRunOwnershipLost, DistributedRunNotFound):
+                    await self._record_shared_ownership_loss(run)
+                    return
                 if not cancel_requested and run.durable_registered:
                     # A remote cancellation may have committed in PostgreSQL
                     # before its Redis signal failed. Only the live Redis
@@ -988,7 +1032,7 @@ class MedusaRunManager:
             local_run_ids = {
                 run_id
                 for run_id, run in self._runs.items()
-                if run.tenant_id == tenant_id
+                if run.tenant_id == tenant_id and not run.shared_ownership_lost
             }
 
         reconciled = 0
