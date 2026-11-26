@@ -85,6 +85,8 @@ class ExecutionRun:
     shared_ownership_lost: bool = field(default=False, repr=False)
     terminal_pending: bool = field(default=False, repr=False)
     terminal_unconfirmed: bool = field(default=False, repr=False)
+    terminal_attempted_at: datetime | None = field(default=None, repr=False)
+    terminal_recovered: bool = field(default=False, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -161,11 +163,15 @@ class MedusaRunManager:
         started_at = datetime.now(timezone.utc)
         async with self._lock:
             existing = self._runs.get(run_id)
-            if existing is not None and existing.status in {
-                ExecutionRunStatus.RUNNING,
-                ExecutionRunStatus.CANCELLING,
-                ExecutionRunStatus.ORPHANED,
-            }:
+            if existing is not None and (
+                existing.terminal_unconfirmed
+                or existing.status
+                in {
+                    ExecutionRunStatus.RUNNING,
+                    ExecutionRunStatus.CANCELLING,
+                    ExecutionRunStatus.ORPHANED,
+                }
+            ):
                 raise RuntimeError(f"Medusa run already active or unresolved: {run_id}")
             run = ExecutionRun(
                 run_id=run_id,
@@ -378,6 +384,7 @@ class MedusaRunManager:
             heartbeat_task = run.heartbeat_task
             run.heartbeat_task = None
             run.terminal_pending = True
+            run.terminal_attempted_at = completed_at
 
         if run.shared_registered:
             try:
@@ -396,6 +403,7 @@ class MedusaRunManager:
                                 completed_at=completed_at,
                                 error_type=error,
                                 outcome_status=outcome,
+                                durable_arbitrated=run.durable_registered,
                             ),
                             timeout=self._settings.run_lease_ttl_seconds,
                         )
@@ -782,11 +790,26 @@ class MedusaRunManager:
                     raise RunTenantMismatchError(run_id)
                 if user_id is not None and run.user_id != user_id:
                     raise RunNotFoundError(run_id)
+        if run is not None:
+            await self._recover_local_terminal_view(run)
+        async with self._lock:
+            run = self._runs.get(run_id)
+            if run is not None:
+                if run.tenant_id != tenant_id:
+                    raise RunTenantMismatchError(run_id)
+                if user_id is not None and run.user_id != user_id:
+                    raise RunNotFoundError(run_id)
                 snapshot = run.snapshot()
                 snapshot["distributed_control"] = await self._distributed_capability(
                     shared_registered=run.shared_registered,
                     orphaned=run.status is ExecutionRunStatus.ORPHANED,
                 )
+                if run.status in {
+                    ExecutionRunStatus.COMPLETED,
+                    ExecutionRunStatus.FAILED,
+                    ExecutionRunStatus.CANCELLED,
+                } and snapshot["distributed_control"].get("supported"):
+                    snapshot["distributed_control"]["lease_alive"] = False
         if snapshot is not None:
             if require_durable_identity:
                 await self._verify_live_durable_identity(
@@ -888,6 +911,17 @@ class MedusaRunManager:
     ) -> list[dict[str, Any]]:
         await self._reconcile_tenant_from_redis(tenant_id)
         async with self._lock:
+            uncertain = [
+                run
+                for run in self._runs.values()
+                if run.tenant_id == tenant_id
+                and (user_id is None or run.user_id == user_id)
+                and run.terminal_unconfirmed
+                and not run.terminal_recovered
+            ][: self._settings.run_reconciliation_batch_size]
+        for run in uncertain:
+            await self._recover_local_terminal_view(run)
+        async with self._lock:
             local_pairs = [
                 (run.snapshot(), run.shared_registered)
                 for run in self._runs.values()
@@ -910,6 +944,12 @@ class MedusaRunManager:
                 shared_registered=shared_registered,
                 orphaned=snapshot["status"] == ExecutionRunStatus.ORPHANED.value,
             )
+            if snapshot["status"] in {
+                "completed",
+                "failed",
+                "cancelled",
+            } and snapshot["distributed_control"].get("supported"):
+                snapshot["distributed_control"]["lease_alive"] = False
             merged[snapshot["run_id"]] = snapshot
 
         if await self._distributed_available():
@@ -1121,6 +1161,148 @@ class MedusaRunManager:
             )
             return None
 
+    def _matches_terminal_identity(
+        self, run: ExecutionRun, receipt: dict[str, Any], *, durable: bool
+    ) -> bool:
+        if any(
+            receipt.get(key) != value
+            for key, value in (
+                ("run_id", run.run_id),
+                ("correlation_id", run.correlation_id),
+                ("user_id", run.user_id),
+                ("owner_worker_id", self._settings.worker_id),
+            )
+        ):
+            return False
+        expected_tenant = (
+            _canonical_tenant_id(run.tenant_id) if durable else run.tenant_id
+        )
+        if receipt.get("tenant_id") != expected_tenant:
+            return False
+        if durable and any(
+            receipt.get(key) != value
+            for key, value in (
+                ("request_id", run.request_id),
+                ("session_id", run.session_id),
+                ("policy_decision_id", run.policy_decision_id),
+            )
+        ):
+            return False
+        return True
+
+    def _matches_terminal_attempt(
+        self, run: ExecutionRun, receipt: dict[str, Any], *, durable: bool
+    ) -> bool:
+        if not self._matches_terminal_identity(run, receipt, durable=durable):
+            return False
+        valid = {
+            "completed": {"success", "partial", "degraded"},
+            "failed": {"error", "timeout"},
+            "cancelled": {"cancelled"},
+            "orphaned": {None},
+        }
+        try:
+            completed = self._parse_time(receipt.get("completed_at"))
+            started = self._parse_time(receipt.get("started_at"))
+            return (
+                completed is not None
+                and completed == run.terminal_attempted_at
+                and started == run.started_at
+                and receipt.get("status") in valid
+                and receipt.get("outcome_status") in valid[receipt["status"]]
+                and (
+                    receipt["status"] != "orphaned"
+                    or receipt.get("error_type") == "NativeRetirementUnverified"
+                )
+            )
+        except (TypeError, ValueError):
+            return False
+
+    async def _recover_local_terminal_view(self, run: ExecutionRun) -> None:
+        """Repair history from exact receipts; never re-authorize a response."""
+        if (
+            not run.terminal_unconfirmed
+            or run.terminal_recovered
+            or not run.task.done()
+        ):
+            return
+        scope = {"run_id": run.run_id, "tenant_id": run.tenant_id}
+        try:
+            receipt = None
+            if run.durable_registered:
+                receipt = await self._durable_ledger.get(**scope)
+            if receipt is None or not self._matches_terminal_attempt(
+                run, receipt, durable=True
+            ):
+                if not run.shared_registered:
+                    return
+                shared = await self._distributed_store.get(**scope)
+                if not self._matches_terminal_attempt(run, shared, durable=False):
+                    return
+                if run.durable_registered:
+                    if (
+                        receipt is None
+                        or not self._matches_terminal_identity(
+                            run, receipt, durable=True
+                        )
+                        or shared.get("terminal_authority") != "durable_arbitrated"
+                    ):
+                        return
+                    await self._durable_ledger.reconcile_from_shared(
+                        **scope,
+                        status=shared["status"],
+                        reconciled_at=datetime.now(timezone.utc),
+                        completed_at=self._parse_time(shared["completed_at"]),
+                        error_type=shared.get("error_type"),
+                        outcome_status=shared.get("outcome_status"),
+                        expected_worker_id=self._settings.worker_id,
+                        expected_correlation_id=run.correlation_id,
+                        expected_user_id=run.user_id,
+                        terminal_authority=shared["terminal_authority"],
+                    )
+                    receipt = await self._durable_ledger.get(**scope)
+                    if receipt is None or not self._matches_terminal_attempt(
+                        run, receipt, durable=True
+                    ):
+                        return
+                    if any(
+                        receipt.get(key) != shared.get(key)
+                        for key in ("status", "outcome_status", "error_type")
+                    ):
+                        return
+                else:
+                    receipt = shared
+            completed_at = self._parse_time(receipt["completed_at"])
+            assert completed_at is not None
+        except (
+            DistributedRunNotFound,
+            DistributedRunTenantMismatch,
+            DistributedRunStoreUnavailable,
+            DurableRunLedgerUnavailable,
+            DurableRunLedgerConflict,
+            ValueError,
+        ):
+            return
+        async with self._lock:
+            if (
+                self._runs.get(run.run_id) is not run
+                or not run.terminal_unconfirmed
+                or run.terminal_recovered
+            ):
+                return
+            run.terminal_recovered = True
+            self._publish_terminal_locked(
+                run,
+                ExecutionRunStatus(receipt["status"]),
+                completed_at,
+                receipt.get("error_type"),
+                receipt.get("outcome_status"),
+            )
+        logger.info(
+            "Medusa recovered verified terminal history",
+            extra={"run_id": run.run_id, "tenant_id": run.tenant_id},
+        )
+
     async def _reconcile_tenant_from_redis(self, tenant_id: str) -> None:
         """Boundedly repair durable active rows using Redis live authority only."""
 
@@ -1152,7 +1334,7 @@ class MedusaRunManager:
                 for run_id, run in self._runs.items()
                 if run.tenant_id == tenant_id
                 and not run.shared_ownership_lost
-                and not run.terminal_unconfirmed
+                and (not run.terminal_unconfirmed or not run.shared_registered)
             }
 
         reconciled = 0
@@ -1224,6 +1406,9 @@ class MedusaRunManager:
                     error_type=shared.get("error_type"),
                     outcome_status=shared.get("outcome_status"),
                     expected_worker_id=shared.get("owner_worker_id"),
+                    expected_correlation_id=shared.get("correlation_id"),
+                    expected_user_id=shared.get("user_id"),
+                    terminal_authority=shared.get("terminal_authority"),
                 )
             except ValueError:
                 logger.warning(

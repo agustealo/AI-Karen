@@ -142,6 +142,9 @@ class DurableRunLedger(Protocol):
         error_type: str | None = None,
         outcome_status: str | None = None,
         expected_worker_id: str | None = None,
+        expected_correlation_id: str | None = None,
+        expected_user_id: str | None = None,
+        terminal_authority: str | None = None,
     ) -> bool: ...
 
     async def link_audit_event(
@@ -660,6 +663,9 @@ class PostgresDurableRunLedger:
         error_type: str | None = None,
         outcome_status: str | None = None,
         expected_worker_id: str | None = None,
+        expected_correlation_id: str | None = None,
+        expected_user_id: str | None = None,
+        terminal_authority: str | None = None,
     ) -> bool:
         """Repair durable state only from an authoritative Redis observation."""
 
@@ -686,16 +692,30 @@ class PostgresDurableRunLedger:
                 if row is None:
                     return False
                 current = str(row["status"])
-                if expected_worker_id and str(row.get("owner_worker_id")) != (
-                    expected_worker_id
+                if any(
+                    expected is not None and str(row.get(key)) != expected
+                    for key, expected in (
+                        ("owner_worker_id", expected_worker_id),
+                        ("correlation_id", expected_correlation_id),
+                        ("user_id", expected_user_id),
+                    )
                 ):
                     return False
-                # A conflicting durable cancellation after an uncertain Redis
-                # commit requires explicit arbitration, not history overwrite.
-                if current == "cancellation_requested" and normalized in {
-                    "completed",
-                    "failed",
-                }:
+                late_cancellation = (
+                    current == "cancellation_requested"
+                    and normalized in {"completed", "failed"}
+                )
+                # Only a receipt emitted while the existing durable row lock
+                # was held proves that an accepted terminal operation preceded
+                # the conflicting durable cancellation. Preserve its audit trail.
+                if late_cancellation and (
+                    terminal_authority != "durable_arbitrated"
+                    or not expected_worker_id
+                    or not expected_correlation_id
+                    or not expected_user_id
+                    or completed_at is None
+                    or outcome_status is None
+                ):
                     return False
                 if current not in _ACTIVE_STATUSES or current == normalized:
                     return False
@@ -757,7 +777,11 @@ class PostgresDurableRunLedger:
                     worker_id=str(row.get("owner_worker_id") or "") or None,
                     source="redis_reconciliation",
                     event_at=reconciled_at,
-                    metadata={"shared_status": status},
+                    metadata={
+                        "shared_status": status,
+                        "terminal_authority": terminal_authority,
+                        "late_cancellation": late_cancellation,
+                    },
                 )
                 return True
         except SQLAlchemyError as exc:
@@ -936,7 +960,7 @@ class PostgresDurableRunLedger:
     async def _lock_row(self, session: Any, run_id: str, tenant_id: str) -> Any | None:
         result = await session.execute(
             text("""
-                SELECT run_id, status, owner_worker_id
+                SELECT run_id, status, owner_worker_id, correlation_id, user_id
                 FROM agent_medusa_runs
                 WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)
                 FOR UPDATE

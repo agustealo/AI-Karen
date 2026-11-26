@@ -276,6 +276,10 @@ async def _run_acceptance() -> None:
             redis=redis, ledger=ledger, prefix=prefix,
             tenant_id=tenant_a, marker=marker,
         )
+        await _terminal_rollback_recovery_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix,
+            tenant_id=tenant_a, marker=marker,
+        )
     finally:
         # Failure before the first cancellation must not strand workload cleanup.
         release_retirement.set()
@@ -710,6 +714,88 @@ async def _terminal_arbitration_acceptance(
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
             await client.delete(f"{prefix}:claim:{run_id}", f"{prefix}:run:{run_id}")
+
+
+async def _terminal_rollback_recovery_acceptance(
+    *,
+    redis: RedisConnectionManager,
+    ledger: PostgresDurableRunLedger,
+    prefix: str,
+    tenant_id: str,
+    marker: str,
+) -> None:
+    """Commit Redis, roll back real SQL, admit late intent, then reconcile."""
+    class RollbackLedger(PostgresDurableRunLedger):
+        async def _append_transition(self, session, **kwargs):
+            await super()._append_transition(session, **kwargs)
+            if kwargs["to_status"] == "completed":
+                raise DurableRunLedgerUnavailable("injected terminal SQL rollback")
+
+    settings = _settings(worker=f"rollback-owner-{marker}", prefix=prefix)
+    store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+    owner = MedusaRunManager(
+        settings=settings,
+        distributed_store=store,
+        durable_ledger=RollbackLedger(postgres=get_postgres_engine()),
+    )
+    scope = dict(run_id=f"{marker}-terminal-rollback", tenant_id=tenant_id)
+    task = asyncio.create_task(asyncio.sleep(0))
+    run = None
+    try:
+        run = await owner.register(
+            **scope, correlation_id=f"rollback-{marker}", user_id="owner", task=task
+        )
+        await task
+        assert (await owner.mark_response(run.run_id, "success")).value == "orphaned"
+        shared = await store.get(**scope)
+        assert shared["status"] == "completed"
+        assert shared["terminal_authority"] == "durable_arbitrated"
+        pending = await ledger.get(**scope)
+        assert pending is not None and pending["status"] == "running"
+        await ledger.mark_cancelling(
+            **scope,
+            requested_at=datetime.now(timezone.utc),
+            audit_event_ref=f"late-{marker}",
+            source="admin_cancel",
+        )
+        with pytest.raises(DistributedRunNotCancellable):
+            await store.request_cancel(**scope)
+        # The injected fault only affects runtime completion; restore the
+        # genuine ledger for history recovery, not a new execution attempt.
+        owner._durable_ledger = ledger
+        local = await owner.get(**scope)
+        durable = await ledger.get(**scope)
+        assert durable is not None
+        assert local["status"] == durable["status"] == shared["status"] == "completed"
+        assert local["outcome_status"] == durable["outcome_status"] == "success"
+        assert local["completed_at"] == durable["completed_at"] == shared["completed_at"]
+        assert durable["audit_event_ref"] == f"late-{marker}"
+        assert (await owner.mark_response(run.run_id, "success")).value == "orphaned"
+        assert await ledger.get(**scope) == durable
+        connection = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT to_status, source, metadata
+                FROM agent_medusa_run_transitions
+                WHERE run_id = $1 ORDER BY transition_id
+                """,
+                run.run_id,
+            )
+            assert [row["to_status"] for row in rows] == [
+                "created", "running", "cancellation_requested", "completed"
+            ]
+            assert rows[-1]["source"] == "redis_reconciliation"
+            assert json.loads(rows[-1]["metadata"])["late_cancellation"] is True
+        finally:
+            await connection.close()
+    finally:
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
 
 
 @pytest.mark.parametrize(

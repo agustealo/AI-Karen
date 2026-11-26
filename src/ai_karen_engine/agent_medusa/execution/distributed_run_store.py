@@ -105,6 +105,9 @@ local status = ARGV[4]
 local error_type = ARGV[6]
 local outcome = ARGV[7]
 local retention = tonumber(ARGV[8])
+if ARGV[9] ~= 'durable_arbitrated' and ARGV[9] ~= 'shared_only' then
+  return -3
+end
 if not retention or retention < 1 or retention % 1 ~= 0 then
   return -3
 end
@@ -125,6 +128,7 @@ redis.call('HSET', KEYS[2],
   'completed_at', ARGV[5],
   'error_type', error_type,
   'outcome_status', outcome,
+  'terminal_authority', ARGV[9],
   'lease_expires_at', '')
 redis.call('EXPIRE', KEYS[2], retention)
 redis.call('EXPIRE', KEYS[3], retention)
@@ -184,6 +188,7 @@ class DistributedRunStore(Protocol):
         completed_at: datetime,
         error_type: str | None,
         outcome_status: str | None = None,
+        durable_arbitrated: bool = False,
     ) -> str: ...
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
@@ -350,6 +355,7 @@ class RedisDistributedRunStore:
         completed_at: datetime,
         error_type: str | None,
         outcome_status: str | None = None,
+        durable_arbitrated: bool = False,
     ) -> str:
         """Publish one owner-fenced terminal receipt, returning its lifecycle."""
 
@@ -372,6 +378,7 @@ class RedisDistributedRunStore:
                     error_type or "",
                     outcome_status or "",
                     str(self._settings.run_terminal_retention_seconds),
+                    "durable_arbitrated" if durable_arbitrated else "shared_only",
                 )
             )
         except (RedisError, TypeError, ValueError) as exc:
@@ -507,6 +514,7 @@ class RedisDistributedRunStore:
             "completed_at": record.get("completed_at") or None,
             "error_type": record.get("error_type") or None,
             "outcome_status": record.get("outcome_status") or None,
+            "terminal_authority": record.get("terminal_authority") or None,
             "cancellable": status == "running" and lease_alive,
             "distributed_control": {
                 "supported": True,

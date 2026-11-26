@@ -79,6 +79,7 @@ class SharedFakeRunStore:
         completed_at: datetime,
         error_type: str | None,
         outcome_status: str | None = None,
+        durable_arbitrated: bool = False,
     ) -> str:
         record = self.records.get(run_id)
         if record is None:
@@ -95,6 +96,9 @@ class SharedFakeRunStore:
         record["completed_at"] = completed_at.isoformat()
         record["error_type"] = error_type
         record["outcome_status"] = outcome_status
+        record["terminal_authority"] = (
+            "durable_arbitrated" if durable_arbitrated else "shared_only"
+        )
         return status
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
@@ -146,6 +150,9 @@ class SharedFakeRunStore:
             "correlation_id": record["correlation_id"],
             "tenant_id": record["tenant_id"],
             "user_id": record["user_id"],
+            "owner_worker_id": record["worker_id"],
+            "outcome_status": record.get("outcome_status"),
+            "terminal_authority": record.get("terminal_authority"),
             "status": status,
             "started_at": record["started_at"],
             "completed_at": record["completed_at"],
@@ -1008,6 +1015,7 @@ async def test_terminal_store_publishes_one_scoped_receipt(result: int) -> None:
             "",
             "success",
             str(settings.run_terminal_retention_seconds),
+            "shared_only",
         )
     ]
 
