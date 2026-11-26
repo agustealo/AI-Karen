@@ -4,9 +4,6 @@ on:
   pull_request:
     branches: [main]
     types: [opened, synchronize, reopened, ready_for_review]
-  # Temporary branch-only proof; remove before consumer PR promotion.
-  push:
-    branches: [kcomm-02d-consumer-inbox-20261126]
   workflow_dispatch:
 
 permissions:

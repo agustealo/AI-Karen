@@ -119,3 +119,25 @@ def test_specialist_lifecycle_extension_reuses_private_real_host_acceptance() ->
     assert "page.route(" not in source
     assert "route.fulfill(" not in source
     assert "storageState:" not in source
+
+
+def test_specialist_cross_tenant_extension_preserves_both_owner_and_tenant_proof() -> None:
+    source = TWO_ACCOUNT.read_text(encoding="utf-8")
+    assert 'KAREN_SPECIALIST_CROSS_TENANT_ACCEPTANCE === "true"' in source
+    assert "crossTenantEnabled && (!participationEnabled || !lifecycleEnabled)" in source
+    assert "KAREN_UX_ACCOUNT_C_EMAIL" in source
+    assert "KAREN_UX_ACCOUNT_C_PASSWORD" in source
+    assert "KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID" in source
+    assert "[a, b, emptyRunId].includes(crossTenantRunId)" in source
+    assert "identity.tenant_id === firstIdentity?.tenant_id" in source
+    assert "identity.tenant_id !== firstIdentity?.tenant_id" in source
+    assert "identity.user_id !== secondUserId" in source
+    assert "participants[0].foreign.push(crossTenantRunId)" in source
+    assert "participants[1].foreign.push(crossTenantRunId, emptyRunId)" in source
+    assert "foreign: [a, b, emptyRunId]" in source
+    assert "foreign.includes(run.run_id)" in source
+    assert "participationPath(foreignId)" in source
+    assert "if (index !== 2)" in source
+    assert "page.route(" not in source
+    assert "route.fulfill(" not in source
+    assert "storageState:" not in source
