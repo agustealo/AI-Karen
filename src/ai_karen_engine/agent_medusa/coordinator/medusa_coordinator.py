@@ -330,6 +330,32 @@ class MedusaCoordinator:
         step_outputs: list[Dict[str, Any]] = []
         agent_trace: list[str] = []
 
+        reported_skips: set[str] = set()
+
+        async def report_skips() -> None:
+            for step in plan.steps:
+                if step.status != StepStatus.SKIPPED or step.id in reported_skips:
+                    continue
+                reason = (
+                    "dependency_blocked"
+                    if (step.error or "").startswith("blocked_dependencies:")
+                    else (
+                        "execution_budget_exhausted"
+                        if step.error == "execution_budget_exhausted"
+                        else "unspecified"
+                    )
+                )
+                await request_emitter.emit(
+                    AgentEvent(
+                        type=AgentEventType.AGENT_SKIPPED,
+                        agent_id=step.agent_specialist,
+                        message=f"step {step.id} skipped",
+                        correlation_id=self._correlation_id(request),
+                        metadata={"step_id": step.id, "reason_code": reason},
+                    )
+                )
+                reported_skips.add(step.id)
+
         try:
             while not plan.is_complete:
                 if meter.exhausted or not await meter.check_duration():
@@ -337,10 +363,12 @@ class MedusaCoordinator:
                         if step.status == StepStatus.PENDING:
                             step.status = StepStatus.SKIPPED
                             step.error = "execution_budget_exhausted"
+                    await report_skips()
                     plan.is_complete = True
                     break
 
                 plan.mark_blocked_dependents()
+                await report_skips()
                 runnable_steps = plan.get_next_runnable_steps()
                 if not runnable_steps:
                     if all(
@@ -375,6 +403,7 @@ class MedusaCoordinator:
                     for step in wave:
                         step.status = StepStatus.SKIPPED
                         step.error = "execution_budget_exhausted"
+                    await report_skips()
                     continue
                 try:
                     async with asyncio.timeout(remaining_seconds):
@@ -404,6 +433,7 @@ class MedusaCoordinator:
                         if step.status == StepStatus.PENDING:
                             step.status = StepStatus.SKIPPED
                             step.error = "execution_budget_exhausted"
+                    await report_skips()
                     plan.is_complete = True
                     break
                 # A tool may have changed external state even when its audit
@@ -412,8 +442,13 @@ class MedusaCoordinator:
                 self._require_durable_tool_receipts(results)
                 for step, result in zip(wave, results):
                     if isinstance(result, BaseException):
-                        step.status = StepStatus.FAILED
-                        step.error = type(result).__name__
+                        # A post-invocation observation or cleanup failure
+                        # cannot undo an already returned specialist result.
+                        if step.status != StepStatus.COMPLETED:
+                            step.status = StepStatus.FAILED
+                            step.error = step.error or type(result).__name__
+                        else:
+                            raise result
                     else:
                         step_outputs.append(result)
                         agent_trace.append(step.agent_specialist)
@@ -723,6 +758,7 @@ class MedusaCoordinator:
         }
 
         await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
+        invocation_entered = False
         try:
             if emitter is not None:
                 await emitter.emit(
@@ -734,6 +770,7 @@ class MedusaCoordinator:
                         metadata={"step_id": step.id, "degraded": is_degraded},
                     )
                 )
+            invocation_entered = True
             result = await specialist.run(step.input_data, context, execution=execution)
             step.status = StepStatus.COMPLETED
             step.output_data = result
@@ -758,8 +795,26 @@ class MedusaCoordinator:
                 )
             return result
         except asyncio.CancelledError:
-            step.status = StepStatus.FAILED
-            step.error = "cancelled"
+            # A returned specialist result is not undone by cancellation of
+            # subsequent observational processing.
+            if step.status != StepStatus.COMPLETED:
+                step.status = StepStatus.FAILED
+                step.error = "cancelled"
+                if emitter is not None:
+                    await emitter.emit(
+                        AgentEvent(
+                            type=AgentEventType.AGENT_INTERRUPTED,
+                            agent_id=step.agent_specialist,
+                            message=f"step {step.id} interrupted",
+                            correlation_id=self._correlation_id(request),
+                            metadata={
+                                "step_id": step.id,
+                                "degraded": is_degraded,
+                                "invocation_entered": invocation_entered,
+                                "reason_code": "cancelled",
+                            },
+                        )
+                    )
             logger.info(
                 "medusa_step_cancelled",
                 extra={
@@ -770,7 +825,11 @@ class MedusaCoordinator:
             )
             raise
         except Exception as exc:
-            if emitter is not None:
+            if (
+                invocation_entered
+                and step.status != StepStatus.COMPLETED
+                and emitter is not None
+            ):
                 await emitter.emit(
                     AgentEvent(
                         type=AgentEventType.AGENT_FAILED,
