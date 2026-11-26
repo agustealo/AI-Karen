@@ -12,7 +12,7 @@ import asyncio
 import os
 import threading
 from urllib.parse import urlsplit
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Type, Union
@@ -807,7 +807,20 @@ class ProviderRegistryService:
                 if status is None or (datetime.utcnow() - status.last_check).total_seconds() > self._cache_ttl:
                     status = self._build_endpoint_status(endpoint)
                     self._provider_status_cache[name] = status
-                return status
+                # The cache owns configuration/credential discovery cost, not
+                # observed health truth. Reproject at read time so a fresh
+                # failure, recovery or monitor TTL expiry is visible now.
+                health = (
+                    self.health_monitor.get_provider_health(endpoint.provider_id).health_status
+                    if endpoint.enabled else HealthStatus.UNAVAILABLE
+                )
+                available = endpoint.enabled and status.has_api_key and health in {
+                    HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN,
+                }
+                return replace(
+                    status, health_status=health, is_available=available,
+                    error_message=None if available else "endpoint disabled or unavailable",
+                )
 
             status = self._provider_status_cache.get(name)
 
@@ -852,7 +865,20 @@ class ProviderRegistryService:
                     )
                     status = self._provider_status_cache.get(name)
 
-            return status
+            if status is None:
+                return None
+            # Compatibility registrations still use the same observed monitor;
+            # their cached credential/capability snapshot cannot override it.
+            try:
+                health = self.health_monitor.get_provider_health(name).health_status
+            except Exception:
+                health = HealthStatus.UNKNOWN
+            return replace(
+                status, health_status=health,
+                is_available=status.has_api_key and health in {
+                    HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN,
+                },
+            )
 
     def get_available_providers(
         self,

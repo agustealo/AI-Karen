@@ -46,6 +46,7 @@ class TestEventTypeTaxonomyIsComplete:
         "provider.execution.completed",
         "provider.execution.failed",
         "provider.fallback",
+        "provider.health.changed",
         "workflow.started",
         "workflow.completed",
         "workflow.failed",

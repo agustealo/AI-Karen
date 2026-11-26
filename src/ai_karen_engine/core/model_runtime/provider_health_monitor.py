@@ -297,7 +297,9 @@ class ProviderHealthMonitor:
                 last_checked_at=now,
             )
 
-        prev_status = health_info.health_status
+        # An expired snapshot is UNKNOWN to readers. A fresh observation
+        # must not silently suppress a transition from that visible state.
+        prev_status = self.get_provider_health(provider_key).health_status
 
         if is_healthy:
             health_info.health_status = HealthStatus.HEALTHY
@@ -336,7 +338,7 @@ class ProviderHealthMonitor:
 
         self._health_cache[provider_key] = health_info
 
-        self._emit_transition_if_changed(provider_id, prev_status, health_info.health_status)
+        self._emit_transition_if_changed(provider_key, prev_status, health_info.health_status)
 
         logger.debug(
             "Updated health for %s: %s", provider_id, health_info.health_status.value
@@ -448,66 +450,25 @@ class ProviderHealthMonitor:
         if prev_status == new_status:
             return
 
-        transition = (prev_status, new_status)
-        meaningful = {
-            (HealthStatus.HEALTHY, HealthStatus.DEGRADED),
-            (HealthStatus.DEGRADED, HealthStatus.UNHEALTHY),
-            (HealthStatus.UNHEALTHY, HealthStatus.HEALTHY),
-            (HealthStatus.UNKNOWN, HealthStatus.HEALTHY),
-            (HealthStatus.UNKNOWN, HealthStatus.UNHEALTHY),
-            (HealthStatus.DEGRADED, HealthStatus.HEALTHY),
-        }
-        if transition not in meaningful:
-            return
-
-        event_type = None
-        if new_status == HealthStatus.UNHEALTHY:
-            event_type = "provider.unavailable"
-        elif new_status == HealthStatus.DEGRADED:
-            event_type = "provider.health.changed"
-        elif new_status == HealthStatus.HEALTHY:
-            event_type = "provider.available"
-
-        if event_type is None:
-            return
-
         try:
             from ai_karen_engine.core.observability.emitter import get_observability_emitter
             from ai_karen_engine.core.observability.contracts import RuntimeEventType
 
-            emitter = get_observability_emitter()
-            if event_type == "provider.available":
-                emitter.emit(
-                    RuntimeEventType.PROVIDER_ATTEMPT_COMPLETED,
-                    provider=provider_id,
-                    status="recovered",
-                    metadata={
-                        "previous_status": prev_status.value,
-                        "new_status": new_status.value,
-                    },
-                )
-            elif event_type == "provider.unavailable":
-                emitter.emit(
-                    RuntimeEventType.PROVIDER_ATTEMPT_FAILED,
-                    provider=provider_id,
-                    status="unavailable",
-                    metadata={
-                        "previous_status": prev_status.value,
-                        "new_status": new_status.value,
-                    },
-                )
-            else:
-                emitter.emit(
-                    RuntimeEventType.RUNTIME_DEGRADED,
-                    provider=provider_id,
-                    degraded_mode=True,
-                    status=new_status.value,
-                    metadata={
-                        "previous_status": prev_status.value,
-                        "new_status": new_status.value,
-                    },
-                )
+            # Use a health event, never an execution completion/failure or a
+            # request-level degraded-mode signal. Unknown -> degraded is a
+            # real first failed observation, not an event to discard.
+            get_observability_emitter().emit(
+                RuntimeEventType.PROVIDER_HEALTH_CHANGED,
+                provider=provider_id,
+                status=new_status.value,
+                execution_layer="provider_health_monitor",
+                metadata={
+                    "previous_status": prev_status.value,
+                    "new_status": new_status.value,
+                },
+            )
         except Exception:
+            # Observability cannot make provider execution unavailable.
             pass
 
     def record_provider_interaction(
