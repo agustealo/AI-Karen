@@ -188,6 +188,69 @@ class CommunicationsInboxRepository:
             next_cursor = InboxCursor(entries[-1].created_at, entries[-1].entry_id)
         return InboxPage(entries, next_cursor, unread)
 
+    @staticmethod
+    async def _admit_pending(
+        session: AsyncSession, params: dict[str, Any], *,
+        execution_id: str | None = None, conversation_id: str | None = None,
+        limit: int = 50,
+    ) -> int:
+        """Single bounded insertion path for exact and recovery admission."""
+        filters = ""
+        params = {**params, "limit": limit}
+        if execution_id is not None:
+            params["execution_id"] = _uuid(execution_id)
+            filters += " AND r.execution_id = CAST(:execution_id AS uuid)"
+        if conversation_id is not None:
+            params["conversation_id"] = _uuid(conversation_id)
+            filters += " AND r.conversation_id = CAST(:conversation_id AS uuid)"
+        result = await session.execute(text(f"""
+            WITH pending AS (
+                SELECT r.tenant_id, r.user_id, r.conversation_id, r.execution_id
+                FROM public.runtime_chat_runs r
+                JOIN public.conversations c
+                  ON (c.conversation_id, c.tenant_id, c.user_id) =
+                     (r.conversation_id, r.tenant_id, r.user_id)
+                WHERE r.tenant_id = CAST(:tenant_id AS uuid)
+                  AND r.user_id = CAST(:user_id AS uuid)
+                  AND r.status IN ('failed', 'orphaned')
+                  AND r.terminal_at IS NOT NULL
+                  AND r.communications_attention_eligible_at = r.terminal_at
+                  AND NOT EXISTS (
+                      SELECT 1 FROM public.communications_inbox_entries e
+                      WHERE e.tenant_id = r.tenant_id AND e.user_id = r.user_id
+                        AND e.execution_id = r.execution_id
+                        AND e.source_kind = 'terminal_chat_attention'
+                  )
+                  {filters}
+                ORDER BY r.communications_attention_eligible_at, r.execution_id
+                LIMIT :limit
+                FOR KEY SHARE OF c, r
+            )
+            INSERT INTO public.communications_inbox_entries
+                (tenant_id, user_id, conversation_id, execution_id)
+            SELECT tenant_id, user_id, conversation_id, execution_id FROM pending
+            ON CONFLICT (tenant_id, user_id, execution_id, source_kind)
+                DO NOTHING
+            RETURNING entry_id
+        """), params)
+        return len(result.scalars().all())
+
+    async def reconcile_pending(
+        self, *, tenant_id: str, user_id: str,
+        conversation_id: str | None = None, limit: int = 50,
+    ) -> int:
+        """Recover committed markers without historical admission or delivery claims."""
+        params = _scope(tenant_id, user_id)
+        if type(limit) is not int or not 1 <= limit <= _MAX_PAGE_SIZE:
+            raise ValueError("Invalid communications reconciliation batch size")
+        async with async_transaction_scope(
+            params["tenant_id"], user_id=params["user_id"]
+        ) as session:
+            count = await self._admit_pending(
+                session, params, conversation_id=conversation_id, limit=limit,
+            )
+        return count
+
     async def admit_terminal_execution(
         self, *, tenant_id: str, user_id: str, execution_id: str,
     ) -> InboxEntry:
@@ -197,22 +260,7 @@ class CommunicationsInboxRepository:
         async with async_transaction_scope(
             params["tenant_id"], user_id=params["user_id"]
         ) as session:
-            await session.execute(text("""
-                INSERT INTO public.communications_inbox_entries
-                    (tenant_id, user_id, conversation_id, execution_id)
-                SELECT r.tenant_id, r.user_id, r.conversation_id, r.execution_id
-                FROM public.runtime_chat_runs r
-                JOIN public.conversations c
-                  ON (c.conversation_id, c.tenant_id, c.user_id) =
-                     (r.conversation_id, r.tenant_id, r.user_id)
-                WHERE r.tenant_id = CAST(:tenant_id AS uuid)
-                  AND r.user_id = CAST(:user_id AS uuid)
-                  AND r.execution_id = CAST(:execution_id AS uuid)
-                  AND r.status IN ('failed', 'orphaned')
-                  AND r.terminal_at IS NOT NULL
-                ON CONFLICT (tenant_id, user_id, execution_id, source_kind)
-                    DO NOTHING
-            """), params)
+            await self._admit_pending(session, params, execution_id=execution_id, limit=1)
             result = await session.execute(
                 text(
                     f"SELECT {_COLUMNS} {_SOURCE} WHERE {_ELIGIBLE} "

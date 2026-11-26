@@ -7,6 +7,7 @@ untrusted correlation, never a globally authorized task identifier.
 from __future__ import annotations
 
 import json
+import logging
 import re
 import uuid
 from collections.abc import Mapping
@@ -22,6 +23,11 @@ from ai_karen_engine.core.runtime.presentation_contract import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 from ai_karen_engine.config.runtime import get_runtime_settings
+from ai_karen_engine.persistence.repositories.communications_inbox_repository import (
+    CommunicationsInboxRepository,
+)
+
+logger = logging.getLogger(__name__)
 
 _RUN_ID_PATTERN = re.compile(r"^[A-Za-z0-9_-]{1,100}$")
 _EVENT_TYPES = frozenset({
@@ -104,6 +110,29 @@ class SqlChatRunRepository:
     def _lease_seconds() -> int:
         return get_runtime_settings().timeouts.chat_run_lease_seconds
 
+    @staticmethod
+    def _attention_enabled() -> bool:
+        return get_runtime_settings().features.enable_communications_terminal_producer
+
+    @staticmethod
+    async def _reconcile_attention(
+        *, tenant_id: str, user_id: str, conversation_id: str,
+    ) -> None:
+        """Post-commit projection failure never changes the runtime result."""
+        try:
+            count = await CommunicationsInboxRepository().reconcile_pending(
+                tenant_id=tenant_id, user_id=user_id, conversation_id=conversation_id,
+            )
+            logger.info("communications.terminal_projection_committed", extra={
+                "tenant_id": tenant_id, "user_id": user_id,
+                "conversation_id": conversation_id, "admitted_count": count,
+            })
+        except Exception as exc:
+            logger.warning("communications.terminal_projection_pending", extra={
+                "tenant_id": tenant_id, "user_id": user_id,
+                "conversation_id": conversation_id, "error_type": type(exc).__name__,
+            })
+
     async def admit(
         self,
         *,
@@ -135,6 +164,8 @@ class SqlChatRunRepository:
         conversation = _uuid(conversation_id)
         execution = str(uuid.uuid4())
         token = str(uuid.uuid4())
+        attention_enabled = self._attention_enabled()
+        marker = ", communications_attention_eligible_at = NOW()" if attention_enabled else ""
         async with async_transaction_scope(tenant, user_id=user) as session:
             # Never silently run without the admission constraints during a
             # rolling upgrade or failed migration. No runtime schema writes.
@@ -157,12 +188,12 @@ class SqlChatRunRepository:
             # uncertainty, even during a concurrent stop or expiry transition.
             await session.execute(
                 text(
-                    """
+                    f"""
                     UPDATE public.runtime_chat_runs
                     SET status = 'orphaned', terminal_at = NOW(),
                         lease_token = NULL, lease_expires_at = NULL,
                         terminal_error_code = 'CHAT_RUN_LEASE_EXPIRED',
-                        updated_at = NOW()
+                        updated_at = NOW(){marker}
                     WHERE tenant_id = CAST(:tenant AS uuid)
                       AND user_id = CAST(:owner AS uuid)
                       AND conversation_id = CAST(:conversation AS uuid)
@@ -206,9 +237,8 @@ class SqlChatRunRepository:
                     "ttl": self._lease_seconds(),
                 },
             )
-            if result.scalar_one_or_none() is None:
-                return None
-            if draft_revision is not None:
+            admitted = result.scalar_one_or_none() is not None
+            if admitted and draft_revision is not None:
                 # Keep the original text durable until transcript completion.
                 # Failure raises inside this transaction, rolling back admission.
                 from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
@@ -220,6 +250,12 @@ class SqlChatRunRepository:
                     submitted_text=submitted_text,
                 ):
                     raise DraftSubmissionConflict("composer_draft_submission_conflict")
+        if attention_enabled:
+            await self._reconcile_attention(
+                tenant_id=tenant, user_id=user, conversation_id=conversation,
+            )
+        if not admitted:
+            return None
         return ChatRunLease(
             execution_id=execution,
             lease_token=token,
@@ -275,14 +311,19 @@ class SqlChatRunRepository:
             or re.fullmatch(r"[A-Z0-9_]+", error_code) is None
         ):
             raise ValueError("invalid_chat_run_error_code")
+        attention_enabled = self._attention_enabled()
+        marker = (
+            ", communications_attention_eligible_at = NOW()"
+            if attention_enabled and status == "failed" else ""
+        )
         async with async_transaction_scope(lease.tenant_id, user_id=lease.user_id) as session:
             result = await session.execute(
                 text(
-                    """
+                    f"""
                     UPDATE public.runtime_chat_runs
                     SET status = :status, terminal_at = NOW(), updated_at = NOW(),
                         terminal_error_code = :error_code,
-                        lease_token = NULL, lease_expires_at = NULL
+                        lease_token = NULL, lease_expires_at = NULL{marker}
                     WHERE execution_id = CAST(:execution AS uuid)
                       AND tenant_id = CAST(:tenant AS uuid)
                       AND user_id = CAST(:owner AS uuid)
@@ -299,7 +340,13 @@ class SqlChatRunRepository:
                 ),
                 self._scope(lease, status=status, error_code=error_code),
             )
-            return result.scalar_one_or_none() is not None
+            transitioned = result.scalar_one_or_none() is not None
+        if attention_enabled:
+            await self._reconcile_attention(
+                tenant_id=lease.tenant_id, user_id=lease.user_id,
+                conversation_id=lease.conversation_id,
+            )
+        return transitioned
 
     async def committed_turn(
         self,
@@ -952,6 +999,13 @@ class SqlChatRunRepository:
             "conversation": _uuid(conversation_id),
             "run_id": transport_run_id,
         }
+        attention_enabled = self._attention_enabled()
+        marker = (
+            ", communications_attention_eligible_at = CASE "
+            "WHEN lease_expires_at <= NOW() THEN NOW() "
+            "ELSE communications_attention_eligible_at END"
+            if attention_enabled else ""
+        )
         async with async_transaction_scope(scope["tenant"], user_id=scope["owner"]) as session:
             locked = await session.execute(
                 text(
@@ -971,50 +1025,55 @@ class SqlChatRunRepository:
             if row is None:
                 return None
             status = str(row["status"])
-            if status not in {"running", "cancelling"}:
-                return status
-            # Repeated stops on an expired cancelling worker must not lie.
-            # Lease expiry is checked inside the same transaction.
-            result = await session.execute(
-                text(
-                    """
-                    UPDATE public.runtime_chat_runs
-                    SET status = CASE
-                            WHEN lease_expires_at > NOW() THEN 'cancelling'
-                            ELSE 'orphaned'
-                        END,
-                        cancel_requested_at = CASE
-                            WHEN lease_expires_at > NOW()
-                                THEN COALESCE(cancel_requested_at, NOW())
-                            ELSE NULL
-                        END,
-                        terminal_at = CASE
-                            WHEN lease_expires_at > NOW() THEN NULL
-                            ELSE NOW()
-                        END,
-                        terminal_error_code = CASE
-                            WHEN lease_expires_at > NOW() THEN NULL
-                            ELSE 'CHAT_RUN_LEASE_EXPIRED'
-                        END,
-                        lease_token = CASE
-                            WHEN lease_expires_at > NOW() THEN lease_token
-                            ELSE NULL
-                        END,
-                        updated_at = NOW()
-                    WHERE tenant_id = CAST(:tenant AS uuid)
-                      AND user_id = CAST(:owner AS uuid)
-                      AND conversation_id = CAST(:conversation AS uuid)
-                      AND transport_run_id = :run_id
-                      AND status IN ('running', 'cancelling')
-                    RETURNING status
-                    """
-                ),
-                scope,
+            if status in {"running", "cancelling"}:
+                # Repeated stops on an expired cancelling worker must not lie.
+                # Lease expiry is checked inside the same transaction.
+                result = await session.execute(
+                    text(
+                        f"""
+                        UPDATE public.runtime_chat_runs
+                        SET status = CASE
+                                WHEN lease_expires_at > NOW() THEN 'cancelling'
+                                ELSE 'orphaned'
+                            END,
+                            cancel_requested_at = CASE
+                                WHEN lease_expires_at > NOW()
+                                    THEN COALESCE(cancel_requested_at, NOW())
+                                ELSE NULL
+                            END,
+                            terminal_at = CASE
+                                WHEN lease_expires_at > NOW() THEN NULL
+                                ELSE NOW()
+                            END,
+                            terminal_error_code = CASE
+                                WHEN lease_expires_at > NOW() THEN NULL
+                                ELSE 'CHAT_RUN_LEASE_EXPIRED'
+                            END,
+                            lease_token = CASE
+                                WHEN lease_expires_at > NOW() THEN lease_token
+                                ELSE NULL
+                            END,
+                            updated_at = NOW(){marker}
+                        WHERE tenant_id = CAST(:tenant AS uuid)
+                          AND user_id = CAST(:owner AS uuid)
+                          AND conversation_id = CAST(:conversation AS uuid)
+                          AND transport_run_id = :run_id
+                          AND status IN ('running', 'cancelling')
+                        RETURNING status
+                        """
+                    ),
+                    scope,
+                )
+                next_status = result.scalar_one_or_none()
+                if next_status is None:
+                    raise RuntimeError("chat_run_cancel_concurrent_state_changed")
+                status = str(next_status)
+        if attention_enabled:
+            await self._reconcile_attention(
+                tenant_id=scope["tenant"], user_id=scope["owner"],
+                conversation_id=scope["conversation"],
             )
-            next_status = result.scalar_one_or_none()
-            if next_status is None:
-                raise RuntimeError("chat_run_cancel_concurrent_state_changed")
-            return str(next_status)
+        return status
 
     async def read_status(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
