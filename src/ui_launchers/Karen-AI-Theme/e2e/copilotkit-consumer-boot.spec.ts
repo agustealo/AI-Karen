@@ -2,6 +2,7 @@ import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
 import { openAutomationWorkspace } from "./fixtures/automation-workspace-navigation";
 import type { Page } from "@playwright/test";
+import { createHash } from "node:crypto";
 import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedSpecialist, matchesApprovedSpecialistReceipt, validRuntimeRequestId, verifyFreshSpecialistEvidence, verifyAttestedSpecialistActivity, type ApprovedSpecialist } from "./fixtures/specialist-evidence";
 
 /**
@@ -348,6 +349,35 @@ const expectedRevision = process.env.KAREN_CHAT_BOOT_REVISION;
 const approvedUrl = process.env.KAREN_BASE_URL;
 const approvedEmail = process.env.KAREN_UX_EMAIL;
 const approvedPassword = process.env.KAREN_UX_PASSWORD;
+const generatedDocumentAcceptance = process.env.KAREN_GENERATED_DOCUMENT_ACCEPTANCE === "true";
+const documentAccounts = [
+  { email: approvedEmail, password: approvedPassword, tenant: process.env.KAREN_GENERATED_DOCUMENT_TENANT_ID, user: process.env.KAREN_GENERATED_DOCUMENT_USER_ID },
+  { email: process.env.KAREN_UX_ACCOUNT_B_EMAIL, password: process.env.KAREN_UX_ACCOUNT_B_PASSWORD, tenant: process.env.KAREN_GENERATED_DOCUMENT_TENANT_ID, user: process.env.KAREN_GENERATED_DOCUMENT_B_USER_ID },
+  { email: process.env.KAREN_UX_ACCOUNT_C_EMAIL, password: process.env.KAREN_UX_ACCOUNT_C_PASSWORD, tenant: process.env.KAREN_GENERATED_DOCUMENT_C_TENANT_ID, user: process.env.KAREN_GENERATED_DOCUMENT_C_USER_ID },
+];
+const documentProvider = process.env.KAREN_GENERATED_DOCUMENT_PROVIDER;
+const documentModel = process.env.KAREN_GENERATED_DOCUMENT_MODEL;
+const documentEngine = process.env.KAREN_GENERATED_DOCUMENT_ENGINE;
+const canonicalDocumentUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+if (generatedDocumentAcceptance && (
+    !localMode || releaseMode || authState || personalContextAcceptance || kcon770FaultAcceptance ||
+    process.env.KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE === "true" ||
+    process.env.KAREN_GENERATED_DOCUMENT_APPROVED !== "true" ||
+    process.env.KAREN_SANITIZED_ACCOUNT !== "true" ||
+    process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "local" ||
+    process.env.KAREN_LOCAL_SEARCH_ACCEPTANCE !== "1" ||
+    process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== "true" ||
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined ||
+    approvedUrl !== "http://127.0.0.1:8010" ||
+    !expectedRevision || !/^[0-9a-f]{40}$/.test(expectedRevision) ||
+    documentAccounts.some(a => !a.email?.trim() || !a.password || !canonicalDocumentUuid.test(a.tenant || "") || !canonicalDocumentUuid.test(a.user || "")) ||
+    new Set(documentAccounts.map(a => a.email?.trim().toLowerCase())).size !== 3 ||
+    new Set(documentAccounts.map(a => a.user)).size !== 3 ||
+    documentAccounts[0].tenant === documentAccounts[2].tenant ||
+    !documentProvider?.trim() || !documentModel?.trim() ||
+    !["lmstudio", "vllm", "sglang", "llamacpp", "tensorrt_llm", "ollama", "transformers"].includes(documentEngine || "")
+)) throw new Error("Generated document trial requires approved disposable loopback, exact revision, three principals and local executor identity");
+
 const ordinarySpecialistAcceptance = process.env.KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE === "true";
 const approvedSpecialist: ApprovedSpecialist | undefined = ordinarySpecialistAcceptance ? {
   tenantId: process.env.KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID || "",
@@ -417,7 +447,7 @@ if (enabled) {
 async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
   // Generic local dev builds may omit the revision endpoint. Signed release
   // and explicit local specialist acceptance both require the reviewed SHA.
-  if (!releaseMode && !localSpecialistMode) return;
+  if (!releaseMode && !localSpecialistMode && !generatedDocumentAcceptance) return;
   const response = await page.context().request.get(
     new URL("/api/deployment-revision", target).toString(),
     { failOnStatusCode: false, maxRedirects: 0, timeout: 20_000 },
@@ -425,7 +455,7 @@ async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
   expect(response.status()).toBe(200);
   const body: unknown = await response.json();
   expect(body).toBeTruthy();
-  if (localSpecialistMode) {
+  if (localSpecialistMode || generatedDocumentAcceptance) {
     expect(response.headers()["content-type"] ?? "").toMatch(/^application\/json(?:;|$)/i);
     expect(response.headers()["cache-control"] ?? "").toContain("no-store");
     expect(body).toEqual({ status: "ok", revision: expectedRevision });
@@ -1271,6 +1301,206 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     expect(browserErrors).toEqual([]);
   });
   }
+
+  test("KIQ-03G6 local generated document download and revocation", async ({ page, browser }, testInfo) => {
+    test.skip(!generatedDocumentAcceptance, "Explicit disposable local generated document approval required");
+    test.setTimeout(480_000);
+    expect(testInfo.retry, "No retry may generate a second file").toBe(0);
+    const target = new URL(approvedUrl!);
+    const requireOrigin = (active: Page) => {
+      if (new URL(active.url()).origin !== target.origin) throw new Error("Unapproved document trial origin");
+    };
+    async function requireAccount(active: Page, account: typeof documentAccounts[number]) {
+      requireOrigin(active);
+      const session = await readAuthorizedSameOriginJson(active, "/api/auth/validate-session");
+      const body = session.body as { valid?: boolean; session_valid?: boolean; authenticated?: boolean;
+        user?: { user_id?: string; tenant_id?: string; roles?: unknown[] } } | null;
+      expect(session.ok && body?.valid === true && body.session_valid === true &&
+        body.authenticated === true && body.user?.user_id === account.user &&
+        body.user?.tenant_id === account.tenant && Array.isArray(body.user?.roles) &&
+        body.user.roles.length > 0 && body.user.roles.every(role =>
+          typeof role === "string" && !/(?:admin|administrator)/i.test(role)),
+        "Exact approved non-admin principal required").toBe(true);
+    }
+    const openChat = async () => {
+      const shell = page.getByTestId("karen-copilot-consumer-chat");
+      const launch = page.getByRole("button", { name: "Ask Karen", exact: true });
+      if (!(await shell.isVisible().catch(() => false)) &&
+          await launch.isVisible().catch(() => false)) await launch.click();
+      await expect(shell).toBeVisible({ timeout: 30_000 });
+      await expect(shell.getByTestId("karen-copilot-controlled-chat")).toBeVisible({ timeout: 30_000 });
+      return shell;
+    };
+    const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
+    await requireReviewedRevision(page, target);
+    await requireLiveCanonicalBackend(page, target);
+    const owner = documentAccounts[0];
+    await signInApprovedKaren(page, owner.email!, owner.password!, { allowLocalLoopback: true });
+    await page.goto(new URL("/dashboard", target).toString());
+    await requireAccount(page, owner);
+    const shell = await openChat();
+    const previous = await shell.getAttribute("data-conversation-id");
+    await shell.getByRole("button", { name: "New conversation" }).click();
+    await expect.poll(async () => {
+      const id = await shell.getAttribute("data-conversation-id");
+      return id && id !== previous && canonicalDocumentUuid.test(id) ? true : false;
+    }, { timeout: 30_000 }).toBe(true);
+    const thread = (await shell.getAttribute("data-conversation-id"))!;
+    const historyPath = "/api/copilotkit/threads/" + thread + "/messages";
+    const empty = await readAuthorizedSameOriginJson(page, historyPath);
+    expect(empty.ok && emptyFreshSpecialistHistory(empty.body, thread), "New thread must be empty").toBe(true);
+    await expectRealCopilotKitStyles(page);
+    const marker = crypto.randomUUID();
+    const prompt = "Create a text file: Write a short fictional project checklist in plain text. Include this exact reference: " + marker;
+    const runs: string[] = [];
+    page.on("request", request => {
+      const url = new URL(request.url());
+      if (url.origin === target.origin && request.method() === "POST" &&
+          ["/api/copilotkit/agent/default/run", "/api/chat/ag-ui", "/api/chat/stream", "/api/chat"].includes(url.pathname)) {
+        runs.push(url.pathname);
+      }
+    });
+    const composer = shell.getByTestId("karen-copilot-sdk-chat").locator("textarea").first();
+    await composer.fill(prompt);
+    await composer.press("Enter");
+    const card = shell.getByTestId("karen-document-artifact");
+    await expect(card).toHaveCount(1, { timeout: 90_000 });
+    await expect(card).toBeVisible();
+    type DocumentEvidence = { artifactId: string; digest: string; bytes: number; assistantId: string; presentationId: string; answer: string };
+    let evidence: DocumentEvidence | undefined;
+    // Same assistant, exact document receipt, observed nondegraded provider,
+    // and generated bytes must all agree before an archive is authorized.
+    await expect.poll(async () => {
+      const saved = await readAuthorizedSameOriginJson(page, historyPath);
+      if (!saved.ok || !saved.body || typeof saved.body !== "object") return false;
+      const body = saved.body as { threadId?: unknown; messages?: Record<string, unknown>[]; replayEvents?: Record<string, unknown>[] };
+      if (body.threadId !== thread || !Array.isArray(body.messages) || !Array.isArray(body.replayEvents) ||
+          body.messages.length !== 2 || body.messages[0].role !== "user" || body.messages[0].content !== prompt) return false;
+      const reply = body.messages[1];
+      if (reply.role !== "assistant" || typeof reply.id !== "string" || typeof reply.content !== "string" ||
+          !reply.content.includes(marker)) return false;
+      const events = body.replayEvents.filter(e => e.type === "CUSTOM" && e.messageId === reply.id);
+      const cards = events.filter(e => e.name === "karen.presentation.v1");
+      const receipts = events.filter(e => e.name === "karen.execution_receipt.v1");
+      if (cards.length !== 1 || receipts.length !== 1) return false;
+      const receipt = receipts[0].value as Record<string, unknown> | null;
+      const envelope = cards[0].value as Record<string, unknown> | null;
+      const data = envelope?.data as Record<string, unknown> | null;
+      if (!receipt || receipt.actual_provider !== documentProvider || receipt.actual_model !== documentModel ||
+          receipt.runtime_engine !== documentEngine || !["provider_runtime", "openai_compatible_engine", "model"].includes(String(receipt.response_source)) ||
+          receipt.degraded_mode === true || (receipt.fallback_level !== undefined && receipt.fallback_level !== 0) ||
+          !envelope || envelope.schema_version !== 1 || envelope.component_type !== "document.artifact" ||
+          !data || Object.keys(data).sort().join(",") !== "artifact_id,filename,mime_type,sha256,size_bytes" ||
+          typeof data.artifact_id !== "string" || !canonicalDocumentUuid.test(data.artifact_id) ||
+          envelope.evidence_ref !== data.artifact_id || envelope.presentation_id !== "generated-text:" + data.artifact_id ||
+          data.filename !== "generated.txt" || data.mime_type !== "text/plain" ||
+          data.size_bytes !== Buffer.byteLength(reply.content, "utf8") || data.size_bytes < 1 || data.size_bytes > 65536 ||
+          data.sha256 !== sha(reply.content)) return false;
+      evidence = { artifactId: data.artifact_id, digest: data.sha256 as string, bytes: data.size_bytes as number,
+        assistantId: reply.id, presentationId: envelope.presentation_id as string, answer: reply.content };
+      return true;
+    }, { timeout: 60_000, message: "Exact persisted generated bytes and model receipt required" }).toBe(true);
+    if (!evidence) throw new Error("Verified creation receipt unavailable; do not guess a cleanup target");
+    const verified = evidence as DocumentEvidence;
+    const artifactPath = "/api/artifacts/" + verified.artifactId;
+    const textPath = artifactPath + "/text";
+    const metadata = await readAuthorizedSameOriginJson(page, artifactPath);
+    const meta = metadata.body as Record<string, unknown> | null;
+    expect(metadata.ok && meta?.id === verified.artifactId && meta?.tenant_id === owner.tenant &&
+      meta?.user_id === owner.user && meta?.kind === "generated_text" && meta?.deleted_at === null &&
+      meta?.sha256 === verified.digest && meta?.size_bytes === verified.bytes, "Exact owned generated artifact required").toBe(true);
+    async function archiveCreatedFile() {
+      await requireAccount(page, owner);
+      const acknowledged = await page.evaluate(async path => {
+        const token = window.localStorage.getItem("access_token");
+        const response = await fetch(path + "/archive", {
+          method: "POST", credentials: "same-origin", redirect: "error", cache: "no-store",
+          headers: token ? { Authorization: "Bearer " + token } : {},
+        });
+        return response.ok && (await response.json()).archived === true;
+      }, artifactPath);
+      expect(acknowledged, "Disposable artifact archive must be acknowledged").toBe(true);
+    }
+    try {
+      const text = await readAuthorizedSameOriginJson(page, textPath);
+      const body = text.body as Record<string, unknown> | null;
+      expect(text.ok && body?.artifact_id === verified.artifactId && body?.sha256 === verified.digest &&
+        body?.size_bytes === verified.bytes && typeof body?.text === "string" && sha(body.text) === verified.digest,
+        "Real Storage readback must match exact generated bytes").toBe(true);
+      await card.getByRole("button", { name: "Preview", exact: true }).click();
+      const preview = card.locator("pre");
+      await expect(preview).toBeVisible();
+      expect(sha(await preview.textContent() || "") === verified.digest, "Preview bytes must match").toBe(true);
+      await card.getByRole("button", { name: "Close preview", exact: true }).click();
+      await expect(preview).toHaveCount(0);
+      const downloadPromise = page.waitForEvent("download");
+      await card.getByRole("button", { name: "Download", exact: true }).click();
+      const download = await downloadPromise;
+      try {
+        expect(download.suggestedFilename()).toBe("generated.txt");
+        const stream = await download.createReadStream();
+        const hash = createHash("sha256");
+        let count = 0;
+        for await (const chunk of stream) {
+          count += chunk.length;
+          if (count > 65536) throw new Error("Unexpected download size");
+          hash.update(chunk);
+        }
+        expect(count === verified.bytes && hash.digest("hex") === verified.digest, "Downloaded bytes must match").toBe(true);
+      } finally {
+        await download.delete();
+      }
+      await page.reload();
+      const restored = await openChat();
+      await expect(restored).toHaveAttribute("data-conversation-id", thread);
+      await expect(restored.getByTestId("karen-copilot-rail-unverified")).toHaveCount(0);
+      await expect(restored.getByTestId("karen-document-artifact")).toHaveCount(1);
+      const savedAgain = await readAuthorizedSameOriginJson(page, historyPath);
+      const replay = (savedAgain.body as { replayEvents?: Record<string, unknown>[] } | null)?.replayEvents;
+      const same = replay?.filter(e => e.type === "CUSTOM" && e.name === "karen.presentation.v1" &&
+        e.messageId === verified.assistantId && (e.value as Record<string, unknown> | null)?.presentation_id === verified.presentationId);
+      expect(savedAgain.ok && same?.length === 1, "Exact receipt must survive reload once").toBe(true);
+      await restored.getByTestId("karen-document-artifact").getByRole("button", { name: "Preview", exact: true }).click();
+      await expect(restored.getByTestId("karen-document-artifact").locator("pre")).toBeVisible();
+      expect(sha(await restored.getByTestId("karen-document-artifact").locator("pre").textContent() || "") === verified.digest).toBe(true);
+      // Verify foreign denial while still active, not after archive makes
+      // every caller fail. Independent contexts share no auth state.
+      const isolated = await browser.newContext({ storageState: { cookies: [], origins: [] }, acceptDownloads: false });
+      try {
+        const guest = await isolated.newPage();
+        await guest.goto(new URL("/login", target).toString());
+        requireOrigin(guest);
+        const denied = await readAuthorizedSameOriginJson(guest, textPath);
+        expect([401, 403]).toContain(denied.status);
+      } finally { await isolated.close(); }
+      for (const account of documentAccounts.slice(1)) {
+        const foreign = await browser.newContext({ storageState: { cookies: [], origins: [] }, acceptDownloads: false });
+        try {
+          const active = await foreign.newPage();
+          await requireLiveCanonicalBackend(active, target);
+          await signInApprovedKaren(active, account.email!, account.password!, { allowLocalLoopback: true });
+          await requireAccount(active, account);
+          expect((await readAuthorizedSameOriginJson(active, textPath)).status, "Foreign active-file access must be denied").toBe(404);
+          expect((await readAuthorizedSameOriginJson(active, historyPath)).status, "Foreign conversation access must be denied").toBe(404);
+        } finally { await foreign.close(); }
+      }
+      expect(runs, "One ordinary SDK execution, no duplicate generation").toEqual(["/api/copilotkit/agent/default/run"]);
+    } finally {
+      await archiveCreatedFile();
+    }
+    await page.reload();
+    const restored = await openChat();
+    const archivedCard = restored.getByTestId("karen-document-artifact");
+    await expect(archivedCard).toHaveCount(1);
+    await expect(archivedCard.locator("pre")).toHaveCount(0);
+    await archivedCard.getByRole("button", { name: "Preview", exact: true }).click();
+    await expect(archivedCard.getByRole("alert")).toBeVisible();
+    await expect(archivedCard.locator("pre")).toHaveCount(0);
+    expect((await readAuthorizedSameOriginJson(page, textPath)).status).toBe(404);
+    await requireReviewedRevision(page, target);
+    await requireLiveCanonicalBackend(page, target);
+    expect(runs).toEqual(["/api/copilotkit/agent/default/run"]);
+  });
 
   test("boots, restores and loads assets without an inspector chunk failure", async ({ page }) => {
     test.setTimeout(120_000);
