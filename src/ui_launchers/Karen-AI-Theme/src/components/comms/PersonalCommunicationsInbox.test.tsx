@@ -4,9 +4,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PersonalCommunicationsInbox, PersonalCommunicationsInboxProvider } from "./PersonalCommunicationsInbox";
 import { INBOX_PATH, INBOX_REFRESH_INTERVAL_MS, type InboxEntry } from "./communications-inbox-contract";
 
-const stubs = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), post: vi.fn(), revision: 1, user: "owner" }));
+const stubs = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), post: vi.fn(), wait: vi.fn(), revision: 1, user: "owner" }));
 vi.mock("@/lib/api", () => ({
-  apiClient: { get: stubs.get, patch: stubs.patch, post: stubs.post },
+  apiClient: { get: stubs.get, patch: stubs.patch, post: stubs.post, waitForInboxInvalidation: stubs.wait },
   captureApiPrincipalScope: (tenant_id: string, user_id: string) => user_id === stubs.user ? { tenant_id, user_id, revision: stubs.revision } : null,
   isCurrentApiPrincipalScope: (scope: { user_id: string; revision: number }) => scope.user_id === stubs.user && scope.revision === stubs.revision,
 }));
@@ -22,7 +22,7 @@ const workspace = (userId: string, visible = true, open?: (id: string) => Promis
     {visible ? <PersonalCommunicationsInbox onOpenConversation={open} /> : <p>Other workspace</p>}
   </PersonalCommunicationsInboxProvider>;
 const mount = (open?: (id: string) => Promise<void>) => render(workspace("owner", true, open));
-beforeEach(() => { stubs.get.mockReset().mockResolvedValue(page()); stubs.patch.mockReset(); stubs.post.mockReset(); stubs.user = "owner"; stubs.revision = 1; });
+beforeEach(() => { stubs.get.mockReset().mockResolvedValue(page()); stubs.patch.mockReset(); stubs.post.mockReset(); stubs.wait.mockReset(); stubs.user = "owner"; stubs.revision = 1; });
 afterEach(cleanup);
 
 describe("personal inbox authority", () => {
@@ -192,4 +192,70 @@ it("honors server-reported producer configuration and read-only entitlements", a
   }
   expect(stubs.patch).not.toHaveBeenCalled();
   expect(stubs.post).not.toHaveBeenCalled();
+});
+
+
+describe("authenticated change hints reuse canonical inbox reconciliation", () => {
+  const enabledPage = () => ({ ...page(), capabilities: { ...page().capabilities, invalidation_wait_enabled: true } });
+  beforeEach(() => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+  });
+  afterEach(() => { vi.restoreAllMocks(); });
+
+  it("does not open a wait when the backend capability is absent", async () => {
+    mount();
+    await screen.findByText("Chat execution interrupted");
+    expect(stubs.wait).not.toHaveBeenCalled();
+  });
+
+  it("refreshes only from the canonical GET, never broker content", async () => {
+    stubs.get.mockResolvedValueOnce(enabledPage()).mockResolvedValue(page([], 0));
+    stubs.wait.mockResolvedValueOnce({ changed: true });
+    mount();
+    await screen.findByText("0 unread active");
+    expect(stubs.wait).toHaveBeenCalledTimes(1);
+    expect(stubs.get).toHaveBeenCalledTimes(2);
+    expect(stubs.patch).not.toHaveBeenCalled();
+    expect(stubs.post).not.toHaveBeenCalled();
+  });
+
+  it("backs off malformed hints without replacing verified records", async () => {
+    stubs.get.mockResolvedValue(enabledPage());
+    stubs.wait.mockResolvedValue({ changed: true, entries: [] });
+    mount();
+    await waitFor(() => expect(stubs.wait).toHaveBeenCalledTimes(1));
+    expect(stubs.get).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId("personal-inbox-unread").textContent).toBe("42 unread active");
+    expect(stubs.post).not.toHaveBeenCalled();
+  });
+
+  it("cancels on workspace exit and ignores late hints", async () => {
+    stubs.get.mockResolvedValue(enabledPage());
+    let release!: (raw: unknown) => void;
+    stubs.wait.mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const view = mount();
+    await waitFor(() => expect(stubs.wait).toHaveBeenCalledTimes(1));
+    const signal = stubs.wait.mock.calls[0][1] as AbortSignal;
+    view.rerender(workspace("owner", false));
+    expect(signal.aborted).toBe(true);
+    await act(async () => release({ changed: true }));
+    expect(stubs.get).toHaveBeenCalledTimes(1);
+  });
+
+  it("cancels on account switch and never applies a delayed old-principal hint", async () => {
+    stubs.get.mockResolvedValueOnce(enabledPage()).mockResolvedValue(page([], 0));
+    let release!: (raw: unknown) => void;
+    stubs.wait.mockReturnValue(new Promise(resolve => { release = resolve; }));
+    const view = mount();
+    await waitFor(() => expect(stubs.wait).toHaveBeenCalledTimes(1));
+    const signal = stubs.wait.mock.calls[0][1] as AbortSignal;
+    stubs.user = "other";
+    stubs.revision++;
+    view.rerender(workspace("other"));
+    await screen.findByText("0 unread active");
+    expect(signal.aborted).toBe(true);
+    await act(async () => release({ changed: true }));
+    expect(stubs.get).toHaveBeenCalledTimes(2);
+  });
 });
