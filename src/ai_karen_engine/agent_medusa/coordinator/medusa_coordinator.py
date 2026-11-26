@@ -799,14 +799,18 @@ class MedusaCoordinator:
         entry_acknowledged = False
         entry_violation = False
         call_attempted = False
+        entry_open = False
+        invocation_task = asyncio.current_task()
 
         async def acknowledge_entry() -> None:
             nonlocal invocation_entered, entry_acknowledged, entry_violation
-            if invocation_entered:
+            if not entry_open:
+                raise OutcomeStoreError("Specialist invocation entry is closed")
+            if asyncio.current_task() is not invocation_task or invocation_entered:
                 entry_violation = True
                 if pending_participation is not None:
                     pending_participation.add(step.id)
-                raise OutcomeStoreError("Duplicate specialist invocation entry")
+                raise OutcomeStoreError("Invalid specialist invocation entry")
             # The trusted run method has already entered. No model or tool
             # processing may proceed until this observation is acknowledged.
             invocation_entered = True
@@ -831,10 +835,16 @@ class MedusaCoordinator:
             call_attempted = True
             if trusted_context is None:
                 invocation_entered = True
-            result = await specialist.run(step.input_data, context, execution=execution)
+            entry_open = True
+            try:
+                result = await specialist.run(step.input_data, context, execution=execution)
+            finally:
+                entry_open = False
             step.status = StepStatus.COMPLETED
             step.output_data = result
             if trusted_context is not None and (not entry_acknowledged or entry_violation):
+                if pending_participation is not None:
+                    pending_participation.add(step.id)
                 raise OutcomeStoreError("Specialist invocation entry unacknowledged")
             await record_participation(SpecialistParticipationPhase.COMPLETED)
             if emitter is not None:
@@ -870,7 +880,11 @@ class MedusaCoordinator:
                     and pending_participation is not None
                 ):
                     pending_participation.add(step.id)
-                if invocation_entered and (trusted_context is None or entry_acknowledged) and not entry_violation:
+                if (
+                    invocation_entered
+                    and (trusted_context is None or entry_acknowledged)
+                    and not entry_violation
+                ):
                     try:
                         await record_participation(
                             SpecialistParticipationPhase.INTERRUPTED
@@ -918,6 +932,8 @@ class MedusaCoordinator:
             ):
                 # Entry persistence failure is not a specialist work failure.
                 # Do not append FAILED or erase the pending STARTED marker.
+                if pending_participation is not None:
+                    pending_participation.add(step.id)
                 if isinstance(exc, OutcomeStoreError):
                     raise
                 raise OutcomeStoreError("Specialist invocation entry unacknowledged") from exc

@@ -1044,7 +1044,9 @@ async def test_scheduler_skip_receipt_failure_cannot_assemble_success(mode):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("mode", ["entry_failed", "entry_cancelled", "missing", "duplicate"])
+@pytest.mark.parametrize(
+    "mode", ["entry_failed", "entry_cancelled", "missing", "duplicate", "foreign_task"]
+)
 async def test_entry_failure_does_not_claim_specialist_work_failed(mode):
     import asyncio
 
@@ -1070,7 +1072,9 @@ async def test_entry_failure_does_not_claim_specialist_work_failed(mode):
 
     async def run(*args, **kwargs):
         execution = kwargs["execution"]
-        if mode != "missing":
+        if mode == "foreign_task":
+            await asyncio.create_task(execution.acknowledge_invocation_entry())
+        elif mode != "missing":
             await execution.acknowledge_invocation_entry()
         if mode == "duplicate":
             await execution.acknowledge_invocation_entry()
@@ -1099,11 +1103,14 @@ async def test_entry_failure_does_not_claim_specialist_work_failed(mode):
     if mode == "missing":
         store.save_unique_outcome_async.assert_not_awaited()
         work.assert_awaited_once()
+    elif mode == "foreign_task":
+        store.save_unique_outcome_async.assert_not_awaited()
+        work.assert_not_awaited()
     else:
         work.assert_not_awaited()
         store.save_unique_outcome_async.assert_awaited_once()
         assert store.save_unique_outcome_async.await_args.args[0]["metadata"]["phase"] == "started"
-        assert pending == {step.id}
+    assert pending == {step.id}
     assert specialist.run.await_args.kwargs["execution"]._invocation_entry is None
 
 
@@ -1138,3 +1145,45 @@ async def test_real_registered_entry_methods_acknowledge_before_work(harness):
         await specialist.run({"query": "test"}, execution=execution)
     entry.assert_awaited_once()
     downstream.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_retained_entry_callback_cannot_write_after_specialist_returns():
+    from ai_karen_engine.agent_medusa.contracts.deep_execution_plan import (
+        DeepExecutionPlan,
+        PlanStep,
+    )
+    from ai_karen_engine.agent_medusa.execution.event_emitter import EventEmitter
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    request, root, meter, _ = _request()
+    step = PlanStep(agent_specialist="researcher")
+    plan = DeepExecutionPlan(request_id=request.request_id, steps=[step])
+    store = SimpleNamespace(save_unique_outcome_async=AsyncMock())
+    retained = []
+
+    async def run(*args, **kwargs):
+        execution = kwargs["execution"]
+        retained.append(execution._invocation_entry)
+        await execution.acknowledge_invocation_entry()
+        return {"result": "observed"}
+
+    specialist = SimpleNamespace(run=AsyncMock(side_effect=run))
+    coordinator = MedusaCoordinator(
+        registry=SimpleNamespace(
+            get_agent=AsyncMock(return_value=SimpleNamespace(lifecycle_state="active")),
+            get_agent_health=AsyncMock(return_value={"exists": True, "healthy": True}),
+        ),
+        factory=SimpleNamespace(resolve=lambda _: specialist),
+        lifecycle=SimpleNamespace(set_status=AsyncMock()),
+        outcome_recorder=OutcomeRecorder(store=store),
+    )
+    pending = set()
+    assert await coordinator._execute_step(
+        step, plan, request, root, meter, EventEmitter(), pending_participation=pending,
+    ) == {"result": "observed"}
+    assert not pending
+    with pytest.raises(OutcomeStoreError, match="entry is closed"):
+        await retained[0]()
+    assert store.save_unique_outcome_async.await_count == 2
+    assert not pending
