@@ -78,7 +78,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
         # Extract request information
         method = request.method
         path = str(request.url.path)
-        query_params = str(request.url.query) if request.url.query else None
+        has_query = bool(request.url.query)
         client_ip = self._get_client_ip(request)
         user_agent = request.headers.get("user-agent", "")
 
@@ -90,7 +90,7 @@ class StructuredLoggingMiddleware(BaseHTTPMiddleware):
             metadata={
                 "method": method,
                 "path": path,
-                "query_params": query_params,
+                "has_query": has_query,
                 "client_ip": client_ip,
                 "user_agent": user_agent,
                 "correlation_id": correlation_id,

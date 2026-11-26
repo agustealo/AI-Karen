@@ -26,8 +26,40 @@ _RESERVED_SCOPE = frozenset({"file_explorer_grant", "file_explorer_entries"})
 
 class OwnerInventorySource(Protocol):
     async def list_owner_sources_page(
-        self, *, tenant_id: str, user_id: str, limit: int, cursor: str | None
+        self, *, tenant_id: str, user_id: str, limit: int, cursor: str | None,
+        search: str | None = None,
     ) -> dict[str, Any]: ...
+
+    async def owner_hierarchy_capability(
+        self, *, tenant_id: str, user_id: str, deletion: bool = False,
+    ) -> bool: ...
+
+    async def list_owner_hierarchy(
+        self, *, tenant_id: str, user_id: str, limit: int,
+        parent_folder_id: str | None, after_folder_id: str | None,
+        file_cursor: str | None = None,
+        search: str | None = None,
+    ) -> dict[str, Any]: ...
+
+    async def create_owner_folder(
+        self, *, tenant_id: str, user_id: str, name: str,
+        parent_folder_id: str | None,
+    ) -> dict[str, Any]: ...
+
+    async def rename_owner_folder(
+        self, *, tenant_id: str, user_id: str, folder_id: str,
+        name: str, expected_revision: int,
+    ) -> dict[str, Any]: ...
+
+    async def move_owner_item(
+        self, *, tenant_id: str, user_id: str, kind: str, source_id: str,
+        destination_id: str | None, expected_revision: int,
+    ) -> str: ...
+
+    async def delete_empty_owner_folder(
+        self, *, tenant_id: str, user_id: str, folder_id: str,
+        expected_revision: int,
+    ) -> bool: ...
 
     async def revalidate_owner_reference(
         self, *, tenant_id: str, user_id: str, source_id: str,
@@ -127,6 +159,224 @@ class FileExplorerInventoryHost:
         ):
             raise PermissionError("file_explorer_kernel_denied")
 
+    async def list_owner_hierarchy(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        limit: int, parent_folder_id: str | None, after_folder_id: str | None,
+        file_cursor: str | None = None,
+        search: str | None = None,
+    ) -> dict[str, Any]:
+        self._authorize_owner(context=context, plan=plan)
+        if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
+            raise ValueError("file_explorer_page_limit_invalid")
+        if any(value is not None and not _canonical_uuid(value)
+               for value in (parent_folder_id, after_folder_id)):
+            raise ValueError("file_explorer_folder_id_invalid")
+        if file_cursor is not None and (
+            not isinstance(file_cursor, str) or not 1 <= len(file_cursor) <= MAX_CURSOR_LENGTH
+        ):
+            raise ValueError("file_explorer_cursor_invalid")
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        page = await self._source.list_owner_hierarchy(
+            tenant_id=context.tenant_id, user_id=context.user_id, limit=limit,
+            parent_folder_id=parent_folder_id, after_folder_id=after_folder_id,
+            file_cursor=file_cursor,
+            **({"search": search} if search is not None else {}),
+        )
+        logger.info("file_explorer_hierarchy_page", extra={
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id, "user_id": context.user_id,
+            "available": page["available"], "folder_count": len(page["folders"]),
+        })
+        return {**page, "request_id": context.request_id,
+                "correlation_id": context.correlation_id}
+
+    async def probe_owner_capability(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        operation: str | None = None,
+    ) -> bool:
+        """Non-executable preflight; a real mutation still needs its exact scope."""
+        if operation is None:
+            self._authorize_owner(context=context, plan=plan)
+        else:
+            self._authorize_mutation(context=context, plan=plan, scope={
+                "operation": operation, "availability_only": True,
+            })
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        return await self._source.owner_hierarchy_capability(
+            tenant_id=context.tenant_id, user_id=context.user_id,
+            deletion=operation == "file_explorer.folder.delete",
+        )
+
+    def _authorize_mutation(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        scope: dict[str, Any],
+    ) -> None:
+        self._authorize_owner(context=context, plan=plan)
+        from ai_karen_engine.auth.rbac_middleware import (
+            FILE_EXPLORER_MUTATION_PERMISSIONS, Permission,
+        )
+
+        entitlement = FILE_EXPLORER_MUTATION_PERMISSIONS.get(scope["operation"])
+        if entitlement is None:
+            raise PermissionError("file_explorer_operation_denied")
+        permissions = {Permission.DATA_READ.value, entitlement.value}
+        required = permissions | {scope["operation"]}
+        if (not required.issubset(plan.allowed_capabilities)
+            or not required.issubset(context.allowed_capabilities)
+            or plan.approval_requirements
+            or plan.resource_scope != scope
+            or not permissions.issubset(context.audit_context.get("permissions", []))):
+            raise PermissionError("file_explorer_write_permission_required")
+
+    @staticmethod
+    def _validate_folder_name(name: str) -> None:
+        if (not isinstance(name, str) or not 1 <= len(name) <= 256
+            or name != name.strip()
+            or any(ord(ch) < 32 or 127 <= ord(ch) <= 159
+                   or 0xD800 <= ord(ch) <= 0xDFFF for ch in name)):
+            raise ValueError("file_explorer_folder_invalid")
+
+    async def create_owner_folder(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        name: str, parent_folder_id: str | None,
+    ) -> dict[str, Any]:
+        self._authorize_mutation(context=context, plan=plan, scope={
+            "operation": "file_explorer.folder.create",
+            "name": name, "parent_folder_id": parent_folder_id,
+        })
+        self._validate_folder_name(name)
+        if parent_folder_id is not None and not _canonical_uuid(parent_folder_id):
+            raise ValueError("file_explorer_folder_invalid")
+        # Kernel admission verifies lifecycle and role; the host, not the
+        # read-only extension, performs the narrowly policy-bound mutation.
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        try:
+            folder = await self._source.create_owner_folder(
+                tenant_id=context.tenant_id, user_id=context.user_id,
+                name=name, parent_folder_id=parent_folder_id,
+            )
+        except Exception:
+            logger.warning("file_explorer_folder_create_failed", extra={
+                "request_id": context.request_id, "correlation_id": context.correlation_id,
+                "tenant_id": context.tenant_id, "user_id": context.user_id,
+            })
+            raise
+        logger.info("file_explorer_folder_created", extra={
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id, "user_id": context.user_id,
+            "policy_decision_id": context.policy_decision_id,
+            "folder_id": folder["folder_id"], "status": "success",
+        })
+        return {"folder": folder, "request_id": context.request_id,
+                "correlation_id": context.correlation_id}
+
+    async def rename_owner_folder(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        folder_id: str, name: str, expected_revision: int,
+    ) -> dict[str, Any]:
+        self._authorize_mutation(context=context, plan=plan, scope={
+            "operation": "file_explorer.folder.rename", "folder_id": folder_id,
+            "name": name, "expected_revision": expected_revision,
+        })
+        self._validate_folder_name(name)
+        if (not _canonical_uuid(folder_id) or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            raise ValueError("file_explorer_folder_invalid")
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        try:
+            folder = await self._source.rename_owner_folder(
+                tenant_id=context.tenant_id, user_id=context.user_id,
+                folder_id=folder_id, name=name, expected_revision=expected_revision,
+            )
+        except Exception:
+            logger.warning("file_explorer_folder_rename_failed", extra={
+                "request_id": context.request_id, "correlation_id": context.correlation_id,
+                "tenant_id": context.tenant_id, "user_id": context.user_id,
+            })
+            raise
+        logger.info("file_explorer_folder_renamed", extra={
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id, "user_id": context.user_id,
+            "policy_decision_id": context.policy_decision_id,
+            "folder_id": folder_id, "status": "success",
+        })
+        return {"folder": folder, "request_id": context.request_id,
+                "correlation_id": context.correlation_id}
+
+    async def move_owner_item(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        kind: str, source_id: str, destination_id: str | None,
+        expected_revision: int,
+    ) -> dict[str, Any]:
+        if kind not in ("folder", "artifact"):
+            raise ValueError("file_explorer_move_kind_invalid")
+        operation = f"file_explorer.{kind}.move"
+        self._authorize_mutation(context=context, plan=plan, scope={
+            "operation": operation, "source_id": source_id,
+            "destination_id": destination_id, "expected_revision": expected_revision,
+        })
+        if (not _canonical_uuid(source_id)
+            or (destination_id is not None and not _canonical_uuid(destination_id))
+            or (kind == "folder" and destination_id == source_id)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            raise ValueError("file_explorer_move_invalid")
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        evidence = {
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id, "user_id": context.user_id,
+            "policy_decision_id": context.policy_decision_id,
+            "operation": operation, "source_id": source_id,
+            "destination_id": destination_id,
+        }
+        try:
+            revision = await self._source.move_owner_item(
+                tenant_id=context.tenant_id, user_id=context.user_id,
+                kind=kind, source_id=source_id, destination_id=destination_id,
+                expected_revision=expected_revision,
+            )
+        except Exception:
+            logger.warning("file_explorer_move_failed", extra=evidence)
+            raise
+        logger.info("file_explorer_move_committed", extra={
+            **evidence, "organization_revision": revision, "status": "success",
+        })
+        return {"kind": kind, "source_id": source_id, "parent_folder_id": destination_id,
+                "organization_revision": revision, "request_id": context.request_id,
+                "correlation_id": context.correlation_id}
+
+    async def delete_empty_owner_folder(
+        self, *, context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+        folder_id: str, expected_revision: int,
+    ) -> dict[str, Any]:
+        self._authorize_mutation(context=context, plan=plan, scope={
+            "operation": "file_explorer.folder.delete", "folder_id": folder_id,
+            "expected_revision": expected_revision,
+        })
+        if (not _canonical_uuid(folder_id) or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            raise ValueError("file_explorer_folder_delete_invalid")
+        await self._admit_kernel_before_read(context=context, plan=plan)
+        evidence = {
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "tenant_id": context.tenant_id, "user_id": context.user_id,
+            "policy_decision_id": context.policy_decision_id, "folder_id": folder_id,
+            "expected_revision": expected_revision,
+        }
+        try:
+            deleted = await self._source.delete_empty_owner_folder(
+                tenant_id=context.tenant_id, user_id=context.user_id,
+                folder_id=folder_id, expected_revision=expected_revision,
+            )
+            if deleted is not True:
+                raise RuntimeError("file_explorer_folder_delete_unconfirmed")
+        except Exception:
+            logger.warning("file_explorer_folder_delete_failed", extra=evidence)
+            raise
+        logger.info("file_explorer_folder_deleted", extra={**evidence, "status": "success"})
+        return {"folder_id": folder_id, "deleted": True,
+                "request_id": context.request_id, "correlation_id": context.correlation_id}
+
     async def revalidate_owner_selection(
         self, *, context: ExtensionExecutionContext,
         plan: AuthorizedExecutionPlan, source_id: str, expected_revision: str,
@@ -179,6 +429,7 @@ class FileExplorerInventoryHost:
         plan: AuthorizedExecutionPlan,
         limit: int = 100,
         cursor: str | None = None,
+        search: str | None = None,
     ) -> dict[str, Any]:
         self._authorize_owner(context=context, plan=plan)
         if type(limit) is not int or not 1 <= limit <= MAX_PAGE_SIZE:
@@ -193,6 +444,7 @@ class FileExplorerInventoryHost:
             user_id=context.user_id,
             limit=limit,
             cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
         if not isinstance(page, dict):
             raise RuntimeError("file_explorer_source_page_invalid")

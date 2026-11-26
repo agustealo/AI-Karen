@@ -9,6 +9,7 @@ from fastapi import HTTPException, Request
 
 from ai_karen_engine.api_routes.plugins import plugins as ingress
 from ai_karen_engine.core.runtime.policy.runtime_policy import PolicyDecision
+from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
 from ai_karen_engine.services.plugin_service import PluginService
 
 TENANT = "11111111-1111-4111-8111-111111111111"
@@ -328,6 +329,7 @@ async def test_content_inventory_independent_of_file_explorer(monkeypatch):
     assert page["items"][0]["source_id"] == FILE
     assert page["items"][0]["revision"] == SHA
     assert page["inventory_semantics"] == "owner_metadata_page_not_live_acl"
+    assert page["max_selection"] == MAX_CONTENT_SOURCE_REFERENCES
     assert kernel.admissions[0].plugin_id == "content-intelligence"
     assert kernel.executions == []
     repo.get_metadata.assert_not_awaited()
@@ -364,6 +366,7 @@ async def test_content_inventory_ingress_delegates_authenticated_scope(monkeypat
         "items": [], "has_more": False, "next_cursor": None,
         "inventory_semantics": "owner_metadata_page_not_live_acl",
         "request_id": "request-1", "correlation_id": "correlation-1",
+        "max_selection": MAX_CONTENT_SOURCE_REFERENCES,
     }))
     result = await ingress.list_content_inventory(
         request=_request(), limit=10, cursor=None,
@@ -372,5 +375,34 @@ async def test_content_inventory_ingress_delegates_authenticated_scope(monkeypat
         plugin_service=service,
     )
     assert result.items == []
+    assert result.max_selection == MAX_CONTENT_SOURCE_REFERENCES
     assert service.list_content_owner_page.await_args.kwargs["user_id"] == OWNER
     assert service.list_content_owner_page.await_args.kwargs["tenant_id"] == TENANT
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ceiling", [{}, {"max_selection": None}, {"max_selection": True},
+                                    {"max_selection": "12"}, {"max_selection": 0},
+                                    {"max_selection": MAX_CONTENT_SOURCE_REFERENCES + 1}])
+async def test_content_inventory_rejects_invalid_service_ceiling(monkeypatch, ceiling):
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: True,
+        get_user_permissions=lambda *_: [ingress.Permission.DATA_READ],
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(list_content_owner_page=AsyncMock(return_value={
+        "items": [], "has_more": False, "next_cursor": None,
+        "inventory_semantics": "owner_metadata_page_not_live_acl",
+        "request_id": "request-1", "correlation_id": "correlation-1",
+        **ceiling,
+    }))
+    with pytest.raises(HTTPException) as exc:
+        await ingress.list_content_inventory(
+            request=_request(), limit=10, cursor=None,
+            current_user={"user_id": OWNER, "tenant_id": TENANT, "roles": ["user"],
+                          "permissions": ["data:read"]},
+            plugin_service=service,
+        )
+    assert exc.value.status_code == 503
+    assert exc.value.detail == "Content inventory is unavailable"
+    service.list_content_owner_page.assert_awaited_once()

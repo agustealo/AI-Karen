@@ -12,7 +12,7 @@ The GUI manifest is `src/ai_karen_engine/extensions/plugins/file-explorer/manife
 
 The `SharedFileExplorer` component accepts `authorized`, `items`, `loading`, `error`, `selectedSourceIds`, `multiSelect`, `onSelect`, and `onRefresh`. It renders an honest unavailable state when `authorized` is not true, and it performs no network calls or filesystem reads.
 
-The host must obtain the inventory using a trusted authenticated action, validate tenant/user/resource ACL and revision, and pass only authorized entries. The `authorized` prop is a UI display hint, **not an authorization decision**. The selectable view is restricted to 200 entries for this slice and supports up to 24 selections. A selection returns `source_id`, `revision`, `sha256`, and `kind` only.
+The host must obtain the inventory using a trusted authenticated action, validate tenant/user/resource ACL and revision, and pass only authorized entries. The `authorized` prop is a UI display hint, **not an authorization decision**. The selectable view is restricted to 200 entries for this slice and uses a consumer-specific selection ceiling. A selection returns `source_id`, `revision`, `sha256`, and `kind` only.
 
 Other plugins must reauthorize every source at the source owner when accessing bytes. The client callback cannot confer access rights, and stale references must fail.
 
@@ -22,11 +22,11 @@ Responsive file/folder listing, folder navigation, text filtering, single or mul
 
 ## Not accepted
 
-Live uploaded-file listing, pagination, standalone backend UI API, authorized preview/download, nested folder permissions, automated plugin-to-plugin mount, visual browser regression, and third-party cloud stores. They must not be advertised as working without host integration and observed acceptance.
+Live uploaded-file listing, authorized preview/download, automated plugin-to-plugin mount, observed visual browser regression, and third-party cloud stores. They must not be advertised as working without host integration and observed acceptance.
 
 ## Controlled keyset-page navigation (implemented UI contract)
 
-The existing `SharedFileExplorer` now accepts `hasMore`, `nextCursor`, `onNextPage(cursor)` and `pageKey` from the trusted authenticated host, in addition to the original controlled inventory and selection props. It never fetches data, caches cursors, or treats pagination evidence as authorization. A missing callback, absent/oversized cursor or inconsistent terminal-page evidence makes the explorer unavailable instead of silently presenting an incomplete inventory as complete. Selecting **Next page** clears local selection and filters and asks the host to retrieve the next server-authorized page. The UI remains limited to 200 entries per supplied page and 24 selections per page.
+The existing `SharedFileExplorer` now accepts `hasMore`, `nextCursor`, `onNextPage(cursor)` and `pageKey` from the trusted authenticated host, in addition to the original controlled inventory and selection props. It never fetches data, caches cursors, or treats pagination evidence as authorization. A missing callback, absent/oversized cursor or inconsistent terminal-page evidence makes the explorer unavailable instead of silently presenting an incomplete inventory as complete. Selecting **Next page** clears local selection and filters and asks the host to retrieve the next server-authorized page. The UI remains limited to 200 entries per supplied page and the supplied consumer-specific selection ceiling.
 
 The host **must** produce a new `pageKey` on every accepted page or identity/authorization-scope transition. That remounts the controlled viewer and clears local folder, filter and selection state. Host callers must also cancel or ignore stale/out-of-order responses, never combine pages from different users, tenants or authorizations, and resolve errors separately from genuinely empty inventories. `onRefresh` clears selection before the host requests a fresh authorized page. This is not an authorization boundary: consumers still revalidate source ACL, deletion status and revision at the canonical owner before bytes are accessed.
 
@@ -36,7 +36,7 @@ The host **must** produce a new `pageKey` on every accepted page or identity/aut
 
 The canonical dashboard plugin route now wraps the existing dynamically loaded `PluginHost` only when its catalog-provided plugin ID is `file-explorer`. The host is `src/ui_launchers/Karen-AI-Theme/src/components/plugins/FileExplorerInventoryHost.tsx`; the plugin component itself continues to receive only controlled presentation props through `PluginHost.componentProps`. There is **no second explorer UI, plugin route registry, file-store client, or bearer grant**.
 
-The authenticated browser API client retrieves `/api/plugins/file-explorer/inventory` from the existing plugin router. The host validates the reference-only response, displays only the currently authorized server page (maximum 200 entries), carries the exact continuation cursor to Next page, clears selection on refresh and page changes, and assigns `pageKey` from the authenticated principal and accepted page generation. It gates rendering on tenant/user/role/permission identity and ignores late responses from unmounted, previous-page, or previous-principal fetches. An unavailable or malformed response never becomes an authorized empty list; the UI visibly reports loading, errors, and retry. The browser never calls storage APIs, uploads files, or uses localStorage for inventory.
+The authenticated browser API client retrieves `/api/plugins/file-explorer/hierarchy` for hierarchy consumers, or `/api/plugins/file-explorer/inventory` for explicit flat consumers from the existing plugin router. The host validates the reference-only response, displays only the currently authorized server page (maximum 200 entries), carries the exact continuation cursor to Next page, clears selection on refresh and page changes, and assigns `pageKey` from the authenticated principal and accepted page generation. It gates rendering on tenant/user/role/permission identity and ignores late responses from unmounted, previous-page, or previous-principal fetches. An unavailable or malformed response never becomes an authorized empty list; the UI visibly reports loading, errors, and retry. The browser never calls storage APIs, uploads files, or uses localStorage for inventory.
 
 This is UI source integration, **not yet certification** of real hosted login/API/production PostgreSQL use. Before consumer-ready status, perform authenticated end-to-end browser acceptance with a real owner account and multiple pages, concurrent refresh/navigation, logout or tenant switch during pending requests, disabled plugin, removed artifact/revision, and responsive/focus behavior at 390, 768, 1024 and 1440 pixels. The source fetch uses the canonical `apiClient`, which owns authentication and token refresh; unresolved promises are ignored by generation/cleanup guards rather than granting access to old responses. Any later byte consumer must freshly revalidate owner and revision in backend runtime.
 
@@ -86,3 +86,299 @@ revocation and RLS proofs. Test Storage bytes are an in-process fixture.
 A passing run is **real PostgreSQL authorization/revision evidence**, not
 live Supabase object-store integration, a production runtime deployment,
 or authenticated browser consumer acceptance. Those remain separate gates.
+
+
+## Reconciled hierarchy presentation (KEXP-004B.6D)
+
+The same controlled component renders compact list and responsive grid layouts,
+using Lucide icons and theme tokens. Layout, filename/size sorting, and the
+displayed-page filter are local presentation state; they never request new
+inventory. Folder entries stay first and are navigation targets, not selections.
+The explicit server filename search runs before file pagination within the
+authorized location. Folder navigation remains visible independently of search.
+Folder and file pagination retain distinct controls.
+
+Bulk selection uses only currently visible files, and rejects the entire
+selection if it would exceed consumer capacity. The selection review includes
+selected files hidden by the local filter and uses the same reference callback
+for removal. Draft capacity derives from the current attachment references;
+Content Intelligence supplies its backend selection ceiling. Every byte
+consumer still reauthorizes the selected content revision.
+
+Organization controls use backend capability preflight, explicit confirmation,
+and independent organization revisions; mutations require fresh authorization
+and matching receipts. The folder hierarchy supports at most 64 levels
+(root folder = level one). The existing database identity trigger enforces
+the limit after acquiring the owner mutation fence, including descendants of
+a moved subtree. Rejected mutations leave organization revisions unchanged
+and use the existing conflict response; they never report successful saves.
+The shared component has no direct IO or local storage.
+Canonical and materialized sources remain identical. Source regression tests
+are not substitutes for authenticated browser acceptance or release certification.
+
+## Protected hierarchy and filename-search acceptance (KEXP-004B.7A)
+
+The reviewed-main `file-explorer` protected browser scenario requires a
+sanitized owner with more than 100 active **root** artifacts, a first owned
+root folder containing a first child folder with at least one owned file,
+and a printable ASCII filename of 1–160 characters on the first root page
+(no leading or trailing whitespace). The browser test does not
+create or change these fixtures. It observes the real hierarchy endpoint,
+verifies the server search request, matching owner file metadata, unchanged
+folder navigation, selection reset, query-bound pagination when a second search
+page exists, and explicit search clearing. The protected workflow requires
+nested navigation instead of treating missing folders as a successful proof.
+Real authenticated deployment evidence is still required; source changes and
+skipped browser cases do not certify consumer readiness.
+
+
+## Search privacy boundary
+
+Inventory search and continuation parameters are request data, not telemetry.
+Both server logging setup paths install the existing logging owner's access
+filter to remove the entire query string before any Uvicorn handler formats
+the record. The older structured request middleware records only whether a
+query exists. The canonical synchronous and asynchronous PostgreSQL engines
+hide bound parameters in SQLAlchemy diagnostics. Request method, path, status,
+correlation and authorization audit context remain available. This is
+application-side protection; managed ingress, external tracing and database
+server logging policies still require deployment-specific verification.
+
+
+## KEXP-005A: local authenticated read-only browser acceptance
+
+The existing `KFILE-LIVE` case now exercises both list and grid layout at
+390/768/1024/1440 pixels, keyboard activation, selection retention when
+switching layout, selected-reference review while filtered out, two-level
+folder navigation, exact breadcrumb identity and selection reset on returning
+to a parent. Required nested mode fails when the first root folder has no
+child folder or that first child contains no owned file. It does not create,
+rename, move or delete any fixtures. Use a dedicated sanitized **local** owner
+and the normal authenticated application to prepare these fixtures before
+running. Do not seed production or use real customer files.
+
+From the checked-out integration revision, start the existing local Karen
+stack and confirm the web origin and backend revision match that checkout.
+With the project's pinned package manager dependencies and Chromium installed,
+run from `src/ui_launchers/Karen-AI-Theme` (Bash):
+
+```bash
+(
+  set +x
+  unset VERCEL_AUTOMATION_BYPASS_SECRET KAREN_SETTINGS_VERIFIED_DEPLOYMENT
+  export KAREN_BASE_URL=http://localhost:8010 # use the actual local web port
+  export KAREN_LOCAL_CHAT_ACCEPTANCE=1 KAREN_CHAT_BOOT_ACCEPTANCE=0
+  export KAREN_FILE_EXPLORER_ACCEPTANCE=true
+  export KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE=true
+  export KAREN_FILE_EXPLORER_REQUIRE_NESTED=true
+  read -r -p 'Sanitized owner email: ' KAREN_UX_EMAIL
+  read -r -s -p 'Sanitized owner password: ' KAREN_UX_PASSWORD; printf '\n'
+  export KAREN_UX_EMAIL KAREN_UX_PASSWORD
+  CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+    --config=e2e/playwright.config.ts --project=chromium \
+    --grep='KFILE-LIVE:' --workers=1 --retries=0
+)
+```
+
+The private configuration disables screenshots, trace, video and persistent
+HTML/JSON reports. Record only commit, fixture contract satisfaction and
+pass/fail/skip counts; do not publish raw private request or failure data.
+A skipped case, an empty root folder, or a source-level contract test is not
+browser acceptance. Live Storage, governed mutation execution and composer
+attachment handoff still need separately authorized observed acceptance.
+
+
+## KEXP-005B/C: governed local folder organization and deletion acceptance
+
+Run the existing private browser spec with the separate case
+`KFILE-MUTATION-LOCAL:` only on an isolated disposable local stack. Verify
+that its API, PostgreSQL and Storage configuration do not point at production.
+Prepare a dedicated sanitized owner and a single empty root folder named
+`KEXP-005B-disposable` on the first root page. Obtain its UUID through the
+normal authenticated hierarchy API. Set the same private local environment
+as 005A, plus:
+
+```bash
+export KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE=true
+# Only after verifying actual backend/database/Storage isolation:
+export KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED=true
+export KAREN_FILE_EXPLORER_DELETE_ACCEPTANCE=true
+read -r -p 'Disposable root folder UUID: ' KAREN_FILE_EXPLORER_MUTATION_FIXTURE_ID
+export KAREN_FILE_EXPLORER_MUTATION_FIXTURE_ID
+CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium \
+  --grep='KFILE-MUTATION-LOCAL:' --workers=1 --retries=0
+```
+
+The separate case rejects HTTPS, hosted GitHub Actions and inherited Vercel
+bypass secrets before login; loopback alone does not prove isolated backend
+configuration. It binds the fixture name to the supplied UUID and requires
+an empty initial inventory. It checks cancel/focus restoration, two confirmed
+creates, revision-bound rename, destination-bound move, exact server receipts,
+reload and independent destination readback. The combined case requires
+explicit deletion opt-in and operator attestation of stack isolation before
+login; that attestation is not automated infrastructure verification.
+
+005C verifies nonempty deletion returns 409 with unchanged inventory,
+cancel/focus restoration, a real concurrent rename in a second authenticated
+context, stale deletion rejection with refreshed inventory and visible conflict
+feedback, and fresh explicit deletion of the generated empty child with
+a matching receipt and authoritative absence. Exactly eight organization writes
+are expected across both contexts, including two rejected deletes. No request
+interception, direct mutation API or automatic retries are used.
+
+No protected workflow dispatch is changed. No files, ACLs, fixture root or
+preexisting folders are deleted. The generated destination remains for
+inspection. Reset manually using governed controls; never automatically retry
+an ambiguous mutation or delete an unknown object. The isolated stack must
+support a second simultaneous login. No live browser result is claimed.
+
+## KEXP-005D: local composer attachment references
+
+Use the same private local environment as 005A, with an isolated backend,
+a dedicated owner, a dedicated **blank** conversation and at least 13 uniquely
+named active root files on the first page. Do not use actual customer files.
+The real dashboard consumer must expose the registered File Explorer plugin.
+
+```bash
+export KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED=true
+export KAREN_FILE_EXPLORER_ATTACHMENT_ACCEPTANCE=true
+read -r -p 'Disposable conversation UUID: ' KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_ID
+read -r -p 'Disposable conversation title: ' KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_TITLE
+export KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_ID KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_TITLE
+CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium \
+  --grep='KFILE-ATTACHMENT-LOCAL:' --workers=1 --retries=0
+```
+
+The test verifies exact draft references and increasing server revisions,
+duplicate exclusion, capacity 12, rejection of a thirteenth selection,
+reload continuity, explicit send denial with text and references retained,
+and removal/replacement with a fresh inventory. It expects no inference
+or organization writes. The send-denial gesture is exercised only on the
+disposable local stack; a broken admission guard would fail the test.
+Only the disposable draft is intentionally retained for inspection.
+
+Attachment references are not file contents and attached-message execution
+is still unsupported. The controlled composer fences the SDK's synchronous
+optimistic empty callback after a rejected attachment send, without blocking
+later manual clearing. Stale content reauthorization and actual file-byte
+execution require separate proof; this case does not certify them.
+
+## KEXP-005E: local session revocation and cross-tenant isolation
+
+Use the same private local environment as 005A. Verify actual API, database
+and Storage isolation before setting the isolation attestation. Prepare two
+distinct sanitized accounts in **different tenants**, each with one uniquely
+named root file and one uniquely named root folder on the first page, rename
+permission, and a dedicated conversation whose saved draft already contains
+its own exact active file reference. The scenario does not seed these objects.
+Supply `KAREN_UX_ISOLATION_EMAIL` and `KAREN_UX_ISOLATION_PASSWORD` privately,
+in addition to the primary owner credentials, and set the six fixture UUIDs:
+
+```bash
+export KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED=true
+export KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE=true
+for actor in A B; do
+  for kind in SOURCE FOLDER CONVERSATION; do
+    key="KAREN_FILE_EXPLORER_ISOLATION_${actor}_${kind}_ID"
+    read -r -p "$key: " "$key"
+    export "$key"
+  done
+done
+CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium \
+  --grep='KFILE-ISOLATION-LOCAL:' --workers=1 --retries=0
+```
+
+The same browser signs in A, selects an owned source, signs out, signs in B
+and returns to A. A separate cookie-free request context must first prove
+the observed bearer works, then replay that exact credential after logout.
+Inventory and draft reads plus an unchanged-name rename probe must be denied.
+B must have successful independent owner access, a distinct backend tenant,
+no A inventory or selection, and receive 404 for A's draft and 403/409 for
+A's folder rename. A's new session verifies the original folder and source
+revision remain intact and the prior bearer is still rejected. The negative
+rename probes use only an unchanged name on a disposable folder; no deletes
+or content changes are authorized. No raw credentials, request captures or
+browser state may be published. A cookie-only transport cannot satisfy this
+specific bearer-replay scenario. No observed local result is claimed.
+This tests draft ownership and session admission, not retired-content
+reauthorization or attachment-byte execution.
+
+## KEXP-005F: consolidated acceptance evidence
+
+For the automated, private-report path, reuse the existing KUI runner with
+`RUN_FILE_EXPLORER_LOCAL=1`. It supports the exact-SHA disposable local stack
+provisioned by `scripts/ci/kui-card-studio-local-deployment.sh` (legacy KCARD
+naming); dedicate that stack and its fixtures to this trial. Do not point the
+runner at an existing personal or production installation. Provisioning is
+separate and requires explicit operator approval. Supply its existing
+`KCARD_COMPOSE_PROJECT` and private `KCARD_ACCEPTANCE_ENV_FILE`, two sanitized
+accounts, all eight distinct fixture IDs, and all explicit flags below.
+The runner verifies local Compose, the actual API database URLs and web
+loopback binding, performs discovery, requires one attempt per scenario,
+and compares private provenance records before and after execution.
+
+```bash
+RUN_FILE_EXPLORER_LOCAL=1 bash scripts/ci/kui-local-acceptance.sh "$EXPECTED_SHA"
+```
+
+This mode runs only the four Explorer scenarios, not the general KUI suite.
+Keep reports and logs private and outside the repository. The manual command
+below remains available for independently verified disposable installations.
+
+The existing canonical browser spec owns four distinct local Explorer cases.
+Run them only against the exact clean integration checkout and a separately
+verified disposable local stack. Do not run them against a hosted preview.
+Prepare the fixture and credential requirements from 005A–005E in the same
+private shell. The mutation fixture must start empty, the attachment draft
+must be blank and the isolation drafts must be separate preseeded fixtures.
+The read-only hierarchy scenario needs its own populated nested fixture on
+the first root page; do not substitute the disposable empty mutation root.
+
+After enabling the explicit flags and supplying the fixture IDs above:
+
+```bash
+# Set EXPECTED_SHA to the independently approved 40-character commit.
+: "${EXPECTED_SHA:?Set the approved integration SHA}"
+[[ "$EXPECTED_SHA" =~ ^[a-f0-9]{40}$ ]] || exit 1
+test "$(git rev-parse HEAD)" = "$EXPECTED_SHA" || exit 1
+test -z "$(git status --porcelain)" || exit 1
+cd src/ui_launchers/Karen-AI-Theme
+CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium \
+  --grep='\bKFILE-(LIVE|MUTATION-LOCAL|ATTACHMENT-LOCAL|ISOLATION-LOCAL):' \
+  --workers=1 --retries=0 --forbid-only --list
+```
+
+Require exactly one listed test for each of the four KFILE prefixes above
+and no other tests. Playwright matches the composite project, file and test
+title, so the filter must not start with `^KFILE`. Only after confirming the
+list, rerun the same command without `--list`. Listing is not execution.
+
+Record the exact commit and independently verified stack identity, and require
+**four passed, zero failed, zero skipped, zero retries**. Playwright's zero
+exit code alone is not acceptance: opt-in tests can be skipped. Do not publish
+raw logs, credentials, file names, IDs or request captures. The attachment
+readback forwards the observed same-origin draft bearer (or verified cookie
+transport), not an assumed authenticated API request; on reload it reacquires
+transport evidence. Negative bearer replay clears the independent context's
+cookies before each probe to prevent a session cookie from masking the result.
+
+| Evidence gate | Required proof |
+| --- | --- |
+| Responsive/nested inventory | KFILE-LIVE observed pass |
+| Governed organization, deletion, conflict | KFILE-MUTATION-LOCAL observed pass |
+| Durable reference capacity and denied send | KFILE-ATTACHMENT-LOCAL observed pass |
+| Revoked credential and separate tenant | KFILE-ISOLATION-LOCAL observed pass |
+| Retired/stale reference CAS admission | Chat System Burn real PostgreSQL composer attachment step |
+| Source integration | All current-head required checks, including First-Boot |
+| Review and release | Independent review, verified deployment isolation and explicit release approval |
+
+The PostgreSQL attachment test changes a previously attached source to retired,
+rejects a subsequent CAS save containing it and allows explicit reference
+removal. That is write-time reauthorization proof, not proof of browser
+behavior or authorization to send attached bytes to a model. Attached-message
+execution remains unsupported. No browser acceptance, merge or deployment
+is implied by this ledger or source test coverage.

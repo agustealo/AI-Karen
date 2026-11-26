@@ -253,7 +253,7 @@ class ApiClient {
       const env = (process as unknown as { env?: Record<string, string> }).env || {};
       // If NEXT_PUBLIC_API_BASE_URL is explicitly set, use it for direct API calls
       if (env.NEXT_PUBLIC_API_BASE_URL) {
-        console.log('[ApiClient] Browser context, using configured API URL:', env.NEXT_PUBLIC_API_BASE_URL);
+        console.log('[ApiClient] Browser context, using configured API URL');
         return env.NEXT_PUBLIC_API_BASE_URL.replace(/\/$/, '');
       }
       console.log('[ApiClient] Browser context, forcing relative URLs');
@@ -301,24 +301,20 @@ class ApiClient {
       const dockerHostPattern = /https?:\/\/(api|api-copilot|172\.\d+\.\d+\.\d+|10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|host\.docker\.internal)(:\d+)?/gi;
       
       let finalUrl = baseUrl ? `${baseUrl}${normalizedEndpoint}` : normalizedEndpoint;
-      console.log(`[ApiClient] buildUrl - Base: ${baseUrl}, Endpoint: ${endpoint}, Initial: ${finalUrl}`);
       
       // If it's an absolute URL pointing to internal Docker hosts, strip it
       if (finalUrl.startsWith('http')) {
         finalUrl = finalUrl.replace(dockerHostPattern, '');
-        console.log(`[ApiClient] buildUrl - After stripping Docker hosts: ${finalUrl}`);
       }
       
       // If we are in the browser and the URL is still absolute to 'api', force it to relative
       if (finalUrl.includes('://api')) {
          finalUrl = finalUrl.substring(finalUrl.indexOf('/api/'));
-         console.log(`[ApiClient] buildUrl - After forcing relative API path: ${finalUrl}`);
       }
 
       // Ensure it starts with /api if it's a relative path to our backend
       if (!finalUrl.startsWith('http') && !finalUrl.startsWith('/')) {
         finalUrl = '/' + finalUrl;
-        console.log(`[ApiClient] buildUrl - After ensuring leading slash: ${finalUrl}`);
       }
       
       return finalUrl;
@@ -450,7 +446,6 @@ class ApiClient {
         if (accessToken) headers['Authorization'] = `Bearer ${accessToken}`;
         return headers;
       }
-      console.log('[ApiClient] getAuthHeaders called; token present:', !!accessToken);
 
       if (accessToken) {
         const expTime = this.getTokenExpirationTime(accessToken);
@@ -480,8 +475,8 @@ class ApiClient {
               // Clear warning flag on successful refresh
               this.clearSessionWarningFlag();
             }
-          } catch (error) {
-            console.warn('[ApiClient] Proactive token refresh failed:', error);
+          } catch {
+            console.warn('[ApiClient] Proactive token refresh failed');
             // Continue with current token, let backend handle expiry
             headers['Authorization'] = `Bearer ${accessToken}`;
           }
@@ -500,7 +495,7 @@ class ApiClient {
               headers['Authorization'] = `Bearer ${newToken}`;
             }
           } catch (error) {
-            console.warn('[ApiClient] Token refresh failed during expiry check:', error);
+            console.warn('[ApiClient] Token refresh failed during expiry check');
             
             if (this.isTransientError(error)) {
               console.warn('[ApiClient] Transient failure during token refresh. Preserving local auth state.');
@@ -605,9 +600,9 @@ class ApiClient {
       if (isMissingToken) {
         console.warn('[ApiClient] Token refresh skipped: No refresh token in storage.');
       } else if (this.isTransientError(error)) {
-        console.warn('[ApiClient] Token refresh temporarily unavailable:', error);
+        console.warn('[ApiClient] Token refresh temporarily unavailable');
       } else {
-        console.error('[ApiClient] Token refresh failed:', error);
+        console.error('[ApiClient] Token refresh failed');
       }
       // Do not clear auth state here; callers decide how to handle 401.
       // This prevents accidental hard logout during transient refresh issues.
@@ -642,7 +637,9 @@ class ApiClient {
       }
 
       const url = this.forceBrowserRelativeApiUrl(this.buildUrl(baseUrl, endpoint));
-      console.log(`[ApiClient] Request: ${url} (Base: ${baseUrl}, Endpoint: ${endpoint})`);
+      // Targets and exception messages can contain private query values or credentials.
+      // Log only fixed transport diagnostics; leave fetch and caller errors unchanged.
+      console.log('[ApiClient] Request dispatched');
       
       try {
         const result = await fetch(url, {
@@ -655,7 +652,7 @@ class ApiClient {
         assertScope();
         return result;
       } catch (err) {
-        console.error(`[ApiClient] Network error for ${url}:`, err);
+        console.error('[ApiClient] Network request failed');
         throw err;
       }
     };
@@ -697,7 +694,7 @@ class ApiClient {
         // Never refresh and replay an already-sent mutation. Surface the
         // unauthorized response to the caller as a terminal error below.
       } else if (skipAuth) {
-        console.warn('[ApiClient] Unauthenticated request received 401:', endpoint);
+        console.warn('[ApiClient] Unauthenticated request received 401');
       } else {
         const hasRefreshToken = typeof window !== 'undefined' && Boolean(localStorage.getItem('refresh_token'));
         const hasTriedRefresh = localStorage.getItem(this.TOKEN_REFRESH_ATTEMPTED_KEY) === 'true';
@@ -726,7 +723,7 @@ class ApiClient {
               // Let it fall through to the normal error handling below, don't clear auth
               localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
             } else {
-              console.warn('[ApiClient] Token refresh failed for 401, redirecting to login:', refreshError);
+              console.warn('[ApiClient] Token refresh failed for 401, redirecting to login');
               localStorage.removeItem(this.TOKEN_REFRESH_ATTEMPTED_KEY);
 
               this.invalidateAuthSession('refresh_failed');
@@ -765,8 +762,8 @@ class ApiClient {
             this.shouldRetryMissingApiRoute(endpoint, response, fallbackBaseUrl)) {
           response = await send(fallbackBaseUrl);
         }
-      } catch (retryError) {
-        console.warn('[ApiClient] Retry after 502 failed:', retryError);
+      } catch {
+        console.warn('[ApiClient] Retry after 502 failed');
         // Continue with original 502 response for error handling
       }
     }
@@ -971,10 +968,12 @@ class ApiClient {
     }, false, 'json', principalScope);
   }
 
-  async delete<T>(endpoint: string): Promise<T> {
+  async delete<T>(endpoint: string, data?: unknown, init: RequestInit = {}, principalScope?: ApiPrincipalScope): Promise<T> {
     return this.request<T>(endpoint, {
+      ...init,
       method: 'DELETE',
-    });
+      body: data === undefined ? undefined : JSON.stringify(data),
+    }, false, 'json', principalScope);
   }
 
   async postFormData<T>(endpoint: string, data: FormData): Promise<T> {
