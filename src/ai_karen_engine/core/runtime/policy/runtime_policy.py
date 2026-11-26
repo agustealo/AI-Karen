@@ -999,7 +999,7 @@ class RuntimePolicyEnforcer:
                 isinstance(meter, ExecutionBudgetMeter)
                 and context.original_runtime_model_plan(meter) is plan
                 and self.verifies_chat_model_policy(context=context, plan=plan)
-                and GENERATED_TEXT_ARTIFACT_CAPABILITY in plan.allowed_capabilities
+                and set(plan.allowed_capabilities) == {GENERATED_TEXT_ARTIFACT_CAPABILITY}
                 and plan.topology is ExecutionTopology.DIRECT
                 and not plan.approval_requirements
                 and not plan.allowed_tools
@@ -1267,7 +1267,8 @@ class RuntimePolicyEnforcer:
             topology = request.execution_topology
             if (
                 request.action != GENERATED_TEXT_ARTIFACT_CAPABILITY
-                or GENERATED_TEXT_ARTIFACT_CAPABILITY not in request.requested_capabilities
+                or set(request.requested_capabilities) != {GENERATED_TEXT_ARTIFACT_CAPABILITY}
+                or request.attachment_references
                 or not request.session_id
                 or not request.correlation_id
                 or request.runtime_level is not RuntimeLevel.FULL
@@ -1278,6 +1279,8 @@ class RuntimePolicyEnforcer:
                 or any(topology.get(key) for key in (
                     "tool_requirements", "plugin_candidates", "requested_agents",
                     "workflow_id", "agent_delegation", "requires_human_gate",
+                    "requires_resumability", "requires_parallel_execution",
+                    "graph_required",
                 ))
                 or not manager.has_permission(principal, Permission.DATA_READ)
                 or not manager.has_permission(principal, Permission.ARTIFACT_CREATE_OWN)

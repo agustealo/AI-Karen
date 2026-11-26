@@ -958,10 +958,16 @@ async def test_revoked_private_execution_cannot_initiate_memory_formation(monkey
     {"permissions": ["artifact:create_own"]},
     {"action": "general_assist"},
     {"requested_capabilities": []},
+    {"requested_capabilities": [GENERATED_TEXT_ARTIFACT_CAPABILITY, "memory.write"]},
+    {"requested_capabilities": [GENERATED_TEXT_ARTIFACT_CAPABILITY, "web.search"]},
+    {"attachment_references": [{"artifact_id": str(uuid.uuid4()), "revision_id": str(uuid.uuid4())}]},
     {"session_id": None},
     {"max_model_calls": 0},
     {"execution_topology": {"requires_human_gate": True}},
     {"execution_topology": {"workflow_id": "untrusted-workflow"}},
+    {"execution_topology": {"graph_required": True}},
+    {"execution_topology": {"requires_parallel_execution": True}},
+    {"execution_topology": {"requires_resumability": True}},
     {"requested_reasoning_modes": ["soft_reasoning"]},
 ])
 async def test_generated_artifact_policy_denies_missing_entitlement_or_wrong_scope(changes):
