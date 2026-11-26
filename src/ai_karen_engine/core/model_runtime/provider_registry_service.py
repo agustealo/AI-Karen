@@ -1172,6 +1172,7 @@ class ProviderRegistryService:
             "available_providers": 0,
             "providers_missing_api_keys": 0,
             "unhealthy_providers": 0,
+            "remote_provider_outages": [],
             "provider_details": {},
             "fallback_chains": list(self._fallback_chains.keys()),
             "recommendations": [],
@@ -1183,7 +1184,7 @@ class ProviderRegistryService:
             all_names.add(endpoint.provider_id)
         all_names.update(self._provider_registrations.keys())
 
-        for provider_name in all_names:
+        for provider_name in sorted(all_names):
             provider_status = self.get_provider_status(provider_name)
             status["total_providers"] += 1
 
@@ -1198,6 +1199,19 @@ class ProviderRegistryService:
 
                 if provider_status.health_status == HealthStatus.UNHEALTHY:
                     status["unhealthy_providers"] += 1
+                    # A remote outage requires an observed unhealthy, enabled
+                    # cloud endpoint with a credential. Missing configuration,
+                    # disabled endpoints and local failures are not outages.
+                    endpoint = self.get_provider_endpoint(provider_name)
+                    if (
+                        endpoint is not None
+                        and endpoint.enabled
+                        and endpoint.tenant_scoped is False
+                        and endpoint.kind == EndpointKind.CLOUD_PROVIDER
+                        and provider_status.has_api_key
+                        and not provider_status.is_available
+                    ):
+                        status["remote_provider_outages"].append(provider_name)
 
                 status["provider_details"][provider_name] = {
                     "is_available": provider_status.is_available,

@@ -55,7 +55,7 @@ def test_global_monitor_accessor_reuses_registry_instance(monkeypatch) -> None:
         provider_registry_service, "_provider_registry_service", registry
     )
     assert get_health_monitor() is registry.health_monitor
-    record_provider_failure("health-reuse")
+    record_provider_failure("health-reuse", "test_observed_probe_failure")
     assert (
         registry.health_monitor.get_provider_health("health-reuse").health_status
         is HealthStatus.DEGRADED
@@ -201,3 +201,42 @@ def test_disabled_endpoint_cannot_be_made_available_by_observation():
     status = registry.get_provider_status(endpoint.provider_id)
     assert status.health_status is HealthStatus.UNAVAILABLE
     assert not status.is_available
+
+
+def test_system_status_remote_outages_require_observed_shared_cloud_failure(monkeypatch):
+    from ai_karen_engine.core.model_runtime.provider_endpoint import (
+        ProviderEndpoint, ProviderEndpointType,
+    )
+    from ai_karen_engine.core.model_runtime.runtime_engine import EndpointKind, Locality
+
+    registry = provider_registry_service.ProviderRegistryService()
+    # Explicit credential classification, no network calls or real secrets.
+    monkeypatch.setattr(
+        registry, "_check_api_key_availability",
+        lambda provider_id: provider_id != "cloud-missing-key",
+    )
+    for name, cloud, enabled, scoped, failed, key_required in [
+        ("cloud-observed-failure", True, True, False, True, True),
+        ("cloud-unchecked", True, True, False, False, True),
+        ("cloud-disabled", True, False, False, True, True),
+        ("cloud-missing-key", True, True, False, True, True),
+        ("cloud-tenant-scoped", True, True, True, True, True),
+        ("local-failed", False, True, False, True, False),
+    ]:
+        endpoint = ProviderEndpoint(
+            provider_id=name, display_name=name,
+            endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+            kind=EndpointKind.CLOUD_PROVIDER if cloud else EndpointKind.LOCAL_ENDPOINT,
+            locality=Locality.CLOUD if cloud else Locality.LOCAL,
+            base_url="https://example.invalid/v1" if cloud else "http://localhost:1234/v1",
+            enabled=enabled, tenant_scoped=scoped,
+            api_key_env="TEST_ONLY_CREDENTIAL" if key_required else None,
+        )
+        registry.register_provider_endpoint(endpoint)
+        if failed:
+            for _ in range(5):
+                registry.health_monitor.record_provider_interaction(name, success=False)
+
+    assert registry.get_system_status()["remote_provider_outages"] == ["cloud-observed-failure"]
+    registry.health_monitor.record_provider_interaction("cloud-observed-failure", success=True)
+    assert registry.get_system_status()["remote_provider_outages"] == []
