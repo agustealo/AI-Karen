@@ -504,3 +504,78 @@ def test_content_local_runner_is_exclusive_and_reuses_private_provenance():
     assert "PROVENANCE[2]='--content-intelligence'" in runner
     assert "REPORT+=(--content-intelligence)" in runner
     assert "PASS content_intelligence_local_acceptance" in runner
+
+
+def test_standalone_storage_gateway_requires_private_host_binding(monkeypatch):
+    import pytest
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    origin = "http://127.0.0.1:54341"
+    assert verifier.local_storage_origin(origin, host_loopback=True) == origin
+    for invalid in (
+        "http://host.docker.internal:54341", "http://127.0.0.1:54341/",
+        "http://127.0.0.1:0", "http://127.0.0.1:65536",
+        "http://127.0.0.1:54341?x=1", "https://127.0.0.1:54341",
+    ):
+        with pytest.raises(verifier.GuardError):
+            verifier.local_storage_origin(invalid, host_loopback=True)
+
+    database = {"Name": "/supabase_db_fixture", "State": {"Running": True}}
+    gateway = {
+        "Name": "/supabase_kong_fixture", "Id": "b" * 64,
+        "State": {"Running": True}, "NetworkSettings": {
+            "Ports": {"8000/tcp": [{"HostIp": "127.0.0.1", "HostPort": "54341"}]},
+        },
+    }
+
+    def inspect(args):
+        if args == ["docker", "inspect", "supabase_db_fixture"]:
+            return [database]
+        assert args == ["docker", "inspect", "supabase_kong_fixture"]
+        return [gateway]
+
+    monkeypatch.setattr(verifier, "docker_json", inspect)
+    assert verifier.verify_local_storage_gateway(
+        "supabase_db_fixture", origin, host_loopback=True,
+    )["container_id"] == "b" * 64
+    bindings = gateway["NetworkSettings"]["Ports"]["8000/tcp"]
+    for bad in ("0.0.0.0", "::", "192.0.2.10"):
+        bindings[0]["HostIp"] = bad
+        with pytest.raises(verifier.GuardError):
+            verifier.verify_local_storage_gateway(
+                "supabase_db_fixture", origin, host_loopback=True,
+            )
+    bindings[0]["HostIp"] = "127.0.0.1"
+    bindings.append({"HostIp": "0.0.0.0", "HostPort": "54341"})
+    with pytest.raises(verifier.GuardError):
+        verifier.verify_local_storage_gateway(
+            "supabase_db_fixture", origin, host_loopback=True,
+        )
+
+
+def test_local_storage_rejects_remote_docker_context(monkeypatch):
+    import pytest
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    monkeypatch.delenv("DOCKER_HOST", raising=False)
+    monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
+    endpoint = {"Endpoints": {"docker": {"Host": "unix:///var/run/docker.sock"}}}
+    calls = []
+
+    def inspect(args):
+        calls.append(args)
+        assert args == ["docker", "context", "inspect"]
+        return [endpoint]
+
+    monkeypatch.setattr(verifier, "docker_json", inspect)
+    verifier.require_local_docker()
+    endpoint["Endpoints"]["docker"]["Host"] = "tcp://remote.invalid:2375"
+    with pytest.raises(verifier.GuardError):
+        verifier.require_local_docker()
+    assert len(calls) == 2
+    for key in ("DOCKER_HOST", "DOCKER_CONTEXT"):
+        monkeypatch.setenv(key, "")
+        with pytest.raises(verifier.GuardError):
+            verifier.require_local_docker()
+        monkeypatch.delenv(key)
+    assert len(calls) == 2
