@@ -1138,3 +1138,86 @@ async def test_durable_receipt_retention_acknowledgement_is_exact(result: int) -
             str(settings.run_terminal_retention_seconds),
         )
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "stage", "reason"),
+    [
+        ("get", "transaction", "shared_run_observation_unavailable"),
+        ("list", "index", "shared_run_index_unavailable"),
+        ("list", "transaction", "shared_run_observation_unavailable"),
+        ("list", "cleanup", "shared_run_index_cleanup_unavailable"),
+        ("cancel", "read", "shared_cancel_read_unavailable"),
+        ("cancel", "signal", "shared_cancel_signal_unconfirmed"),
+        ("cancel", "transaction", "shared_run_observation_unavailable"),
+    ],
+)
+async def test_redis_disconnect_after_health_check_is_typed(
+    operation: str, stage: str, reason: str
+) -> None:
+    from types import SimpleNamespace
+
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    failure = RedisConnectionError("private connection diagnostic")
+
+    class Client:
+        async def ping(self) -> bool:
+            return True
+
+        def pipeline(self, *, transaction: bool):
+            assert transaction
+
+            class Pipeline:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *_args: Any) -> None:
+                    pass
+
+                def hgetall(self, _key: str) -> None:
+                    pass
+
+                def get(self, _key: str) -> None:
+                    pass
+
+                async def execute(self):
+                    if stage == "transaction":
+                        raise failure
+                    return {}, None
+
+            return Pipeline()
+
+        async def smembers(self, _key: str):
+            if stage == "index":
+                raise failure
+            return {"run-a"}
+
+        async def srem(self, *_args: Any):
+            assert stage == "cleanup"
+            raise failure
+
+        async def eval(self, *_args: Any) -> int:
+            if stage == "signal":
+                raise failure
+            return 1
+
+        async def hgetall(self, _key: str):
+            if stage == "read":
+                raise failure
+            return {"run_id": "run-a", "tenant_id": "tenant-a"}
+
+    store = RedisDistributedRunStore(
+        settings=_settings("owner"),
+        redis_manager=SimpleNamespace(client=Client(), is_degraded=lambda: False),
+    )
+    with pytest.raises(DistributedRunStoreUnavailable, match=reason) as exc:
+        if operation == "get":
+            await store.get(run_id="run-a", tenant_id="tenant-a")
+        elif operation == "list":
+            await store.list_runs(tenant_id="tenant-a", include_terminal=True)
+        else:
+            await store.request_cancel(run_id="run-a", tenant_id="tenant-a")
+    assert exc.value.__cause__ is failure
+    assert "private connection diagnostic" not in str(exc.value)

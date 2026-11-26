@@ -549,23 +549,33 @@ class RedisDistributedRunStore:
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         client = await self._client()
         run_key = self._run_key(run_id)
-        record = await client.hgetall(run_key)
+        try:
+            record = await client.hgetall(run_key)
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_cancel_read_unavailable"
+            ) from exc
         if not record:
             raise DistributedRunNotFound(run_id)
         if record.get("tenant_id") != tenant_id:
             raise DistributedRunTenantMismatch(run_id)
 
         now = self._now()
-        result = int(
-            await client.eval(
-                _CANCEL_RUN_SCRIPT,
-                2,
-                self._claim_key(run_id),
-                run_key,
-                tenant_id,
-                self._iso(now),
+        try:
+            result = int(
+                await client.eval(
+                    _CANCEL_RUN_SCRIPT,
+                    2,
+                    self._claim_key(run_id),
+                    run_key,
+                    tenant_id,
+                    self._iso(now),
+                )
             )
-        )
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_cancel_signal_unconfirmed"
+            ) from exc
         if result == -2:
             raise DistributedRunTenantMismatch(run_id)
         if result in {-1, -3, 0}:
@@ -582,10 +592,15 @@ class RedisDistributedRunStore:
         # MULTI/EXEC is required: a terminal write retires the claim and
         # updates the hash atomically. Two independent reads can combine
         # the old active hash with the retired claim and invent an orphan.
-        async with client.pipeline(transaction=True) as pipe:
-            pipe.hgetall(self._run_key(run_id))
-            pipe.get(self._claim_key(run_id))
-            record, owner = await pipe.execute()
+        try:
+            async with client.pipeline(transaction=True) as pipe:
+                pipe.hgetall(self._run_key(run_id))
+                pipe.get(self._claim_key(run_id))
+                record, owner = await pipe.execute()
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_run_observation_unavailable"
+            ) from exc
         return record, owner
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
@@ -608,7 +623,12 @@ class RedisDistributedRunStore:
     ) -> list[dict[str, Any]]:
         client = await self._client()
         index_key = self._tenant_index(tenant_id)
-        run_ids = await client.smembers(index_key)
+        try:
+            run_ids = await client.smembers(index_key)
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_run_index_unavailable"
+            ) from exc
         snapshots: list[dict[str, Any]] = []
         stale: list[str] = []
         for run_id in run_ids:
@@ -633,7 +653,12 @@ class RedisDistributedRunStore:
             }:
                 snapshots.append(snapshot)
         if stale:
-            await client.srem(index_key, *stale)
+            try:
+                await client.srem(index_key, *stale)
+            except RedisError as exc:
+                raise DistributedRunStoreUnavailable(
+                    "shared_run_index_cleanup_unavailable"
+                ) from exc
         return sorted(
             snapshots,
             key=lambda item: item["started_at"] or "",
