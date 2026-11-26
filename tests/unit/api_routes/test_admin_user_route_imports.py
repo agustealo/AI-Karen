@@ -166,6 +166,7 @@ async def test_tenant_creation_uses_one_transaction(monkeypatch, failure):
             assert kwargs["tenant_id"] == str(session.tenant.id)
             assert kwargs["roles"] == ["admin", "user"]
             assert kwargs["is_verified"] is True
+            assert events == ["tenant", "flush", "audit_scope"]
             events.append("account")
             if failure == "account":
                 raise ValueError("duplicate account")
@@ -195,10 +196,10 @@ async def test_tenant_creation_uses_one_transaction(monkeypatch, failure):
             operator_id=operator_id,
         )
 
-    expected = ["tenant", "flush", "account"]
-    if failure not in {"account", "scope"}:
-        expected.append("audit_scope")
-        if failure != "audit_scope":
+    expected = ["tenant", "flush", "audit_scope"]
+    if failure != "audit_scope":
+        expected.append("account")
+        if failure not in {"account", "scope"}:
             expected.extend(["audit", "audit_flush"])
     if failure:
         with pytest.raises((ValueError, RuntimeError)):
