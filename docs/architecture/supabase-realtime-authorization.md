@@ -51,3 +51,24 @@ See `tests/unit/core/realtime/` for authorization test fixtures.
 ## 7. Handoff Dependency
 
 Active data-spine developer must apply these RLS policies after schema is ready.
+
+
+## 8. KCOMM-03B/03C source boundary (candidate)
+
+The core `RealtimeTopicFactory` owns backend topic syntax and normalization.
+The database repository factory is a compatibility adapter with the original
+static call signatures; it must not construct independent topic strings.
+Identifiers must be UUID strings from the authenticated runtime. A syntactically
+private topic does not establish ownership or authorize a subscriber.
+
+`RealtimeSubscriber` denies admission without a trusted policy callback and
+re-evaluates that callback on delivery. The callback must bind the current
+authenticated session, tenant, subscription resource, event type and event
+resource using canonical authorization; event payload identifiers are not
+authority. The subscriber's envelope tenant check is defense in depth, not
+resource authorization.
+
+This change does not create a live transport, deploy RLS, or prove session
+revocation across processes. Do not enable personal inbox push until those
+gates, post-commit delivery, and browser acceptance are independently proven.
+The frontend topic formatter remains a client-side syntax mirror only.
