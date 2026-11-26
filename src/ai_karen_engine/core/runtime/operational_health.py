@@ -232,6 +232,20 @@ class OperationalHealthService:
             cls._env_bool("AUTH_ENABLE_RATE_LIMITING", default=True),
         ))
 
+    @classmethod
+    def redis_lifecycle_enabled(cls) -> bool:
+        """Attach the canonical pool for required or optional Redis consumers.
+
+        Best-effort Communications hints must not turn an otherwise optional
+        broker into a global readiness dependency. The transport independently
+        verifies the actual connection and fails closed; polling still works.
+        """
+        if cls.redis_required():
+            return True
+        from ai_karen_engine.config.runtime import get_runtime_settings
+
+        return get_runtime_settings().features.enable_communications_invalidation is True
+
     @staticmethod
     def _env_bool(name: str, *, default: bool) -> bool:
         value = os.getenv(name)
