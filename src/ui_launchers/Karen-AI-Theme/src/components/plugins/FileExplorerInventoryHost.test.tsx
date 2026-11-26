@@ -959,7 +959,7 @@ describe('governed server filename search', () => {
     fireEvent.submit(screen.getByRole('form', { name: 'Search authorized filenames' }));
     await screen.findByRole('checkbox', { name: 'Select beta.txt' });
     expect(mocks.get).toHaveBeenNthCalledWith(2, '/api/plugins/content-intelligence/inventory?limit=100&search=report_%25');
-    fireEvent.click(screen.getByRole('button', { name: 'Clear search', exact: true }));
+    fireEvent.click(screen.getByRole('button', { name: /^Clear search$/ }));
     await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
     expect(mocks.get).toHaveBeenNthCalledWith(3, '/api/plugins/content-intelligence/inventory?limit=100');
     expect(mocks.post).not.toHaveBeenCalled();
