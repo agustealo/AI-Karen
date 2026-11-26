@@ -38,9 +38,71 @@ if [[ "${RUN_BROWSER:-0}" == '1' ]]; then
   fi
 fi
 
+# Explorer write trials require a dedicated local-only invocation.
+if [[ "${RUN_FILE_EXPLORER_LOCAL:-0}" == '1' ]]; then
+  [[ "${RUN_BROWSER:-0}" != '1' && "${RUN_CARD_STUDIO_LOCAL:-0}" != '1' ]] || {
+    echo 'Run Explorer acceptance separately from other browser modes.' >&2; exit 2;
+  }
+  [[ "${GITHUB_ACTIONS:-false}" != 'true' && ! -v VERCEL_AUTOMATION_BYPASS_SECRET ]] || {
+    echo 'Explorer requires local execution without Vercel credentials.' >&2; exit 2;
+  }
+  [[ "${KAREN_BASE_URL:-}" == 'http://127.0.0.1:8010' &&
+     "${KAREN_LOCAL_CHAT_ACCEPTANCE:-0}" == '1' &&
+     "${KAREN_CHAT_BOOT_ACCEPTANCE:-0}" != '1' &&
+     "${KAREN_SANITIZED_ACCOUNT:-false}" == 'true' ]] || {
+    echo 'Explicit approved local origin and sanitized identities required.' >&2; exit 2;
+  }
+  for flag in KAREN_SETTINGS_VERIFIED_DEPLOYMENT KAREN_SEARCH_ACCEPTANCE_REQUIRED \
+      KAREN_COPILOTKIT_ACCEPTANCE_REQUIRED KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED; do
+    [[ "${!flag:-false}" != 'true' ]] || {
+      echo 'Protected deployment flags are forbidden in Explorer local acceptance.' >&2; exit 2;
+    }
+  done
+  for flag in KAREN_FILE_EXPLORER_ACCEPTANCE KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE \
+      KAREN_FILE_EXPLORER_REQUIRE_NESTED KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED \
+      KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE KAREN_FILE_EXPLORER_DELETE_ACCEPTANCE \
+      KAREN_FILE_EXPLORER_ATTACHMENT_ACCEPTANCE KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE; do
+    [[ "${!flag:-false}" == 'true' ]] || {
+      printf 'Missing explicit Explorer approval: %s\n' "$flag" >&2; exit 2;
+    }
+  done
+  : "${KAREN_UX_EMAIL:?Dedicated owner email required}"
+  : "${KAREN_UX_PASSWORD:?Dedicated owner password required}"
+  : "${KAREN_UX_ISOLATION_EMAIL:?Dedicated isolation email required}"
+  : "${KAREN_UX_ISOLATION_PASSWORD:?Dedicated isolation password required}"
+  [[ "${KAREN_UX_EMAIL,,}" != "${KAREN_UX_ISOLATION_EMAIL,,}" ]] || {
+    echo 'Two distinct sanitized accounts are required.' >&2; exit 2;
+  }
+  : "${KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_TITLE:?Disposable conversation title required}"
+  : "${KCARD_COMPOSE_PROJECT:?Dedicated existing local Compose project required}"
+  : "${KCARD_ACCEPTANCE_ENV_FILE:?Private existing local acceptance env file required}"
+  ids=()
+  for key in KAREN_FILE_EXPLORER_MUTATION_FIXTURE_ID \
+      KAREN_FILE_EXPLORER_ATTACHMENT_CONVERSATION_ID \
+      KAREN_FILE_EXPLORER_ISOLATION_A_SOURCE_ID KAREN_FILE_EXPLORER_ISOLATION_A_FOLDER_ID \
+      KAREN_FILE_EXPLORER_ISOLATION_A_CONVERSATION_ID \
+      KAREN_FILE_EXPLORER_ISOLATION_B_SOURCE_ID KAREN_FILE_EXPLORER_ISOLATION_B_FOLDER_ID \
+      KAREN_FILE_EXPLORER_ISOLATION_B_CONVERSATION_ID; do
+    value="${!key:-}"
+    [[ "$value" =~ ^[[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}$ ]] || {
+      printf 'Invalid disposable fixture UUID: %s\n' "$key" >&2; exit 2;
+    }
+    ids+=("${value,,}")
+  done
+  [[ "$(printf '%s\n' "${ids[@]}" | sort -u | wc -l)" -eq 8 ]] || {
+    echo 'Explorer fixtures must be distinct.' >&2; exit 2;
+  }
+fi
+
 # Authenticated reports may contain live metadata. Keep outside the checkout.
 OUT="${KAREN_KUI_ACCEPTANCE_OUTPUT_DIR:-${XDG_STATE_HOME:-${HOME:?}/.local/state}/ai-karen/kui-acceptance/$ACTUAL_SHA}"
-mkdir -p "$OUT"
+if [[ "${RUN_FILE_EXPLORER_LOCAL:-0}" == '1' ]]; then
+  OUT="$(python -c 'import pathlib,sys; p=pathlib.Path(sys.argv[1]).resolve(); r=pathlib.Path(sys.argv[2]).resolve(); sys.exit("Evidence must be outside checkout") if p.is_relative_to(r) else print(p)' "$OUT" "$ROOT")"
+  mkdir -p "$OUT"
+  OUT="$(mktemp -d "$OUT/explorer.XXXXXXXX")"
+else
+  mkdir -p "$OUT"
+fi
 RESULTS="$OUT/results.txt"
 printf 'SHA=%s\nDATE=%s\nRUN_BROWSER=%s\n' \
   "$ACTUAL_SHA" "$(date -u +'%FT%TZ')" "${RUN_BROWSER:-0}" >"$RESULTS"
@@ -56,6 +118,58 @@ run() {
     return "$code"
   fi
 }
+
+if [[ "${RUN_FILE_EXPLORER_LOCAL:-0}" == '1' ]]; then
+  PROVENANCE=(python "$ROOT/scripts/ci/verify_local_card_studio_acceptance.py"
+    --file-explorer --sha "$ACTUAL_SHA" --project "$KCARD_COMPOSE_PROJECT"
+    --base-url "$KAREN_BASE_URL" --env-file "$KCARD_ACCEPTANCE_ENV_FILE")
+  REPORT=(python "$ROOT/scripts/ci/verify_local_browser_report.py")
+  run explorer_provenance_before "${PROVENANCE[@]}" --evidence "$OUT/explorer-before.json"
+
+  cd "$ROOT/src/ui_launchers/Karen-AI-Theme"
+  run explorer_npm_install env -u KAREN_UX_EMAIL -u KAREN_UX_PASSWORD \
+    -u KAREN_UX_ISOLATION_EMAIL -u KAREN_UX_ISOLATION_PASSWORD npm ci
+  run explorer_chromium_install env -u KAREN_UX_EMAIL -u KAREN_UX_PASSWORD \
+    -u KAREN_UX_ISOLATION_EMAIL -u KAREN_UX_ISOLATION_PASSWORD npx playwright install chromium
+  BROWSER=(npx playwright test e2e/file-explorer-real-acceptance.spec.ts
+    --config=e2e/playwright.config.ts --project=chromium
+    --grep='\bKFILE-(LIVE|MUTATION-LOCAL|ATTACHMENT-LOCAL|ISOLATION-LOCAL):'
+    --workers=1 --retries=0 --forbid-only --reporter=json
+    --output="$OUT/playwright-artifacts")
+  run explorer_discover env -u PW_TEST_REPORTER -u PLAYWRIGHT_JSON_ONLY_FAILURES \
+    CI=1 PLAYWRIGHT_JSON_OUTPUT_FILE="$OUT/explorer-list.json" "${BROWSER[@]}" --list
+  run explorer_discovery_evidence "${REPORT[@]}" "$OUT/explorer-list.json" --list-only
+  cd "$ROOT"
+  [[ "$(git rev-parse HEAD)" == "$ACTUAL_SHA" && -z "$(git status --porcelain)" ]] || {
+    echo 'Checkout changed during acceptance preparation.' >&2; exit 2;
+  }
+  run explorer_provenance_pre_execution "${PROVENANCE[@]}" --evidence "$OUT/explorer-pre-execution.json"
+  cd "$ROOT/src/ui_launchers/Karen-AI-Theme"
+  run explorer_live_browser env -u PW_TEST_REPORTER -u PLAYWRIGHT_JSON_ONLY_FAILURES \
+    CI=1 PLAYWRIGHT_JSON_OUTPUT_FILE="$OUT/explorer-playwright.json" "${BROWSER[@]}"
+  run explorer_browser_evidence "${REPORT[@]}" "$OUT/explorer-playwright.json"
+  cd "$ROOT"
+  run explorer_provenance_after "${PROVENANCE[@]}" --evidence "$OUT/explorer-after.json"
+  run explorer_provenance_continuity python - \
+    "$OUT/explorer-before.json" "$OUT/explorer-pre-execution.json" "$OUT/explorer-after.json" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+records = [json.loads(Path(path).read_text()) for path in sys.argv[1:]]
+for record in records:
+    record.pop("timestamp", None)
+if any(record != records[0] for record in records[1:]):
+    raise SystemExit("Local stack identity changed during Explorer acceptance")
+print("Explorer stack identity remained consistent across recorded checkpoints")
+PY
+  [[ "$(git rev-parse HEAD)" == "$ACTUAL_SHA" && -z "$(git status --porcelain)" ]] || {
+    echo 'Checkout changed during acceptance.' >&2; exit 2;
+  }
+  printf 'PASS explorer_local_acceptance (four scenarios; independent review still required)\n' | tee -a "$RESULTS"
+  printf 'RESULTS=%s\n' "$RESULTS"
+  exit 0
+fi
 
 run python_compile python -m compileall -q src
 run ruff_check ruff check src tests scripts

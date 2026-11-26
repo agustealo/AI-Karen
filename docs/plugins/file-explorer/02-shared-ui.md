@@ -303,6 +303,26 @@ reauthorization or attachment-byte execution.
 
 ## KEXP-005F: consolidated acceptance evidence
 
+For the automated, private-report path, reuse the existing KUI runner with
+`RUN_FILE_EXPLORER_LOCAL=1`. It supports the exact-SHA disposable local stack
+provisioned by `scripts/ci/kui-card-studio-local-deployment.sh` (legacy KCARD
+naming); dedicate that stack and its fixtures to this trial. Do not point the
+runner at an existing personal or production installation. Provisioning is
+separate and requires explicit operator approval. Supply its existing
+`KCARD_COMPOSE_PROJECT` and private `KCARD_ACCEPTANCE_ENV_FILE`, two sanitized
+accounts, all eight distinct fixture IDs, and all explicit flags below.
+The runner verifies local Compose, the actual API database URLs and web
+loopback binding, performs discovery, requires one attempt per scenario,
+and compares private provenance records before and after execution.
+
+```bash
+RUN_FILE_EXPLORER_LOCAL=1 bash scripts/ci/kui-local-acceptance.sh "$EXPECTED_SHA"
+```
+
+This mode runs only the four Explorer scenarios, not the general KUI suite.
+Keep reports and logs private and outside the repository. The manual command
+below remains available for independently verified disposable installations.
+
 The existing canonical browser spec owns four distinct local Explorer cases.
 Run them only against the exact clean integration checkout and a separately
 verified disposable local stack. Do not run them against a hosted preview.

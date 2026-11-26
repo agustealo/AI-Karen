@@ -4,11 +4,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlsplit
-from urllib.request import build_opener, HTTPError, HTTPRedirectHandler, Request
+from urllib.request import build_opener, HTTPError, HTTPRedirectHandler, ProxyHandler, Request
 
 SHA = {"a": None}
 
@@ -47,7 +48,7 @@ def docker_json(args: list[str]) -> list[dict]:
 def http_json(url: str) -> dict:
     request = Request(url, headers={"Accept": "application/json", "Cache-Control": "no-store"})
     try:
-        with build_opener(NoRedirects()).open(request, timeout=30) as response:
+        with build_opener(ProxyHandler({}), NoRedirects()).open(request, timeout=30) as response:
             if response.status != 200:
                 raise GuardError("Required local endpoint returned non-200")
             mime = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
@@ -61,9 +62,72 @@ def http_json(url: str) -> dict:
     return payload
 
 
-def inspect_container(project: str, sha: str, service: str) -> dict:
+def verify_explorer_runtime(
+    service: str, container: dict, env: list[str], project: str, database: str
+) -> None:
+    """Bind browser ingress and actual API DSNs to the dedicated local stack."""
+    if not all(isinstance(item, str) and "=" in item for item in env):
+        raise GuardError("Invalid runtime environment")
+    values = dict(item.split("=", 1) for item in env)
+    if len(values) != len(env):
+        raise GuardError("Ambiguous runtime environment")
+    labels = container.get("Config", {}).get("Labels", {})
+    if (
+        labels.get("com.docker.compose.project") != project
+        or labels.get("com.docker.compose.service") != service
+    ):
+        raise GuardError("Container does not belong to the approved Compose service")
+    if service == "web":
+        ports = container.get("NetworkSettings", {}).get("Ports", {})
+        if (
+            values.get("KAREN_BACKEND_URL") != "http://api:8000"
+            or ports.get("8010/tcp") != [{"HostIp": "127.0.0.1", "HostPort": "8010"}]
+        ):
+            raise GuardError("Web ingress is not bound to the approved loopback stack")
+        return
+    required = {
+        "ENVIRONMENT": "production",
+        "AUTH_MODE": "production",
+        "AUTH_DEV_MODE": "false",
+        "AUTH_ALLOW_DEV_LOGIN": "false",
+        "KARI_AUTH_BYPASS": "false",
+        "AUTH_ENABLE_SESSION_VALIDATION": "true",
+        "DB_HOST": "host.docker.internal",
+        "DB_PORT": "54322",
+        "DB_NAME": database,
+    }
+    if any(values.get(key) != value for key, value in required.items()):
+        raise GuardError("API disposable database or security configuration differs")
+    for key in ("DATABASE_URL", "POSTGRES_URL", "AUTH_DATABASE_URL"):
+        try:
+            parsed = urlsplit(values.get(key, ""))
+            valid = (
+                parsed.scheme in {"postgresql", "postgresql+asyncpg"}
+                and parsed.hostname == "host.docker.internal"
+                and parsed.port == 54322
+                and parsed.path == "/" + database
+                and not parsed.query and not parsed.fragment
+                and bool(parsed.username) and bool(parsed.password)
+            )
+        except ValueError:
+            valid = False
+        if not valid:
+            raise GuardError("API connection URL does not target the disposable database")
+
+
+def inspect_container(
+    project: str, sha: str, service: str, *, explorer_database: str | None = None,
+    env_path: Path | None = None,
+) -> dict:
+    compose = ["docker", "compose", "-p", project]
+    if explorer_database is not None:
+        compose.extend([
+            "--env-file", str(env_path), "-f", "docker-compose.yml",
+            "-f", "deploy/compose/docker-compose.prod.yml",
+            "-f", "deploy/compose/docker-compose.local-card-studio.yml",
+        ])
     ps = subprocess.run(
-        ["docker", "compose", "-p", project, "ps", "-q", service],
+        [*compose, "ps", "-q", service],
         check=False, capture_output=True, text=True, timeout=30,
     )
     ids = [line.strip() for line in ps.stdout.splitlines() if line.strip()]
@@ -95,6 +159,8 @@ def inspect_container(project: str, sha: str, service: str) -> dict:
         }
         if not required.issubset(set(env)):
             raise GuardError("API disposable security flags are incomplete")
+    if explorer_database is not None:
+        verify_explorer_runtime(service, container, env, project, explorer_database)
     image_id = container.get("Image")
     if not isinstance(image_id, str):
         raise GuardError(f"Missing {service} image identity")
@@ -107,10 +173,10 @@ def inspect_container(project: str, sha: str, service: str) -> dict:
         raise GuardError(f"Built {service} image revision differs")
     if images[0].get("Id") != image_id:
         raise GuardError(f"Built {service} image ID differs")
-    return {"service": service, "container_id": ids[0][:12], "image_id": image_id}
+    return {"service": service, "container_id": ids[0], "image_id": image_id}
 
 
-def verify_local_supabase_database(env_path: Path) -> dict:
+def verify_local_supabase_database(env_path: Path, expected_database: str | None = None) -> dict:
     values = {}
     for line in env_path.read_text(encoding="utf-8").splitlines():
         if "=" in line:
@@ -119,6 +185,8 @@ def verify_local_supabase_database(env_path: Path) -> dict:
     db_name = values.get("KCARD_DB_NAME", "")
     if not db_name or not db_name.startswith("kcard_"):
         raise GuardError("Disposable local Supabase database name is missing")
+    if expected_database is not None and db_name != expected_database:
+        raise GuardError("Disposable database does not match the reviewed revision")
     containers = subprocess.run(
         ["docker", "ps", "--format", "{{.Names}}\t{{.Ports}}"],
         check=False, capture_output=True, text=True, timeout=30,
@@ -146,6 +214,7 @@ def main() -> int:
     parser.add_argument("--base-url", default="http://127.0.0.1:8010")
     parser.add_argument("--env-file", required=True)
     parser.add_argument("--evidence", required=True)
+    parser.add_argument("--file-explorer", action="store_true")
     args = parser.parse_args()
 
     try:
@@ -156,18 +225,35 @@ def main() -> int:
         if not env_path.is_file() or env_path.stat().st_mode & 0o077:
             raise GuardError("Acceptance env file is missing or exposed")
 
-        api = inspect_container(args.project, args.sha, "api")
-        web = inspect_container(args.project, args.sha, "web")
+        database = None
+        if args.file_explorer:
+            if origin != "http://127.0.0.1:8010" or args.project != "kcard-" + args.sha[:12]:
+                raise GuardError("Explorer requires the dedicated exact-revision local stack")
+            if "DOCKER_HOST" in os.environ or "DOCKER_CONTEXT" in os.environ:
+                raise GuardError("Explicit Docker endpoint overrides are forbidden")
+            contexts = docker_json(["docker", "context", "inspect"])
+            if len(contexts) != 1 or not str(
+                contexts[0].get("Endpoints", {}).get("docker", {}).get("Host", "")
+            ).startswith("unix://"):
+                raise GuardError("Explorer requires a local Docker daemon")
+            database = "kcard_" + args.sha[:12]
+        api = inspect_container(
+            args.project, args.sha, "api", explorer_database=database, env_path=env_path
+        )
+        web = inspect_container(
+            args.project, args.sha, "web", explorer_database=database, env_path=env_path
+        )
         revision = http_json(origin + "/api/deployment-revision")
         if revision != {"status": "ok", "revision": args.sha}:
             raise GuardError("Running deployment revision differs from reviewed SHA")
         health = http_json(origin + "/api/health")
         if health.get("status") != "ok" or health.get("backend_ready") is not True:
             raise GuardError("Canonical backend is not ready")
-        supabase_database = verify_local_supabase_database(env_path)
+        supabase_database = verify_local_supabase_database(env_path, database)
 
         evidence = {
             "decision": "PASS",
+            "scenario": "file-explorer" if args.file_explorer else "card-studio",
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "source_sha": args.sha,
             "project": args.project,
@@ -179,10 +265,10 @@ def main() -> int:
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
         evidence_path.chmod(0o600)
-        print("LOCAL_CARD_STUDIO_PROVENANCE_PASS")
+        print("LOCAL_FILE_EXPLORER_PROVENANCE_PASS" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_PASS")
         return 0
-    except GuardError as exc:
-        print(f"LOCAL_CARD_STUDIO_PROVENANCE_FAIL: {exc}")
+    except (GuardError, OSError, ValueError, subprocess.TimeoutExpired):
+        print("LOCAL_FILE_EXPLORER_PROVENANCE_FAIL" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_FAIL")
         return 1
 
 

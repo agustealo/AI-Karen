@@ -154,3 +154,136 @@ def test_local_attachment_readback_preserves_observed_authentication_and_revocat
     for probe in ("revokedInventory", "revokedDraft", "revokedRename",
                   "foreignDraft", "foreignRename", "stillRevoked"):
         assert f'await replay.clearCookies();\n    const {probe} = ' in source
+
+
+def test_explorer_local_runner_reuses_existing_provenance_and_private_report():
+    runner = (ROOT / "scripts/ci/kui-local-acceptance.sh").read_text()
+    assert "RUN_FILE_EXPLORER_LOCAL:-0" in runner
+    assert "explorer_provenance_pre_execution" in runner
+    assert "explorer_provenance_continuity" in runner
+    assert "verify_local_browser_report.py" in runner
+    assert "verify_local_card_studio_acceptance.py" in runner
+    assert "--file-explorer --sha" in runner
+    assert "--list-only" in runner
+    assert "mktemp -d" in runner
+    assert "KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED" in runner
+    assert "PASS explorer_local_acceptance" in runner
+    overlay = (ROOT / "deploy/compose/docker-compose.local-card-studio.yml").read_text()
+    assert 'web:\n    ports: !override\n      - "127.0.0.1:' in overlay
+
+
+def test_explorer_report_rejects_skips_retries_duplicate_and_wrong_scenarios():
+    from copy import deepcopy
+
+    import pytest
+
+    from scripts.ci.verify_local_browser_report import (
+        EXPLORER_PREFIXES,
+        EXPLORER_SPEC,
+        validate_report,
+    )
+
+    report = {
+        "errors": [],
+        "stats": {"expected": 4, "unexpected": 0, "skipped": 0, "flaky": 0},
+        "suites": [{"specs": [
+            {
+                "title": prefix + " acceptance",
+                "file": EXPLORER_SPEC,
+                "tests": [{
+                    "projectName": "chromium",
+                    "expectedStatus": "passed",
+                    "status": "expected",
+                    "results": [{"status": "passed", "retry": 0}],
+                }],
+            }
+            for prefix in EXPLORER_PREFIXES
+        ]}],
+    }
+    validate_report(report, EXPLORER_PREFIXES, EXPLORER_SPEC)
+    discovery = deepcopy(report)
+    for spec in discovery["suites"][0]["specs"]:
+        spec["tests"][0]["results"] = []
+    validate_report(discovery, EXPLORER_PREFIXES, EXPLORER_SPEC, list_only=True)
+    with pytest.raises(ValueError):
+        validate_report(discovery, EXPLORER_PREFIXES, EXPLORER_SPEC)
+    with pytest.raises(ValueError):
+        validate_report(report, EXPLORER_PREFIXES, EXPLORER_SPEC, list_only=True)
+    for field, value in (("skipped", 1), ("flaky", 1), ("unexpected", 1), ("expected", 3)):
+        bad = deepcopy(report)
+        bad["stats"][field] = value
+        with pytest.raises(ValueError):
+            validate_report(bad, EXPLORER_PREFIXES, EXPLORER_SPEC)
+    for field, value in (
+        ("results", [{"status": "passed", "retry": 1}]),
+        ("results", [{"status": "skipped", "retry": 0}]),
+        ("projectName", "firefox"),
+        ("expectedStatus", "failed"),
+    ):
+        bad = deepcopy(report)
+        bad["suites"][0]["specs"][0]["tests"][0][field] = value
+        with pytest.raises(ValueError):
+            validate_report(bad, EXPLORER_PREFIXES, EXPLORER_SPEC)
+    bad = deepcopy(report)
+    bad["suites"][0]["specs"][1]["title"] = bad["suites"][0]["specs"][0]["title"]
+    with pytest.raises(ValueError):
+        validate_report(bad, EXPLORER_PREFIXES, EXPLORER_SPEC)
+    bad = deepcopy(report)
+    bad["suites"][0]["specs"][0]["file"] = "unrelated.spec.ts"
+    with pytest.raises(ValueError):
+        validate_report(bad, EXPLORER_PREFIXES, EXPLORER_SPEC)
+
+
+def test_explorer_provenance_rejects_foreign_database_and_web_binding():
+    import pytest
+
+    from scripts.ci.verify_local_card_studio_acceptance import GuardError, verify_explorer_runtime
+
+    project = "kcard-aaaaaaaaaaaa"
+    database = "kcard_aaaaaaaaaaaa"
+    api = {"Config": {"Labels": {
+        "com.docker.compose.project": project,
+        "com.docker.compose.service": "api",
+    }}}
+    values = {
+        "ENVIRONMENT": "production",
+        "AUTH_MODE": "production",
+        "AUTH_DEV_MODE": "false",
+        "AUTH_ALLOW_DEV_LOGIN": "false",
+        "KARI_AUTH_BYPASS": "false",
+        "AUTH_ENABLE_SESSION_VALIDATION": "true",
+        "DB_HOST": "host.docker.internal",
+        "DB_PORT": "54322",
+        "DB_NAME": database,
+        "DATABASE_URL": "postgresql+asyncpg://test:fixture@host.docker.internal:54322/" + database,
+        "POSTGRES_URL": "postgresql://test:fixture@host.docker.internal:54322/" + database,
+        "AUTH_DATABASE_URL": "postgresql+asyncpg://test:fixture@host.docker.internal:54322/" + database,
+    }
+
+    def environment(data):
+        return [f"{key}={value}" for key, value in data.items()]
+
+    verify_explorer_runtime("api", api, environment(values), project, database)
+    for key, value in (
+        ("DATABASE_URL", "postgresql://test:fixture@example.invalid:54322/" + database),
+        ("AUTH_DATABASE_URL", "postgresql://test:fixture@host.docker.internal:54322/postgres"),
+        ("POSTGRES_URL", values["POSTGRES_URL"] + "?host=example.invalid"),
+        ("DB_NAME", "postgres"),
+        ("AUTH_ENABLE_SESSION_VALIDATION", "false"),
+    ):
+        with pytest.raises(GuardError):
+            verify_explorer_runtime("api", api, environment({**values, key: value}), project, database)
+    web = {
+        "Config": {"Labels": {
+            "com.docker.compose.project": project,
+            "com.docker.compose.service": "web",
+        }},
+        "NetworkSettings": {"Ports": {
+            "8010/tcp": [{"HostIp": "127.0.0.1", "HostPort": "8010"}],
+        }},
+    }
+    web_env = ["KAREN_BACKEND_URL=http://api:8000"]
+    verify_explorer_runtime("web", web, web_env, project, database)
+    web["NetworkSettings"]["Ports"]["8010/tcp"][0]["HostIp"] = "0.0.0.0"
+    with pytest.raises(GuardError):
+        verify_explorer_runtime("web", web, web_env, project, database)
