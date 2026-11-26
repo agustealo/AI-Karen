@@ -1,5 +1,5 @@
 import React from "react";
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@copilotkit/react-core/v2", () => ({
@@ -46,6 +46,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.getAllByTestId("karen-copilot-rail-unverified")).toHaveLength(2);
     expect(screen.getByTestId("karen-copilot-mobile-intelligence")).toBeTruthy();
     expect(screen.queryByTestId("canonical-conversation-rail")).toBeNull();
@@ -71,6 +72,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(2);
     expect(screen.getAllByText("verified-runtime-model")).toHaveLength(2);
     expect(screen.getAllByTestId("observed-steps").every(node => node.textContent === "0")).toBe(true);
@@ -107,6 +109,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.getAllByTestId("karen-date-presentation")).toHaveLength(2);
     expect(document.querySelectorAll('[data-presentation-id="card-new"]')).toHaveLength(2);
     expect(document.querySelectorAll('[data-presentation-id="card-old"]')).toHaveLength(0);
@@ -176,6 +179,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.getAllByText("newest-model")).toHaveLength(2);
     expect(screen.queryByText("stale-model")).toBeNull();
   });
@@ -202,6 +206,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.getAllByText("latest-verified-model")).toHaveLength(2);
     expect(screen.queryByText("older-verified-model")).toBeNull();
     const selectors = screen.getAllByLabelText("Inspect saved response");
@@ -272,6 +277,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.getAllByTestId("observed-steps").every(
       node => node.textContent === "1",
     )).toBe(true);
@@ -320,6 +326,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.getAllByTestId("observed-steps").every(
       node => node.textContent === "0",
     )).toBe(true);
@@ -347,6 +354,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.queryByText("older-model")).toBeNull();
     expect(screen.queryByTestId("canonical-conversation-rail")).toBeNull();
     expect(screen.getAllByTestId("karen-copilot-rail-unverified")).toHaveLength(2);
@@ -415,6 +423,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.getAllByTestId("observed-steps").every(
       node => node.textContent === "2",
     )).toBe(true);
@@ -438,6 +447,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    fireEvent.click(screen.getByRole("button", { name: "Show response context" }));
     expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(2);
     expect(screen.getAllByText("verified-runtime-model")).toHaveLength(2);
   });
@@ -472,6 +482,50 @@ describe("CopilotKit canonical intelligence rail", () => {
       },
     }], messages)).toThrow();
   });
+  it("opens and closes desktop evidence without duplicating mounted context or losing selection", () => {
+    const transcript = [
+      { id: "user-1", role: "user" },
+      { id: "assistant-old", role: "assistant" },
+      { id: "user-2", role: "user" },
+      { id: "assistant-new", role: "assistant" },
+    ];
+    const receipts = ["assistant-old", "assistant-new"].map((messageId, index) => ({
+      type: "CUSTOM",
+      name: "karen.execution_receipt.v1",
+      messageId,
+      value: {
+        actual_provider: "local",
+        actual_model: index === 0 ? "older-verified-model" : "latest-verified-model",
+        response_source: "local_inference",
+      },
+    }));
+    render(
+      <KarenVerifiedHistoryProvider parts={parseKarenVerifiedHistory(receipts, transcript)}>
+        <KarenCopilotVerifiedRail />
+      </KarenVerifiedHistoryProvider>,
+    );
+    const desktop = screen.getByTestId("karen-copilot-response-context");
+    const mobile = screen.getByTestId("karen-copilot-mobile-intelligence");
+    const show = within(desktop).getByRole("button", { name: "Show response context" });
+    expect(show.getAttribute("aria-expanded")).toBe("false");
+    expect(within(desktop).queryByTestId("canonical-conversation-rail")).toBeNull();
+    expect(within(mobile).getByText("latest-verified-model")).toBeTruthy();
+    fireEvent.click(show);
+    const hide = within(desktop).getByRole("button", { name: "Hide response context" });
+    expect(hide.getAttribute("aria-expanded")).toBe("true");
+    fireEvent.change(within(desktop).getByLabelText("Inspect saved response"), {
+      target: { value: "assistant-old" },
+    });
+    expect(within(desktop).getByText("older-verified-model")).toBeTruthy();
+    expect(within(mobile).getByText("older-verified-model")).toBeTruthy();
+    fireEvent.click(hide);
+    expect(within(desktop).queryByTestId("canonical-conversation-rail")).toBeNull();
+    expect(within(mobile).getByText("older-verified-model")).toBeTruthy();
+    fireEvent.click(within(desktop).getByRole("button", { name: "Show response context" }));
+    expect(within(desktop).getByText("older-verified-model")).toBeTruthy();
+    expect(screen.queryByText("latest-verified-model")).toBeNull();
+  });
+
   it("presents verified intelligence in an accessible mobile disclosure", () => {
     const parts = parseKarenVerifiedHistory([{
       type: "CUSTOM",
