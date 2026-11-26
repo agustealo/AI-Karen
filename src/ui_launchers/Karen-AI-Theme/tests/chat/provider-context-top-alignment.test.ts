@@ -30,9 +30,7 @@ describe("provider/model and selected response context alignment", () => {
     expect(consumer).toMatch(/data-testid="karen-copilot-model-discovery"\s+aria-label="Conversation model preferences"\s+className="shrink-0 border-b border-border\/60 bg-background\/80 px-3 py-1\.5 sm:px-4"/);
     expect(consumer).toMatch(/<details className="group">\s*<summary className="flex min-h-9 cursor-pointer/);
     expect(consumer).toContain("Model settings");
-    expect(rail).toContain('className="hidden h-full min-h-0 w-[21rem]');
-    expect(rail).toContain('xl:block');
-    expect(rail).toContain('w-11 shrink-0 border-l');
+    expect(rail).toMatch(/className=\{desktopOpen\s*\? "hidden h-full min-h-0 w-\[21rem\] shrink-0 overflow-y-auto border-l border-border\/70 bg-background\/45 xl:block 2xl:w-\[22rem\]"\s*:\s*"hidden h-full min-h-0 w-11 shrink-0 border-l border-border\/70 bg-background\/45 xl:flex xl:flex-col xl:items-center xl:py-3"\}/);
     expect(rail).toContain('aria-label="Show response context"');
     expect(rail).toContain('aria-label="Hide response context"');
     expect(rail).toContain('data-testid="karen-copilot-mobile-intelligence"');
