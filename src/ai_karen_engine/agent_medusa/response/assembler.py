@@ -32,6 +32,13 @@ class ResponseAssembler:
         metadata: Optional[Dict[str, Any]] = None,
         execution: Optional["SpecialistExecutionContext"] = None,
     ) -> RuntimeResponse:
+        # Plan-level specialist degradation is independent of the model
+        # receipt for final synthesis. A later healthy model cannot erase it.
+        upstream = metadata or {}
+        specialist_degraded = upstream.get("degraded_mode") is True
+        if specialist_degraded and status is ResponseStatus.SUCCESS:
+            status = ResponseStatus.DEGRADED
+
         if not step_outputs:
             return RuntimeResponse(
                 request_id=request_id,
@@ -129,7 +136,7 @@ class ResponseAssembler:
             "actual_model": result.model,
             "runtime_engine": result.runtime_engine,
             "fallback_level": result.metadata.get("fallback_level", 0),
-            "degraded_mode": result.degraded or status is ResponseStatus.DEGRADED,
+            "degraded_mode": result.degraded,
             "degradation_reason": result.degradation_reason,
             "latency_ms": result.latency_ms,
             "correlation_id": execution.correlation_id,
@@ -141,8 +148,28 @@ class ResponseAssembler:
             intermediate_steps=step_outputs,
             agent_trace=agent_trace,
             metadata={
-                **(metadata or {}),
+                **upstream,
                 **receipt,
+                "degraded_mode": (
+                    specialist_degraded
+                    or result.degraded
+                    or status is ResponseStatus.DEGRADED
+                ),
+                "degradation_reason": (
+                    result.degradation_reason or upstream.get("degradation_reason")
+                ),
+                **(
+                    {
+                        "specialist_degradation": {
+                            "degraded_mode": True,
+                            "degradation_reason": upstream.get("degradation_reason"),
+                            "fallback_level": upstream.get("fallback_level"),
+                            "affected_agents": upstream.get("affected_agents", []),
+                        }
+                    }
+                    if specialist_degraded
+                    else {}
+                ),
                 "synthesis": {"source": "expression_gateway", **receipt},
             },
         )

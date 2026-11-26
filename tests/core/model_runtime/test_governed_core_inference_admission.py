@@ -2238,7 +2238,17 @@ async def test_legacy_response_synthesizer_cannot_borrow_provider_authority(stre
 
 
 @pytest.mark.asyncio
-async def test_medusa_final_synthesis_preserves_original_meter_and_provenance(monkeypatch):
+@pytest.mark.parametrize(
+    ("initial_status", "specialist_degraded", "expected_status"),
+    [
+        ("success", False, "success"),
+        ("success", True, "degraded"),
+        ("partial", True, "partial"),
+    ],
+)
+async def test_medusa_final_synthesis_preserves_original_meter_and_provenance(
+    monkeypatch, initial_status, specialist_degraded, expected_status,
+):
     from ai_karen_engine.agent_medusa.contracts.specialist_execution import SpecialistExecutionContext
     from ai_karen_engine.agent_medusa.contracts.runtime_response import ResponseStatus
     from ai_karen_engine.agent_medusa.response.assembler import ResponseAssembler
@@ -2262,7 +2272,16 @@ async def test_medusa_final_synthesis_preserves_original_meter_and_provenance(mo
             request_id=ctx.request_id, latest_user_message="Summarize results",
             step_outputs=[{"finding": "first"}, {"finding": "second"}],
             agent_trace=["analyst", "researcher"], execution=scope,
-            metadata={"actual_provider": "forged", "actual_model": "forged"},
+            status=ResponseStatus(initial_status),
+            metadata={
+                "actual_provider": "forged", "actual_model": "forged",
+                **({
+                    "degraded_mode": True,
+                    "degradation_reason": "Specialist dependencies unavailable",
+                    "fallback_level": "partial",
+                    "affected_agents": ["researcher"],
+                } if specialist_degraded else {}),
+            },
         )
 
     for invalid in (
@@ -2276,7 +2295,20 @@ async def test_medusa_final_synthesis_preserves_original_meter_and_provenance(mo
     assert not attempts and admission.meter.model_calls == 0
     result = await assemble(execution)
     assert result.content == "actual observed output"
-    assert result.status is ResponseStatus.SUCCESS
+    assert result.status is ResponseStatus(expected_status)
+    assert result.metadata["degraded_mode"] is specialist_degraded
+    assert result.metadata["synthesis"]["degraded_mode"] is False
+    assert result.metadata["synthesis"]["fallback_level"] == 0
+    if specialist_degraded:
+        assert result.metadata["degradation_reason"] == "Specialist dependencies unavailable"
+        assert result.metadata["specialist_degradation"] == {
+            "degraded_mode": True,
+            "degradation_reason": "Specialist dependencies unavailable",
+            "fallback_level": "partial",
+            "affected_agents": ["researcher"],
+        }
+    else:
+        assert "specialist_degradation" not in result.metadata
     assert result.metadata["actual_provider"] == "ollama-local"
     assert result.metadata["actual_model"] == "model-a"
     assert result.metadata["synthesis"]["source"] == "expression_gateway"

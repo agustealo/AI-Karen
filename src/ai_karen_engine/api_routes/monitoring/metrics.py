@@ -84,10 +84,8 @@ def render_prometheus_text() -> str:
         lines.append(f"# TYPE {metric_name} histogram")
         label_names = metric["label_names"]
         buckets = tuple(float(bucket) for bucket in metric["buckets"])
-        for label_values, observations in sorted(metric["values"].items()):
-            ordered = [float(value) for value in observations]
-            for bucket in buckets:
-                count = sum(1 for value in ordered if value <= bucket)
+        for label_values, aggregate in sorted(metric["values"].items()):
+            for bucket, count in zip(buckets, aggregate.bucket_counts, strict=True):
                 labels = _labels_with_extra(
                     label_names,
                     label_values,
@@ -96,10 +94,10 @@ def render_prometheus_text() -> str:
                 )
                 lines.append(f"{metric_name}_bucket{labels} {count}")
             inf_labels = _labels_with_extra(label_names, label_values, "le", "+Inf")
-            lines.append(f"{metric_name}_bucket{inf_labels} {len(ordered)}")
+            lines.append(f"{metric_name}_bucket{inf_labels} {aggregate.count}")
             labels = _labels(label_names, label_values)
-            lines.append(f"{metric_name}_sum{labels} {_format_number(sum(ordered))}")
-            lines.append(f"{metric_name}_count{labels} {len(ordered)}")
+            lines.append(f"{metric_name}_sum{labels} {_format_number(aggregate.total)}")
+            lines.append(f"{metric_name}_count{labels} {aggregate.count}")
 
     return "\n".join(lines) + "\n"
 
