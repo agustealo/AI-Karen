@@ -16,7 +16,7 @@ const entry: InboxEntry = {
   execution_id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", source_kind: "terminal_chat_attention", source_status: "orphaned",
   created_at: timestamp, read_at: null, acknowledged_at: null, archived_at: null, revision: "9007199254740993",
 };
-const page = (entries: InboxEntry[] = [entry], count = 42) => ({ entries, next_cursor: null, active_unread_count: count });
+const page = (entries: InboxEntry[] = [entry], count = 42) => ({ entries, next_cursor: null, active_unread_count: count, capabilities: { can_mutate: true, producer_enabled: true, can_reconcile: true } });
 const workspace = (userId: string, visible = true, open?: (id: string) => Promise<void>) =>
   <PersonalCommunicationsInboxProvider tenantId="tenant" userId={userId}>
     {visible ? <PersonalCommunicationsInbox onOpenConversation={open} /> : <p>Other workspace</p>}
@@ -178,4 +178,18 @@ describe("bounded authenticated inbox refresh", () => {
     await act(async () => { await vi.advanceTimersByTimeAsync(INBOX_REFRESH_INTERVAL_MS * 2); });
     expect(stubs.get).toHaveBeenCalledTimes(2);
   });
+});
+
+it("honors server-reported producer configuration and read-only entitlements", async () => {
+  stubs.get.mockResolvedValueOnce({ ...page(), capabilities: { can_mutate: false, producer_enabled: false, can_reconcile: false } });
+  mount();
+  await screen.findByText("Read-only inbox access. Your account cannot change notification state.");
+  expect(screen.getByText(/New runtime notification production is disabled/)).toBeTruthy();
+  for (const label of ["Mark read", "Acknowledge", "Archive", "Recover missed notifications"]) {
+    const button = screen.getByRole("button", { name: label });
+    expect((button as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(button);
+  }
+  expect(stubs.patch).not.toHaveBeenCalled();
+  expect(stubs.post).not.toHaveBeenCalled();
 });

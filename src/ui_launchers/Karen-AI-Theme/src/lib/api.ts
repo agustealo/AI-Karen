@@ -659,6 +659,7 @@ class ApiClient {
       try {
         const result = await fetch(url, {
           ...init,
+          ...(principalScope ? { cache: 'no-store' as const } : {}),
           headers: requestHeaders,
           credentials: 'include',
         });

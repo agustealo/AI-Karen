@@ -94,7 +94,7 @@ function useInboxController(initialScope: ApiPrincipalScope) {
   }, [load]);
 
   async function perform(entry: InboxEntry, operation: InboxOperation) {
-    if (!current() || writeLock.current || readLock.current || uncertainRef.current || loading || uncertain || !page?.entries.includes(entry)
+    if (!current() || writeLock.current || readLock.current || uncertainRef.current || loading || uncertain || !page?.capabilities.can_mutate || !page.entries.includes(entry)
         || operationRecorded(entry, operation)) return;
     writeLock.current = true;
     readEpoch.current += 1;
@@ -121,7 +121,7 @@ function useInboxController(initialScope: ApiPrincipalScope) {
   }
 
   async function reconcile() {
-    if (!current() || writeLock.current || readLock.current || uncertainRef.current || loading || uncertain || !page) return;
+    if (!current() || writeLock.current || readLock.current || uncertainRef.current || loading || uncertain || !page?.capabilities.can_reconcile) return;
     writeLock.current = true;
     readEpoch.current += 1;
     setBusy(true);
@@ -224,8 +224,10 @@ function InboxView({ controller, active, refreshRevision, onOpenConversation }: 
           <Button key={value} type="button" size="sm" variant={filter === value ? "default" : "outline"} aria-pressed={filter === value}
             disabled={busy || loading || uncertain} onClick={() => { setNotice(""); void load(value, null); }}>{value === "active" ? "Active" : value === "archived" ? "Archived" : "All"}</Button>)}
         <Button type="button" size="sm" variant="outline" disabled={busy || loading} onClick={() => { setNotice(""); void load(filter, null); }}>Refresh inbox</Button>
-        <Button type="button" size="sm" variant="outline" disabled={disabled} onClick={() => void reconcile()}>Recover missed notifications</Button>
+        <Button type="button" size="sm" variant="outline" disabled={disabled || !page?.capabilities.can_reconcile} onClick={() => void reconcile()}>Recover missed notifications</Button>
       </div>
+      {page && !page.capabilities.producer_enabled && <p className="text-sm text-muted-foreground">New runtime notification production is disabled by server configuration. Existing records remain available.</p>}
+      {page && !page.capabilities.can_mutate && <p className="text-sm text-muted-foreground">Read-only inbox access. Your account cannot change notification state.</p>}
       {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
       {(error || handoffError) && <p role="alert" className="rounded-lg border p-3 text-sm text-destructive">{error || handoffError}</p>}
       {loading && <p role="status" className="text-sm text-muted-foreground">{page ? "Refreshing verified inbox…" : "Loading verified inbox…"}</p>}
@@ -246,7 +248,7 @@ function InboxView({ controller, active, refreshRevision, onOpenConversation }: 
           <div className="flex flex-wrap gap-2">
             {onOpenConversation && <Button type="button" variant="outline" size="sm" disabled={disabled} onClick={() => void openConversation(entry)}>Open original conversation</Button>}
             {(["read", "acknowledge", "archive"] as const).map(operation => <Button key={operation} type="button" size="sm" variant="outline"
-              disabled={disabled || operationRecorded(entry, operation)} onClick={() => void perform(entry, operation)}>
+              disabled={disabled || !page.capabilities.can_mutate || operationRecorded(entry, operation)} onClick={() => void perform(entry, operation)}>
               {operation === "read" ? "Mark read" : operation === "acknowledge" ? "Acknowledge" : "Archive"}
             </Button>)}
           </div>

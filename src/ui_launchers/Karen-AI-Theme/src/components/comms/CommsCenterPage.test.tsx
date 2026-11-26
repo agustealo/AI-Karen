@@ -68,7 +68,7 @@ beforeEach(() => {
   stubs.get.mockReset();
   stubs.approvalGet.mockReset().mockResolvedValue([]);
   stubs.approvalPost.mockReset();
-  stubs.inboxGet.mockReset().mockResolvedValue({ entries: [], next_cursor: null, active_unread_count: 0 });
+  stubs.inboxGet.mockReset().mockResolvedValue({ entries: [], next_cursor: null, active_unread_count: 0, capabilities: { can_mutate: true, producer_enabled: true, can_reconcile: true } });
   stubs.inboxPatch.mockReset();
   stubs.useAuth.mockReset();
   stubs.useAuth.mockReturnValue({
@@ -399,7 +399,7 @@ it("retains the personal inbox mutation lock when changing Communications tabs",
     created_at: "2026-11-26T15:00:00Z", read_at: null,
     acknowledged_at: null, archived_at: null, revision: "1",
   };
-  stubs.inboxGet.mockResolvedValue({ entries: [entry], next_cursor: null, active_unread_count: 1 });
+  stubs.inboxGet.mockResolvedValue({ entries: [entry], next_cursor: null, active_unread_count: 1, capabilities: { can_mutate: true, producer_enabled: true, can_reconcile: true } });
   let reject!: (error: Error) => void;
   stubs.inboxPatch.mockReturnValue(new Promise((_resolve, fail) => { reject = fail; }));
   render(<CommsCenterPage />);

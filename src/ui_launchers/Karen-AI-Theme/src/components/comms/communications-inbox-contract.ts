@@ -19,10 +19,16 @@ export type InboxEntry = {
   archived_at: string | null;
   revision: string;
 };
+export type InboxCapabilities = {
+  can_mutate: boolean;
+  producer_enabled: boolean;
+  can_reconcile: boolean;
+};
 export type InboxPage = {
   entries: InboxEntry[];
   next_cursor: InboxCursor | null;
   active_unread_count: number;
+  capabilities: InboxCapabilities;
 };
 const MAX_REVISION = "9223372036854775806";
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === "object" && !Array.isArray(v);
@@ -47,6 +53,12 @@ export function readPage(v: unknown, filter: InboxFilter, previous: InboxCursor 
     || !v.entries.every(isEntry) || typeof v.active_unread_count !== "number"
     || !Number.isSafeInteger(v.active_unread_count) || v.active_unread_count < 0
     || !(v.next_cursor === null || isCursor(v.next_cursor))) throw new Error("Invalid inbox page");
+  const capabilities = v.capabilities;
+  if (!isObject(capabilities) || typeof capabilities.can_mutate !== "boolean"
+    || typeof capabilities.producer_enabled !== "boolean" || typeof capabilities.can_reconcile !== "boolean"
+    || capabilities.can_reconcile !== (capabilities.can_mutate && capabilities.producer_enabled)) {
+    throw new Error("Invalid inbox capabilities");
+  }
   const entries: InboxEntry[] = v.entries;
   if (new Set(entries.map(e => e.entry_id)).size !== entries.length
     || entries.some(e => (filter === "active" && e.archived_at !== null) || (filter === "archived" && e.archived_at === null))
@@ -55,7 +67,8 @@ export function readPage(v: unknown, filter: InboxFilter, previous: InboxCursor 
   const last = entries[entries.length - 1];
   if (v.next_cursor && (entries.length !== PAGE_SIZE || !last || last.entry_id !== v.next_cursor.entry_id
     || last.created_at !== v.next_cursor.created_at)) throw new Error("Invalid inbox cursor");
-  return { entries, next_cursor: v.next_cursor, active_unread_count: v.active_unread_count };
+  return { entries, next_cursor: v.next_cursor, active_unread_count: v.active_unread_count,
+    capabilities: { can_mutate: capabilities.can_mutate, producer_enabled: capabilities.producer_enabled, can_reconcile: capabilities.can_reconcile } };
 }
 export function operationRecorded(entry: InboxEntry, operation: InboxOperation): boolean {
   return operation === "read" ? entry.read_at !== null : operation === "acknowledge" ? entry.acknowledged_at !== null : entry.archived_at !== null;
