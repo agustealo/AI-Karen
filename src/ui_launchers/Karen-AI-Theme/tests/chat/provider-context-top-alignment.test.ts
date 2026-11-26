@@ -27,9 +27,14 @@ describe("provider/model and selected response context alignment", () => {
   });
 
   it("preserves the shared vertical start, scroll region and accessible responsive context", () => {
-    expect(consumer).toContain('className="shrink-0 border-b border-border/60 bg-background/80 px-3 py-3 sm:px-4"');
+    expect(consumer).toMatch(/data-testid="karen-copilot-model-discovery"\s+aria-label="Conversation model preferences"\s+className="shrink-0 border-b border-border\/60 bg-background\/80 px-3 py-1\.5 sm:px-4"/);
+    expect(consumer).toMatch(/<details className="group">\s*<summary className="flex min-h-9 cursor-pointer/);
+    expect(consumer).toContain("Model settings");
     expect(rail).toContain('className="hidden h-full min-h-0 w-[21rem]');
     expect(rail).toContain('xl:block');
+    expect(rail).toContain('w-11 shrink-0 border-l');
+    expect(rail).toContain('aria-label="Show response context"');
+    expect(rail).toContain('aria-label="Hide response context"');
     expect(rail).toContain('data-testid="karen-copilot-mobile-intelligence"');
     expect(rail).toContain('xl:hidden');
     expect(rail).toContain('className="order-first w-full shrink-0');
