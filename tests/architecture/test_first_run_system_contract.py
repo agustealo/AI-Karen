@@ -369,3 +369,20 @@ def test_communications_failure_diagnostics_do_not_disclose_private_report(capsy
     assert "kind=inbox_unavailable error_type=AttributeError count=1" in output
     assert "private-secret" not in output
     assert output.count("KCOMM_BACKEND_EVENT ") == 4
+
+    correlation = "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a6"
+    foreign = "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a7"
+    module.report_backend_failure_summary("\n".join([
+        '{"logger":"ai_karen_engine.core.realtime.inbox_invalidation","message":"communications.invalidation.wait_unavailable reason=duplicate_owner","reason":"duplicate_owner","error_type":"InboxInvalidationUnavailable","correlation_id":"' + correlation + '","private":"private-secret"}',
+        '{"name":"ai_karen_engine.core.realtime.inbox_invalidation","message":"communications.invalidation.wait_admitted","correlation_id":"' + foreign + '"}',
+        '{"name":"ai_karen_engine.core.realtime.inbox_invalidation","message":"communications.invalidation.wait_unavailable","reason":"private-secret","error_type":"private-secret","correlation_id":"' + correlation + '"}',
+    ]), correlations={correlation})
+    output = capsys.readouterr().out
+    assert "kind=wait_unavailable error_type=InboxInvalidationUnavailable count=1 reason=duplicate_owner" in output
+    assert "kind=wait_unavailable error_type=unknown count=1 reason=unknown" in output
+    assert "wait_admitted" not in output
+    assert correlation not in output and foreign not in output and "private-secret" not in output
+    assert output.count("KCOMM_CORRELATED_BACKEND_EVENT ") == 2
+    assert module.safe_correlation("private-secret") is None
+    assert module.safe_correlation(correlation.upper()) == correlation
+

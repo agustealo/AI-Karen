@@ -539,10 +539,36 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
   const recordResponse = (res: import("@playwright/test").Response) => {
     if (res.request() === ownerRequest) sequence.push("hint");
   };
+  const recordFailure = (req: BrowserRequest) => {
+    if (req === ownerRequest) test.info().annotations.push({ type: "kcomm-hint-request-failed", description: "yes" });
+  };
   page.on("request", recordRequest);
   page.on("response", recordResponse);
+  page.on("requestfailed", recordFailure);
   try {
-    const hintPending = page.waitForResponse(res => res.request() === ownerRequest, { timeout: 20_000 });
+    const hintPending = page.waitForResponse(res => res.request() === ownerRequest, { timeout: 20_000 }).then(async hint => {
+      // Capture the exact response immediately, before an unrelated navigation
+      // or fetch cancellation can make its body inaccessible to Chromium.
+      test.info().annotations.push({ type: "kcomm-hint-http", description: String(hint.status()) });
+      const correlation = hint.headers()["x-correlation-id"];
+      if (correlation && /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(correlation)) {
+        // The private report retains the identifier for matching backend logs.
+        // The public summarizer must never emit the identifier itself.
+        test.info().annotations.push({ type: "kcomm-hint-correlation", description: correlation.toLowerCase() });
+      }
+      let hintBody: unknown = null;
+      let bodyState = "read_failed";
+      try {
+        const body = await hint.text();
+        bodyState = body.length ? "invalid_json" : "empty";
+        if (body.length) {
+          hintBody = JSON.parse(body);
+          bodyState = "json";
+        }
+      } catch { /* diagnostics only: do not treat unreadable bodies as success */ }
+      test.info().annotations.push({ type: "kcomm-hint-body-state", description: bodyState });
+      return { hint, hintBody };
+    });
     const readPending = page.waitForResponse(res => inboxRequest(res.request()), { timeout: 20_000 });
     const foreignPending = request.get(origin + waitPath, { headers: aHeaders, timeout: 25_000, maxRedirects: 0 });
     // Attach rejection observers immediately, even if an earlier assertion
@@ -558,22 +584,21 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     const read = readReceipt(await patch.json(), entry, "read");
     expect(read.changed).toBe(true);
     mark("hint_order");
-    const hint = await hintPending;
-    test.info().annotations.push({ type: "kcomm-hint-http", description: String(hint.status()) });
-    const hintBody = await hint.json().catch(() => null);
+    const { hint, hintBody } = await hintPending;
+    const envelope = hintBody && typeof hintBody === "object" ? hintBody as Record<string, unknown> : null;
     // Classify only exact known public error codes/messages. Never include
     // the body itself in a diagnostic annotation or public CI output.
     const kind = hint.status() === 200 ? "none"
-      : hintBody?.error_code === "BACKEND_UPSTREAM_UNAVAILABLE" ? "proxy_unavailable"
-      : hintBody?.error_code === "BACKEND_REDIRECT_REJECTED" ? "redirect_rejected"
-      : hintBody?.detail === "Inbox invalidation unavailable" ? "invalidation_unavailable"
-      : hintBody?.detail === "Active session unavailable" ? "session_unavailable"
-      : hintBody?.detail === "Communications inbox unavailable" ? "inbox_unavailable"
-      : hintBody?.detail === "Authentication service unavailable" ? "authentication_unavailable"
-      : hintBody?.detail === "Active authenticated session could not be verified" ? "session_unavailable"
-      : hintBody?.error === "Rate limit enforcement unavailable" ? "rate_limit_unavailable"
-      : hintBody?.error_code === "BACKEND_TARGET_NOT_CONFIGURED" ? "backend_not_configured"
-      : hintBody?.error_code === "ERROR_RESPONSE_SERIALIZATION_FAILED" ? "serialization_failed"
+      : envelope?.error_code === "BACKEND_UPSTREAM_UNAVAILABLE" ? "proxy_unavailable"
+      : envelope?.error_code === "BACKEND_REDIRECT_REJECTED" ? "redirect_rejected"
+      : envelope?.detail === "Inbox invalidation unavailable" ? "invalidation_unavailable"
+      : envelope?.detail === "Active session unavailable" ? "session_unavailable"
+      : envelope?.detail === "Communications inbox unavailable" ? "inbox_unavailable"
+      : envelope?.detail === "Authentication service unavailable" ? "authentication_unavailable"
+      : envelope?.detail === "Active authenticated session could not be verified" ? "session_unavailable"
+      : envelope?.error === "Rate limit enforcement unavailable" ? "rate_limit_unavailable"
+      : envelope?.error_code === "BACKEND_TARGET_NOT_CONFIGURED" ? "backend_not_configured"
+      : envelope?.error_code === "ERROR_RESPONSE_SERIALIZATION_FAILED" ? "serialization_failed"
       : hintBody === null ? "unclassified_body"
       : hint.status() === 401 ? "auth_required"
       : hint.status() === 403 ? "permission_denied"
@@ -650,5 +675,6 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
   } finally {
     page.off("request", recordRequest);
     page.off("response", recordResponse);
+    page.off("requestfailed", recordFailure);
   }
 });

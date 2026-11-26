@@ -36,6 +36,10 @@ _HINT_FAILURES = {
 }
 _BACKEND_EVENTS = {
     ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.wait_unavailable"): "wait_unavailable",
+    ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.wait_admitted"): "wait_admitted",
+    ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.wait_signal_observed"): "wait_signal_observed",
+    ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.wait_idle"): "wait_idle",
+    ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.wait_cancelled"): "wait_cancelled",
     ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.unavailable"): "publish_unavailable",
     ("ai_karen_engine.core.realtime.inbox_invalidation", "communications.invalidation.broker_acknowledged"): "broker_acknowledged",
     ("ai_karen_engine.services.communications_inbox", "communications.invalidation.wait_completed"): "wait_completed",
@@ -52,6 +56,12 @@ _SAFE_ERROR_TYPES = {
     "InvalidStateError", "RedisError", "ResponseError", "OperationalError",
     "InterfaceError", "DBAPIError", "MissingGreenlet",
 }
+_WAIT_REASONS = {
+    "configuration", "manager_unavailable", "owner_scope", "duplicate_owner",
+    "capacity", "disconnect_check", "client_disconnected", "subscribe",
+    "subscribe_ack", "broker_receive", "unexpected_frame", "subscription_cleanup",
+}
+_BODY_STATES = {"read_failed", "empty", "invalid_json", "json"}
 _BROWSER_STAGES = {
     "login", "initial_projection", "broker_admission", "commit_read",
     "hint_order", "foreign_idle", "cancel", "reopen", "revoke",
@@ -64,10 +74,20 @@ def stage(name):
     _STAGE = name
 
 
+def safe_correlation(value):
+    if not isinstance(value, str) or not re.fullmatch(
+        r"[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}", value
+    ):
+        return None
+    return value.lower()
+
+
 def report_failure_summary(report):
     """Emit only fixed scenario/stage/status tokens and numeric spec locations."""
     def safe_status(value):
         return value if isinstance(value, str) and value in _STATUSES else "unknown"
+
+    correlations = set()
 
     def visit(suites):
         for suite in suites:
@@ -88,6 +108,14 @@ def report_failure_summary(report):
                             print("KCOMM_BROWSER_HINT_HTTP status=" + value)
                         if item.get("type") == "kcomm-hint-failure" and isinstance(value, str) and value in _HINT_FAILURES:
                             print("KCOMM_BROWSER_HINT_FAILURE kind=" + value)
+                        if item.get("type") == "kcomm-hint-body-state" and isinstance(value, str) and value in _BODY_STATES:
+                            print("KCOMM_BROWSER_HINT_BODY state=" + value)
+                        if item.get("type") == "kcomm-hint-request-failed" and value == "yes":
+                            print("KCOMM_BROWSER_HINT_REQUEST_FAILED observed=yes")
+                        if scenario == "KCOMM-03G" and item.get("type") == "kcomm-hint-correlation":
+                            correlation = safe_correlation(value)
+                            if correlation:
+                                correlations.add(correlation)
                     for result in test.get("results", []):
                         print("KCOMM_BROWSER_RESULT status=" + safe_status(result.get("status")))
                         positions = set()
@@ -114,25 +142,28 @@ def report_failure_summary(report):
             visit(suite.get("suites", []))
 
     visit(report.get("suites", []))
+    return correlations
 
 
-def report_backend_failure_summary(logs):
+def report_backend_failure_summary(logs, correlations=None):
     """Emit only known backend event labels; never copy raw logs or identities.
 
-    This is an aggregate of the disposable browser run, not a per-request trace.
-    Recognize the canonical console formatter and structured JSON formatter.
+    Without a correlation filter this is an aggregate, not a per-request trace.
+    With a filter, accept only exact structured correlation matches.
     """
     counts = {}
     for line in logs.splitlines():
-        name = message = error_type = None
+        name = message = error_type = reason = correlation = None
         try:
             entry = json.loads(line)
         except (TypeError, ValueError):
             entry = None
         if isinstance(entry, dict):
             name, message, error_type = (
-                entry.get("name"), entry.get("message"), entry.get("error_type")
+                entry.get("name") or entry.get("logger"), entry.get("message"), entry.get("error_type")
             )
+            reason = entry.get("reason")
+            correlation = safe_correlation(entry.get("correlation_id"))
         else:
             parts = line.split(" - ", 3)
             if len(parts) == 4:
@@ -141,6 +172,15 @@ def report_backend_failure_summary(logs):
                     continue
         if not isinstance(name, str) or not isinstance(message, str):
             continue
+        if correlations is not None and correlation not in correlations:
+            continue
+        if name == "ai_karen_engine.core.realtime.inbox_invalidation":
+            prefix = "communications.invalidation.wait_unavailable reason="
+            if message.startswith(prefix):
+                candidate = message[len(prefix):]
+                if candidate in _WAIT_REASONS:
+                    reason = candidate
+                    message = "communications.invalidation.wait_unavailable"
         kind = _BACKEND_EVENTS.get((name, message))
         if name == "ai_karen_engine.middleware.rate_limit":
             prefix = "Rate limit enforcement unavailable: "
@@ -154,15 +194,17 @@ def report_backend_failure_summary(logs):
             if isinstance(error_type, str) and error_type in _SAFE_ERROR_TYPES
             else "unknown"
         )
-        key = (kind, safe_type)
+        safe_reason = reason if isinstance(reason, str) and reason in _WAIT_REASONS else "unknown"
+        key = (kind, safe_type, safe_reason)
         counts[key] = counts.get(key, 0) + 1
+    label = "KCOMM_CORRELATED_BACKEND_EVENT" if correlations is not None else "KCOMM_BACKEND_EVENT"
     if not counts:
-        print("KCOMM_BACKEND_EVENTS status=none_observed")
-    for (kind, error_type), count in sorted(counts.items()):
-        print(f"KCOMM_BACKEND_EVENT kind={kind} error_type={error_type} count={count}")
+        print(label + "S status=none_observed")
+    for (kind, error_type, reason), count in sorted(counts.items()):
+        print(f"{label} kind={kind} error_type={error_type} count={count} reason={reason}")
 
 
-def collect_backend_failure_summary(container, started):
+def collect_backend_failure_summary(container, started, correlations=()):
     """Best effort on the already verified disposable API container only."""
     try:
         result = subprocess.run(
@@ -176,6 +218,22 @@ def collect_backend_failure_summary(container, started):
         print("KCOMM_BACKEND_EVENTS status=unavailable")
         return
     report_backend_failure_summary(result.stdout + "\n" + result.stderr)
+    if not correlations:
+        print("KCOMM_CORRELATED_BACKEND_EVENTS status=missing_browser_correlation")
+        return
+    # Existing production structured log sink; never print raw records or IDs.
+    try:
+        structured = subprocess.run(
+            ["docker", "exec", container, "tail", "-n", "4000", "logs/kari.log"],
+            capture_output=True, text=True, errors="replace", timeout=15, check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        print("KCOMM_CORRELATED_BACKEND_EVENTS status=unavailable")
+        return
+    if structured.returncode:
+        print("KCOMM_CORRELATED_BACKEND_EVENTS status=unavailable")
+        return
+    report_backend_failure_summary(structured.stdout, correlations=set(correlations))
 
 
 class NoRedirect(HTTPRedirectHandler):
@@ -340,8 +398,8 @@ def main():
             stage("chromium_report_validation")
             report = json.loads(report_path.read_text(encoding="utf-8"))
             if result.returncode != 0:
-                report_failure_summary(report)
-                collect_backend_failure_summary(args.api_container, browser_started)
+                correlations = report_failure_summary(report)
+                collect_backend_failure_summary(args.api_container, browser_started, correlations)
                 raise RuntimeError("Disposable Chromium scenario failed; private diagnostics suppressed")
             stats = report.get("stats", {})
             if report.get("errors") != [] or stats.get("expected") != 2 or any(
