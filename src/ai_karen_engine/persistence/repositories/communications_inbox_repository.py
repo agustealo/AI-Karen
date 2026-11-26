@@ -215,6 +215,7 @@ class CommunicationsInboxRepository:
                   AND r.status IN ('failed', 'orphaned')
                   AND r.terminal_at IS NOT NULL
                   AND r.communications_attention_eligible_at = r.terminal_at
+                  AND r.communications_attention_conversation_id = r.conversation_id
                   AND NOT EXISTS (
                       SELECT 1 FROM public.communications_inbox_entries e
                       WHERE e.tenant_id = r.tenant_id AND e.user_id = r.user_id

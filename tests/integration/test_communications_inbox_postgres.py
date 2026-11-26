@@ -297,9 +297,10 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
         await raw.execute("""
             INSERT INTO runtime_chat_runs (
                 execution_id, tenant_id, user_id, conversation_id, transport_run_id,
-                request_id, correlation_id, status, lease_token, lease_expires_at
-            ) VALUES ($1,$2,$3,$4,'new-failed','req','corr','running',$8,now()+interval '1 hour'),
-                     ($5,$2,$6,$7,'foreign-failed','req','corr','running',$9,now()+interval '1 hour')
+                request_id, correlation_id, status, lease_token, lease_expires_at,
+                communications_attention_conversation_id
+            ) VALUES ($1,$2,$3,$4,'new-failed','req','corr','running',$8,now()+interval '1 hour',$4),
+                     ($5,$2,$6,$7,'foreign-failed','req','corr','running',$9,now()+interval '1 hour',$7)
         """, new_run, tenant, owner, second_conversation, foreign_run,
             other_owner, foreign_conversation, uuid.uuid4(), uuid.uuid4())
         await raw.execute("""
@@ -522,6 +523,21 @@ async def test_communications_inbox_real_postgres(monkeypatch: pytest.MonkeyPatc
                 failure.setattr(CommunicationsInboxRepository, "reconcile_pending", projection_failure)
                 assert await ledger.finish(erased_run, status="failed")
             await raw.execute("DELETE FROM conversations WHERE conversation_id=$1", erased_conversation)
+            assert await raw.fetchval(
+                "SELECT communications_attention_conversation_id IS NULL "
+                "AND communications_attention_eligible_at IS NOT NULL "
+                "FROM runtime_chat_runs WHERE execution_id=$1", uuid.UUID(erased_run.execution_id),
+            )
+            # Even an explicit same-ID recreation cannot rebind an erased source.
+            await raw.execute(
+                "INSERT INTO conversations (conversation_id,tenant_id,user_id) VALUES ($1,$2,$3)",
+                erased_conversation, tenant, owner,
+            )
+            with pytest.raises(asyncpg.CheckViolationError):
+                await raw.execute(
+                    "UPDATE runtime_chat_runs SET communications_attention_conversation_id=$1 "
+                    "WHERE execution_id=$2", erased_conversation, uuid.UUID(erased_run.execution_id),
+                )
             assert await repo.reconcile_pending(**principal) == 0
             assert len((await repo.list_entries(**principal)).entries) == 3
         finally:

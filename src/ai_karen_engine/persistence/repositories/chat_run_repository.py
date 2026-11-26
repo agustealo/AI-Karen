@@ -165,7 +165,13 @@ class SqlChatRunRepository:
         execution = str(uuid.uuid4())
         token = str(uuid.uuid4())
         attention_enabled = self._attention_enabled()
-        marker = ", communications_attention_eligible_at = NOW()" if attention_enabled else ""
+        marker = (
+            ", communications_attention_eligible_at = CASE "
+            "WHEN communications_attention_conversation_id IS NOT NULL THEN NOW() ELSE NULL END"
+            if attention_enabled else ""
+        )
+        attention_column = ", communications_attention_conversation_id" if attention_enabled else ""
+        attention_value = ", CAST(:conversation AS uuid)" if attention_enabled else ""
         async with async_transaction_scope(tenant, user_id=user) as session:
             # Never silently run without the admission constraints during a
             # rolling upgrade or failed migration. No runtime schema writes.
@@ -205,18 +211,18 @@ class SqlChatRunRepository:
             )
             result = await session.execute(
                 text(
-                    """
+                    f"""
                     INSERT INTO public.runtime_chat_runs (
                         execution_id, tenant_id, user_id, conversation_id,
                         transport_run_id, request_id, correlation_id, submission_id,
-                        status, lease_token, lease_expires_at
+                        status, lease_token, lease_expires_at{attention_column}
                     )
                     VALUES (
                         CAST(:execution AS uuid), CAST(:tenant AS uuid),
                         CAST(:owner AS uuid), CAST(:conversation AS uuid),
                         :run_id, :request_id, :correlation_id, :submission_id,
                         'running', CAST(:token AS uuid),
-                        NOW() + make_interval(secs => :ttl)
+                        NOW() + make_interval(secs => :ttl){attention_value}
                     )
                     -- Transport replay, submission replay and a live
                     -- or unresolved conversation execution prevents admission.
@@ -313,7 +319,8 @@ class SqlChatRunRepository:
             raise ValueError("invalid_chat_run_error_code")
         attention_enabled = self._attention_enabled()
         marker = (
-            ", communications_attention_eligible_at = NOW()"
+            ", communications_attention_eligible_at = CASE "
+            "WHEN communications_attention_conversation_id IS NOT NULL THEN NOW() ELSE NULL END"
             if attention_enabled and status == "failed" else ""
         )
         async with async_transaction_scope(lease.tenant_id, user_id=lease.user_id) as session:
@@ -1002,7 +1009,7 @@ class SqlChatRunRepository:
         attention_enabled = self._attention_enabled()
         marker = (
             ", communications_attention_eligible_at = CASE "
-            "WHEN lease_expires_at <= NOW() THEN NOW() "
+            "WHEN lease_expires_at <= NOW() AND communications_attention_conversation_id IS NOT NULL THEN NOW() "
             "ELSE communications_attention_eligible_at END"
             if attention_enabled else ""
         )
