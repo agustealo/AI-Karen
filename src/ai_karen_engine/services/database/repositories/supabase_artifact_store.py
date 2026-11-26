@@ -137,9 +137,12 @@ class SupabaseArtifactStore(ArtifactStore):
         ):
             return RepositoryResult(success=False, error=unavailable)
         try:
-            body = data.decode("utf-8", errors="strict")
+            try:
+                body = data.decode("utf-8", errors="strict")
+            except UnicodeError:
+                return RepositoryResult(success=False, error=unavailable)
             if not body.strip() or any(
-                ord(char) < 32 and char not in "\\n\\r\\t" for char in body
+                ord(char) < 32 and char not in "\n\r\t" for char in body
             ):
                 return RepositoryResult(success=False, error=unavailable)
             # Validate serializability before consuming the one-shot claim.

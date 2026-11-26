@@ -140,35 +140,22 @@ async def test_illegal_or_unproven_commit_is_denied():
 
 
 @pytest.mark.asyncio
-async def test_committed_transition_requires_active_owner_matched_artifact():
+async def test_generic_commit_cannot_bypass_verified_readback():
     db = FakeSession({**record(), "state": "committing"})
     repo = UploadSessionRepository(lambda: db)
-    artifact_id = SESSION
-    await repo.transition(
-        tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
-        expected_state="committing", next_state="committed",
-        artifact_id=artifact_id, lease_token=SESSION,
-    )
-    statement = db.statements[0][0]
-    assert "received_bytes = expected_bytes" in statement
-    assert "FROM public.files AS artifact" in statement
-    assert "artifact.tenant_id = :tenant_id" in statement
-    assert "artifact.owner_user_id = :owner_user_id" in statement
-    assert "artifact.deleted_at IS NULL" in statement
-    assert "artifact.bytes = expected_bytes" in statement
-    assert "artifact.sha256 = expected_sha256" in statement
-    assert "expected_sha256 IS NOT NULL" in statement
-    assert "expected_sha256 IS NULL" not in statement
-    assert "artifact.storage_uri = 'supabase://artifacts/' || storage_key" in statement
-    assert "FOR SHARE OF artifact" in statement
-    assert "lease_owner = :lease_token" in statement
-    assert "lease_expires_at > now()" in statement
+    with pytest.raises(ValueError, match="Illegal upload state"):
+        await repo.transition(
+            tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+            expected_state="committing", next_state="committed",
+            artifact_id=SESSION, lease_token=SESSION,
+        )
+    assert db.statements == []
 
 
 @pytest.mark.asyncio
 async def test_cannot_bind_artifact_before_verified_commit():
     repo = UploadSessionRepository(lambda: FakeSession(record()))
-    with pytest.raises(ValueError, match="only at commit"):
+    with pytest.raises(ValueError, match="only through verified readback"):
         await repo.transition(
             tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
             expected_state="created", next_state="receiving",
@@ -250,8 +237,7 @@ async def test_commit_requires_lease_before_database_access():
     with pytest.raises(ValueError, match="Active commit lease"):
         await repo.transition(
             tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
-            expected_state="committing", next_state="committed",
-            artifact_id=SESSION,
+            expected_state="committing", next_state="reconcile_required",
         )
     assert db.statements == []
 
@@ -261,7 +247,7 @@ async def test_commit_requires_lease_before_database_access():
 async def test_commit_rejects_unreserved_artifact_before_database_access():
     db = FakeSession(record())
     repo = UploadSessionRepository(lambda: db)
-    with pytest.raises(ValueError, match="reserved session identity"):
+    with pytest.raises(ValueError, match="Illegal upload state"):
         await repo.transition(
             tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
             expected_state="committing", next_state="committed",

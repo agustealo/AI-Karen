@@ -351,18 +351,14 @@ class UploadSessionRepository:
             "created": {"receiving", "cancelled"},
             "receiving": {"failed", "cancelled"},
             "staged": {"cancelled"},
-            "committing": {"committed", "reconcile_required"},
+            "committing": {"reconcile_required"},
             # Uncertain commits require an independently verified recovery
             # adapter. Do not allow this generic transition to replay them.
         }
         if next_state not in allowed.get(expected_state, set()):
             raise ValueError("Illegal upload state transition")
-        if next_state == "committed" and not artifact_id:
-            raise ValueError("Committed upload requires artifact_id")
-        if next_state == "committed" and artifact_id != session_uuid:
-            raise ValueError("Artifact must match reserved session identity")
-        if next_state != "committed" and artifact_id is not None:
-            raise ValueError("Artifact binding is allowed only at commit")
+        if artifact_id is not None:
+            raise ValueError("Artifact binding is allowed only through verified readback")
         if expected_state == "committing":
             if not lease_token:
                 raise ValueError("Active commit lease required")
@@ -375,13 +371,11 @@ class UploadSessionRepository:
             "lease_token": lease_token,
             "expected_state": expected_state,
             "next_state": next_state,
-            "artifact_id": artifact_id,
         }
         async with self._session_factory() as session:
             result = await session.execute(text("""
                 UPDATE public.artifact_upload_sessions
                 SET state = :next_state,
-                    artifact_id = COALESCE(:artifact_id, artifact_id),
                     lease_owner = NULL, lease_expires_at = NULL,
                     updated_at = now()
                 WHERE session_id = :session_id
@@ -392,26 +386,6 @@ class UploadSessionRepository:
                   AND (
                       :expected_state <> 'committing'
                       OR (lease_owner = :lease_token AND lease_expires_at > now())
-                  )
-                  AND (
-                      :next_state <> 'committed'
-                      OR (
-                          received_bytes = expected_bytes
-                          AND expected_sha256 IS NOT NULL
-                          AND artifact_id IS NULL
-                          AND storage_key = tenant_id::text || '/' || session_id::text || '/content'
-                          AND EXISTS (
-                              SELECT 1 FROM public.files AS artifact
-                              WHERE artifact.file_id = :artifact_id
-                                AND artifact.tenant_id = :tenant_id
-                                AND artifact.owner_user_id = :owner_user_id
-                                AND artifact.deleted_at IS NULL
-                                AND artifact.bytes = expected_bytes
-                                AND artifact.sha256 = expected_sha256
-                                AND artifact.storage_uri = 'supabase://artifacts/' || storage_key
-                              FOR SHARE OF artifact
-                          )
-                      )
                   )
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,
