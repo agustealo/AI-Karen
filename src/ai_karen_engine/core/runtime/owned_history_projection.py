@@ -101,6 +101,31 @@ def _carries_value(value: Any) -> bool:
     return True
 
 
+def _is_degraded_direct_search_context(metadata: Mapping[str, Any]) -> bool:
+    """Allow withheld search metadata from a degraded direct-capability turn.
+
+    When live crawl degrades after search discovery, ChatRuntime intentionally
+    withholds verified_presentations_v1 while persisting the canonical text
+    answer, bounded search diagnostics, and source receipts. This helper grants
+    no presentation or replay authority: raw sources never reach the UI and
+    project_owned_history still requires exact completed-run digest attestation.
+    """
+    structured = metadata.get("structured_content")
+    return (
+        metadata.get("source") == "chat_runtime"
+        and isinstance(metadata.get("request_id"), str)
+        and metadata.get("response_source") == "tool"
+        and metadata.get("runtime_engine") == "direct_capability"
+        and metadata.get("degraded_mode") is True
+        and metadata.get("verified_presentations_v1") is None
+        and isinstance(structured, Mapping)
+        and set(structured).issubset(_VERIFIED_PRESENTATION_CONTEXT_KEYS - {"presentation"})
+        and structured.get("status") == "ok"
+        and isinstance(structured.get("mode"), str)
+        and isinstance(structured.get("query"), str)
+    )
+
+
 def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
     """Allow *withheld* provider source metadata only with an attested UI part.
 
@@ -111,6 +136,25 @@ def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
     sources = metadata.get("sources")
     citations = metadata.get("citations")
     if not _carries_value(sources) and not _carries_value(citations):
+        return True
+
+    if sources is not None and not isinstance(sources, list):
+        return False
+    if citations is not None and not isinstance(citations, list):
+        return False
+    source_rows = sources or []
+    citation_rows = citations or []
+    if len(source_rows) > 100 or len(citation_rows) > 100:
+        return False
+    if any(
+        not isinstance(row, Mapping)
+        or not isinstance(row.get("url"), str)
+        or not 1 <= len(row["url"]) <= 1200
+        for row in source_rows + citation_rows
+    ):
+        return False
+
+    if _is_degraded_direct_search_context(metadata):
         return True
 
     structured = metadata.get("structured_content")
@@ -134,22 +178,6 @@ def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
         return False
     evidence = part.get("evidence_ref")
     if not isinstance(evidence, str) or not evidence.startswith(metadata["request_id"] + ":"):
-        return False
-
-    if sources is not None and not isinstance(sources, list):
-        return False
-    if citations is not None and not isinstance(citations, list):
-        return False
-    source_rows = sources or []
-    citation_rows = citations or []
-    if len(source_rows) > 100 or len(citation_rows) > 100:
-        return False
-    if any(
-        not isinstance(row, Mapping)
-        or not isinstance(row.get("url"), str)
-        or not 1 <= len(row["url"]) <= 1200
-        for row in source_rows + citation_rows
-    ):
         return False
 
     if part["component_type"] == "search.results":
@@ -292,6 +320,10 @@ def project_owned_history(
                         or snapshot_val.get("source") != "authenticated_runtime_observation"
                     ):
                         raise UnreplayableHistory("unsupported_rich_history")
+            elif _is_degraded_direct_search_context(metadata):
+                # Bounded degraded search diagnostics; raw sources remain
+                # withheld and exact completed-run attestation still runs below.
+                pass
             else:
                 captured = metadata.get("verified_presentations_v1")
                 if (
