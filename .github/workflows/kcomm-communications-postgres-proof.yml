@@ -1,0 +1,114 @@
+name: KCOMM Communications PostgreSQL Proof
+on:
+  pull_request:
+    branches: [main]
+    paths:
+      - "supabase/migrations/*communications_inbox*.sql"
+      - "tests/integration/test_communications_inbox_postgres.py"
+      - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
+      - "src/ai_karen_engine/persistence/postgres/transactions.py"
+      - "src/ai_karen_engine/services/privacy_compliance.py"
+      - "src/ai_karen_engine/services/communications_inbox.py"
+      - "src/ai_karen_engine/api_routes/content/communications.py"
+      - "src/ai_karen_engine/auth/rbac_middleware.py"
+      - "config_assets/permissions.json"
+      - "tests/api_routes/test_communications_inbox_contract.py"
+      - ".github/workflows/kcomm-communications-postgres-proof.yml"
+  push:
+    branches: [main]
+    paths:
+      - "supabase/migrations/**"
+      - "tests/integration/test_communications_inbox_postgres.py"
+      - "src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py"
+      - "src/ai_karen_engine/persistence/postgres/transactions.py"
+      - "src/ai_karen_engine/services/privacy_compliance.py"
+      - "src/ai_karen_engine/services/communications_inbox.py"
+      - "src/ai_karen_engine/api_routes/content/communications.py"
+      - "src/ai_karen_engine/auth/rbac_middleware.py"
+      - "config_assets/permissions.json"
+      - "tests/api_routes/test_communications_inbox_contract.py"
+      - ".github/workflows/kcomm-communications-postgres-proof.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: kcomm-postgres-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  communications-postgres:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PYTHONPATH: src
+      KAREN_TEST_COMMUNICATIONS_POSTGRES: "1"
+      KAREN_TEST_DISPOSABLE_DATABASE: "1"
+      KAREN_TEST_COMMUNICATIONS_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/karen_communications_test
+    steps:
+      - uses: actions/checkout@v4
+      - name: Assert exact checked-out commit
+        run: test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+      - name: Start canonical disposable PostgreSQL container
+        env:
+          KAREN_CI_DOCKERHUB_USERNAME: ${{ secrets.KAREN_CI_DOCKERHUB_USERNAME }}
+          KAREN_CI_DOCKERHUB_TOKEN: ${{ secrets.KAREN_CI_DOCKERHUB_TOKEN }}
+          KAREN_CI_POSTGRES_IMAGE: ${{ vars.KAREN_CI_POSTGRES_IMAGE || 'pgvector/pgvector:pg16' }}
+        run: bash scripts/ci/start-postgres-container.sh
+      - name: Verify single committed communications migration
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e supabase/kcomm_02a_candidate.sql
+          mapfile -t migrations < <(find supabase/migrations -maxdepth 1 -type f -name '*communications_inbox*.sql')
+          test "${#migrations[@]}" = 1
+          test "${migrations[0]}" = "supabase/migrations/20261126144509_77_communications_inbox.sql"
+          sha256sum "supabase/migrations/20261126144509_77_communications_inbox.sql"
+      - name: Prove full canonical migration chain without optional client roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          container="ai-karen-postgres-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT count(*) FROM pg_tables WHERE schemaname='public'")" = 0
+          test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT count(*) FROM pg_roles WHERE rolname IN ('anon','authenticated')")" = 0
+          while IFS= read -r migration; do
+            echo "Full-chain migration: $(basename "$migration")"
+            docker exec -i "$container" psql -v ON_ERROR_STOP=1 -U postgres -d ai_karen < "$migration"
+          done < <(find supabase/migrations -maxdepth 1 -type f -name '*.sql' | sort)
+          test "$(docker exec "$container" psql -U postgres -d ai_karen -At -c "SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.communications_inbox_entries'::regclass")" = t
+          echo "Full migration chain passed with FORCE RLS and no optional client roles."
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements/ci/*.txt
+      - name: Install existing PostgreSQL proof dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements/ci/chat.txt
+      - name: Create dedicated disposable database and client roles
+        shell: bash
+        run: |
+          python - <<'PY'
+          import asyncio
+          import asyncpg
+
+          async def prepare():
+              root = await asyncpg.connect("postgresql://postgres:postgres@127.0.0.1:5432/ai_karen")
+              try:
+                  if await root.fetchval("SELECT 1 FROM pg_database WHERE datname='karen_communications_test'"):
+                      raise RuntimeError("Refuse existing communications test database")
+                  for role in ("anon", "authenticated"):
+                      if not await root.fetchval("SELECT 1 FROM pg_roles WHERE rolname=$1", role):
+                          await root.execute(f'CREATE ROLE "{role}" NOLOGIN')
+                  await root.execute("CREATE DATABASE karen_communications_test")
+              finally:
+                  await root.close()
+
+          asyncio.run(prepare())
+          PY
+      - name: Exercise committed migration, repository and privacy lifecycle
+        run: |
+          python -m compileall -q src/ai_karen_engine/persistence/repositories/communications_inbox_repository.py src/ai_karen_engine/services/privacy_compliance.py tests/integration/test_communications_inbox_postgres.py
+          pytest tests/integration/test_communications_inbox_postgres.py -q -rs
+          pytest tests/api_routes/test_communications_center_scope.py tests/api_routes/test_communications_inbox_contract.py -q -rs
+      - name: Record evidence boundary
+        if: always()
+        run: |
+          echo "This workflow targets the canonical migration chain, scoped DDL, repository lifecycle and conversation privacy export/erasure against disposable PostgreSQL. Consult job and test results for actual acceptance; no deployed schema or browser acceptance is certified." >> "$GITHUB_STEP_SUMMARY"
