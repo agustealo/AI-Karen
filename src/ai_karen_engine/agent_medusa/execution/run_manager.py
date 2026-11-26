@@ -311,9 +311,7 @@ class MedusaRunManager:
             outcome_status="error",
         )
 
-    async def mark_cancelled(
-        self, run_id: str
-    ) -> ExecutionRunStatus | None:
+    async def mark_cancelled(self, run_id: str) -> ExecutionRunStatus | None:
         return await self._mark_terminal(
             run_id,
             ExecutionRunStatus.CANCELLED,
