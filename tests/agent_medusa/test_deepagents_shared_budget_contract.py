@@ -540,6 +540,11 @@ async def test_scheduler_emits_each_skipped_step_once(exhausted):
     if exhausted:
         assert await meter.reserve_model_execution()
         assert await meter.reserve_model_execution()
+        # Reaching the quota is not a denied reservation. The shared meter
+        # becomes exhausted only after a further request is rejected.
+        assert not await meter.reserve_model_execution()
+        assert meter.exhausted
+        assert meter.model_calls == 2
 
     coordinator._execute_step = AsyncMock(side_effect=RuntimeError("step_failure"))
     await coordinator._handle_request(request)
