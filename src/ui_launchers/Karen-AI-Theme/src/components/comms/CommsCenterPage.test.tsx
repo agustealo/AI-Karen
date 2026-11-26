@@ -275,6 +275,13 @@ describe("Communications Center's canonical visual and authority contract", () =
     expect(screen.getByTestId("comms-attention-runs").textContent?.trim()).toBe("—");
     expect(screen.getByTestId("comms-metric-audit").textContent?.trim()).toBe("—");
     expect(screen.queryByText("Verified backend audit receipt")).toBeNull();
+    // Revalidation of the same identity must wait for new authorized records.
+    stubs.get.mockImplementation(() => new Promise(() => {}));
+    stubs.useAuth.mockReturnValue({ isLoading: false, isAuthenticated: true, user: FIRST_PRINCIPAL });
+    rerender(<CommsCenterPage onOpenAgents={onOpenAgents} />);
+    expect(screen.getByTestId("comms-attention-runs").textContent?.trim()).toBe("—");
+    expect(screen.getByTestId("comms-metric-audit").textContent?.trim()).toBe("—");
+    expect(screen.queryByText("Verified backend audit receipt")).toBeNull();
     stubs.useAuth.mockReturnValue({ isLoading: false, isAuthenticated: false, user: FIRST_PRINCIPAL });
     rerender(<CommsCenterPage onOpenAgents={onOpenAgents} />);
     expect(screen.getByTestId("comms-attention-runs").textContent?.trim()).toBe("—");

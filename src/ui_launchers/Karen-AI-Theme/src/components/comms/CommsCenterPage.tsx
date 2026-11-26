@@ -242,7 +242,12 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat 
 
     // Render only backend-confirmed observability, never synthetic metrics.
     useEffect(() => {
-        if (isAuthLoading) return;
+        if (isAuthLoading) {
+            setSnapshot(null);
+            setObservabilityError(null);
+            setObservabilityLoading(true);
+            return;
+        }
 
         if (!isAuthenticated || !principal) {
             setSnapshot(null);
@@ -294,7 +299,12 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat 
     // Reuse the canonical Medusa consumer run projection. No execution or
     // permission decision is performed in this UI, and no global run API is used.
     useEffect(() => {
-        if (isAuthLoading) return;
+        if (isAuthLoading) {
+            setOwnedRunSnapshot(null);
+            setOwnedRunsError(null);
+            setOwnedRunsLoading(true);
+            return;
+        }
         if (!isAuthenticated || !principal || !user?.user_id) {
             setOwnedRunSnapshot(null);
             setOwnedRunsLoading(false);
