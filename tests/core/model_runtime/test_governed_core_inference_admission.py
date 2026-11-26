@@ -2076,6 +2076,17 @@ async def test_local_graph_tool_receipt_restores_synthesis_without_checkpoint_ou
         with pytest.raises(PermissionError, match="evidence_receipt_required"):
             await WorkflowGenerationRuntime().execute(request)
         assert attempts == []
+        # A mixed attachment/tool turn must still pass durable attachment
+        # authorization. An otherwise valid local receipt cannot waive it.
+        base.request.attachment_references = [{"source_id": "private", "revision": "r"}]
+        from ai_karen_engine.core.expression.errors import PrivateEvidenceAuthorizationError
+        with pytest.raises(PrivateEvidenceAuthorizationError):
+            await WorkflowGenerationRuntime().execute(
+                replace(request, workflow_context={"tool_results": refs}),
+            )
+        assert attempts == []
+        assert admission.meter.model_calls == 0
+        base.request.attachment_references = []
         result = await WorkflowGenerationRuntime().execute(
             replace(request, workflow_context={"tool_results": refs}),
         )
@@ -2154,3 +2165,47 @@ async def test_production_tool_bootstrap_isolates_optional_import_failure(monkey
     ))
     assert result.success is True
     assert result.result["word_count"] == 3
+
+
+@pytest.mark.asyncio
+async def test_medusa_generation_bridge_uses_governed_local_transport(monkeypatch):
+    from ai_karen_engine.agent_medusa.contracts.specialist_execution import SpecialistExecutionContext
+    from ai_karen_engine.agent_medusa.specialists.bridges import GenerationBridge
+
+    admission = _scope(calls=1, topology=ExecutionTopology.MULTI_AGENT)
+    _, _, attempts = _workflow_transport(monkeypatch, admission)
+    ctx = admission.authenticated_context
+    execution = SpecialistExecutionContext(
+        authorized_plan=admission.plan, tenant_id=ctx.tenant_id,
+        user_id=ctx.user_id, session_id=ctx.session_id,
+        policy_decision_id=admission.policy_decision_id,
+        trajectory_id=ctx.request_id, correlation_id=ctx.correlation_id,
+        step_id="analysis-step", budget_meter=admission.meter,
+        authenticated_chat_context=ctx,
+        preferred_provider="ollama-local", preferred_model="model-a",
+    )
+    bridge = GenerationBridge()
+
+    async def invoke(scope):
+        return await bridge.invoke(
+            request_id=ctx.request_id, correlation_id=ctx.correlation_id,
+            policy_decision_id=admission.policy_decision_id,
+            messages=[{"role": "user", "content": "Analyze the authorized query."}],
+            execution=scope,
+        )
+
+    for invalid in (
+        None,
+        replace(execution, authenticated_chat_context=None),
+        replace(execution, budget_meter=ExecutionBudgetMeter(admission.plan.budget)),
+        replace(execution, authorized_plan=replace(admission.plan)),
+        replace(execution, correlation_id="forged"),
+    ):
+        with pytest.raises(PermissionError):
+            await invoke(invalid)
+    assert attempts == []
+    assert admission.meter.model_calls == 0
+    assert await invoke(execution) == "actual observed output"
+    assert len(attempts) == 1
+    assert admission.meter.model_calls == 1
+    assert admission.meter.external_requests == 0

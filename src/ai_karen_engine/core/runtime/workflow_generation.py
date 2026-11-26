@@ -359,14 +359,26 @@ class WorkflowGenerationRuntime:
 
             async def authorize_external() -> bool:
                 authority.require_live()
+                if tool_data or ChatRuntime._attachment_restriction_required(original):
+                    return False
                 return RuntimePolicyEnforcer.authorize_external_provider_execution(
                     context=ctx, plan=plan, expression_policies=gateway.settings.policies,
                 )
 
             async def authorize_private() -> bool:
                 authority.require_live()
-                return await ChatRuntime._private_evidence_authorized(
-                    original, plan, admission.meter,
+                # A local computation on the original user-supplied parameters
+                # is not an attachment read. Preserve durable attachment RBAC
+                # whenever selected or bound, including mixed-evidence turns.
+                if ChatRuntime._attachment_restriction_required(original):
+                    return await ChatRuntime._private_evidence_authorized(
+                        original, plan, admission.meter,
+                    )
+                return bool(
+                    tool_data
+                    and authority._tool_batch_complete
+                    and authority._tool_receipts == claimed_json
+                    and authority._tool_evidence == tool_data
                 )
 
             task = ExpressionTask(

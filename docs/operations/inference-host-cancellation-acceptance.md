@@ -298,3 +298,28 @@ every optional tool's dependencies or explain the underlying TypeError.
 No tool admission guard is relaxed. Medusa generation migration and
 legacy ProviderRuntime retirement remain pending, as do fresh exact-head
 CI, real database evidence and host acceptance.
+
+
+### Governed specialist synthesis and local evidence authorization (KUI-004B4.48C7Z8E18)
+
+E17 Chat System Burn recorded 241 passes and one failure. Tool registration,
+revocation and local computation execution recovered; the successful
+receipt reached the expression gateway, which denied synthesis because
+the local-only callback incorrectly required an attachment session.
+The workflow callback now distinguishes receipt-bound local computation
+from attachment selection or retained attachment scope. Mixed turns
+still require the original durable attachment authorization; neither
+kind of local evidence can be routed externally.
+
+The remaining Medusa CanonicalGenerationExecutor now uses PromptRuntime,
+ExpressionGateway and the original GovernedToolModelAdmission rather
+than ProviderRuntime. Actual transport attempts consume the shared
+meter; the bridge no longer charges a speculative model call. The
+specialist path requires the original authenticated multi-agent scope
+and rejects structured/streaming requests until their contracts are
+supported. Specialist synthesis is conservatively local-only pending
+a separate external evidence disclosure contract. Tests cover denial
+before transport for missing/copy/replaced scope, single actual model
+reservation and mixed attachment/tool authorization. No legacy file
+deletion, independent review or deployment is claimed. Fresh exact-head
+CI remains required.
