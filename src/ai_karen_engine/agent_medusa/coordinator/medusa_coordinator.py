@@ -330,6 +330,30 @@ class MedusaCoordinator:
         step_outputs: list[Dict[str, Any]] = []
         agent_trace: list[str] = []
 
+        reported_skips: set[str] = set()
+
+        async def report_skips() -> None:
+            for step in plan.steps:
+                if step.status != StepStatus.SKIPPED or step.id in reported_skips:
+                    continue
+                reason = (
+                    "dependency_blocked"
+                    if (step.error or "").startswith("blocked_dependencies:")
+                    else "execution_budget_exhausted"
+                    if step.error == "execution_budget_exhausted"
+                    else "unspecified"
+                )
+                await request_emitter.emit(
+                    AgentEvent(
+                        type=AgentEventType.AGENT_SKIPPED,
+                        agent_id=step.agent_specialist,
+                        message=f"step {step.id} skipped",
+                        correlation_id=self._correlation_id(request),
+                        metadata={"step_id": step.id, "reason_code": reason},
+                    )
+                )
+                reported_skips.add(step.id)
+
         try:
             while not plan.is_complete:
                 if meter.exhausted or not await meter.check_duration():
@@ -337,10 +361,12 @@ class MedusaCoordinator:
                         if step.status == StepStatus.PENDING:
                             step.status = StepStatus.SKIPPED
                             step.error = "execution_budget_exhausted"
+                    await report_skips()
                     plan.is_complete = True
                     break
 
                 plan.mark_blocked_dependents()
+                await report_skips()
                 runnable_steps = plan.get_next_runnable_steps()
                 if not runnable_steps:
                     if all(
@@ -375,6 +401,7 @@ class MedusaCoordinator:
                     for step in wave:
                         step.status = StepStatus.SKIPPED
                         step.error = "execution_budget_exhausted"
+                    await report_skips()
                     continue
                 try:
                     async with asyncio.timeout(remaining_seconds):
@@ -404,6 +431,7 @@ class MedusaCoordinator:
                         if step.status == StepStatus.PENDING:
                             step.status = StepStatus.SKIPPED
                             step.error = "execution_budget_exhausted"
+                    await report_skips()
                     plan.is_complete = True
                     break
                 # A tool may have changed external state even when its audit
