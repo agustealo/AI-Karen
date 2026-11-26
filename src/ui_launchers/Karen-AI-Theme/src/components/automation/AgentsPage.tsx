@@ -97,6 +97,86 @@ export function isRuntimeApproval(value: unknown): value is RuntimeApproval {
     && nonemptyString(value.expires_at) && Number.isFinite(Date.parse(value.expires_at));
 }
 
+const transitionStatuses = ["created", "running", "cancellation_requested", "completed", "failed", "cancelled", "orphaned"] as const;
+const transitionSources = {
+  runtime: "Runtime",
+  admin_cancel: "Administrative cancellation",
+  redis_reconciliation: "Reconciled from shared execution state",
+  migration_backfill: "Migration backfill (not an observed live event)",
+} as const;
+
+interface RunTransition {
+  transition_id: string;
+  from_status: typeof transitionStatuses[number] | null;
+  to_status: typeof transitionStatuses[number];
+  event_at: string;
+  source: keyof typeof transitionSources;
+}
+
+interface RunTransitionsResponse {
+  run_id: string;
+  transitions: RunTransition[];
+  truncated: boolean;
+  response_source: "postgres_durable_run_ledger";
+}
+
+function isTransitionStatus(value: unknown): value is RunTransition["to_status"] {
+  return typeof value === "string" && (transitionStatuses as readonly string[]).includes(value);
+}
+
+export function isRunTransitionsResponse(value: unknown): value is RunTransitionsResponse {
+  if (!isObject(value) || !nonemptyString(value.run_id) || value.response_source !== "postgres_durable_run_ledger"
+      || typeof value.truncated !== "boolean" || !Array.isArray(value.transitions) || value.transitions.length > 250
+      || (value.truncated && value.transitions.length === 0)) return false;
+  const ids = new Set<string>();
+  for (const row of value.transitions) {
+    if (!isObject(row) || typeof row.transition_id !== "string" || !/^[1-9][0-9]{0,18}$/.test(row.transition_id)
+        || ids.has(row.transition_id) || (row.from_status !== null && !isTransitionStatus(row.from_status))
+        || !isTransitionStatus(row.to_status) || !nonemptyString(row.event_at) || !Number.isFinite(Date.parse(row.event_at))
+        || typeof row.source !== "string" || !Object.prototype.hasOwnProperty.call(transitionSources, row.source)) return false;
+    ids.add(row.transition_id);
+  }
+  // Keep ledger order: JS Date loses PostgreSQL sub-millisecond precision.
+  return true;
+}
+
+function ExecutionTimeline({ runId, revision }: { runId: string; revision: number }) {
+  const [result, setResult] = useState<{ revision: number; receipt: RunTransitionsResponse | null } | null>(null);
+  useEffect(() => {
+    let active = true;
+    apiClient.get<unknown>(`/api/agent-runtime/my-runs/${encodeURIComponent(runId)}/transitions`)
+      .then((receipt) => {
+        if (!isRunTransitionsResponse(receipt) || receipt.run_id !== runId) throw new Error("Invalid transition history");
+        if (active) setResult({ revision, receipt });
+      })
+      .catch(() => { if (active) setResult({ revision, receipt: null }); });
+    return () => { active = false; };
+  }, [runId, revision]);
+  const receipt = result?.revision === revision ? result.receipt : null;
+  const loading = result?.revision !== revision;
+  return (
+    <section aria-label="Recorded execution timeline" className="mt-4 space-y-2">
+      <h5 className="text-sm font-medium">Recorded execution timeline</h5>
+      <p className="text-xs text-muted-foreground">Durable lifecycle evidence, not a live progress estimate.</p>
+      {loading ? <p role="status" className="text-sm text-muted-foreground">Loading recorded transitions…</p>
+        : !receipt ? <p role="status" className="text-sm text-muted-foreground">Recorded transition history is unavailable. Refresh runtime to retry.</p>
+        : receipt.transitions.length === 0 ? <p className="text-sm text-muted-foreground">No durable transitions were recorded.</p>
+        : <>
+          {receipt.truncated && <p className="text-xs text-muted-foreground">Only the most recent recorded transitions are shown; earlier history is omitted.</p>}
+          <ol className="space-y-3 border-l border-border pl-3 text-sm">
+            {receipt.transitions.map((event) => (
+              <li key={event.transition_id} className="space-y-1">
+                <p className="break-words font-medium">{event.from_status ? event.from_status.replaceAll("_", " ") + " → " : ""}{event.to_status.replaceAll("_", " ")}</p>
+                <p className="text-xs text-muted-foreground"><time dateTime={event.event_at}>{formatTimestamp(event.event_at)}</time></p>
+                <p className="text-xs text-muted-foreground">{transitionSources[event.source]}</p>
+              </li>
+            ))}
+          </ol>
+        </>}
+    </section>
+  );
+}
+
 function formatTimestamp(value?: string | null): string {
   if (!value) return "Not recorded";
   const parsed = new Date(value);
@@ -660,6 +740,7 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                         <p className="mt-1 text-sm font-medium">{formatRunElapsed(selectedRun)}</p>
                       </div>
                     </div>
+                    {!isAdmin && <ExecutionTimeline key={selectedRun.run_id} runId={selectedRun.run_id} revision={runListRevision} />}
                     <section aria-label="Recorded lifecycle timestamps" className="mt-4 space-y-2">
                       <h5 className="text-sm font-medium">Recorded lifecycle timestamps</h5>
                       <p className="text-xs text-muted-foreground">Snapshot evidence only; not a complete transition history.</p>
