@@ -84,4 +84,155 @@ async def test_participation_control_plane_checks_owner_before_read(monkeypatch,
         store.list_specialist_participation_async.assert_not_awaited()
     manager.get.assert_awaited_once_with(
         run_id="run", tenant_id="tenant", require_durable_history=True, user_id="owner",
+        require_durable_identity=True,
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["owned", "empty", "foreign_user", "foreign_tenant", "wrong_run", "bad_correlation", "bad_request", "missing", "outage", "saturated"])
+async def test_governed_tool_receipt_control_plane_requires_durable_exact_run(monkeypatch, mode):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.agent_medusa import control_plane as module
+    from ai_karen_engine.agent_medusa.execution.run_manager import RunNotFoundError
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    run = {"run_id": "run", "request_id": "run", "tenant_id": "tenant",
+           "user_id": "owner", "correlation_id": "corr", "status": "completed"}
+    changes = {
+        "foreign_user": {"user_id": "other"}, "foreign_tenant": {"tenant_id": "other"},
+        "wrong_run": {"run_id": "other"}, "bad_correlation": {"correlation_id": None},
+        "bad_request": {"request_id": "other"},
+    }
+    run.update(changes.get(mode, {}))
+    manager = SimpleNamespace(get=AsyncMock(return_value=run))
+    if mode == "missing":
+        manager.get.side_effect = RunNotFoundError("run")
+    receipt = {"outcome_id": "receipt", "tool_success": True, "status": "success",
+               "metadata": {"tool_name": "read_only", "tool_call_id": "call", "agent_id": "researcher",
+                            "step_id": "step", "policy_decision_id": "policy", "private": "never-export"},
+               "private": "never-export"}
+    events = [] if mode == "empty" else [receipt]
+    if mode == "saturated":
+        events = [{**receipt, "outcome_id": f"receipt-{i}"} for i in range(100)]
+    reader = AsyncMock(return_value=events)
+    if mode == "outage":
+        reader.side_effect = OutcomeStoreError("private database diagnostic")
+    monkeypatch.setattr(module, "get_outcome_store", lambda: SimpleNamespace(list_governed_tool_receipts_async=reader))
+    plane = module.AgentMedusaControlPlane(
+        run_manager=manager, registry=SimpleNamespace(), audit_logger=SimpleNamespace(),
+    )
+    kwargs = dict(run_id="run", tenant_id="tenant", user_id="owner")
+    if mode in {"bad_correlation", "bad_request", "outage"}:
+        with pytest.raises(OutcomeStoreError):
+            await plane.read_run_tool_receipts(**kwargs)
+    else:
+        result = await plane.read_run_tool_receipts(**kwargs)
+        if mode in {"owned", "empty", "saturated"}:
+            assert result["run_id"] == "run"
+            assert result["evidence_status"] == ("empty" if mode == "empty" else "recorded")
+            assert result["window_limit_reached"] is (mode == "saturated")
+            if mode == "owned":
+                assert result["receipts"][0]["success"] is True
+                assert result["receipts"][0]["independently_verified"] is False
+                assert result["receipts"][0]["tool_name"] == "read_only"
+                assert "never-export" not in str(result)
+            elif mode == "empty":
+                assert result["receipts"] == []
+            else:
+                assert len(result["receipts"]) == 100
+        else:
+            assert result is None
+    manager.get.assert_awaited_once_with(
+        run_id="run", tenant_id="tenant", require_durable_history=True, user_id="owner",
+        require_durable_identity=True,
+    )
+    if mode in {"owned", "empty", "outage", "saturated"}:
+        reader.assert_awaited_once_with(
+            trajectory_id="run", correlation_id="corr", tenant_id="tenant", user_id="owner", limit=100,
+        )
+    else:
+        reader.assert_not_awaited()
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["tool", "participation"])
+@pytest.mark.parametrize(
+    "mode",
+    ["match", "disabled", "outage", "absent", "foreign_owner",
+     "foreign_tenant", "wrong_run", "wrong_request", "wrong_correlation",
+     "caller_not_owner"],
+)
+async def test_evidence_read_checks_durable_identity_even_for_cached_run(monkeypatch, kind, mode):
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.agent_medusa import control_plane as module
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+        DurableRunLedgerUnavailable,
+    )
+    from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
+    from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
+
+    identity = dict(run_id="run", request_id="run", tenant_id="tenant",
+                    user_id="owner", correlation_id="corr")
+    changed = {
+        "foreign_owner": {"user_id": "other"},
+        "foreign_tenant": {"tenant_id": "other"},
+        "wrong_run": {"run_id": "other"},
+        "wrong_request": {"request_id": "other"},
+        "wrong_correlation": {"correlation_id": "other"},
+    }
+    durable = {**identity, **changed.get(mode, {})}
+    ledger = SimpleNamespace(
+        register=AsyncMock(), mark_running=AsyncMock(),
+        get=AsyncMock(return_value=None if mode == "absent" else durable),
+    )
+    if mode == "outage":
+        ledger.get.side_effect = DurableRunLedgerUnavailable("private failure")
+    manager = MedusaRunManager(
+        settings=AgentMedusaRuntimeSettings(
+            distributed_run_control_enabled=False,
+            durable_run_ledger_enabled=mode != "disabled",
+            durable_run_ledger_required=mode != "disabled",
+            worker_id="evidence-test",
+        ),
+        durable_ledger=ledger,
+    )
+    task = asyncio.create_task(asyncio.sleep(60))
+    try:
+        await manager.register(**identity, task=task)
+        assert (await manager.get(run_id="run", tenant_id="tenant"))["user_id"] == "owner"
+        tool_reader = AsyncMock(return_value=[])
+        participation_reader = AsyncMock(return_value=([], False))
+        monkeypatch.setattr(
+            module, "get_outcome_store", lambda: SimpleNamespace(
+                list_governed_tool_receipts_async=tool_reader,
+                list_specialist_participation_async=participation_reader,
+            ),
+        )
+        plane = module.AgentMedusaControlPlane(
+            run_manager=manager, registry=SimpleNamespace(), audit_logger=SimpleNamespace(),
+        )
+        read = plane.read_run_tool_receipts if kind == "tool" else plane.read_run_participation
+        scope = dict(run_id="run", tenant_id="tenant",
+                     user_id="other" if mode == "caller_not_owner" else "owner")
+        if mode == "match":
+            result = await read(**scope)
+            assert result["evidence_status"] == "empty"
+            (tool_reader if kind == "tool" else participation_reader).assert_awaited_once()
+        elif mode == "caller_not_owner":
+            assert await read(**scope) is None
+        else:
+            with pytest.raises(DurableRunLedgerUnavailable):
+                await read(**scope)
+        if mode != "match":
+            tool_reader.assert_not_awaited()
+            participation_reader.assert_not_awaited()
+        if mode in {"disabled", "caller_not_owner"}:
+            ledger.get.assert_not_awaited()
+        else:
+            ledger.get.assert_awaited_once_with(run_id="run", tenant_id="tenant")
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task

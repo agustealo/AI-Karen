@@ -41,7 +41,7 @@ const ALLOWED_RECEIPT = new Set([
   "requested_provider", "requested_model", "actual_provider", "actual_model",
   "response_source", "runtime_engine", "degradation_reason",
   "degraded_mode", "fallback_level", "persona_id",
-  "persona_selection_revision",
+  "persona_selection_revision", "runtime_request_id",
 ]);
 const ALLOWED_INTEGRITY = new Set([
   "output_truncated", "cortex_intent", "personal_recall_grounded", "evidence_source",
@@ -57,6 +57,13 @@ function validReceipt(value: unknown): value is Record<string, unknown> {
     if (typeof value[key] !== "string" ||
         !(value[key] as string).trim() || (value[key] as string).length > 200) return false;
   }
+  // Match the runtime envelope grammar exactly. Legacy receipts omit this
+  // field; a supplied value is a join key, not evidence of tool execution.
+  if (Object.hasOwn(value, "runtime_request_id") && (
+    typeof value.runtime_request_id !== "string" ||
+    value.runtime_request_id.length < 1 || value.runtime_request_id.length > 128 ||
+    /[^A-Za-z0-9_-]/.test(value.runtime_request_id)
+  )) return false;
   // The runtime emits persona evidence only as a pair of a bounded
   // identifier and its nonnegative, JS-safe revision. A legitimate completed
   // run must not become unreplayable just because persona metadata exists.

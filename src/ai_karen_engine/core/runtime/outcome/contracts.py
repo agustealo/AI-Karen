@@ -203,3 +203,23 @@ class SpecialistParticipationReceipt:
                 "phase": self.phase.value,
             },
         }
+
+
+def project_governed_tool_receipt(event: dict[str, Any]) -> dict[str, Any]:
+    """Shared allowlisted tool acknowledgment, never external-state proof."""
+    return {
+        "receipt_id": event["outcome_id"],
+        "tool_call_id": (event.get("metadata") or {}).get("tool_call_id"),
+        "tool_name": (event.get("metadata") or {}).get("tool_name"),
+        "tool_version": (event.get("metadata") or {}).get("tool_version"),
+        "agent_id": (event.get("metadata") or {}).get("agent_id"),
+        "step_id": (event.get("metadata") or {}).get("step_id"),
+        "policy_decision_id": (event.get("metadata") or {}).get("policy_decision_id"),
+        "success": event.get("tool_success") is True
+                   and event.get("status") == "success",
+        "error_type": (event.get("metadata") or {}).get("error_type"),
+        "result_sha256": (event.get("metadata") or {}).get("result_sha256"),
+        "recorded_at": event.get("recorded_at"),
+        "execution_scope": "tool_runtime_acknowledgment",
+        "independently_verified": False,
+    }
