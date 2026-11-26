@@ -19,7 +19,7 @@ vi.mock("@/lib/api", () => ({
 import AgentsPage, { isAgentRunRecord, isAgentRunsResponse, isRuntimeApproval, isRunTransitionsResponse, isRunParticipationResponse } from "@/components/automation/AgentsPage";
 
 import { RuntimeApprovalProvider } from "@/components/approvals/RuntimeApprovalProvider";
-import { isRunToolReceiptsResponse } from "@/components/automation/GovernedToolReceipts";
+import { isRunToolReceiptsResponse } from "@/lib/governed-tool-receipts";
 
 const render = (ui: React.ReactElement) => renderWithTestingLibrary(ui, { wrapper: RuntimeApprovalProvider });
 

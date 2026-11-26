@@ -16,7 +16,8 @@ import {
 import useAuth from "@/lib/useAuth";
 import { apiClient } from "@/lib/api";
 import { isAgentCatalogResponse, type AgentCatalogResponse } from "./agentCatalog";
-import { GovernedToolReceiptList, isRunToolReceiptsResponse } from "./GovernedToolReceipts";
+import { GovernedToolReceiptList } from "./GovernedToolReceipts";
+import { isRunToolReceiptsResponse } from "@/lib/governed-tool-receipts";
 import { ApprovalReviewPanel } from "@/components/approvals/ApprovalReviewPanel";
 import { useRuntimeApprovalContext } from "@/components/approvals/RuntimeApprovalProvider";
 export { isRuntimeApproval, type RuntimeApproval } from "@/components/approvals/useRuntimeApprovals";

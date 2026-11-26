@@ -4,7 +4,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import useAuth from "@/lib/useAuth";
 import { AutomationListNotice } from "@/components/automation/AutomationListNotice";
-import { GovernedToolReceiptList, type GovernedToolReceipt } from "./GovernedToolReceipts";
+import { GovernedToolReceiptList } from "./GovernedToolReceipts";
+import type { GovernedToolReceipt } from "@/lib/governed-tool-receipts";
 import { AutomationWorkflowHeader } from "@/components/automation/AutomationWorkflowHeader";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle, CardFooter } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
