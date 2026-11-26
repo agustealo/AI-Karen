@@ -9,6 +9,7 @@ class AgentEventType(str, Enum):
     AGENT_COMPLETED = "agent_completed"
     AGENT_FAILED = "agent_failed"
     AGENT_INTERRUPTED = "agent_interrupted"
+    AGENT_SKIPPED = "agent_skipped"
     TOOL_CALL_STARTED = "tool_call_started"
     TOOL_CALL_COMPLETED = "tool_call_completed"
     TOOL_CALL_FAILED = "tool_call_failed"
