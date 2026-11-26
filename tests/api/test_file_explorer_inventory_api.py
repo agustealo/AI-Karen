@@ -773,9 +773,16 @@ def test_inventory_selection_ceiling_matches_content_execution_contract():
                 inventory_semantics="owner_metadata_page_not_live_acl",
                 request_id="request", correlation_id="correlation")
     assert ingress.FileExplorerInventoryResponse.model_validate(page).max_selection == MAX_CONTENT_SOURCE_REFERENCES
-    for invalid in (True, 0, "12", MAX_CONTENT_SOURCE_REFERENCES + 1):
+    with pytest.raises(ValidationError):
+        ingress.ContentInventoryResponse.model_validate(page)
+    for invalid in (None, True, 0, "12", MAX_CONTENT_SOURCE_REFERENCES + 1):
         with pytest.raises(ValidationError):
             ingress.FileExplorerInventoryResponse.model_validate({**page, "max_selection": invalid})
+        with pytest.raises(ValidationError):
+            ingress.ContentInventoryResponse.model_validate({**page, "max_selection": invalid})
+    assert ingress.ContentInventoryResponse.model_validate(
+        {**page, "max_selection": MAX_CONTENT_SOURCE_REFERENCES}
+    ).max_selection == MAX_CONTENT_SOURCE_REFERENCES
     refs = [{"source_id": FILE, "revision": SHA}] * MAX_CONTENT_SOURCE_REFERENCES
     assert len(ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs).references) == MAX_CONTENT_SOURCE_REFERENCES
     with pytest.raises(ValidationError):

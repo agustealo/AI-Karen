@@ -925,6 +925,46 @@ describe('governed server filename search', () => {
     await waitFor(() => expect(latest.items[0]?.source_id).toBe(FILE_B));
     expect(mocks.get).toHaveBeenNthCalledWith(4, '/api/plugins/file-explorer/inventory?limit=100&search=report_%25');
   });
+  it('rejects same-principal out-of-order search and stale page callbacks', async () => {
+    let latest!: FileExplorerInventoryProps;
+    let resolveOld!: (data: ReturnType<typeof response>) => void;
+    const delayed = new Promise<ReturnType<typeof response>>(resolve => { resolveOld = resolve; });
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'old-cursor'))
+      .mockReturnValueOnce(delayed).mockResolvedValueOnce(response(FILE_B, true, 'new-cursor'));
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{props.items.map(item => item.name).join(',')}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    const stale = latest;
+    act(() => latest.onSearch?.('old'));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    act(() => latest.onSearch?.('new'));
+    await waitFor(() => expect(latest.authorized && !latest.loading && latest.search === 'new').toBe(true));
+    await act(async () => { resolveOld(response(FILE_A)); await delayed; });
+    act(() => latest.onSelect([latest.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    act(() => { stale.onSelect([]); stale.onRefresh(); stale.onNextPage('old-cursor'); });
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    expect(latest.items.map(item => item.source_id)).toEqual([FILE_B]);
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('clears Content Intelligence filename search through its own authorized endpoint', async () => {
+    mocks.get.mockResolvedValueOnce(response(FILE_A))
+      .mockResolvedValueOnce(response(FILE_B)).mockResolvedValueOnce(response(FILE_A));
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search authorized filenames' }), { target: { value: 'report_%' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'Search authorized filenames' }));
+    await screen.findByRole('checkbox', { name: 'Select beta.txt' });
+    expect(mocks.get).toHaveBeenNthCalledWith(2, '/api/plugins/content-intelligence/inventory?limit=100&search=report_%25');
+    fireEvent.click(screen.getByRole('button', { name: 'Clear search', exact: true }));
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    expect(mocks.get).toHaveBeenNthCalledWith(3, '/api/plugins/content-intelligence/inventory?limit=100');
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it('discards a delayed query result and resets query on principal changes', async () => {
     let latest!: FileExplorerInventoryProps;
     let finish!: (data: unknown) => void;
@@ -1016,12 +1056,38 @@ describe('consumer-specific reference capacity', () => {
     await act(async () => latest.onSelect(latest.items));
     expect(latest.selectedSourceIds).toEqual([]);
   });
-  it('fails closed on missing Content Intelligence selection evidence', async () => {
-    mocks.get.mockResolvedValue({ ...response(FILE_A), max_selection: undefined });
+  it.each([undefined, null, true, '12', 0, -1, 1.5, 201])('fails closed on invalid Content Intelligence selection evidence %s', async (max_selection) => {
+    mocks.get.mockResolvedValue({ ...response(FILE_A), max_selection });
     render(<Consumer consumer="content-intelligence" />);
     await waitFor(() => expect(screen.getByTestId('error').textContent).toContain('Invalid file inventory response'));
     expect(screen.getByTestId('authorized').textContent).toBe('false');
   });
+  it('enforces the thirteenth selection boundary through the investigation workspace', async () => {
+    const page = response(FILE_A);
+    page.items = Array.from({ length: 13 }, (_, i) => ({
+      ...page.items[0],
+      source_id: '44444444-4444-4444-8444-' + String(i + 1).padStart(12, '0'),
+      name: 'file-' + String(i + 1).padStart(2, '0') + '.txt',
+    }));
+    mocks.get.mockResolvedValue(page);
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select file-01.txt' });
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(13);
+    boxes.slice(0, 12).forEach(box => fireEvent.click(box));
+    expect(boxes[12].disabled).toBe(true);
+    expect(screen.getByText(/Selection limit reached/)).toBeTruthy();
+    fireEvent.click(boxes[0]);
+    expect(boxes[12].disabled).toBe(false);
+    fireEvent.click(boxes[12]);
+    expect(boxes[12].checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(boxes.every(box => !box.checked && !box.disabled)).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
   it('excludes attached references, enforces remaining capacity and revokes stale callbacks', async () => {
     let latest!: FileExplorerInventoryProps;
     const onAttach = vi.fn();
