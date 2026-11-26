@@ -30,16 +30,34 @@ redis.call('EXPIRE', KEYS[3], tonumber(ARGV[3]))
 return 1
 """
 
-_RENEW_CLAIM_SCRIPT = """
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-  return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+# Recheck the claim and immutable run identity in the same operation as
+# renewal. A delayed heartbeat must never recreate or modify a retired run.
+_HEARTBEAT_RUN_SCRIPT = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+  return -1
 end
-return 0
-"""
-
-_RELEASE_CLAIM_SCRIPT = """
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-  return redis.call('DEL', KEYS[1])
+if redis.call('EXISTS', KEYS[2]) == 0 then
+  return -2
+end
+if redis.call('HGET', KEYS[2], 'owner_worker_id') ~= ARGV[1]
+    or redis.call('HGET', KEYS[2], 'tenant_id') ~= ARGV[2]
+    or redis.call('HGET', KEYS[2], 'run_id') ~= ARGV[3] then
+  return -1
+end
+local status = redis.call('HGET', KEYS[2], 'status')
+if status ~= 'running' and status ~= 'cancelling' then
+  return -1
+end
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
+redis.call('HSET', KEYS[2],
+  'updated_at', ARGV[6],
+  'heartbeat_at', ARGV[6],
+  'lease_expires_at', ARGV[7])
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[5]))
+redis.call('EXPIRE', KEYS[3], tonumber(ARGV[5]))
+local cancel = redis.call('HGET', KEYS[2], 'cancel_requested_at')
+if cancel and cancel ~= '' then
+  return 1
 end
 return 0
 """
@@ -86,6 +104,10 @@ return 1
 
 class DistributedRunStoreUnavailable(RuntimeError):
     """Raised when shared coordination is not currently authoritative."""
+
+
+class DistributedRunOwnershipLost(RuntimeError):
+    """Raised when Redis definitively rejects the worker's live authority."""
 
 
 class DistributedRunNotFound(LookupError):
@@ -252,45 +274,43 @@ class RedisDistributedRunStore:
 
     async def heartbeat(self, *, run_id: str, worker_id: str) -> bool:
         client = await self._client()
-        claim_key = self._claim_key(run_id)
-        renewed = await client.eval(
-            _RENEW_CLAIM_SCRIPT,
-            1,
-            claim_key,
-            worker_id,
-            str(self._settings.run_lease_ttl_seconds),
-        )
-        if not renewed:
-            raise RuntimeError(f"Medusa run ownership changed or expired: {run_id}")
-
         run_key = self._run_key(run_id)
+        # This read locates the tenant index only. The script repeats all
+        # identity, status and claim checks before touching any key.
         record = await client.hgetall(run_key)
         if not record:
-            await client.eval(_RELEASE_CLAIM_SCRIPT, 1, claim_key, worker_id)
             raise DistributedRunNotFound(run_id)
-        if record.get("owner_worker_id") != worker_id:
-            await client.eval(_RELEASE_CLAIM_SCRIPT, 1, claim_key, worker_id)
-            raise RuntimeError(f"Medusa run ownership metadata changed: {run_id}")
-        if record.get("status") not in self._ACTIVE:
-            return False
+        tenant_id = record.get("tenant_id")
+        if not tenant_id:
+            raise DistributedRunOwnershipLost(f"Missing Medusa tenant: {run_id}")
 
         now = self._now()
         lease_expires = now + timedelta(seconds=self._settings.run_lease_ttl_seconds)
-        index_key = self._tenant_index(str(record.get("tenant_id", "")))
-        pipeline = client.pipeline(transaction=True)
-        pipeline.hset(
-            run_key,
-            mapping={
-                "updated_at": self._iso(now),
-                "heartbeat_at": self._iso(now),
-                "lease_expires_at": self._iso(lease_expires),
-            },
+        result = int(
+            await client.eval(
+                _HEARTBEAT_RUN_SCRIPT,
+                3,
+                self._claim_key(run_id),
+                run_key,
+                self._tenant_index(tenant_id),
+                worker_id,
+                tenant_id,
+                run_id,
+                str(self._settings.run_lease_ttl_seconds),
+                str(self._settings.run_terminal_retention_seconds),
+                self._iso(now),
+                self._iso(lease_expires),
+            )
         )
-        pipeline.expire(run_key, self._settings.run_terminal_retention_seconds)
-        if record.get("tenant_id"):
-            pipeline.expire(index_key, self._settings.run_terminal_retention_seconds)
-        await pipeline.execute()
-        return bool(record.get("cancel_requested_at"))
+        if result == -2:
+            raise DistributedRunNotFound(run_id)
+        if result == -1:
+            raise DistributedRunOwnershipLost(
+                f"Medusa run ownership changed or expired: {run_id}"
+            )
+        if result not in {0, 1}:
+            raise DistributedRunStoreUnavailable("invalid_heartbeat_result")
+        return result == 1
 
     async def mark_terminal(
         self,
@@ -479,6 +499,7 @@ class RedisDistributedRunStore:
 __all__ = [
     "DistributedRunNotCancellable",
     "DistributedRunNotFound",
+    "DistributedRunOwnershipLost",
     "DistributedRunStore",
     "DistributedRunStoreUnavailable",
     "DistributedRunTenantMismatch",

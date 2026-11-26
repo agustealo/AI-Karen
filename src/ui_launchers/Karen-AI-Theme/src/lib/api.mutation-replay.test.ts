@@ -367,3 +367,52 @@ describe('request diagnostic privacy', () => {
     assertPrivate();
   });
 });
+
+
+describe("bounded authenticated inbox waits", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    localStorage.setItem("access_token", "existing-token");
+    localStorage.setItem("refresh_token", "existing-refresh");
+    vi.mocked(authService.getCurrentUser).mockReturnValue({ tenant_id: "tenant", user_id: "owner" } as ReturnType<typeof authService.getCurrentUser>);
+    vi.mocked(authService.getAuthenticationRevision).mockReturnValue(1);
+    vi.mocked(authService.clearAuth).mockClear();
+  });
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
+
+  it.each([401, 403, 502, 503])("never refreshes, logs out or replays on %s", async (status) => {
+    const scope = captureApiPrincipalScope("tenant", "owner")!;
+    const refresh = vi.spyOn(clientInternals, "refreshAccessToken");
+    const fetchMock = vi.fn().mockResolvedValue(new Response("private error", { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    await expect(apiClient.waitForInboxInvalidation(scope, controller.signal)).rejects.toMatchObject({ status });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/communications-center/inbox/wait");
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET", cache: "no-store", redirect: "error", signal: controller.signal });
+    expect(refresh).not.toHaveBeenCalled();
+    expect(authService.clearAuth).not.toHaveBeenCalled();
+    expect(localStorage.getItem("access_token")).toBe("existing-token");
+    expect(localStorage.getItem("refresh_token")).toBe("existing-refresh");
+  });
+
+  it("does not dispatch an aborted or obsolete request and discards late results", async () => {
+    const scope = captureApiPrincipalScope("tenant", "owner")!;
+    const controller = new AbortController();
+    controller.abort();
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(apiClient.waitForInboxInvalidation(scope, controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+    expect(fetchMock).not.toHaveBeenCalled();
+    let release!: (response: Response) => void;
+    fetchMock.mockReturnValue(new Promise<Response>(resolve => { release = resolve; }));
+    const live = new AbortController();
+    const pending = apiClient.waitForInboxInvalidation(scope, live.signal);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    vi.mocked(authService.getAuthenticationRevision).mockReturnValue(2);
+    release(new Response('{"changed":true}', { status: 200 }));
+    await expect(pending).rejects.toThrow("Authenticated request scope changed");
+    await expect(apiClient.waitForInboxInvalidation(scope, live.signal)).rejects.toThrow("Authenticated request scope changed");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});

@@ -235,6 +235,7 @@ class InboxCapabilitiesResponse(BaseModel):
     can_mutate: bool
     producer_enabled: bool
     can_reconcile: bool
+    invalidation_wait_enabled: bool = False
 
 
 class InboxPageResponse(BaseModel):

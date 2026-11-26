@@ -83,3 +83,21 @@ The canonical authentication middleware also applies no-store to the wait
 response before it leaves ingress, covering initial authentication rejection
 and dependency rejection as well as successful and post-wait responses.
 No duplicate authentication owner or global cache-policy change is introduced.
+
+
+## KCOMM-03E3B: authenticated frontend reconciliation
+
+The canonical inbox GET reports the explicit configuration capability
+`invalidation_wait_enabled`; it is false unless both flags are enabled.
+It is not a health or connection receipt. Missing capability means disabled
+for compatibility. The API client uses one same-origin cancellable GET for
+a wait; no retry, redirect, proactive credential rotation or logout side
+effect occurs in the optional path. Ordinary inbox GET retains existing auth
+behavior. The mounted view's existing reconciliation effect owns the wait,
+cancels on visibility/offline/cleanup and pauses during reads or uncertain
+mutations; only an exact boolean change hint may request the canonical
+principal-fenced GET. Malformed/unavailable hints back off to normal polling.
+A coalesced/missed hint is recovered by periodic reconciliation. No persistent
+connection badge, broker payload, optimistic data, or automatic mutation.
+Browser-to-backend disconnect and signed-session revocation acceptance remain
+required; both server flags stay default-off.
