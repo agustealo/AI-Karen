@@ -252,9 +252,23 @@ def test_guided_hook_install_and_cleanup_are_inside_generation_lock(monkeypatch,
     message = "cancelled" if fails == "cancelled" else (
         "injected generation failure" if fails else "never exposed"
     )
-    with pytest.raises(error, match=message):
-        adapter.generate_with_first_token_embedding(
-            "prepared prompt", [0.1] * 8, max_tokens=1, seed=1,
-        )
+    from ai_karen_engine.core.model_runtime import provider_health_monitor as health
+    from unittest.mock import Mock
+
+    monitor = Mock()
+    monkeypatch.setattr(health, "get_health_monitor", lambda: monitor)
+    sequence = health.NativeExecutionSequence()
+    with pytest.raises(error, match=message) as failure:
+        with sequence.attempt():
+            adapter.generate_with_first_token_embedding(
+                "prepared prompt", [0.1] * 8, max_tokens=1, seed=1,
+            )
+    monitor.record_native_execution.assert_not_called()
+    sequence.finish(failure.value)
+    monitor.record_native_execution.assert_called_once()
+    assert monitor.record_native_execution.call_args.kwargs["operation"] == "soft_guided"
+    assert monitor.record_native_execution.call_args.kwargs["outcome"] == (
+        "unverified_result" if not fails else "execution_failed"
+    )
     assert events == ["lock", "install", "generate", "remove", "unlock"]
     assert held is False

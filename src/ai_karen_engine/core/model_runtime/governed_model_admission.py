@@ -35,7 +35,7 @@ class ModelAdmissionBudgetExhausted(RuntimeError):
     """The original meter refused a reservation; not provider evidence."""
 
 
-class ModelAdmissionDeadlineExceeded(RuntimeError):
+class ModelAdmissionDeadlineExceeded(ProviderNotAvailable):
     """The original execution deadline expired; not a provider timeout."""
 
 
@@ -241,7 +241,7 @@ class GovernedToolModelAdmission:
                 if stopped.is_set():
                     raise ProviderNotAvailable("governed_model_execution_cancelled")
                 if loop.time() >= deadline:
-                    raise ProviderNotAvailable("governed_model_execution_deadline_exhausted")
+                    raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
 
             def invoke() -> _T:
                 # A queued worker and each cooperative native stage share

@@ -27,6 +27,7 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
     ModelRuntimeCapabilities,
     ProviderNotAvailable,
 )
+from ai_karen_engine.core.model_runtime.provider_health_monitor import observe_native_compute
 from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
     generation_checkpoint_options,
 )
@@ -182,7 +183,8 @@ class TransformersSoftGenerationAdapter:
             with generation_lock, torch.no_grad():
                 model.eval()
                 self._check()
-                outputs = model(**forward_kwargs)
+                with observe_native_compute("soft_reference"):
+                    outputs = model(**forward_kwargs)
                 self._check()
                 logits = outputs.logits[0, -1, :]
                 token_id = int(torch.argmax(logits, dim=-1).item())
@@ -295,7 +297,8 @@ class TransformersSoftGenerationAdapter:
 
                     generate_kwargs.update(generation_checkpoint_options(self._checkpoint))
                     self._check()
-                    generated = model.generate(**generate_kwargs)
+                    with observe_native_compute("soft_guided"):
+                        generated = model.generate(**generate_kwargs)
                     self._check()
             except ProviderNotAvailable:
                 raise

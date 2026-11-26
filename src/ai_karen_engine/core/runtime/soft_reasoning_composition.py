@@ -8,8 +8,9 @@ provider or builds a shadow prompt registry.
 
 from __future__ import annotations
 
+import asyncio
 import os
-from contextlib import nullcontext
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
@@ -20,6 +21,7 @@ from ai_karen_engine.core.model_runtime.model_manager import (
     get_model_manager,
 )
 from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpointType
+from ai_karen_engine.core.model_runtime.provider_health_monitor import NativeExecutionSequence
 from ai_karen_engine.core.reasoning.soft_reasoning.contracts import SoftVerificationScore
 from ai_karen_engine.core.reasoning.soft_reasoning.exploration import (
     SoftExplorationConfig,
@@ -155,6 +157,8 @@ class RuntimeSoftReasoningComposer:
         checkpoint: Callable[[], None] | None = preparation_checkpoint
         reserved = 0
         started = False
+        pending_attempt = False
+        observations = NativeExecutionSequence()
         if execution_admission is not None:
             if target is None or endpoint is None:
                 raise SoftReasoningCompositionUnavailable("native target unavailable")
@@ -166,12 +170,26 @@ class RuntimeSoftReasoningComposer:
         else:
             marker = self._tokens.ensure(runtime)
 
+        @contextmanager
         def model_scope():
+            nonlocal pending_attempt
             if pinned is None:
-                return nullcontext()
-            return runtime.borrow_generation_components(
-                target, expected=pinned, checkpoint=checkpoint,
-            )
+                yield
+                return
+            # Only a successfully reserved exploration operation gets an
+            # observation scope. Capability checks and preparation do not.
+            if pending_attempt:
+                pending_attempt = False
+                with observations.attempt():
+                    with runtime.borrow_generation_components(
+                        target, expected=pinned, checkpoint=checkpoint,
+                    ):
+                        yield
+            else:
+                with runtime.borrow_generation_components(
+                    target, expected=pinned, checkpoint=checkpoint,
+                ):
+                    yield
         def check_native() -> None:
             if checkpoint is None:
                 raise SoftReasoningCompositionUnavailable("native worker scope unavailable")
@@ -230,12 +248,14 @@ class RuntimeSoftReasoningComposer:
             started = True
 
             def execute(worker_checkpoint, reserve):
-                nonlocal checkpoint
+                nonlocal checkpoint, pending_attempt
                 checkpoint = worker_checkpoint
 
                 def attempt():
+                    nonlocal pending_attempt
                     reserve()
                     on_model_attempt()
+                    pending_attempt = True
 
                 try:
                     worker_checkpoint()
@@ -244,10 +264,17 @@ class RuntimeSoftReasoningComposer:
                     return trace
                 finally:
                     checkpoint = None
+                    pending_attempt = False
 
-            return await execution_admission.run_native_attempt_sequence(
-                endpoint, model=target, function=execute, on_reserved=record_reservation,
-            )
+            try:
+                trace = await execution_admission.run_native_attempt_sequence(
+                    endpoint, model=target, function=execute, on_reserved=record_reservation,
+                )
+            except (Exception, asyncio.CancelledError) as exc:
+                observations.finish(exc)
+                raise
+            observations.finish()
+            return trace
 
         if preparation_checkpoint is not None:
             preparation_checkpoint()

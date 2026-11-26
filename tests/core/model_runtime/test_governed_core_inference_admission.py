@@ -2599,3 +2599,133 @@ async def test_direct_native_observation_uses_actual_library_call_and_owned_term
         }[case]
         assert counters["kari_native_execution_observations_total"]["values"] == {(operation, expected): 1.0}
     assert health.call_count == int(operation == "generation" and case == "success")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminal", ["success", "budget", "cancelled", "deadline", "retirement"])
+async def test_native_sequence_observation_waits_for_owner_and_excludes_preparation(
+    monkeypatch, terminal,
+):
+    from ai_karen_engine.core.model_runtime import provider_health_monitor as health
+    from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
+    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+    from ai_karen_engine.platform.observability import metrics
+
+    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS
+                    if item.provider_id == "builtin_transformers")
+    admission = _scope(calls=4)
+    monitor = health.ProviderHealthMonitor()
+    monkeypatch.setattr(health, "get_health_monitor", lambda: monitor)
+    collector = metrics.MetricsCollector()
+    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: collector)
+    sequence = health.NativeExecutionSequence()
+    entered = asyncio.Event()
+    release = threading.Event()
+    retired = threading.Event()
+    loop = asyncio.get_running_loop()
+
+    def worker(checkpoint, reserve):
+        # Preparation and even a reserved scope without a library call
+        # cannot emit inference evidence.
+        with sequence.attempt():
+            checkpoint()
+        reserve()
+        with sequence.attempt():
+            checkpoint()
+        reserve()
+        with sequence.attempt():
+            with health.observe_native_compute("soft_reference"):
+                pass
+        reserve()
+        with sequence.attempt():
+            with health.observe_native_compute("soft_guided"):
+                pass
+        reserve()
+        with sequence.attempt():
+            try:
+                with health.observe_native_compute("generation"):
+                    if terminal in {"cancelled", "deadline", "retirement"}:
+                        loop.call_soon_threadsafe(entered.set)
+                        if not release.wait(5):
+                            raise RuntimeError("test worker release deadline")
+                        if terminal != "retirement":
+                            checkpoint()
+                if terminal == "retirement":
+                    raise NativeRetirementUnverified()
+            finally:
+                retired.set()
+        if terminal == "budget":
+            reserve()
+        return "trace"
+
+    async def invoke():
+        try:
+            result = await admission.run_native_attempt_sequence(
+                endpoint, model="model-a", function=worker,
+            )
+        except (Exception, asyncio.CancelledError) as exc:
+            sequence.finish(exc)
+            raise
+        sequence.finish()
+        return result
+
+    task = asyncio.create_task(invoke())
+    if terminal in {"cancelled", "deadline", "retirement"}:
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            assert "kari_native_execution_observations_total" not in collector.snapshot()["counters"]
+            if terminal in {"cancelled", "retirement"}:
+                task.cancel()
+                await asyncio.sleep(0)
+                assert not task.done()
+                assert not retired.is_set()
+            else:
+                admission.meter._start_ms -= 61000
+        finally:
+            release.set()
+    if terminal == "success":
+        assert await asyncio.wait_for(task, timeout=3) == "trace"
+    elif terminal == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3)
+    elif terminal == "retirement":
+        with pytest.raises(NativeRetirementUnverified):
+            await asyncio.wait_for(task, timeout=3)
+    else:
+        with pytest.raises(RuntimeError, match="budget_exhausted|deadline_exhausted"):
+            await asyncio.wait_for(task, timeout=3)
+
+    sequence.finish()  # duplicate finalization must not emit again
+    assert retired.is_set()
+    assert admission.meter.model_calls == 4
+    observed = collector.snapshot()["counters"]["kari_native_execution_observations_total"]["values"]
+    completed = "success" if terminal == "success" else "sequence_aborted"
+    last = {"success": "success", "budget": "sequence_aborted",
+            "cancelled": "cancelled", "deadline": "sequence_aborted",
+            "retirement": "retirement_unverified"}[terminal]
+    assert observed == {
+        ("soft_reference", completed): 1.0,
+        ("soft_guided", completed): 1.0,
+        ("soft_verifier", last): 1.0,
+    }
+    assert monitor.get_provider_health(endpoint.provider_id).health_status is health.HealthStatus.UNKNOWN
+
+
+def test_native_sequence_never_certifies_multiple_computes_in_one_reserved_scope(monkeypatch):
+    from ai_karen_engine.core.model_runtime import provider_health_monitor as health
+    from ai_karen_engine.platform.observability import metrics
+
+    monitor = health.ProviderHealthMonitor()
+    monkeypatch.setattr(health, "get_health_monitor", lambda: monitor)
+    collector = metrics.MetricsCollector()
+    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: collector)
+    sequence = health.NativeExecutionSequence()
+    with sequence.attempt():
+        with health.observe_native_compute("soft_guided"):
+            pass
+        with health.observe_native_compute("generation"):
+            pass
+    sequence.finish()
+    assert collector.snapshot()["counters"]["kari_native_execution_observations_total"]["values"] == {
+        ("soft_guided", "unverified_result"): 1.0,
+    }

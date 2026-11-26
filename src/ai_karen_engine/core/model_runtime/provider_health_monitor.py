@@ -74,7 +74,7 @@ _native_observation: ContextVar[NativeExecutionObservation | None] = ContextVar(
 
 @dataclass(slots=True)
 class NativeExecutionObservation:
-    """One direct governed native call, published only by the owning coroutine."""
+    """One governed native computation, published only by the owning coroutine."""
 
     operation: str
     endpoint: ProviderEndpoint | None = None
@@ -82,6 +82,8 @@ class NativeExecutionObservation:
     compute_calls: int = 0
     compute_returned: bool = False
     finished: bool = False
+    soft_attempt: bool = False
+    sealed_at: float | None = None
 
     @contextmanager
     def bind(self) -> Iterator[None]:
@@ -102,7 +104,9 @@ class NativeExecutionObservation:
         self.finished = True
         if self.compute_calls != 1 or (outcome == "success" and not self.compute_returned):
             outcome = "unverified_result"
-        elapsed = time.perf_counter() - self.started
+        elapsed = (
+            self.sealed_at if self.sealed_at is not None else time.perf_counter()
+        ) - self.started
         try:
             return get_health_monitor().record_native_execution(
                 self.endpoint, operation=self.operation,
@@ -137,7 +141,23 @@ class NativeExecutionObservation:
 def observe_native_compute(operation: str) -> Iterator[None]:
     """Mark the actual library invocation inside the already-owned worker."""
     observation = _native_observation.get()
-    if observation is None or observation.operation != operation:
+    if observation is None:
+        yield
+        return
+    if observation.soft_attempt:
+        # The batch verifier reuses the canonical pipeline generation owner.
+        # Relabel only within the admitted exploration attempt, never globally.
+        role = {
+            "generation": "soft_verifier",
+            "soft_reference": "soft_reference",
+            "soft_guided": "soft_guided",
+        }.get(operation)
+        if role is None:
+            yield
+            return
+        if observation.compute_calls == 0:
+            observation.operation = role
+    elif observation.operation != operation:
         yield
         return
     observation.compute_calls += 1
@@ -145,6 +165,53 @@ def observe_native_compute(operation: str) -> Iterator[None]:
         observation.started = time.perf_counter()
     yield
     observation.compute_returned = True
+
+
+class NativeExecutionSequence:
+    """Collect bounded per-attempt evidence inside one owned exploration worker.
+
+    The existing exploration budget bounds the list. No telemetry is emitted
+    inside the worker or while the native model lock is held. An attempt scope
+    must enclose the canonical borrow/device fence, not just the library call.
+    """
+
+    def __init__(self) -> None:
+        self._attempts: list[tuple[NativeExecutionObservation, BaseException | None]] = []
+        self._finished = False
+
+    @contextmanager
+    def attempt(self) -> Iterator[None]:
+        observation = NativeExecutionObservation("soft_attempt", soft_attempt=True)
+        failure: BaseException | None = None
+        try:
+            with observation.bind():
+                yield
+        except BaseException as exc:
+            failure = exc
+            raise
+        finally:
+            if observation.started is not None:
+                observation.sealed_at = time.perf_counter()
+                self._attempts.append((observation, failure))
+
+    def finish(self, failure: BaseException | None = None) -> None:
+        """Publish only after the sequence owner resolves its deadline/retirement."""
+        if self._finished:
+            return
+        self._finished = True
+        for observation, attempt_failure in self._attempts:
+            if attempt_failure is not None:
+                # The owning coroutine has the authoritative cancellation or
+                # deadline result, including a failed retirement fence.
+                observation.finish_exception(failure or attempt_failure)
+            elif failure is not None:
+                # The attempt returned, but the overall authorized sequence
+                # did not complete. Do not promote intermediate work into
+                # a successful admitted outcome.
+                observation.finish("sequence_aborted")
+            else:
+                observation.finish("success")
+        self._attempts.clear()
 
 
 class ProviderHealthMonitor:
@@ -327,12 +394,14 @@ class ProviderHealthMonitor:
         self, endpoint: ProviderEndpoint | None, *, operation: str,
         outcome: str, response_time: float,
     ) -> bool:
-        """Observe direct native execution without conflating encoder and chat health."""
+        """Observe native execution without conflating reasoning, encoder and chat health."""
         if (
-            operation not in {"generation", "embedding"}
+            operation not in {
+                "generation", "embedding", "soft_reference", "soft_guided", "soft_verifier",
+            }
             or outcome not in {
                 "success", "cancelled", "deadline_exceeded", "execution_failed",
-                "unverified_result", "retirement_unverified",
+                "unverified_result", "retirement_unverified", "sequence_aborted",
             }
             or not math.isfinite(response_time)
             or response_time < 0
@@ -345,12 +414,12 @@ class ProviderHealthMonitor:
             labels = {"operation": operation, "outcome": outcome}
             collector.counter(
                 "kari_native_execution_observations_total",
-                "Direct governed native execution outcomes after worker retirement",
+                "Governed native execution outcomes after worker retirement",
                 ["operation", "outcome"],
             ).labels(**labels).inc()
             collector.histogram(
                 "kari_native_execution_observation_duration_seconds",
-                "Elapsed native invocation to admitted terminal outcome",
+                "Elapsed native invocation to attempt or admitted terminal outcome",
                 ["operation", "outcome"],
             ).labels(**labels).observe(response_time)
         except Exception:
