@@ -124,6 +124,20 @@ if [[ "${RUN_FILE_EXPLORER_LOCAL:-0}" == '1' ]]; then
     --file-explorer --sha "$ACTUAL_SHA" --project "$KCARD_COMPOSE_PROJECT"
     --base-url "$KAREN_BASE_URL" --env-file "$KCARD_ACCEPTANCE_ENV_FILE")
   REPORT=(python "$ROOT/scripts/ci/verify_local_browser_report.py")
+  check_explorer_continuity() {
+    python - "$@" <<'PY'
+import json
+import sys
+from pathlib import Path
+
+records = [json.loads(Path(path).read_text()) for path in sys.argv[1:]]
+for record in records:
+    record.pop("timestamp", None)
+if any(record != records[0] for record in records[1:]):
+    raise SystemExit("Local stack identity changed during Explorer acceptance")
+print("Explorer stack identity remained consistent across recorded checkpoints")
+PY
+  }
   run explorer_provenance_before "${PROVENANCE[@]}" --evidence "$OUT/explorer-before.json"
 
   cd "$ROOT/src/ui_launchers/Karen-AI-Theme"
@@ -144,26 +158,16 @@ if [[ "${RUN_FILE_EXPLORER_LOCAL:-0}" == '1' ]]; then
     echo 'Checkout changed during acceptance preparation.' >&2; exit 2;
   }
   run explorer_provenance_pre_execution "${PROVENANCE[@]}" --evidence "$OUT/explorer-pre-execution.json"
+  run explorer_pre_execution_continuity check_explorer_continuity \
+    "$OUT/explorer-before.json" "$OUT/explorer-pre-execution.json"
   cd "$ROOT/src/ui_launchers/Karen-AI-Theme"
   run explorer_live_browser env -u PW_TEST_REPORTER -u PLAYWRIGHT_JSON_ONLY_FAILURES \
     CI=1 PLAYWRIGHT_JSON_OUTPUT_FILE="$OUT/explorer-playwright.json" "${BROWSER[@]}"
   run explorer_browser_evidence "${REPORT[@]}" "$OUT/explorer-playwright.json"
   cd "$ROOT"
   run explorer_provenance_after "${PROVENANCE[@]}" --evidence "$OUT/explorer-after.json"
-  run explorer_provenance_continuity python - \
-    "$OUT/explorer-before.json" "$OUT/explorer-pre-execution.json" "$OUT/explorer-after.json" <<'PY'
-import json
-import sys
-from pathlib import Path
-
-records = [json.loads(Path(path).read_text()) for path in sys.argv[1:]]
-for record in records:
-    record.pop("timestamp", None)
-if any(record != records[0] for record in records[1:]):
-    raise SystemExit("Local stack identity changed during Explorer acceptance")
-print("Explorer stack identity remained consistent across recorded checkpoints")
-PY
-  [[ "$(git rev-parse HEAD)" == "$ACTUAL_SHA" && -z "$(git status --porcelain)" ]] || {
+  run explorer_provenance_continuity check_explorer_continuity \
+    "$OUT/explorer-before.json" "$OUT/explorer-pre-execution.json" "$OUT/explorer-after.json"  [[ "$(git rev-parse HEAD)" == "$ACTUAL_SHA" && -z "$(git status --porcelain)" ]] || {
     echo 'Checkout changed during acceptance.' >&2; exit 2;
   }
   printf 'PASS explorer_local_acceptance (four scenarios; independent review still required)\n' | tee -a "$RESULTS"

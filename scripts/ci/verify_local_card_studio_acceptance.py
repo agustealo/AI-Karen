@@ -197,14 +197,42 @@ def verify_local_supabase_database(env_path: Path, expected_database: str | None
                if "54322->5432/tcp" in line and line.startswith("supabase_db_")]
     if len(matches) != 1:
         raise GuardError("Canonical loopback local Supabase PostgreSQL is absent or ambiguous")
+    target = matches[0]
+    evidence = {"authority": "local_supabase", "database": db_name, "port": 54322, "status": "ready"}
+    query = "SELECT current_database()"
+    if expected_database is not None:
+        inspected = docker_json(["docker", "inspect", target])
+        if (
+            len(inspected) != 1
+            or inspected[0].get("Name") != "/" + target
+            or inspected[0].get("State", {}).get("Running") is not True
+        ):
+            raise GuardError("Local PostgreSQL container identity is unavailable")
+        container_id = inspected[0].get("Id")
+        if (
+            not isinstance(container_id, str) or len(container_id) != 64
+            or any(ch not in "0123456789abcdef" for ch in container_id)
+        ):
+            raise GuardError("Local PostgreSQL container ID is invalid")
+        target = container_id
+        evidence["container_id"] = container_id
+        query = "SELECT current_database(), oid FROM pg_database WHERE datname = current_database()"
     result = subprocess.run(
-        ["docker", "exec", matches[0], "psql", "-U", "postgres", "-d", db_name,
-         "-tAc", "SELECT current_database()"],
+        ["docker", "exec", target, "psql", "-U", "postgres", "-d", db_name,
+         "-tAc", query],
         check=False, capture_output=True, text=True, timeout=30,
     )
-    if result.returncode != 0 or result.stdout.strip() != db_name:
+    if result.returncode != 0:
         raise GuardError("Disposable database is unavailable in local Supabase")
-    return {"authority": "local_supabase", "database": db_name, "port": 54322, "status": "ready"}
+    output = result.stdout.strip()
+    if expected_database is not None:
+        name, separator, oid = output.partition("|")
+        if name != db_name or separator != "|" or not oid.isascii() or not oid.isdecimal():
+            raise GuardError("Disposable database identity could not be verified")
+        evidence["database_oid"] = oid
+    elif output != db_name:
+        raise GuardError("Disposable database is unavailable in local Supabase")
+    return evidence
 
 
 def main() -> int:
@@ -267,7 +295,11 @@ def main() -> int:
         evidence_path.chmod(0o600)
         print("LOCAL_FILE_EXPLORER_PROVENANCE_PASS" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_PASS")
         return 0
-    except (GuardError, OSError, ValueError, subprocess.TimeoutExpired):
+    except GuardError as exc:
+        prefix = "LOCAL_FILE_EXPLORER_PROVENANCE_FAIL" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_FAIL"
+        print(f"{prefix}: {exc}")
+        return 1
+    except (OSError, ValueError, subprocess.TimeoutExpired):
         print("LOCAL_FILE_EXPLORER_PROVENANCE_FAIL" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_FAIL")
         return 1
 

@@ -161,6 +161,7 @@ def test_explorer_local_runner_reuses_existing_provenance_and_private_report():
     assert "RUN_FILE_EXPLORER_LOCAL:-0" in runner
     assert "explorer_provenance_pre_execution" in runner
     assert "explorer_provenance_continuity" in runner
+    assert runner.index("run explorer_pre_execution_continuity") < runner.index("run explorer_live_browser")
     assert "verify_local_browser_report.py" in runner
     assert "verify_local_card_studio_acceptance.py" in runner
     assert "--file-explorer --sha" in runner
@@ -287,3 +288,28 @@ def test_explorer_provenance_rejects_foreign_database_and_web_binding():
     web["NetworkSettings"]["Ports"]["8010/tcp"][0]["HostIp"] = "0.0.0.0"
     with pytest.raises(GuardError):
         verify_explorer_runtime("web", web, web_env, project, database)
+
+def test_explorer_database_provenance_includes_container_and_database_identity(tmp_path, monkeypatch):
+    import subprocess
+
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    database = "kcard_aaaaaaaaaaaa"
+    container = "b" * 64
+    env = tmp_path / "local.env"
+    env.write_text("KCARD_DB_NAME=" + database + "\n")
+
+    def execute(args, **kwargs):
+        if args[:2] == ["docker", "ps"]:
+            return subprocess.CompletedProcess(args, 0, "supabase_db_fixture\t54322->5432/tcp\n", "")
+        assert args[:3] == ["docker", "exec", container]
+        assert args[-1] == "SELECT current_database(), oid FROM pg_database WHERE datname = current_database()"
+        return subprocess.CompletedProcess(args, 0, database + "|12345\n", "")
+
+    monkeypatch.setattr(verifier.subprocess, "run", execute)
+    monkeypatch.setattr(verifier, "docker_json", lambda args: [{
+        "Name": "/supabase_db_fixture", "Id": container, "State": {"Running": True},
+    }])
+    observed = verifier.verify_local_supabase_database(env, database)
+    assert observed["container_id"] == container
+    assert observed["database_oid"] == "12345"
