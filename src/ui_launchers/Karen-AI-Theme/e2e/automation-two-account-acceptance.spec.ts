@@ -167,6 +167,12 @@ const participationRunIds = [
 // configuration. It must never silently turn into the original two-run proof.
 const lifecycleEnabled = process.env.KAREN_SPECIALIST_LIFECYCLE_ACCEPTANCE === "true";
 const emptyRunId = process.env.KAREN_UX_ACCOUNT_A_EMPTY_PARTICIPATION_RUN_ID;
+const crossTenantEnabled = process.env.KAREN_SPECIALIST_CROSS_TENANT_ACCEPTANCE === "true";
+const crossTenantAccount = {
+  email: process.env.KAREN_UX_ACCOUNT_C_EMAIL,
+  password: process.env.KAREN_UX_ACCOUNT_C_PASSWORD,
+};
+const crossTenantRunId = process.env.KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID;
 const personalRunsPath = "/api/agent-runtime/my-runs";
 const phases = {
   started: "Method entered",
@@ -296,7 +302,7 @@ test("ARM-05C.5B rejects overbroad receipt projections", () => {
 });
 
 async function verifyParticipationProjection(
-  page: Page, origin: string, own: string, foreign: string, expected: ParticipationReadback,
+  page: Page, origin: string, own: string, foreign: readonly string[], expected: ParticipationReadback,
 ): Promise<void> {
   const listResponse = realResponse(page, personalRunsPath, origin);
   await openAutomationWorkspace(page, "Agents", true);
@@ -305,13 +311,15 @@ async function verifyParticipationProjection(
   const body = await response.json() as { runs: Array<{ run_id: string; status: string }>; total: number };
   expect(Array.isArray(body.runs) && body.total === body.runs.length).toBe(true);
   expect(body.runs.some(run => run.run_id === own && ["completed", "failed", "cancelled", "canceled", "succeeded"].includes(run.status.toLowerCase()))).toBe(true);
-  expect(body.runs.some(run => run.run_id === foreign), "Foreign run must not appear in personal history").toBe(false);
+  expect(body.runs.some(run => foreign.includes(run.run_id)), "Foreign runs must not appear in personal history").toBe(false);
   const root = page.getByTestId("agent-runtime-page");
   await expect(root.getByRole("heading", { name: "Mission Control", exact: true })).toBeVisible();
   await expect(root.getByRole("heading", { name: "Mission history", exact: true })).toBeVisible();
   const list = root.locator('[aria-label="Execution list"]');
   await expect(list.getByText(own, { exact: true })).toBeVisible();
-  await expect(list.getByText(foreign, { exact: true })).toHaveCount(0);
+  for (const foreignId of foreign) {
+    await expect(list.getByText(foreignId, { exact: true })).toHaveCount(0);
+  }
   const pending = realResponse(page, participationPath(own), origin);
   await list.getByRole("button").filter({ has: page.getByText(own, { exact: true }) }).click();
   const observed = await pending;
@@ -341,12 +349,16 @@ async function verifyParticipationProjection(
 }
 
 test("ARM-05C.5B real participation receipts survive reload and deny a second account", async ({ page }) => {
+  // Cross-tenant proof supplements, never replaces, both original modes.
+  if (crossTenantEnabled && (!participationEnabled || !lifecycleEnabled)) {
+    throw new Error("Cross-tenant acceptance requires both participation and lifecycle acceptance.");
+  }
   // Fail closed if an operator requests the extension without its private mode.
   if (lifecycleEnabled && !participationEnabled) {
     throw new Error("Lifecycle acceptance requires KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE=true.");
   }
   test.skip(!participationEnabled, "Opt in with KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE=true.");
-  test.setTimeout(6 * 60_000);
+  test.setTimeout((crossTenantEnabled ? 9 : 6) * 60_000);
   const origin = requireApprovedOrigin();
   const [a, b] = participationRunIds;
   if (!a || !b || a === b || !/^[A-Za-z0-9_-]{1,128}$/.test(a) || !/^[A-Za-z0-9_-]{1,128}$/.test(b)
@@ -357,6 +369,30 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
   if (lifecycleEnabled && (!emptyRunId || !/^[A-Za-z0-9_-]{1,128}$/.test(emptyRunId)
       || emptyRunId === a || emptyRunId === b)) {
     throw new Error("Lifecycle acceptance requires a third, distinct owned terminal run with verified empty evidence.");
+  }
+  const participants: Array<{
+    index: 0 | 1 | 2;
+    account: { email: string | undefined; password: string | undefined };
+    own: string;
+    foreign: string[];
+  }> = [
+    { index: 0, account: accounts[0], own: a, foreign: [b] },
+    { index: 1, account: accounts[1], own: b, foreign: [a] },
+  ];
+  if (crossTenantEnabled) {
+    const email = crossTenantAccount.email?.trim().toLowerCase();
+    if (!email || !crossTenantAccount.password || !crossTenantRunId || !emptyRunId
+        || !/^[A-Za-z0-9_-]{1,128}$/.test(crossTenantRunId)
+        || [a, b, emptyRunId].includes(crossTenantRunId)
+        || accounts.some(account => account.email?.trim().toLowerCase() === email)) {
+      throw new Error("Cross-tenant acceptance requires a distinct sanitized third account and fourth terminal run.");
+    }
+    participants[0].foreign.push(crossTenantRunId);
+    participants[1].foreign.push(crossTenantRunId, emptyRunId);
+    participants.push({
+      index: 2, account: crossTenantAccount, own: crossTenantRunId,
+      foreign: [a, b, emptyRunId],
+    });
   }
   await page.setViewportSize({ width: 1440, height: 900 });
   const observedPhases = new Set<keyof typeof phases>();
@@ -370,8 +406,9 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
     }
   });
   let firstIdentity: { user_id: string; tenant_id: string } | undefined;
-  for (const [index, own, foreign] of [[0, a, b], [1, b, a]] as const) {
-    await signInApprovedKaren(page, accounts[index].email!, accounts[index].password!, { allowLocalLoopback: local });
+  let secondUserId: string | undefined;
+  for (const { index, account, own, foreign } of participants) {
+    await signInApprovedKaren(page, account.email!, account.password!, { allowLocalLoopback: local });
     const identityResponse = await scopedParticipationGet(page, origin, "/api/auth/validate-session");
     expect(identityResponse.status).toBe(200);
     const envelope = identityResponse.payload as { valid?: boolean; session_valid?: boolean; authenticated?: boolean; user?: { user_id: string; tenant_id: string; roles: string[] } };
@@ -383,14 +420,24 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
     expect(typeof identity.tenant_id === "string" && !["", "default", "dev-tenant"].includes(identity.tenant_id.toLowerCase())).toBe(true);
     expect(Array.isArray(identity.roles) && !identity.roles.includes("admin")).toBe(true);
     if (index === 0) firstIdentity = identity;
-    else {
+    else if (index === 1) {
       expect(identity.user_id !== firstIdentity?.user_id).toBe(true);
       expect(identity.tenant_id === firstIdentity?.tenant_id, "Prove same-tenant owner isolation").toBe(true);
+      secondUserId = identity.user_id;
+    } else {
+      expect(!!firstIdentity && !!secondUserId).toBe(true);
+      expect(identity.user_id !== firstIdentity?.user_id && identity.user_id !== secondUserId).toBe(true);
+      expect(identity.tenant_id !== firstIdentity?.tenant_id, "Prove cross-tenant isolation").toBe(true);
     }
-    const denied = await scopedParticipationGet(page, origin, participationPath(foreign));
-    expect(denied.status, "Authenticated non-owner must receive 404").toBe(404);
+    for (const foreignId of foreign) {
+      const denied = await scopedParticipationGet(page, origin, participationPath(foreignId));
+      expect(denied.status, "Authenticated non-owner must receive 404").toBe(404);
+    }
     const expected = await readParticipation(page, origin, own);
-    for (const row of expected.receipts) observedPhases.add(row.phase);
+    // The third account must not substitute for the original lifecycle fixtures.
+    if (index !== 2) {
+      for (const row of expected.receipts) observedPhases.add(row.phase);
+    }
     await verifyParticipationProjection(page, origin, own, foreign, expected);
     // Reopen after a fresh document load; selection persistence is not claimed.
     await page.goto(origin + "/dashboard");
@@ -406,7 +453,7 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
         expect(sameParticipation(await readParticipation(page, origin, emptyRunId, "empty"), empty),
           "Verified empty evidence must survive reload").toBe(true);
         await verifyParticipationProjection(page, origin, emptyRunId, foreign, empty);
-      } else {
+      } else if (index === 1) {
         const deniedEmpty = await scopedParticipationGet(page, origin, participationPath(emptyRunId));
         expect(deniedEmpty.status, "Foreign owner must not read even an empty receipt inventory").toBe(404);
       }

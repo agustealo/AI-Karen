@@ -767,3 +767,19 @@ denied the empty run. No fixture creation, synthetic backend responses or
 execution mutation is authorized. Run the existing ARM-05C.5B test selector
 in the approved environment. The added mode fails if any required phase or
 empty fixture is missing. Browser proof remains NOT_RUN until actual execution.
+
+### ARM-05C.6E: cross-tenant specialist readback (additional opt-in)
+
+Enable the two ARM-05C.6B flags plus `KAREN_SPECIALIST_CROSS_TENANT_ACCEPTANCE=true`.
+Provide a third separately approved, sanitized non-admin account through
+`KAREN_UX_ACCOUNT_C_EMAIL` and `KAREN_UX_ACCOUNT_C_PASSWORD`, and its existing
+recorded terminal run through `KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID`.
+The third run must differ from all three original fixtures; the server must
+confirm a distinct authenticated user in a different tenant. A/B must still
+prove same-tenant owner isolation and all five lifecycle phases without C.
+All accounts must exclude configured foreign runs from personal history and
+deny direct foreign participation reads, including A's empty run for B/C.
+C must prove its own recorded evidence, reload and signed-out denial. Use the
+same private test selector and approved origin; no new fixture creation,
+execution mutation, synthetic response or credential artifacts. Actual browser
+proof remains NOT_RUN until the authorized run succeeds.
