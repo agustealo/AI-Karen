@@ -240,3 +240,32 @@ def test_system_status_remote_outages_require_observed_shared_cloud_failure(monk
     assert registry.get_system_status()["remote_provider_outages"] == ["cloud-observed-failure"]
     registry.health_monitor.record_provider_interaction("cloud-observed-failure", success=True)
     assert registry.get_system_status()["remote_provider_outages"] == []
+
+
+def test_diagnostic_snapshot_distinguishes_eligibility_inventory_and_observation():
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.register_configured_endpoint({
+        "provider_id": "diagnostic_test", "enabled": True,
+        "base_url": "http://127.0.0.1:1234/v1",
+        "default_model": "registered-model", "capabilities": ["chat"],
+    })
+    first = registry.get_provider_health_snapshot(endpoint.provider_id)
+    assert first["status"] == "unknown"
+    assert first["is_available"] is True
+    assert first["last_check"] is None
+    assert first["response_time"] is None
+    assert first["registered_model_count"] == 1
+    registry.health_monitor.record_provider_interaction(
+        endpoint.provider_id, success=False, error_message="private upstream text",
+    )
+    failed = registry.get_provider_health_snapshot(endpoint.provider_id)
+    assert failed["status"] == "degraded"
+    assert failed["last_check"] is not None
+    assert "private upstream text" not in repr(failed)
+    registry.health_monitor.record_provider_interaction(
+        endpoint.provider_id, success=True, response_time=0.125,
+    )
+    recovered = registry.get_provider_health_snapshot(endpoint.provider_id)
+    assert recovered["status"] == "healthy"
+    assert recovered["response_time"] == 0.125
+    assert registry.get_provider_health_snapshot("missing_test_provider") is None

@@ -308,14 +308,7 @@ def _build_provider_entry(
 
     resolved_status = "unknown"
     if status:
-        if status.is_available:
-            resolved_status = "healthy"
-        elif spec and getattr(spec, "requires_api_key", False) and not status.has_api_key:
-            resolved_status = "degraded"
-        elif status.health_status.value:
-            resolved_status = status.health_status.value
-        else:
-            resolved_status = "unknown"
+        resolved_status = status.health_status.value
     if healthy_only and resolved_status != "healthy":
         return None
 
@@ -352,7 +345,8 @@ def _build_provider_entry(
         health_status=resolved_status,
         error_message=getattr(status, "error_message", None),
         last_health_check=(
-            status.last_check.timestamp() if status and getattr(status, "last_check", None) else None
+            (registry_service.get_provider_health_snapshot(name) or {}).get("last_check")
+            if status else None
         ),
         cached_models_count=model_library_info.get(
             "local_models_count", len(getattr(spec, "fallback_models", []) or [])
@@ -648,94 +642,38 @@ async def get_provider_models(
         raise handle_api_exception(ex, f"Failed to get models for provider {provider_name}")
 
 
+def _project_provider_health(snapshot: Dict[str, Any]) -> ProviderHealthResult:
+    return ProviderHealthResult(
+        status=snapshot["status"],
+        message="Last observed provider health (no active probe)",
+        error_message=snapshot["error_message"],
+        last_check=snapshot["last_check"],
+        response_time=snapshot["response_time"],
+        capabilities=snapshot["capabilities"],
+    )
+
+
 @router.post("/health-check-all", response_model=Dict[str, ProviderHealthResult])
-async def health_check_all_providers(registry=Depends(get_llm_registry)):
-    """
-    Perform health check on all registered providers.
-    
-    Returns:
-        Dict containing health check results for each provider
-    """
-    try:
-        results = {}
-        provider_names = registry.list_providers()
-        
-        # Run health checks concurrently
-        async def check_provider(name: str):
-            try:
-                health = registry.health_check(f"provider:{name}")
-                return name, ProviderHealthResult(
-                    status=health.status,
-                    message=f"Provider {name} health check",
-                    error_message=health.error_message,
-                    last_check=health.last_check,
-                    response_time=health.response_time,
-                    capabilities=health.capabilities
-                )
-            except Exception as e:
-                logger.error(f"Health check failed for {name}: {e}")
-                return name, ProviderHealthResult(
-                    status="unhealthy",
-                    error_message=str(e),
-                    last_check=time.time()
-                )
-        
-        # Execute health checks concurrently
-        tasks = [check_provider(name) for name in provider_names]
-        health_results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        for result in health_results:
-            if isinstance(result, tuple):
-                name, health_result = result
-                results[name] = health_result
-            else:
-                logger.error(f"Health check task failed: {result}")
-        
-        return results
-        
-    except Exception as ex:
-        logger.error(f"Failed to perform health check on all providers: {ex}")
-        raise handle_api_exception(ex, "Failed to perform provider health checks")
+async def health_check_all_providers(registry_service=Depends(get_provider_registry_service)):
+    """Return existing observed health; this endpoint does not execute probes."""
+    results = {}
+    for name in registry_service.get_all_provider_names():
+        snapshot = registry_service.get_provider_health_snapshot(name)
+        if snapshot is not None:
+            results[name] = _project_provider_health(snapshot)
+    return results
 
 
 @router.get("/health/{provider_name}", response_model=ProviderHealthResult)
 async def health_check_provider(
     provider_name: str,
-    registry=Depends(get_llm_registry)
+    registry_service=Depends(get_provider_registry_service),
 ):
-    """
-    Perform health check on a specific provider.
-    
-    Args:
-        provider_name: Name of the provider to check
-        
-    Returns:
-        Health check result for the provider
-    """
-    try:
-        spec = registry.get_provider_spec(provider_name)
-        if not spec:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Provider '{provider_name}' not found"
-            )
-        
-        health = registry.health_check(f"provider:{provider_name}")
-        
-        return ProviderHealthResult(
-            status=health.status,
-            message=f"Provider {provider_name} health check",
-            error_message=health.error_message,
-            last_check=health.last_check,
-            response_time=health.response_time,
-            capabilities=health.capabilities
-        )
-        
-    except HTTPException:
-        raise
-    except Exception as ex:
-        logger.error(f"Failed to health check provider {provider_name}: {ex}")
-        raise handle_api_exception(ex, f"Failed to health check provider {provider_name}")
+    """Return observed provider health without instantiating a provider."""
+    snapshot = registry_service.get_provider_health_snapshot(provider_name)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    return _project_provider_health(snapshot)
 
 
 @router.get("/stats", response_model=ProviderStats)
@@ -1225,21 +1163,19 @@ async def get_provider_model_recommendations(
 # Export the router
 __all__ = ["router"]
 @router.get("/{provider_name}/health")
-async def check_provider_health(provider_name: str, registry=Depends(get_llm_registry)):
-    """Check health of a single provider."""
-    try:
-        status = registry.health_check(f"provider:{provider_name}")
-        return {
-            "name": provider_name,
-            "status": status.status,
-            "last_check": status.last_check,
-            "error_message": status.error_message,
-            "response_time": status.response_time,
-            "capabilities": status.capabilities,
-        }
-    except Exception as ex:
-        logger.error(f"Health check failed for {provider_name}: {ex}")
-        return handle_api_exception(ex, f"Failed to check health for {provider_name}")
+async def check_provider_health(
+    provider_name: str, registry_service=Depends(get_provider_registry_service),
+):
+    """Compatibility response shape backed by canonical observations."""
+    health = await health_check_provider(provider_name, registry_service)
+    return {
+        "name": provider_name,
+        "status": health.status,
+        "last_check": health.last_check,
+        "error_message": health.error_message,
+        "response_time": health.response_time,
+        "capabilities": health.capabilities,
+    }
 
 
 @router.post("/{provider_name}/disable")
@@ -1303,7 +1239,7 @@ class ProviderHealthResponse(BaseModel):
     provider_id: str
     status: str  # healthy, degraded, unhealthy, unknown
     message: str
-    last_check: float
+    last_check: Optional[float] = None
     response_time: Optional[float] = None
     error_details: Optional[Dict[str, Any]] = None
     capabilities: Dict[str, Any] = Field(default_factory=dict)
@@ -1674,105 +1610,49 @@ async def get_llm_health_summary(registry=Depends(get_llm_registry)):
 async def get_provider_health_detailed(
     provider_id: str,
     include_models: bool = True,
-    registry=Depends(get_llm_registry)
+    registry_service=Depends(get_provider_registry_service),
 ):
-    """
-    Get detailed health information for a specific provider.
-    
-    This endpoint provides comprehensive health diagnostics including model availability,
-    rate limiting status, and detailed error information for troubleshooting.
-    """
-    try:
-        spec = registry.get_provider_spec(provider_id)
-        if not spec:
-            raise HTTPException(
-                status_code=404,
-                detail=f"Provider '{provider_id}' not found"
-            )
-        
-        start_time = time.time()
-        
-        # Perform health check
-        health = registry.health_check(f"provider:{provider_id}")
-        
-        response = ProviderHealthResponse(
-            provider_id=provider_id,
-            status=health.status,
-            message=health.message or f"Health check for {provider_id}",
-            last_check=health.last_check or start_time,
-            response_time=health.response_time,
-            capabilities={
-                "requires_api_key": spec.requires_api_key,
-                "supports_streaming": "streaming" in spec.capabilities,
-                "supports_embeddings": "embeddings" in spec.capabilities,
-                "supports_function_calling": "function_calling" in spec.capabilities,
-                "local_execution": "local_execution" in spec.capabilities,
-                "provider_type": getattr(spec, "provider_type", "unknown")
-            }
-        )
-        
-        # Add error details if unhealthy
-        if health.status != "healthy" and health.error_message:
-            response.error_details = {
-                "error_message": health.error_message,
-                "error_type": "health_check_failed",
-                "timestamp": health.last_check
-            }
-        
-        # Check model availability if requested
-        if include_models:
-            try:
-                # Try to get model count
-                if spec.discover:
-                    try:
-                        models = spec.discover()
-                        model_count = len(models) if models else 0
-                        response.model_availability = {
-                            "total_models": model_count,
-                            "discovery_successful": True,
-                            "last_discovery": time.time()
-                        }
-                    except Exception as e:
-                        response.model_availability = {
-                            "total_models": len(spec.fallback_models),
-                            "discovery_successful": False,
-                            "discovery_error": str(e),
-                            "fallback_models_available": len(spec.fallback_models)
-                        }
-                else:
-                    response.model_availability = {
-                        "total_models": len(spec.fallback_models),
-                        "discovery_supported": False,
-                        "fallback_models_available": len(spec.fallback_models)
-                    }
-                    
-            except Exception as e:
-                logger.warning(f"Failed to check model availability for {provider_id}: {e}")
-                response.model_availability = {
-                    "error": str(e),
-                    "check_failed": True
-                }
-        
-        # Check rate limiting status for API-based providers
-        if spec.requires_api_key:
-            try:
-                # This would be implemented based on provider-specific rate limiting info
-                response.rate_limit_status = {
-                    "rate_limited": False,
-                    "requests_remaining": "unknown",
-                    "reset_time": None,
-                    "note": "Rate limit status not implemented for this provider"
-                }
-            except Exception:
-                pass
-        
-        return response
-        
-    except HTTPException:
-        raise
-    except Exception as ex:
-        logger.error(f"Failed to get detailed health for provider {provider_id}: {ex}")
-        raise handle_api_exception(ex, f"Failed to get detailed health for provider {provider_id}")
+    """Report observed health and registered inventory, never active inference."""
+    snapshot = registry_service.get_provider_health_snapshot(provider_id)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Provider not found")
+    registered = snapshot["capabilities"]["registered"]
+    response = ProviderHealthResponse(
+        provider_id=provider_id,
+        status=snapshot["status"],
+        message="Last observed provider health (no active probe)",
+        last_check=snapshot["last_check"],
+        response_time=snapshot["response_time"],
+        capabilities={
+            **snapshot["capabilities"],
+            "supports_streaming": "streaming" in registered,
+            "supports_embeddings": "embeddings" in registered,
+            "supports_function_calling": "function_calling" in registered or "tools" in registered,
+            "local_execution": "local_execution" in registered,
+        },
+    )
+    if snapshot["error_message"]:
+        response.error_details = {
+            "error_message": snapshot["error_message"],
+            "error_type": "provider_unavailable",
+            "timestamp": snapshot["last_check"],
+        }
+    if include_models:
+        response.model_availability = {
+            "total_models": snapshot["registered_model_count"],
+            "source": "registered_inventory",
+            "execution_verified": False,
+            "discovery_successful": None,
+            "last_discovery": None,
+        }
+    if snapshot["capabilities"]["requires_api_key"]:
+        response.rate_limit_status = {
+            "rate_limited": None,
+            "requests_remaining": "unknown",
+            "reset_time": None,
+            "note": "Rate limit status not observed",
+        }
+    return response
 
 
 @router.post("/{provider_id}/refresh-models")

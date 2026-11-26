@@ -13,7 +13,7 @@ import os
 import threading
 from urllib.parse import urlsplit
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Type, Union
 
@@ -879,6 +879,51 @@ class ProviderRegistryService:
                     HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN,
                 },
             )
+
+    def get_provider_health_snapshot(self, name: str) -> Optional[Dict[str, Any]]:
+        """Read canonical observed health and registered inventory without a probe.
+
+        Registry availability is eligibility, not a successful execution.
+        Do not return raw provider errors, credentials, paths or URLs.
+        """
+        status = self.get_provider_status(name)
+        if status is None:
+            canonical = self.canonicalize_provider_id(name)
+            if canonical and canonical != name:
+                name = canonical
+                status = self.get_provider_status(name)
+        if status is None:
+            return None
+        endpoint = self.get_provider_endpoint(name)
+        registration = self._provider_registrations.get(name)
+        # An orphaned compatibility cache entry does not establish a provider.
+        if endpoint is None and registration is None:
+            return None
+        observed = self.health_monitor.get_provider_health(name)
+        models = self.get_registered_models(name, healthy_only=False)
+        if endpoint and endpoint.default_model not in (None, "", "auto"):
+            if endpoint.default_model not in models:
+                models.append(endpoint.default_model)
+        checked = observed.last_checked_at
+        return {
+            "provider_id": name,
+            "status": status.health_status.value,
+            "is_available": status.is_available,
+            "last_check": checked.replace(tzinfo=timezone.utc).timestamp() if checked else None,
+            "response_time": observed.latency_ms / 1000.0 if observed.latency_ms is not None else None,
+            "error_message": (
+                "Provider unavailable or not configured" if not status.is_available else None
+            ),
+            "capabilities": {
+                "registered": sorted(cap.value for cap in status.capabilities),
+                "requires_api_key": bool(
+                    (endpoint and endpoint.api_key_env)
+                    or (registration and registration.requires_api_key)
+                ),
+            },
+            "registered_model_count": len(models),
+            "source": "canonical_observed_health",
+        }
 
     def get_available_providers(
         self,
