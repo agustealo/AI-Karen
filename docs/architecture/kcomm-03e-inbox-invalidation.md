@@ -62,3 +62,18 @@ The Redis read window is bounded; canonical auth, driver cleanup and ingress
 deadlines are separate. No claim of lossless delivery, live presence, SSE,
 or production activation. Polling remains mandatory for missed hints and
 privacy cascades.
+
+
+### Disposable Redis process-isolation gate
+
+The existing Communications PostgreSQL proof workflow now additionally starts
+a disposable Redis 7 container on a dynamically assigned loopback port.
+The test uses three independent Python subscriber processes and the canonical
+publisher/manager, exact Redis subscription counts, one intended owner and
+two foreign scopes (different owner, different tenant). It requires a real
+change result for the owner, verified idle results for the other two, and
+subscription count zero after exit. It also checks cancellation and resubscribe
+using real connections. It does not flush or modify existing Redis data, use
+hosted credentials, or change production configuration. This certifies the
+broker boundary only, not authenticated end-to-end HTTP revocation or browser
+delivery. The test must actually run and pass; an opt-out skip is not evidence.
