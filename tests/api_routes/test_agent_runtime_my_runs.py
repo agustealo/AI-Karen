@@ -264,3 +264,51 @@ async def test_transition_route_uses_authenticated_owner_and_honest_errors(mode,
         reader.assert_not_awaited()
     else:
         reader.assert_awaited_once_with(run_id="run-1", tenant_id=tenant, user_id=owner)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode,expected", [
+    ("recorded", 200), ("empty", 200), ("missing", 404), ("wrong", 404),
+    ("outage", 503), ("ledger_outage", 503), ("inactive", 403),
+    ("unverified", 403), ("default", 403), ("dev-tenant", 403), ("long_id", 404),
+])
+async def test_participation_route_preserves_owner_scope_and_availability(mode, expected):
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import DurableRunLedgerUnavailable
+    from ai_karen_engine.api_routes.agents.runtime import get_my_run_participation
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    tenant, owner = str(uuid4()), str(uuid4())
+    run_id = "x" * 129 if mode == "long_id" else "run-1"
+    evidence = {
+        "run_id": run_id,
+        "evidence_status": "empty" if mode == "empty" else "recorded",
+        "receipts": [] if mode == "empty" else [{"phase": "interrupted"}],
+        "truncated": False,
+        "response_source": "postgres_outcome_records",
+    }
+    reader = AsyncMock(return_value=evidence)
+    if mode == "missing":
+        reader.return_value = None
+    elif mode == "wrong":
+        reader.return_value = {**evidence, "run_id": "other"}
+    elif mode == "outage":
+        reader.side_effect = OutcomeStoreError("private database diagnostic")
+    elif mode == "ledger_outage":
+        reader.side_effect = DurableRunLedgerUnavailable("private database diagnostic")
+    principal = SimpleNamespace(
+        tenant_id=mode if mode in {"default", "dev-tenant"} else tenant,
+        user_id=owner, is_active=mode != "inactive", is_verified=mode != "unverified",
+    )
+    plane = SimpleNamespace(read_run_participation=reader)
+    if expected == 200:
+        assert await get_my_run_participation(run_id, current_user=principal, control_plane=plane) == evidence
+    else:
+        with pytest.raises(HTTPException) as error:
+            await get_my_run_participation(run_id, current_user=principal, control_plane=plane)
+        assert error.value.status_code == expected
+        assert "private database diagnostic" not in error.value.detail
+    if expected == 403 or mode == "long_id":
+        reader.assert_not_awaited()
+    else:
+        reader.assert_awaited_once_with(run_id=run_id, tenant_id=tenant, user_id=owner)
