@@ -428,14 +428,71 @@ class ProviderModelCompatibilityService:
             return validation_result
             
         except Exception as e:
-            logger.error(f"Failed to validate provider setup for {provider_name}: {e}")
+            logger.warning(
+                "provider_model_compatibility_unavailable",
+                extra={"provider_id": provider_name, "error_type": type(e).__name__},
+            )
             return {
                 "provider": provider_name,
                 "has_compatible_models": False,
                 "status": "error",
-                "error": str(e)
+                "error": "Model compatibility information unavailable"
             }
     
+    def project_integration_status(self, summary: Dict[str, Any]) -> Dict[str, Any]:
+        """Combine canonical health with compatibility inventory, without probes."""
+        groups = summary["groups"]
+        result = {
+            "providers": {},
+            "overall_status": summary["overall_status"],
+            "total_providers": summary["total_providers"],
+            "healthy_providers": len(groups["healthy"]),
+            "degraded_providers": len(groups["degraded"]),
+            "unhealthy_providers": len(groups["unhealthy"]),
+            "unknown_providers": len(groups["unknown"]),
+            "unavailable_providers": len(groups["unavailable"]),
+            "providers_with_models": 0,
+            "total_compatible_models": 0,
+            "compatibility_unknown_providers": 0,
+            "last_health_check": summary["last_health_check"],
+            "recommendations": [],
+        }
+        for name, snapshot in summary["providers"].items():
+            try:
+                validation = self.validate_provider_model_setup(name)
+            except Exception:
+                validation = {"status": "error"}
+            known = validation.get("status") in {"healthy", "needs_models"}
+            if not known:
+                result["compatibility_unknown_providers"] += 1
+            has_models = bool(validation.get("has_compatible_models")) if known else None
+            compatible_count = validation.get("total_compatible", 0) if known else None
+            result["providers"][name] = {
+                "name": name,
+                "healthy": name in groups["healthy"],
+                "health_status": snapshot["status"],
+                "is_available": snapshot["is_available"],
+                "has_compatible_models": has_models,
+                "has_local_models": bool(validation.get("has_local_models")) if known else None,
+                "local_models_count": validation.get("local_models_count", 0) if known else None,
+                "available_for_download": validation.get("available_for_download", 0) if known else None,
+                "total_compatible": compatible_count,
+                "status": validation["status"] if known else "unknown",
+                "compatibility_observed": known,
+                "recommendations": validation.get("recommendations", []) if known else [
+                    "Model Library compatibility information unavailable",
+                ],
+            }
+            if has_models:
+                result["providers_with_models"] += 1
+            if compatible_count is not None:
+                result["total_compatible_models"] += compatible_count
+        if result["compatibility_unknown_providers"]:
+            result["recommendations"].append("Some model compatibility information is unavailable")
+        elif not result["providers_with_models"]:
+            result["recommendations"].append("Review Model Library for compatible models")
+        return result
+
     def clear_compatibility_cache(self):
         """Clear the compatibility cache."""
         self.compatibility_cache.clear()

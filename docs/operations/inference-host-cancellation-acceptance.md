@@ -65,3 +65,362 @@ A missing artifact or unavailable host is a **release HOLD** for this gate, not 
 ## Metric/version caution
 
 Prometheus metrics have version-dependent availability. Relevant native series include vllm:num_requests_running, vllm:num_requests_waiting, vllm:generation_tokens_total, vllm:kv_cache_usage_perc and vllm:request_success_total with finished_reason=abort. An incremented abort counter is not required because some versions omit that signal despite terminating work. Instead, the isolated request must produce native scheduler drain, a stable generation counter and no change to its normal completion counter. The separately marked per-request abort trace remains uncertified. Model residency can legitimately persist as warm weights or prefix cache even when no request is running.
+
+
+## In-process Transformers retirement boundary (KUI-004B4.48C7Z8E7)
+
+The governed single-device Transformers path fences observed CUDA devices with
+`torch.cuda.synchronize(device)` before the native generation lock is released.
+The same scope covers governed specialist borrows, including marker mutation,
+reference inference, guided generation and verifier operations. The explicit
+CPU path does not issue a CUDA synchronization. Unknown device identity denies
+governed dispatch. Cancellation does not bypass the retirement fence.
+
+A synchronization failure places the canonical Transformers runtime in a
+process-wide native execution hold; replacing the cached model or provider
+runtime is not evidence of recovery. No automated reset is supplied. Operators
+must investigate the device/driver failure and establish host quiescence before
+a controlled restart. No model attempt may be replayed automatically as orphan
+recovery. Already-running work on other instances is not certified terminated by
+the hold, and the hold is not durable across process death.
+
+The source regression exercises explicit device selection, lock ordering,
+cancelled borrow retirement and failed-fence replacement denial using test
+doubles. **Actual CUDA host acceptance remains NOT_RUN.** These checks do not
+establish multi-device/remote execution, GPU weight release, process-death
+recovery, or successful cancellation of a hung driver. Governed pipeline
+placement is now fenced using the explicit selected placement device even if
+the pipeline constructor raises before returning an object. A returned pipeline
+with mismatched placement puts native execution on hold. This does not certify
+arbitrary device work inside third-party loaders or failed multi-device loading.
+Do not promote this source contract into a consumer-ready or GPU release receipt.
+
+
+## Durable orphan recovery audit (KUI-004B4.48C7Z8E8)
+
+Chat's durable authority is `SqlChatRunRepository` and its
+`ChatRunCoordinator`, not the separate Medusa run ledger:
+
+- `admit` turns expired running/cancelling rows into orphaned rows within the
+  authenticated conversation transaction. The unresolved-run partial unique
+  index still fences new transport and submission IDs.
+- `renew` and `finish` use the scoped lease token and expiry. Standalone
+  completion is not allowed; the canonical conversation repository atomically
+  commits transcript and run finality.
+- `read_recovery_run` and `read_projected_events` observe durable state only.
+  Expired active rows are interrupted, not confirmed cancelled or completed.
+- `ChatRunCoordinator.stream` cancels upstream on lease loss and refuses a
+  terminal completion without the exact committed transcript evidence.
+- Medusa reconciles its own active rows from Redis and marks absent leases
+  orphaned; this is not a device-retirement receipt and must not be used to
+  reopen a chat admission.
+
+No new recovery ledger or automatic replay mechanism is introduced. Existing
+source recovery rules remain in force. Process-wide native holds are not durable
+across worker death: host quiescence and authorized operator recovery remain
+required. A further adversarial finding is that a late device synchronization
+failure can be observed and discarded by the blocking worker cancellation join,
+which preserves caller cancellation but may obscure the unverified device
+retirement from the chat lifecycle. Propagate that failure without enabling
+fallback or resolving the orphan fence before certifying recovery. Actual
+process-death plus device recovery acceptance remains NOT_RUN.
+
+
+### Unverified retirement propagation (KUI-004B4.48C7Z8E9)
+
+The typed `NativeRetirementUnverified` failure preserves the distinction
+between caller cancellation and failed native cessation. The canonical worker
+join rethrows a late retirement failure even after repeated cancellation.
+Reasoning strategy/executor and runtime fallback boundaries propagate that
+failure instead of producing a normal result. The chat stream coordinator
+leaves its existing unresolved lease fence intact; the AG-UI diagnostic is
+not a durable terminal event. These source contracts do not certify hardware
+quiescence or authorize a process restart. Full cross-adapter and real device
+acceptance remain required.
+
+
+### Cross-adapter containment audit (KUI-004B4.48C7Z8E10)
+
+Typed retirement failure now bypasses retry/fallback handlers in the legacy
+ProviderRuntime and SafeStageRunner, graph reasoning and synthesis nodes, and
+LangGraph's nonstreaming and streaming orchestration adapters. The workflow
+agent forwarding stream preserves the specific failure across child-task
+cleanup rather than treating it as normal completion. The structured-tool
+SDK's current transport uses the original admission and HTTP transport; this
+does not establish native device retirement for remote schedulers.
+
+**Outstanding P0 authority gap:** WorkflowGenerationRuntime still accepts a
+serialized plan and delegates to legacy ProviderRuntime, whose synchronous
+generation path uses a timed thread and independent retries. Exception
+containment does not govern that dispatch. Replace this live workflow synthesis
+path with the original authenticated admission/meter and canonical provider
+transport. Do not treat the compatibility route, arbitrary SDK/tool callbacks,
+or Medusa's independent durable ledger as proven native cessation. The
+candidate must not merge until the live workflow dispatch boundary is resolved
+and full exact-head verification is available.
+
+
+### Workflow model authority (KUI-004B4.48C7Z8E11)
+
+Workflow generation no longer calls the legacy provider runtime. The Runtime
+binds the original authenticated context, policy plan and budget meter in a
+revocable in-process scope while driving graph execution. Serialized graph
+state alone cannot authorize synthesis. The existing prompt owner assembles
+workflow context; the canonical expression gateway selects the endpoint;
+its governed non-streaming HTTP adapter reserves each concrete attempt on
+the original meter, verifies model provenance and respects its deadline.
+No new router or retry chain is introduced. Native or streaming model
+transport is not enabled by this workflow adapter. The graph may still
+stream observed workflow activity and the completed synthesis.
+
+This source change does not certify arbitrary graph-local evidence sources,
+tool side effects, SDK callbacks or remote device cessation. Exact-head
+tests and independent review remain required before merge.
+
+
+### Workflow fallback and evidence boundary (KUI-004B4.48C7Z8E12–E13)
+
+The E12 gateway prevents a disabled primary engine or substituted concrete
+provider from bypassing a no-degradation plan. Chat System Burn at
+`6d4d16edbcb993d926b92c3477fbe52b3a37dc00` passed its model-runtime test
+group (226 tests), including the governed workflow HTTP regression file.
+Context Authority and Cognitive Proof also passed at that head.
+The E13 candidate uses original Runtime messages and the existing scoped
+CognitiveContext memory projection rather than checkpoint copies of history,
+profile, recalled facts or instructions. Graph-local tool and reasoning
+result authorization is still open; this does not establish their provenance
+or grant execution rights. Added HTTP-boundary fallback tests for shared
+quota, forbidden fallback and verified actual provider identity.
+
+The existing caller census reported 1,632 Python files, 89 candidates and no
+parse errors at E12. It is not proof of legacy executor retirement. Chat
+System Burn now records tracked legacy symbol reference filenames alongside
+the existing census. Review each candidate, migrate any active execution
+consumer and preserve security coverage before deleting the executor or
+retiring tests. The new candidate requires fresh exact-head CI, independent
+review and actual host/consumer acceptance; no merge is implied.
+
+
+### Graph evidence and raw tool containment (KUI-004B4.48C7Z8E14)
+
+The active LangGraph tool node previously invoked ToolService directly,
+without the original execution meter, governed cache boundary or durable
+invocation receipt. The existing Medusa ToolBridge is the receipt-backed
+execution path, but cannot be borrowed by a graph using fabricated
+specialist or trajectory identities. Until the common receipt owner is
+wired to the original graph execution, the raw graph tool node rejects
+nonempty calls before invocation, including direct calls to its adapter.
+No-tool graph execution remains available. Existing direct-capability
+and Medusa tool execution paths are unchanged.
+
+Workflow synthesis now excludes checkpoint plans, safety evaluations and
+arbitrary graph context from the prompt. Nonempty graph tool or reasoning
+results are explicitly denied before model execution pending verified
+evidence admission; empty graph context uses original runtime workflow
+identifiers. This is containment, not completed feature migration.
+Nested graph reasoning execution still needs original-meter and evidence
+binding before it may be certified. No claim of authorized graph tool
+success, safe executor deletion or consumer readiness is made. Restore
+graph tool and reasoning capability through canonical receipt-backed
+execution and test both positive and denied paths.
+
+
+### Receipt bridge and graph trajectory identity (KUI-004B4.48C7Z8E15)
+
+The E13 Chat System Burn model-runtime group passed 230 tests and the
+legacy reference inventory step succeeded before that run was superseded.
+The inventory identifies an actual remaining executor import in
+`agent_medusa/specialists/bridges.py` (CanonicalGenerationExecutor).
+ProviderRuntime retirement remains blocked on that consumer and its
+regressions; response-source strings alone are not executor imports.
+
+The existing ToolBridge now validates the original authenticated chat
+plan/meter when a trusted ChatExecutionContext is present, denies forged
+scope or fresh meters before dispatch, checks eligibility before budget
+reservation, rechecks live authority before dispatch and after durable
+receipt persistence. The existing non-chat compatibility contract remains
+unchanged in this slice; it is not certified by the chat grant. No new
+receipt store or execution gate is introduced. ChatRuntime passes its
+actual trajectory identifier to WorkflowRuntime on both chat paths; the
+host-owned workflow binding now supplies this identifier to the model
+execution receipt, never from checkpoint metadata.
+
+Raw graph tool calls remain blocked: the Medusa-specific actor/step
+receipt contract, parameter admission, replay protection, remote-effect
+reconciliation and safe model-visible evidence projection must be wired
+before restoring graph execution. Nested graph reasoning and the legacy
+specialist generation adapter remain open. This is a prerequisite repair,
+not a claim of completed graph functionality or production acceptance.
+
+
+### Local-compute graph tool restoration (KUI-004B4.48C7Z8E16)
+
+E15 DEV_FAST reported two missing SpecialistExecutionContext type
+references; the type-checking import is restored without weakening lint.
+E16 restores a narrow graph tool path through the existing ToolBridge and
+OutcomeRecorder. Only tool implementations explicitly marked as local
+computation in their registered metadata are eligible; the audited
+text-processing implementation is the first opt-in. The actual resolved
+ToolService implementation must retain that marker. The original CORTEX
+tool list and ingress parameter snapshot are compared with the graph
+request, the original live plan and meter are checked, the host trajectory
+is preserved, and the batch is claimed once before suspension. The audit
+actor records the actual graph adapter, not a fabricated specialist.
+
+The graph receives only receipt references. Successful output is retained
+in the live runtime scope, projected as data into the canonical prompt,
+checked for intact inclusion, and restricted to local model execution.
+Checkpoint-only, altered or omitted receipts cannot authorize synthesis.
+This is a controlled, local-only restoration, not a general action
+framework: network/filesystem/mutation tools, approval workflows,
+resumability and nested graph reasoning remain blocked from this adapter.
+The new tests exercise real text processing with the in-memory receipt
+store and controlled HTTP model transport, replay/parameter denial and
+network-tool denial. Live PostgreSQL and host acceptance remain required.
+
+
+### Tool package dependency isolation (KUI-004B4.48C7Z8E17)
+
+E16 Chat System Burn completed its model-runtime group with 239 passed
+and two failures. The revocation regression used a SimpleNamespace
+instead of the typed ExecutionDecision; the fixture now uses the real
+contract. The positive local graph tool test could not register text
+processing: eager package imports failed with a dependency TypeError.
+The existing production catalog is now independently loaded per tool,
+with lazy compatibility exports and one registration function used by
+ToolService. The former web-search factory names re-export that owner.
+An optional tool's import or registration failure cannot hide unrelated
+tools, and failure logs carry only tool identity and exception type.
+
+The new regression deliberately fails the web-search import while proving
+real local text processing through ToolService. This does not certify
+every optional tool's dependencies or explain the underlying TypeError.
+No tool admission guard is relaxed. Medusa generation migration and
+legacy ProviderRuntime retirement remain pending, as do fresh exact-head
+CI, real database evidence and host acceptance.
+
+
+### Governed specialist synthesis and local evidence authorization (KUI-004B4.48C7Z8E18)
+
+E17 Chat System Burn recorded 241 passes and one failure. Tool registration,
+revocation and local computation execution recovered; the successful
+receipt reached the expression gateway, which denied synthesis because
+the local-only callback incorrectly required an attachment session.
+The workflow callback now distinguishes receipt-bound local computation
+from attachment selection or retained attachment scope. Mixed turns
+still require the original durable attachment authorization; neither
+kind of local evidence can be routed externally.
+
+The remaining Medusa CanonicalGenerationExecutor now uses PromptRuntime,
+ExpressionGateway and the original GovernedToolModelAdmission rather
+than ProviderRuntime. Actual transport attempts consume the shared
+meter; the bridge no longer charges a speculative model call. The
+specialist path requires the original authenticated multi-agent scope
+and rejects structured/streaming requests until their contracts are
+supported. Specialist synthesis is conservatively local-only pending
+a separate external evidence disclosure contract. Tests cover denial
+before transport for missing/copy/replaced scope, single actual model
+reservation and mixed attachment/tool authorization. No legacy file
+deletion, independent review or deployment is claimed. Fresh exact-head
+CI remains required.
+
+
+### Retired response synthesis facade and reference audit (KUI-004B4.48C7Z8E19)
+
+The E18 exact-head Chat System Burn model-runtime group completed
+successfully, including the graph evidence and specialist generation
+regressions, before the overall workflow completed. Source inspection
+found one additional direct legacy consumer: services/response/
+response_synthesizer.py constructed ProviderRuntime, routed and retried
+without a live authenticated plan or meter, and produced emergency
+text. The public ResponseSynthesizer constructor/import remains a
+retirement shim but its synthesis method denies execution. Content
+validation, prompt building and sanitization remain separate and
+unchanged. The new regression asserts no router access and denial of
+forged receipt/context metadata for both streaming and nonstreaming.
+
+The existing read-only CI inventory now includes ResponseSynthesizer
+aliases, ProviderProcessingError and exact source-line references in
+src/tests/scripts. This is candidate evidence, not proof of reachability.
+The ProviderRuntime protocol in model_runtime/provider_contracts.py
+and historical provider_runtime response-source strings are distinct
+from the retired concrete executor. Source-level architecture tests and
+legacy behavior tests still reference that concrete class; do not
+delete it until those contracts are migrated and the full inventory is
+reviewed. No local test execution, full exact-head CI, deployment or
+physical-host acceptance is claimed.
+
+
+### Final multi-specialist synthesis and citation contract migration (KUI-004B4.48C7Z8E20)
+
+E19 exact-head Chat System Burn passed, including 245 model-runtime
+tests. Its expanded caller inventory (artifact 15081861626, run
+45741750957) found Medusa ResponseAssembler's remaining indirect legacy
+ResponseSynthesizer consumer. E19 Plugin Backend reported 2028 passes
+and one failure: a textual assertion requiring retry implementation
+inside the now-retired facade.
+
+The final multi-specialist stage now uses the same governed
+CanonicalGenerationExecutor as other specialist stages. The coordinator
+passes its original authenticated plan and meter, not serialized
+metadata. The executor exposes the observed ExpressionResult without
+a second generation path; the assembler preserves actual provider/model
+attribution and validates the sanitized answer. A single Deep Agents
+answer still does not trigger another model call. Missing or mismatched
+scope fails closed. The obsolete citation source assertion is retired
+in favor of behavioral validation in ChatRuntime, including a new test
+rejecting fabricated gateway citation metadata. Both citation suites
+are explicitly included in Chat System Burn.
+
+Remaining: actual final synthesis CI, audit of Medusa terminal trajectory
+status relative to synthesis, duplicate ProviderProcessingError classes
+(including raw exception string exposure in the legacy router), legacy
+executor test/telemetry migration and deletion, full exact-head quality
+and physical-host acceptance. No production merge or deployment.
+
+
+### Provider error authority and Medusa terminal synthesis (KUI-004B4.48C7Z8E21)
+
+E20's head was mergeable against the unchanged base; 26 workflows were
+registered, four successful and no failures at initial inspection.
+The two ProviderProcessingError classes are consolidated into the existing
+provider-neutral contract. Legacy imports re-export the same class,
+preserving original causal exceptions for internal classification while
+excluding upstream error strings from the wrapper's display message.
+Ordinary Medusa error logging no longer attaches raw exception traces.
+
+The coordinator now registers a running observational trajectory before
+specialist execution, keeps the active plan through final synthesis,
+and completes the trajectory using the returned response status rather
+than preliminary step aggregation. Failure and cancellation also close
+the trajectory and clean up the active plan. This is not a replacement
+for the durable run ledger: distributed cancellation races and durable
+terminal acknowledgement still need independent verification.
+
+Regression coverage checks alias identity and redaction, running status
+during final synthesis, degraded/error/cancelled terminal outcomes, and
+safe Medusa log projection. The targeted suites are included in Chat
+System Burn. No full CI, deployment or legacy executor deletion claimed.
+
+
+### Integration reconciliation and exact-head stabilization (KUI-004B4.48C7Z8E22)
+
+The E20 Chat System Burn model group returned 245 passes and one
+failure. Final Medusa synthesis and its positive provenance assertions
+passed; the second invocation was denied through the gateway's existing
+EngineUnavailableError projection, not the PermissionError expected by
+the regression. The test now verifies that public exception and confirms
+the original single model reservation and transport count remain unchanged.
+The generic budget-denial error projection remains an observability debt.
+The E20 durable-run gate also reported Black formatting differences in
+the coordinator; the reported formatting and subsequent extra blank line
+are corrected, pending CI.
+
+Live main advanced to 7dcac39bdb57a458b6dd9ef2b54873e81595ba79, changing
+three overlapping files. Reconciliation preserves the mainline
+ARM-05C.1B ledger update, deferral of AGENT_STARTED until actual child
+admission and BUSY lifecycle admission, and all five associated tests,
+alongside E21 terminal synthesis lifecycle coverage. The merge commit
+has both the previous branch head and the observed main as parents.
+No forced update, legacy deletion, test weakening of budget assertions,
+or production deployment. Fresh exact-head CI remains mandatory.

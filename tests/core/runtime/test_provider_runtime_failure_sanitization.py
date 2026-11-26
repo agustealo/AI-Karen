@@ -100,3 +100,36 @@ async def test_wrapped_rate_limit_preserves_backoff_without_exposing_secret():
     assert "rate limits" in health["error_message"].lower()
     assert SECRET not in repr(health)
     assert SECRET not in str(failure)
+
+
+@pytest.mark.asyncio
+async def test_retirement_failure_never_wraps_retries_or_falls_back(monkeypatch):
+    from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
+    from unittest.mock import AsyncMock
+
+    runtime = ProviderRuntime.__new__(ProviderRuntime)
+    runtime.retry_attempts = 3
+    runtime.retry_initial_delay = 0
+    attempts = []
+    failure = NativeRetirementUnverified()
+
+    async def dispatch(*args, **kwargs):
+        attempts.append("dispatch")
+        raise failure
+        if False:
+            yield ""
+
+    monkeypatch.setattr(runtime, "_process_with_provider", dispatch)
+    monkeypatch.setattr(runtime, "_respect_rate_limit", AsyncMock())
+    monkeypatch.setattr(runtime, "_resolve_actual_model", lambda *args: "model")
+    fallback = AsyncMock(side_effect=AssertionError("retirement must not trigger fallback"))
+    monkeypatch.setattr(runtime, "_execute_fallback_chain", fallback)
+    decision = SimpleNamespace(
+        correlation_id="corr", selected_provider="local-runtime", selected_model="model",
+    )
+    request = SimpleNamespace(stream=False)
+    with pytest.raises(NativeRetirementUnverified) as captured:
+        await runtime.execute(decision, request)
+    assert captured.value is failure
+    assert attempts == ["dispatch"]
+    fallback.assert_not_awaited()

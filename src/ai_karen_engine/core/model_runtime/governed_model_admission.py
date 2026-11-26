@@ -8,13 +8,35 @@ prompts and facade dictionaries cannot issue permission or reset a budget.
 
 from __future__ import annotations
 
+import asyncio
+import threading
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from contextvars import copy_context
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, TypeVar
 
-from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint
+from ai_karen_engine.core.model_runtime.provider_contracts import (
+    NativeRetirementUnverified, ProviderNotAvailable,
+)
+from ai_karen_engine.core.model_runtime.provider_endpoint import ProviderEndpoint, ProviderEndpointType
 from ai_karen_engine.core.model_runtime.provider_execution import (
     provider_endpoint_requires_external_permission,
 )
+from ai_karen_engine.core.model_runtime.runtime_engine import (
+    EndpointKind, EndpointProtocol, Locality, RuntimeEngine,
+)
+
+
+_T = TypeVar("_T")
+
+
+class ModelAdmissionBudgetExhausted(RuntimeError):
+    """The original meter refused a reservation; not provider evidence."""
+
+
+class ModelAdmissionDeadlineExceeded(ProviderNotAvailable):
+    """The original execution deadline expired; not a provider timeout."""
 
 
 @dataclass(frozen=True, slots=True, repr=False)
@@ -86,6 +108,7 @@ class GovernedToolModelAdmission:
         required = constraints.get("provider")
         eligible = constraints.get("eligible_providers")
         forbidden = constraints.get("forbidden_providers")
+        allowed_providers = constraints.get("allowed_providers")
         if required and required != provider_id:
             raise PermissionError("governed_model_provider_not_authorized")
         if eligible is not None:
@@ -94,6 +117,13 @@ class GovernedToolModelAdmission:
             ):
                 raise PermissionError("governed_model_provider_constraints_invalid")
             if eligible and provider_id not in eligible:
+                raise PermissionError("governed_model_provider_not_authorized")
+        if allowed_providers is not None:
+            if not isinstance(allowed_providers, (list, tuple, set)) or not all(
+                isinstance(item, str) and item for item in allowed_providers
+            ):
+                raise PermissionError("governed_model_provider_constraints_invalid")
+            if allowed_providers and provider_id not in allowed_providers:
                 raise PermissionError("governed_model_provider_not_authorized")
         if forbidden is not None:
             if not isinstance(forbidden, (list, tuple, set)) or not all(
@@ -139,7 +169,7 @@ class GovernedToolModelAdmission:
         )
 
     async def reserve_transport(self, endpoint: ProviderEndpoint, *, model: str | None = None) -> None:
-        """Validate first; charge exactly one actual model attempt on original meter."""
+        """Validate first; reserve one model call, not evidence of dispatch."""
         if not isinstance(endpoint, ProviderEndpoint):
             raise PermissionError("governed_model_endpoint_not_eligible")
         external = provider_endpoint_requires_external_permission(endpoint)
@@ -155,7 +185,189 @@ class GovernedToolModelAdmission:
             ):
                 raise PermissionError("governed_external_model_execution_denied")
         if not await self.meter.reserve_model_execution(external=external):
-            raise RuntimeError("governed_model_execution_budget_exhausted")
+            raise ModelAdmissionBudgetExhausted("governed_model_execution_budget_exhausted")
+
+    @asynccontextmanager
+    async def admitted_execution_deadline(self) -> AsyncIterator[float]:
+        """Fence already-reserved async work by the original meter deadline.
+
+        Call only after the existing atomic reservation. This is neither
+        another grant nor another reservation, and never resets the clock.
+        Scope expiry is local cancellation, not proof of remote cessation.
+        """
+        self._require_scope()
+        loop = asyncio.get_running_loop()
+        sampled_at = loop.time()
+        remaining = await self.meter.remaining_admitted_duration_ms()
+        deadline = sampled_at + remaining / 1000.0
+        if remaining <= 0 or loop.time() >= deadline:
+            raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
+        scope = asyncio.timeout_at(deadline)
+        try:
+            async with scope:
+                yield deadline
+                # A transport can suppress cancellation and return late.
+                # Do not project its result into a successful SDK receipt.
+                self._require_scope()
+                remaining = await self.meter.remaining_admitted_duration_ms()
+                if scope.expired() or remaining <= 0 or loop.time() >= deadline:
+                    raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
+        except TimeoutError:
+            if scope.expired():
+                raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted") from None
+            raise
+
+    async def run_admitted_blocking(
+        self, function: Callable[[Callable[[], None]], _T], /,
+    ) -> _T:
+        """Own a synchronous native call until its local worker returns.
+
+        The caller must already have reserved this exact operation. A deadline
+        or caller cancellation suppresses the result, not the running thread.
+        Never abandon an executor future or claim remote/device cessation.
+        """
+        return await self._run_owned_blocking(function)
+
+    async def _run_owned_blocking(
+        self, function: Callable[[Callable[[], None]], _T], /,
+    ) -> _T:
+        """Shared worker owner; callers establish admission before entering."""
+        async with self.admitted_execution_deadline() as deadline:
+            loop = asyncio.get_running_loop()
+            context = copy_context()
+            stopped = threading.Event()
+
+            def checkpoint() -> None:
+                if stopped.is_set():
+                    raise ProviderNotAvailable("governed_model_execution_cancelled")
+                if loop.time() >= deadline:
+                    raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
+
+            def invoke() -> _T:
+                # A queued worker and each cooperative native stage share
+                # the same cancellation signal and original deadline.
+                checkpoint()
+                return context.run(function, checkpoint)
+
+            worker = loop.run_in_executor(None, invoke)
+            try:
+                return await asyncio.shield(worker)
+            except asyncio.CancelledError:
+                stopped.set()
+                # Repeated cancellation must not detach the native call.
+                # Keep ownership while it retires, even beyond the deadline.
+                while not worker.done():
+                    try:
+                        await asyncio.shield(worker)
+                    except asyncio.CancelledError:
+                        continue
+                    except Exception:
+                        break
+                if not worker.cancelled():
+                    failure = worker.exception()
+                    if isinstance(failure, NativeRetirementUnverified):
+                        # Never replace uncertain device cessation with a
+                        # confirmed caller cancellation or deadline outcome.
+                        raise failure
+                raise
+
+    async def run_admitted_preparation(
+        self, function: Callable[[Callable[[], None]], _T], /,
+    ) -> _T:
+        """Own non-inference preparation on the original authorized deadline.
+
+        The trusted Runtime caller must validate the concrete target before
+        loading it. This path does not authorize or charge model inference.
+        """
+        self._require_scope()
+        if not await self.meter.check_duration():
+            raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
+        return await self._run_owned_blocking(function)
+
+    async def run_native_attempt_sequence(
+        self,
+        endpoint: ProviderEndpoint,
+        *,
+        model: str,
+        function: Callable[[Callable[[], None], Callable[[], None]], _T],
+        on_reserved: Callable[[], None] | None = None,
+    ) -> _T:
+        """Own a native sequence whose trusted worker reserves every attempt.
+
+        The worker must call reserve_attempt immediately before each native
+        dispatch. Reservations execute on the original event loop and meter,
+        not a new thread-local loop. The callback is valid only inside this
+        worker invocation; it is not a grant or a reusable transport receipt.
+        Preparation and cancellation before an attempt do not charge quota.
+        A successful reservation is never refunded, including on failure.
+        """
+        self.require_native_generation(endpoint, model=model)
+        if not await self.meter.check_duration():
+            raise ModelAdmissionDeadlineExceeded("governed_model_execution_deadline_exhausted")
+        loop = asyncio.get_running_loop()
+
+        def invoke(checkpoint: Callable[[], None]) -> _T:
+            owner = threading.get_ident()
+            active = True
+
+            async def reserve_on_owner() -> None:
+                checkpoint()
+                await self.reserve_native_generation(endpoint, model=model)
+                if on_reserved is not None:
+                    on_reserved()
+                checkpoint()
+
+            def reserve_attempt() -> None:
+                if not active or threading.get_ident() != owner:
+                    raise RuntimeError("governed_native_attempt_worker_scope_invalid")
+                checkpoint()
+                # Do not abandon this future: a cancellation racing a
+                # reservation must still leave its actual charge observable.
+                reservation = asyncio.run_coroutine_threadsafe(reserve_on_owner(), loop)
+                reservation.result()
+                checkpoint()
+
+            try:
+                return function(checkpoint, reserve_attempt)
+            finally:
+                active = False
+
+        return await self._run_owned_blocking(invoke)
+
+    def require_native_generation(self, endpoint: ProviderEndpoint, *, model: str) -> None:
+        """Validate only the canonical in-process Transformers endpoint.
+
+        Native execution has no HTTP destination. Do not relax the HTTP
+        classifier for an absent URL, or allow a mislabeled remote endpoint
+        to borrow this local reservation path.
+        """
+        self._require_scope()
+        if (
+            not isinstance(endpoint, ProviderEndpoint)
+            or endpoint.provider_id != "builtin_transformers"
+            or endpoint.endpoint_type is not ProviderEndpointType.BUILTIN_TRANSFORMERS
+            or endpoint.protocol is not EndpointProtocol.NATIVE
+            or endpoint.runtime_engine is not RuntimeEngine.TRANSFORMERS
+            or endpoint.kind is not EndpointKind.LOCAL_ENDPOINT
+            or endpoint.locality is not Locality.LOCAL
+            or endpoint.builtin is not True
+            or endpoint.enabled is not True
+            or endpoint.base_url is not None
+        ):
+            raise PermissionError("governed_native_endpoint_not_eligible")
+        if (
+            not isinstance(model, str)
+            or not model.strip()
+            or model.strip().lower() == "auto"
+        ):
+            raise PermissionError("governed_model_identity_not_authorized")
+        self._require_constraints(endpoint, model, external=False)
+
+    async def reserve_native_generation(self, endpoint: ProviderEndpoint, *, model: str) -> None:
+        """Revalidate and atomically charge the original meter at dispatch."""
+        self.require_native_generation(endpoint, model=model)
+        if not await self.meter.reserve_model_execution(external=False):
+            raise ModelAdmissionBudgetExhausted("governed_model_execution_budget_exhausted")
 
     async def reserve_local_embedding(self, *, model: str) -> None:
         """Charge a real local embedding attempt, never a synthetic fallback."""
@@ -167,4 +379,4 @@ class GovernedToolModelAdmission:
             "builtin_transformers", model, external=False,
         )
         if not await self.meter.reserve_model_execution(external=False):
-            raise RuntimeError("governed_model_execution_budget_exhausted")
+            raise ModelAdmissionBudgetExhausted("governed_model_execution_budget_exhausted")

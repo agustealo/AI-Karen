@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import sys
 from dataclasses import asdict, replace
 from typing import Any, Dict, List, Optional
 
-from ...core.runtime.outcome.store import OutcomeStoreError
+from ...core.model_runtime.provider_contracts import NativeRetirementUnverified
+from ...core.runtime.outcome.contracts import SpecialistParticipationPhase
+from ...core.runtime.outcome.recorder import OutcomeRecorder
+from ...core.runtime.outcome.store import OutcomeStoreError, get_outcome_store
 from ...core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
@@ -27,7 +31,11 @@ from ..contracts.specialist_execution import SpecialistExecutionContext
 from ..contracts.trace import ExecutionTrajectory
 from ..execution.event_emitter import EventEmitter
 from ..execution.failure_policy import aggregate_status
-from ..execution.run_manager import MedusaRunManager, get_medusa_run_manager
+from ..execution.run_manager import (
+    ExecutionRunStatus,
+    MedusaRunManager,
+    get_medusa_run_manager,
+)
 from ..lifecycle.lifecycle_manager import LifecycleStatus, MedusaAgentLifecycle
 from ..planning.capability_planner import CapabilityAwareMedusaPlanner
 from ..registry import get_medusa_registry
@@ -87,6 +95,7 @@ class MedusaCoordinator:
         lifecycle: Optional[MedusaAgentLifecycle] = None,
         event_emitter: Optional[EventEmitter] = None,
         run_manager: Optional[MedusaRunManager] = None,
+        outcome_recorder: Optional[OutcomeRecorder] = None,
     ) -> None:
         self.planner = planner or CapabilityAwareMedusaPlanner()
         self.registry = registry or get_medusa_registry()
@@ -94,6 +103,11 @@ class MedusaCoordinator:
         self.assembler = assembler or ResponseAssembler()
         self.lifecycle = lifecycle or MedusaAgentLifecycle()
         self.run_manager = run_manager or get_medusa_run_manager()
+        self._outcome_recorder = (
+            outcome_recorder
+            if outcome_recorder is not None
+            else OutcomeRecorder(store=get_outcome_store())
+        )
         self.active_plans: Dict[str, DeepExecutionPlan] = {}
         self.event_emitter = event_emitter or EventEmitter()
         self.trajectories: Dict[str, ExecutionTrajectory] = {}
@@ -187,7 +201,13 @@ class MedusaCoordinator:
         try:
             response = await self._handle_request(request)
         except asyncio.CancelledError:
-            await self.run_manager.mark_cancelled(request.request_id)
+            try:
+                await self.run_manager.mark_cancelled(request.request_id)
+            except Exception:
+                logger.error(
+                    "medusa_run_cancellation_transition_failed",
+                    extra={"run_id": request.request_id},
+                )
             logger.info(
                 "medusa_run_cancelled",
                 extra={
@@ -198,9 +218,35 @@ class MedusaCoordinator:
                 },
             )
             raise
+        except NativeRetirementUnverified:
+            # The Python task is leaving, but native retirement is unknown.
+            # Relinquish its live lease without manufacturing a task outcome.
+            try:
+                await self.run_manager.mark_retirement_unverified(request.request_id)
+            except Exception:
+                # Preserve the original non-retryable retirement exception.
+                logger.error(
+                    "medusa_retirement_transition_unavailable",
+                    extra={"run_id": request.request_id},
+                )
+            logger.error(
+                "medusa_native_retirement_unverified",
+                extra={"run_id": request.request_id},
+            )
+            raise
         except Exception as exc:
-            await self.run_manager.mark_failed(request.request_id, exc)
-            logger.exception(
+            try:
+                await self.run_manager.mark_failed(request.request_id, exc)
+            except Exception:
+                if not isinstance(exc, OutcomeStoreError):
+                    raise
+                # Never replace a non-retryable receipt failure with a
+                # potentially retryable run-ledger transition error.
+                logger.error(
+                    "medusa_run_failure_transition_failed",
+                    extra={"run_id": request.request_id},
+                )
+            logger.error(
                 "medusa_run_failed",
                 extra={
                     "run_id": request.request_id,
@@ -212,10 +258,23 @@ class MedusaCoordinator:
             )
             return to_safe_response(exc, correlation_id=requirements.correlation_id)
         else:
-            await self.run_manager.mark_response(
+            resolved = await self.run_manager.mark_response(
                 request.request_id,
                 response.status.value,
             )
+            if resolved is ExecutionRunStatus.CANCELLED:
+                logger.info(
+                    "medusa_run_cancelled",
+                    extra={
+                        "run_id": request.request_id,
+                        "correlation_id": requirements.correlation_id,
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                    },
+                )
+                # A specialist may catch cancellation and return content.
+                # The canonical run manager still owns the terminal outcome.
+                raise asyncio.CancelledError
             logger.info(
                 "medusa_run_finished",
                 extra={
@@ -324,6 +383,10 @@ class MedusaCoordinator:
             trajectory_id=request.request_id,
         )
         request_emitter = EventEmitter(sinks=list(self._global_sinks))
+        # Publish a running trajectory before any specialist or final synthesis.
+        # It remains observational, not an authorization or a durable run ledger.
+        trajectory.events = request_emitter._events
+        self.trajectories[request.request_id] = trajectory
         self.active_plans[request.request_id] = plan
         degraded_agents: List[str] = []
         degradation_reasons: Dict[str, Any] = {}
@@ -331,6 +394,7 @@ class MedusaCoordinator:
         agent_trace: list[str] = []
 
         reported_skips: set[str] = set()
+        pending_participation: set[str] = set()
 
         async def report_skips() -> None:
             for step in plan.steps:
@@ -344,6 +408,14 @@ class MedusaCoordinator:
                         if step.error == "execution_budget_exhausted"
                         else "unspecified"
                     )
+                )
+                await self._record_participation(
+                    context=trusted_context,
+                    plan=authorized_plan,
+                    meter=meter,
+                    step=step,
+                    phase=SpecialistParticipationPhase.SKIPPED,
+                    pending=pending_participation,
                 )
                 await request_emitter.emit(
                     AgentEvent(
@@ -405,28 +477,57 @@ class MedusaCoordinator:
                         step.error = "execution_budget_exhausted"
                     await report_skips()
                     continue
+                wave_tasks = [
+                    asyncio.create_task(
+                        self._execute_step(
+                            step,
+                            plan,
+                            request,
+                            authorized_plan,
+                            meter,
+                            request_emitter,
+                            trajectory,
+                            degraded_agents,
+                            degradation_reasons,
+                            pending_participation,
+                        )
+                    )
+                    for step in wave
+                ]
                 try:
                     async with asyncio.timeout(remaining_seconds):
                         results = await asyncio.gather(
-                            *[
-                                self._execute_step(
-                                    step,
-                                    plan,
-                                    request,
-                                    authorized_plan,
-                                    meter,
-                                    request_emitter,
-                                    trajectory,
-                                    degraded_agents,
-                                    degradation_reasons,
-                                )
-                                for step in wave
-                            ],
+                            *wave_tasks,
                             return_exceptions=True,
                         )
                 except TimeoutError:
-                    for step in wave:
-                        if step.status != StepStatus.COMPLETED:
+                    # A completed sibling can have failed its tool receipt
+                    # before a different child exhausted the wave deadline.
+                    # Gather cancellation must not erase that evidence failure.
+                    self._require_durable_tool_receipts(
+                        [
+                            task.exception()
+                            for task in wave_tasks
+                            if task.done() and not task.cancelled()
+                        ]
+                    )
+                    # Cancellation of an in-flight append does not establish
+                    # whether the durable observation was committed.
+                    if pending_participation:
+                        raise OutcomeStoreError(
+                            "Specialist participation acknowledgement unavailable"
+                        )
+                    for step, task in zip(wave, wave_tasks):
+                        if step.status == StepStatus.COMPLETED:
+                            if task.done() and not task.cancelled():
+                                error = task.exception()
+                                if error is not None:
+                                    raise error
+                            elif task.cancelled():
+                                raise OutcomeStoreError(
+                                    "Completed specialist post-invocation processing interrupted"
+                                )
+                        elif step.status in {StepStatus.PENDING, StepStatus.RUNNING}:
                             step.status = StepStatus.FAILED
                             step.error = "execution_deadline_exceeded"
                     for step in plan.steps:
@@ -440,8 +541,19 @@ class MedusaCoordinator:
                 # receipt failed. Never downgrade that uncertainty to a
                 # partial response merely because sibling agents succeeded.
                 self._require_durable_tool_receipts(results)
+                if pending_participation:
+                    raise OutcomeStoreError(
+                        "Specialist participation acknowledgement unavailable"
+                    )
+                # A child cancellation is never an ordinary DAG failure.
+                # Inspect the whole wave before assembling sibling outputs.
+                for result in results:
+                    if isinstance(result, asyncio.CancelledError):
+                        raise result
                 for step, result in zip(wave, results):
                     if isinstance(result, BaseException):
+                        if not isinstance(result, Exception):
+                            raise result
                         # A post-invocation observation or cleanup failure
                         # cannot undo an already returned specialist result.
                         if step.status != StepStatus.COMPLETED:
@@ -452,53 +564,84 @@ class MedusaCoordinator:
                     else:
                         step_outputs.append(result)
                         agent_trace.append(step.agent_specialist)
+            if degraded_agents:
+                plan.degraded_mode = True
+                plan.degradation_metadata = DegradationMetadata(
+                    degraded=True,
+                    degradation_reason=(
+                        f"Agents {', '.join(degraded_agents)} ran in degraded mode"
+                    ),
+                    affected_agent=", ".join(degraded_agents),
+                    fallback_level=DegradationLevel.PARTIAL,
+                    capabilities_lost=degradation_reasons.get("capabilities_lost", []),
+                    original_requirement=degradation_reasons.get(
+                        "original_requirement",
+                        "full agent execution",
+                    ),
+                )
+
+            final_status = aggregate_status([step.status.value for step in plan.steps])
+            response_metadata: Dict[str, Any] = {
+                "plan": plan.to_dict(),
+                "trajectory": trajectory.to_dict(),
+                "execution_topology": "multi_agent",
+                "policy_decision_id": authorized_plan.policy_decision_id,
+            }
+            if plan.degraded_mode and plan.degradation_metadata is not None:
+                response_metadata["degraded_mode"] = True
+                response_metadata["degradation_reason"] = (
+                    plan.degradation_metadata.degradation_reason
+                )
+                response_metadata["affected_agents"] = degraded_agents
+                response_metadata["fallback_level"] = (
+                    plan.degradation_metadata.fallback_level.value
+                )
+
+            # The final response is another model stage, not a fresh request.
+            # Only the original authenticated plan and meter may admit synthesis.
+            synthesis_scope = (
+                SpecialistExecutionContext(
+                    authorized_plan=authorized_plan,
+                    tenant_id=request.tenant_id,
+                    user_id=request.user_id,
+                    session_id=request.session_id,
+                    policy_decision_id=authorized_plan.policy_decision_id,
+                    trajectory_id=request.request_id,
+                    correlation_id=self._correlation_id(request),
+                    step_id="medusa.final_synthesis",
+                    budget_meter=meter,
+                    authenticated_chat_context=trusted_context,
+                    preferred_provider=request.context.get("preferred_provider"),
+                    preferred_model=request.context.get("preferred_model"),
+                )
+                if trusted_context is not None
+                else None
+            )
+            response = await self.assembler.assemble(
+                request_id=request.request_id,
+                step_outputs=step_outputs,
+                agent_trace=agent_trace,
+                latest_user_message=request.query,
+                status=final_status,
+                metadata=response_metadata,
+                execution=synthesis_scope,
+            )
+            trajectory.complete(response.status.value)
+            response.metadata["trajectory"] = trajectory.to_dict()
+            return response
+
+        except asyncio.CancelledError:
+            trajectory.complete("cancelled")
+            raise
+        except NativeRetirementUnverified:
+            trajectory.metadata["retirement_unverified"] = True
+            trajectory.complete("orphaned")
+            raise
+        except Exception:
+            trajectory.complete("error")
+            raise
         finally:
             self.active_plans.pop(request.request_id, None)
-
-        if degraded_agents:
-            plan.degraded_mode = True
-            plan.degradation_metadata = DegradationMetadata(
-                degraded=True,
-                degradation_reason=(
-                    f"Agents {', '.join(degraded_agents)} ran in degraded mode"
-                ),
-                affected_agent=", ".join(degraded_agents),
-                fallback_level=DegradationLevel.PARTIAL,
-                capabilities_lost=degradation_reasons.get("capabilities_lost", []),
-                original_requirement=degradation_reasons.get(
-                    "original_requirement",
-                    "full agent execution",
-                ),
-            )
-
-        final_status = aggregate_status([step.status.value for step in plan.steps])
-        trajectory.complete(final_status.value)
-        trajectory.events = request_emitter._events
-        self.trajectories[request.request_id] = trajectory
-        response_metadata: Dict[str, Any] = {
-            "plan": plan.to_dict(),
-            "trajectory": trajectory.to_dict(),
-            "execution_topology": "multi_agent",
-            "policy_decision_id": authorized_plan.policy_decision_id,
-        }
-        if plan.degraded_mode and plan.degradation_metadata is not None:
-            response_metadata["degraded_mode"] = True
-            response_metadata["degradation_reason"] = (
-                plan.degradation_metadata.degradation_reason
-            )
-            response_metadata["affected_agents"] = degraded_agents
-            response_metadata["fallback_level"] = (
-                plan.degradation_metadata.fallback_level.value
-            )
-
-        return await self.assembler.assemble(
-            request_id=request.request_id,
-            step_outputs=step_outputs,
-            agent_trace=agent_trace,
-            latest_user_message=request.query,
-            status=final_status,
-            metadata=response_metadata,
-        )
 
     async def _execute_step(
         self,
@@ -511,6 +654,7 @@ class MedusaCoordinator:
         trajectory: Any = None,
         degraded_agents: Optional[List[str]] = None,
         degradation_reasons: Optional[Dict[str, str]] = None,
+        pending_participation: Optional[set[str]] = None,
     ) -> Dict[str, Any]:
         logger.info(
             "medusa_step_started",
@@ -757,8 +901,42 @@ class MedusaCoordinator:
             "degraded_mode": is_degraded,
         }
 
-        await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
+        async def record_participation(phase: SpecialistParticipationPhase) -> None:
+            await self._record_participation(
+                context=trusted_context,
+                plan=specialist_plan,
+                meter=meter,
+                step=step,
+                phase=phase,
+                pending=pending_participation,
+            )
+
         invocation_entered = False
+        entry_acknowledged = False
+        entry_violation = False
+        call_attempted = False
+        entry_open = False
+        invocation_task = asyncio.current_task()
+
+        async def acknowledge_entry() -> None:
+            nonlocal invocation_entered, entry_acknowledged, entry_violation
+            if not entry_open:
+                raise OutcomeStoreError("Specialist invocation entry is closed")
+            if asyncio.current_task() is not invocation_task or invocation_entered:
+                entry_violation = True
+                if pending_participation is not None:
+                    pending_participation.add(step.id)
+                raise OutcomeStoreError("Invalid specialist invocation entry")
+            # The trusted run method has already entered. No model or tool
+            # processing may proceed until this observation is acknowledged.
+            invocation_entered = True
+            await record_participation(SpecialistParticipationPhase.STARTED)
+            entry_acknowledged = True
+
+        if trusted_context is not None:
+            execution._invocation_entry = acknowledge_entry
+
+        await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.BUSY)
         try:
             if emitter is not None:
                 await emitter.emit(
@@ -770,10 +948,25 @@ class MedusaCoordinator:
                         metadata={"step_id": step.id, "degraded": is_degraded},
                     )
                 )
-            invocation_entered = True
-            result = await specialist.run(step.input_data, context, execution=execution)
+            call_attempted = True
+            if trusted_context is None:
+                invocation_entered = True
+            entry_open = True
+            try:
+                result = await specialist.run(
+                    step.input_data, context, execution=execution
+                )
+            finally:
+                entry_open = False
             step.status = StepStatus.COMPLETED
             step.output_data = result
+            if trusted_context is not None and (
+                not entry_acknowledged or entry_violation
+            ):
+                if pending_participation is not None:
+                    pending_participation.add(step.id)
+                raise OutcomeStoreError("Specialist invocation entry unacknowledged")
+            await record_participation(SpecialistParticipationPhase.COMPLETED)
             if emitter is not None:
                 await emitter.emit(
                     AgentEvent(
@@ -800,21 +993,54 @@ class MedusaCoordinator:
             if step.status != StepStatus.COMPLETED:
                 step.status = StepStatus.FAILED
                 step.error = "cancelled"
-                if emitter is not None:
-                    await emitter.emit(
-                        AgentEvent(
-                            type=AgentEventType.AGENT_INTERRUPTED,
-                            agent_id=step.agent_specialist,
-                            message=f"step {step.id} interrupted",
-                            correlation_id=self._correlation_id(request),
-                            metadata={
+                if (
+                    trusted_context is not None
+                    and call_attempted
+                    and (not entry_acknowledged or entry_violation)
+                    and pending_participation is not None
+                ):
+                    pending_participation.add(step.id)
+                if (
+                    invocation_entered
+                    and (trusted_context is None or entry_acknowledged)
+                    and not entry_violation
+                ):
+                    try:
+                        await record_participation(
+                            SpecialistParticipationPhase.INTERRUPTED
+                        )
+                    except Exception:
+                        # Preserve caller cancellation; the pending marker
+                        # blocks successful aggregation on a wave timeout.
+                        logger.error(
+                            "medusa_interruption_receipt_unacknowledged",
+                            extra={
+                                "run_id": request.request_id,
                                 "step_id": step.id,
-                                "degraded": is_degraded,
-                                "invocation_entered": invocation_entered,
-                                "reason_code": "cancelled",
+                                "agent_id": step.agent_specialist,
                             },
                         )
-                    )
+                if emitter is not None:
+                    try:
+                        await emitter.emit(
+                            AgentEvent(
+                                type=AgentEventType.AGENT_INTERRUPTED,
+                                agent_id=step.agent_specialist,
+                                message=f"step {step.id} interrupted",
+                                correlation_id=self._correlation_id(request),
+                                metadata={
+                                    "step_id": step.id,
+                                    "degraded": is_degraded,
+                                    "invocation_entered": invocation_entered,
+                                    "reason_code": "cancelled",
+                                },
+                            )
+                        )
+                    except Exception:
+                        logger.error(
+                            "medusa_interruption_event_failed",
+                            extra={"run_id": request.request_id, "step_id": step.id},
+                        )
             logger.info(
                 "medusa_step_cancelled",
                 extra={
@@ -824,32 +1050,127 @@ class MedusaCoordinator:
                 },
             )
             raise
+        except NativeRetirementUnverified:
+            # The method did enter, but retirement is not established. Keep
+            # the entry observation without inventing a terminal phase.
+            raise
         except Exception as exc:
+            if (
+                trusted_context is not None
+                and call_attempted
+                and (not entry_acknowledged or entry_violation)
+            ):
+                # Entry persistence failure is not a specialist work failure.
+                # Do not append FAILED or erase the pending STARTED marker.
+                if pending_participation is not None:
+                    pending_participation.add(step.id)
+                if isinstance(exc, OutcomeStoreError):
+                    raise
+                raise OutcomeStoreError(
+                    "Specialist invocation entry unacknowledged"
+                ) from exc
+            if invocation_entered and step.status != StepStatus.COMPLETED:
+                step.status = StepStatus.FAILED
+                step.error = type(exc).__name__
+                await record_participation(SpecialistParticipationPhase.FAILED)
             if (
                 invocation_entered
                 and step.status != StepStatus.COMPLETED
                 and emitter is not None
             ):
-                await emitter.emit(
-                    AgentEvent(
-                        type=AgentEventType.AGENT_FAILED,
-                        agent_id=step.agent_specialist,
-                        message=f"step {step.id} failed",
-                        correlation_id=self._correlation_id(request),
-                        metadata={
-                            "step_id": step.id,
-                            "error_type": type(exc).__name__,
-                            "degraded": is_degraded,
-                        },
+                try:
+                    await emitter.emit(
+                        AgentEvent(
+                            type=AgentEventType.AGENT_FAILED,
+                            agent_id=step.agent_specialist,
+                            message=f"step {step.id} failed",
+                            correlation_id=self._correlation_id(request),
+                            metadata={
+                                "step_id": step.id,
+                                "error_type": type(exc).__name__,
+                                "degraded": is_degraded,
+                            },
+                        )
                     )
-                )
+                except Exception:
+                    if not isinstance(exc, OutcomeStoreError):
+                        raise
+                    logger.error(
+                        "medusa_failure_event_failed",
+                        extra={"run_id": request.request_id, "step_id": step.id},
+                    )
             raise
         finally:
-            await self.lifecycle.set_status(step.agent_specialist, LifecycleStatus.IDLE)
+            # The capability belongs to this call only, not a retained context.
+            execution._invocation_entry = None
+            primary = sys.exc_info()[1]
+            try:
+                if not isinstance(primary, NativeRetirementUnverified):
+                    await self.lifecycle.set_status(
+                        step.agent_specialist, LifecycleStatus.IDLE
+                    )
+            except Exception:
+                if primary is None:
+                    raise
+                # Cleanup is secondary to an already propagating exception,
+                # including cancellation and strict receipt failures.
+                logger.error(
+                    "medusa_step_cleanup_failed",
+                    extra={
+                        "run_id": request.request_id,
+                        "step_id": step.id,
+                        "primary_error_type": type(primary).__name__,
+                    },
+                )
+
+    async def _record_participation(
+        self,
+        *,
+        context: Any,
+        plan: AuthorizedExecutionPlan,
+        meter: ExecutionBudgetMeter,
+        step: PlanStep,
+        phase: SpecialistParticipationPhase,
+        pending: Optional[set[str]],
+    ) -> None:
+        # Legacy requests without original authenticated chat authority
+        # remain observational; serialized grants cannot produce receipts.
+        if context is None:
+            return
+        if pending is not None:
+            pending.add(step.id)
+        try:
+            # Evidence I/O uses the original wall-clock deadline even after
+            # a quota denial. It cannot renew or authorize execution.
+            remaining_seconds = (await meter.remaining_admitted_duration_ms()) / 1000.0
+            if remaining_seconds <= 0:
+                raise OutcomeStoreError(
+                    "Specialist participation acknowledgement unavailable"
+                )
+            async with asyncio.timeout(remaining_seconds):
+                await self._outcome_recorder.record_specialist_participation_async(
+                    context=context,
+                    plan=plan,
+                    meter=meter,
+                    step_id=step.id,
+                    specialist_id=step.agent_specialist,
+                    phase=phase,
+                )
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            raise OutcomeStoreError(
+                "Specialist participation acknowledgement unavailable"
+            ) from exc
+        if pending is not None:
+            pending.discard(step.id)
 
     @staticmethod
     def _require_durable_tool_receipts(results: List[Any]) -> None:
         """Keep post-side-effect audit failures out of partial aggregation."""
+        for result in results:
+            if isinstance(result, NativeRetirementUnverified):
+                raise result
         for result in results:
             if isinstance(result, OutcomeStoreError):
                 raise result

@@ -12,8 +12,8 @@ import asyncio
 import os
 import threading
 from urllib.parse import urlsplit
-from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from dataclasses import dataclass, field, replace
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from typing import Any, Dict, List, Optional, Set, Type, Union
 
@@ -807,7 +807,20 @@ class ProviderRegistryService:
                 if status is None or (datetime.utcnow() - status.last_check).total_seconds() > self._cache_ttl:
                     status = self._build_endpoint_status(endpoint)
                     self._provider_status_cache[name] = status
-                return status
+                # The cache owns configuration/credential discovery cost, not
+                # observed health truth. Reproject at read time so a fresh
+                # failure, recovery or monitor TTL expiry is visible now.
+                health = (
+                    self.health_monitor.get_provider_health(endpoint.provider_id).health_status
+                    if endpoint.enabled else HealthStatus.UNAVAILABLE
+                )
+                available = endpoint.enabled and status.has_api_key and health in {
+                    HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN,
+                }
+                return replace(
+                    status, health_status=health, is_available=available,
+                    error_message=None if available else "endpoint disabled or unavailable",
+                )
 
             status = self._provider_status_cache.get(name)
 
@@ -852,7 +865,125 @@ class ProviderRegistryService:
                     )
                     status = self._provider_status_cache.get(name)
 
-            return status
+            if status is None:
+                return None
+            # Compatibility registrations still use the same observed monitor;
+            # their cached credential/capability snapshot cannot override it.
+            try:
+                health = self.health_monitor.get_provider_health(name).health_status
+            except Exception:
+                health = HealthStatus.UNKNOWN
+            return replace(
+                status, health_status=health,
+                is_available=status.has_api_key and health in {
+                    HealthStatus.HEALTHY, HealthStatus.DEGRADED, HealthStatus.UNKNOWN,
+                },
+            )
+
+    def get_provider_health_snapshot(self, name: str) -> Optional[Dict[str, Any]]:
+        """Read canonical observed health and registered inventory without a probe.
+
+        Registry availability is eligibility, not a successful execution.
+        Do not return raw provider errors, credentials, paths or URLs.
+        """
+        status = self.get_provider_status(name)
+        if status is None:
+            canonical = self.canonicalize_provider_id(name)
+            if canonical and canonical != name:
+                name = canonical
+                status = self.get_provider_status(name)
+        if status is None:
+            return None
+        endpoint = self.get_provider_endpoint(name)
+        registration = self._provider_registrations.get(name)
+        # An orphaned compatibility cache entry does not establish a provider.
+        if endpoint is None and registration is None:
+            return None
+        observed = self.health_monitor.get_provider_health(name)
+        models = self.get_registered_models(name, healthy_only=False)
+        if endpoint and endpoint.default_model not in (None, "", "auto"):
+            if endpoint.default_model not in models:
+                models.append(endpoint.default_model)
+        checked = observed.last_checked_at
+        return {
+            "provider_id": name,
+            "status": status.health_status.value,
+            "is_available": status.is_available,
+            "last_check": checked.replace(tzinfo=timezone.utc).timestamp() if checked else None,
+            "response_time": observed.latency_ms / 1000.0 if observed.latency_ms is not None else None,
+            "error_message": (
+                "Provider unavailable or not configured" if not status.is_available else None
+            ),
+            "capabilities": {
+                "registered": sorted(cap.value for cap in status.capabilities),
+                "requires_api_key": bool(
+                    (endpoint and endpoint.api_key_env)
+                    or (registration and registration.requires_api_key)
+                ),
+            },
+            "registered_model_count": len(models),
+            "category": registration.category if registration else "LLM",
+            "locality": endpoint.locality.value if endpoint else "unknown",
+            "configured": bool(status.has_api_key and (endpoint is None or endpoint.enabled)),
+            "source": "canonical_observed_health",
+        }
+
+    def get_provider_health_summary(self, *, llm_only: bool = False) -> Dict[str, Any]:
+        """Aggregate existing snapshots, never provider callbacks or discovery."""
+        snapshots: Dict[str, Dict[str, Any]] = {}
+        for name in self.get_all_provider_names():
+            snapshot = self.get_provider_health_snapshot(name)
+            if snapshot is None or (llm_only and snapshot["category"] != "LLM"):
+                continue
+            snapshots[snapshot["provider_id"]] = snapshot
+
+        groups: Dict[str, List[str]] = {state.value: [] for state in HealthStatus}
+        registered_count = eligible_count = local_count = remote_count = unknown_locality = 0
+        checked_times = []
+        for name, snapshot in sorted(snapshots.items()):
+            # Configuration availability is a separate axis from observation.
+            # Keep the observation on the row, but never count a disabled or
+            # unconfigured provider as currently healthy or eligible.
+            state = snapshot["status"] if snapshot["configured"] else "unavailable"
+            groups[state].append(name)
+            count = snapshot["registered_model_count"]
+            registered_count += count
+            if snapshot["is_available"]:
+                eligible_count += count
+                if snapshot["locality"] in {"local", "lan"}:
+                    local_count += count
+                elif snapshot["locality"] == "cloud":
+                    remote_count += count
+                else:
+                    unknown_locality += count
+            if snapshot["last_check"] is not None:
+                checked_times.append(snapshot["last_check"])
+
+        if not snapshots:
+            overall = "unknown"
+        elif len(groups["healthy"]) == len(snapshots):
+            overall = "healthy"
+        elif len(groups["unavailable"]) == len(snapshots):
+            overall = "unavailable"
+        elif len(groups["unhealthy"]) == len(snapshots):
+            overall = "critical"
+        elif groups["degraded"] or groups["unhealthy"]:
+            overall = "degraded"
+        else:
+            overall = "unknown"
+        return {
+            "providers": snapshots,
+            "groups": groups,
+            "overall_status": overall,
+            "total_providers": len(snapshots),
+            "registered_model_count": registered_count,
+            "eligible_registered_model_count": eligible_count,
+            "local_models_count": local_count,
+            "remote_models_count": remote_count,
+            "unknown_locality_model_count": unknown_locality,
+            "last_health_check": max(checked_times, default=None),
+            "degraded_mode": overall in {"degraded", "critical"},
+        }
 
     def get_available_providers(
         self,
@@ -1146,6 +1277,7 @@ class ProviderRegistryService:
             "available_providers": 0,
             "providers_missing_api_keys": 0,
             "unhealthy_providers": 0,
+            "remote_provider_outages": [],
             "provider_details": {},
             "fallback_chains": list(self._fallback_chains.keys()),
             "recommendations": [],
@@ -1157,7 +1289,7 @@ class ProviderRegistryService:
             all_names.add(endpoint.provider_id)
         all_names.update(self._provider_registrations.keys())
 
-        for provider_name in all_names:
+        for provider_name in sorted(all_names):
             provider_status = self.get_provider_status(provider_name)
             status["total_providers"] += 1
 
@@ -1172,6 +1304,19 @@ class ProviderRegistryService:
 
                 if provider_status.health_status == HealthStatus.UNHEALTHY:
                     status["unhealthy_providers"] += 1
+                    # A remote outage requires an observed unhealthy, enabled
+                    # cloud endpoint with a credential. Missing configuration,
+                    # disabled endpoints and local failures are not outages.
+                    endpoint = self.get_provider_endpoint(provider_name)
+                    if (
+                        endpoint is not None
+                        and endpoint.enabled
+                        and endpoint.tenant_scoped is False
+                        and endpoint.kind == EndpointKind.CLOUD_PROVIDER
+                        and provider_status.has_api_key
+                        and not provider_status.is_available
+                    ):
+                        status["remote_provider_outages"].append(provider_name)
 
                 status["provider_details"][provider_name] = {
                     "is_available": provider_status.is_available,

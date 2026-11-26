@@ -100,6 +100,7 @@ class TextProcessingTool(BaseTool):
                 }
             ],
             tags=["text", "nlp", "processing", "analysis"],
+            workflow_local_compute=True,
             timeout=30
         )
 

@@ -239,6 +239,8 @@ export const getDegradedResponseMessage = (error: unknown): string => {
 const RUN_FAILURE_GUIDANCE: Readonly<Record<string, string>> = {
   CHAT_RUNTIME_GATED:
     'Karen cannot accept chat execution until the runtime gate is cleared. Check system maintenance or runtime status, then retry.',
+  CHAT_TRANSCRIPT_FINALITY_UNVERIFIED:
+    'Karen could not establish the final outcome of this run. Check its saved history and run status before sending another message.',
   CHAT_TRANSCRIPT_NOT_PERSISTED:
     'Karen could not confirm that the chat response was saved to conversation history. Check verified history before retrying.',
   CHAT_TRANSCRIPT_PERSISTENCE_FAILED:
@@ -297,11 +299,15 @@ function runFailureDetail(value: unknown): {
       status = item.status;
     }
 
-    for (const key of ['event', 'error', 'cause', 'detail', 'response']) {
+    for (const key of ['event', 'error', 'cause', 'detail', 'details', 'response', 'data']) {
       if (isRecord(item[key])) candidates.push(item[key]);
     }
   }
   return { code: null, status };
+}
+
+export function isCopilotRunFinalityUnverified(failure: unknown): boolean {
+  return runFailureDetail(failure).code === 'CHAT_TRANSCRIPT_FINALITY_UNVERIFIED';
 }
 
 export function getCopilotRunFailureMessage(failure: unknown): string {

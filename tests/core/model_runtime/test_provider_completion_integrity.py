@@ -11,7 +11,7 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 )
 from ai_karen_engine.core.model_runtime.provider_execution import (
     ProviderExecutionError,
-    _sync_openai_compatible_request,
+    execute_provider_endpoint,
 )
 
 
@@ -23,12 +23,12 @@ def _endpoint():
     )
 
 
-def _execute(body: dict, *, model: str | None = "qwen3:4b"):
+async def _execute(body: dict, *, model: str | None = "qwen3:4b"):
     with patch(
         "ai_karen_engine.core.model_runtime.provider_execution._post_chat_completions",
         return_value=body,
     ) as request:
-        result = _sync_openai_compatible_request(
+        result = await execute_provider_endpoint(
             _endpoint(),
             messages=[{"role": "user", "content": "Explain the result"}],
             model=model,
@@ -48,8 +48,9 @@ def _valid() -> dict:
     }
 
 
-def test_sync_response_requires_observed_matching_model():
-    result = _execute(_valid())
+@pytest.mark.asyncio
+async def test_sync_response_requires_observed_matching_model():
+    result = await _execute(_valid())
     assert result.model == "qwen3:4b"
     assert result.text == "Observed reply."
 
@@ -91,32 +92,36 @@ def test_sync_response_requires_observed_matching_model():
         ),
     ],
 )
-def test_malformed_or_unverified_sync_completion_fails_closed(replacement, error):
+@pytest.mark.asyncio
+async def test_malformed_or_unverified_sync_completion_fails_closed(replacement, error):
     body = _valid()
     body.update(replacement)
     with pytest.raises(ProviderExecutionError, match=error):
-        _execute(body)
+        await _execute(body)
 
 
-def test_sync_unselected_model_still_requires_an_actual_model_receipt():
-    result = _execute(_valid(), model="auto")
+@pytest.mark.asyncio
+async def test_sync_unselected_model_still_requires_an_actual_model_receipt():
+    result = await _execute(_valid(), model="auto")
     assert result.model == "qwen3:4b"
 
     missing_model = _valid()
     missing_model.pop("model")
     with pytest.raises(ProviderExecutionError, match="provider_response_unverified_model"):
-        _execute(missing_model, model="auto")
+        await _execute(missing_model, model="auto")
 
 
-def test_sync_metadata_does_not_treat_boolean_usage_as_tokens():
+@pytest.mark.asyncio
+async def test_sync_metadata_does_not_treat_boolean_usage_as_tokens():
     body = _valid()
     body["usage"] = {"prompt_tokens": True, "completion_tokens": 10}
-    result = _execute(body)
+    result = await _execute(body)
     assert result.usage == {"completion_tokens": 10}
 
 
-def test_sync_token_limit_finish_is_retained_as_observed():
+@pytest.mark.asyncio
+async def test_sync_token_limit_finish_is_retained_as_observed():
     body = _valid()
     body["choices"][0]["finish_reason"] = "length"
-    result = _execute(body)
+    result = await _execute(body)
     assert result.finish_reason == "length"

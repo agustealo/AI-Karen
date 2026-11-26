@@ -16,6 +16,8 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
     ProviderNotAvailable,
 )
 
+from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
+
 DEFAULT_SOFT_REASONING_MARKER = "<|soft_reasoning|>"
 
 
@@ -47,6 +49,19 @@ class SoftReasoningTokenManager:
             )
 
         model, tokenizer, generation_lock = runtime.generation_components()
+        # Lookup and mutation share one lock so a concurrent caller cannot
+        # reuse the marker before model embedding resize has completed.
+        with generation_lock:
+            try:
+                return self._ensure_locked(model, tokenizer)
+            except BaseException:
+                # Even a partially applied mutation must not become visible
+                # to ordinary chat after releasing the canonical lock.
+                if isinstance(runtime, TransformersRuntime):
+                    runtime.quarantine_generation_components((model, tokenizer))
+                raise
+
+    def _ensure_locked(self, model: Any, tokenizer: Any) -> SoftReasoningMarker:
         convert = getattr(tokenizer, "convert_tokens_to_ids", None)
         if not callable(convert):
             raise ProviderNotAvailable(
@@ -55,6 +70,7 @@ class SoftReasoningTokenManager:
 
         existing_id = self._existing_token_id(tokenizer)
         if existing_id is not None:
+            self._require_embedding_capacity(model, tokenizer, existing_id)
             return SoftReasoningMarker(
                 token=self._token,
                 token_id=existing_id,
@@ -69,20 +85,19 @@ class SoftReasoningTokenManager:
             )
 
         try:
-            with generation_lock:
-                added = int(
-                    add_special_tokens(
-                        {"additional_special_tokens": [self._token]}
-                    )
-                    or 0
+            added = int(
+                add_special_tokens(
+                    {"additional_special_tokens": [self._token]}
                 )
-                token_id = int(convert(self._token))
-                if token_id < 0:
-                    raise GenerationFailed(
-                        "Tokenizer returned an invalid Soft Reasoning marker id"
-                    )
-                if added > 0:
-                    resize(len(tokenizer))
+                or 0
+            )
+            token_id = int(convert(self._token))
+            if token_id < 0:
+                raise GenerationFailed(
+                    "Tokenizer returned an invalid Soft Reasoning marker id"
+                )
+            if added > 0:
+                resize(len(tokenizer))
         except Exception as exc:
             if isinstance(exc, (GenerationFailed, ProviderNotAvailable)):
                 raise
@@ -95,11 +110,27 @@ class SoftReasoningTokenManager:
             raise GenerationFailed(
                 "Soft Reasoning marker token registration could not be verified"
             )
+        self._require_embedding_capacity(model, tokenizer, token_id)
         return SoftReasoningMarker(
             token=self._token,
             token_id=token_id,
             vocabulary_resized=added > 0,
         )
+
+    @staticmethod
+    def _require_embedding_capacity(model: Any, tokenizer: Any, token_id: int) -> None:
+        """Prove both vocabulary dimensions before accepting a registered marker.
+
+        A failed resize may leave the token in the tokenizer. A later request
+        must not mistake its presence for a consistent native model.
+        """
+        required = max(len(tokenizer), token_id + 1)
+        for accessor in ("get_input_embeddings", "get_output_embeddings"):
+            get_layer = getattr(model, accessor, None)
+            layer = get_layer() if callable(get_layer) else None
+            shape = getattr(getattr(layer, "weight", None), "shape", None)
+            if shape is None or len(shape) != 2 or int(shape[0]) < required:
+                raise GenerationFailed("soft_reasoning_embedding_capacity_unverified")
 
     def _existing_token_id(self, tokenizer: Any) -> int | None:
         convert = tokenizer.convert_tokens_to_ids

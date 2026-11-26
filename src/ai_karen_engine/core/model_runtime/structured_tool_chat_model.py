@@ -115,30 +115,31 @@ class KarenGovernedChatModel(BaseChatModel):
         if not isinstance(admission, GovernedToolModelAdmission):
             raise PermissionError("governed_model_transport_admission_required")
         await admission.reserve_transport(self.endpoint, model=self.selected_model)
-        result = await execute_structured_provider_endpoint(
-            self.endpoint,
-            messages=wire_messages,
-            model=self.selected_model,
-            tools=self.tool_schemas,
-            max_tokens=self.selected_max_tokens,
-            temperature=self.selected_temperature,
-        )
-        response = AIMessage(
-            content=result.message["content"],
-            tool_calls=result.message["tool_calls"],
-            response_metadata={
-                "actual_provider": result.provider_id,
-                "actual_model": result.model,
-                "runtime_engine": result.runtime_engine,
-                "finish_reason": result.finish_reason,
-            },
-            usage_metadata={
-                "input_tokens": result.usage.get("prompt_tokens", 0),
-                "output_tokens": result.usage.get("completion_tokens", 0),
-                "total_tokens": result.usage.get("total_tokens", 0),
-            },
-        )
-        return ChatResult(generations=[ChatGeneration(message=response)])
+        async with admission.admitted_execution_deadline():
+            result = await execute_structured_provider_endpoint(
+                self.endpoint,
+                messages=wire_messages,
+                model=self.selected_model,
+                tools=self.tool_schemas,
+                max_tokens=self.selected_max_tokens,
+                temperature=self.selected_temperature,
+            )
+            response = AIMessage(
+                content=result.message["content"],
+                tool_calls=result.message["tool_calls"],
+                response_metadata={
+                    "actual_provider": result.provider_id,
+                    "actual_model": result.model,
+                    "runtime_engine": result.runtime_engine,
+                    "finish_reason": result.finish_reason,
+                },
+                usage_metadata={
+                    "input_tokens": result.usage.get("prompt_tokens", 0),
+                    "output_tokens": result.usage.get("completion_tokens", 0),
+                    "total_tokens": result.usage.get("total_tokens", 0),
+                },
+            )
+            return ChatResult(generations=[ChatGeneration(message=response)])
 
     def _generate(
         self,

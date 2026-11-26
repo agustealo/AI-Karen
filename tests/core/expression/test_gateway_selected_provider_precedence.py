@@ -92,8 +92,8 @@ def test_local_engine_resolves_saved_ollama_before_other_healthy_endpoints(monke
 
 
 @pytest.mark.asyncio
-async def test_verified_model_generation_reports_actual_executor_health(monkeypatch):
-    """A successful model call advances the canonical monitor, not a preference."""
+async def test_engine_receipt_alone_does_not_report_provider_health(monkeypatch):
+    """An engine receipt without transport evidence cannot update health."""
     from ai_karen_engine.core.model_runtime import provider_health_monitor
 
     observations = []
@@ -139,7 +139,7 @@ async def test_verified_model_generation_reports_actual_executor_health(monkeypa
 
     assert result.provider == "ollama-local"
     assert result.model == "smollm2:135m"
-    assert observations == [("ollama-local", pytest.approx(0.15))]
+    assert observations == []
     assert task.preferred_provider == "openai"
 
 
@@ -350,3 +350,56 @@ async def test_kcon768_invalid_output_attempt_is_distinct_from_verified_model():
     attempts = result.metadata["engine_attempt_timings"]
     assert [a["outcome"] for a in attempts] == ["invalid_output", "verified_model"]
     assert all(a["duration_ms"] >= 0 for a in attempts)
+
+
+@pytest.mark.asyncio
+async def test_real_gateway_http_observes_provider_health_once(monkeypatch):
+    import httpx
+    from types import SimpleNamespace
+    from ai_karen_engine.core.model_runtime import provider_health_monitor, provider_registry_service
+    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+
+    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS if item.provider_id == "ollama-local")
+    registry = SimpleNamespace(
+        get_provider_endpoint=lambda value: endpoint if value == endpoint.provider_id else None,
+        get_provider_status=lambda _: SimpleNamespace(is_available=True),
+        resolve_capable_targets=lambda **_: [endpoint],
+        canonicalize_provider_id=lambda value: value,
+    )
+    registry.health_monitor = provider_health_monitor.ProviderHealthMonitor(registry=registry)
+    monkeypatch.setattr(provider_registry_service, "get_provider_registry_service", lambda: registry)
+    observations = []
+    original = registry.health_monitor.update_provider_health
+
+    def observe(*args, **kwargs):
+        observations.append((args, kwargs))
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(registry.health_monitor, "update_provider_health", observe)
+    original_client = httpx.AsyncClient
+    wire = []
+
+    def respond(request):
+        wire.append(request)
+        return httpx.Response(200, json={
+            "model": "test-model",
+            "choices": [{"message": {"role": "assistant", "content": "A verified model answer."}}],
+        })
+
+    monkeypatch.setattr(
+        httpx, "AsyncClient",
+        lambda **kwargs: original_client(transport=httpx.MockTransport(respond), **kwargs),
+    )
+    task = ExpressionTask(
+        task_id="real-health-proof", kind="chat",
+        messages=[{"role": "user", "content": "Hello"}],
+        response_mode="text", required_capabilities=[], forbidden_capabilities=[],
+        preferred_provider=endpoint.provider_id, preferred_model="test-model",
+        max_tokens=16, temperature=0.0,
+    )
+    result = await ExpressionGateway(
+        ExpressionSettings(active_engine="local", engine_fallback_order=[]),
+    ).generate(task)
+    assert result.provider == endpoint.provider_id
+    assert len(wire) == len(observations) == 1
+    assert observations[0][1]["is_healthy"] is True

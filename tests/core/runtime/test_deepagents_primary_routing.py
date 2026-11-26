@@ -318,3 +318,31 @@ async def test_explicit_requested_model_skips_advisory_read(
     req.preferred_model = "selected-by-user"
     output, _ = await WorkflowRuntime().run(req, decision(), plan())
     assert output == "User-model result"
+
+
+@pytest.mark.asyncio
+async def test_agent_receipt_failure_remains_nonrecoverable_across_workflow(enabled, monkeypatch):
+    from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+
+    async def handle(_self, _request):
+        return RuntimeResponse(
+            request_id="req-1",
+            content="private diagnostic",
+            status=ResponseStatus.ERROR,
+            metadata={"reconciliation_required": True, "recoverable": False},
+        )
+
+    monkeypatch.setattr(
+        "ai_karen_engine.agent_medusa.coordinator.medusa_coordinator."
+        "MedusaCoordinator.handle_request", handle,
+    )
+    runtime = WorkflowRuntime()
+    with pytest.raises(OutcomeStoreError):
+        await runtime.run(request(), decision(), plan())
+    chunks = [chunk async for chunk in runtime.stream(request(), decision(), plan())]
+    assert chunks[-1].type == ChatStreamEventType.ERROR
+    assert chunks[-1].metadata["recoverable"] is False
+    assert chunks[-1].metadata["reconciliation_required"] is True
+    assert chunks[-1].metadata["error_code"] == "AGENT_RECEIPT_RECONCILIATION_REQUIRED"
+    assert "private diagnostic" not in str(chunks)
+    assert not any(chunk.type == ChatStreamEventType.CONTENT for chunk in chunks)

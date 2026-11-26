@@ -12,7 +12,9 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Sequence, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
     from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 
 from .base import Repository, RepositoryResult
 
@@ -123,7 +125,10 @@ class ConversationRepository(Repository):
         """Create a conversation. Returns the assigned id."""
 
     @abstractmethod
-    async def get_conversation(self, conversation_id: str, tenant_id: str) -> RepositoryResult[Optional[Conversation]]:
+    async def get_conversation(
+        self, conversation_id: str, tenant_id: str,
+        *, db_session: Optional[AsyncSession] = None,
+    ) -> RepositoryResult[Optional[Conversation]]:
         """Retrieve a conversation by id."""
 
     @abstractmethod
@@ -190,6 +195,7 @@ class ConversationRepository(Repository):
     async def add_completed_turn(
         self, user_message: Message, assistant_message: Message,
         *, run_lease: Optional["ChatRunLease"] = None,
+        private_execution: Optional["ChatExecutionContext"] = None,
     ) -> RepositoryResult[int]:
         """Atomically persist a pair; unsupported repositories fail closed."""
         return RepositoryResult(
@@ -210,10 +216,15 @@ class ConversationRepository(Repository):
         user_text: str,
         assistant_text: str,
         persona_scope_id: Optional[str] = None,
+        private_execution: Optional["ChatExecutionContext"] = None,
+        run_lease: Optional["ChatRunLease"] = None,
+        expected_assistant_digest: Optional[str] = None,
     ) -> RepositoryResult[bool]:
         """Verify an exact committed pair after an interrupted write.
 
         This is a scoped read-only reconciliation contract, not a second writer.
+        For a leased run the same transaction must also verify the exact
+        run-ledger message IDs and canonical assistant digest.
         Unsupported stores must not fabricate a negative or positive receipt.
         """
         return RepositoryResult(success=False, error="committed_turn_read_not_supported")
@@ -221,7 +232,7 @@ class ConversationRepository(Repository):
     @abstractmethod
     async def get_messages(
         self, conversation_id: str, tenant_id: str, limit: int = 100, offset: int = 0,
-        *, newest_first: bool = False,
+        *, newest_first: bool = False, db_session: Optional[AsyncSession] = None,
     ) -> RepositoryResult[List[Message]]:
         """Read canonical messages in a bounded deterministic order.
 

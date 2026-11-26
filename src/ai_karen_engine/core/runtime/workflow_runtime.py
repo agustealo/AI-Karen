@@ -8,6 +8,7 @@ from typing import Any, AsyncIterator, Callable, Dict, List, Optional, Tuple
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
@@ -15,6 +16,10 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import (
 )
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
+from ai_karen_engine.core.runtime.workflow_generation import (
+    WorkflowGenerationAuthority, bind_workflow_generation,
+)
 
 logger = get_logger(__name__)
 
@@ -43,6 +48,7 @@ class WorkflowRuntime:
         plan: Optional[AuthorizedExecutionPlan] = None,
         *,
         budget_meter: ExecutionBudgetMeter | None = None,
+        trajectory_id: str | None = None,
     ) -> Tuple[str, Dict[str, Any]]:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
@@ -55,12 +61,20 @@ class WorkflowRuntime:
             return result
 
         orchestrator = await self._get_orchestrator()
-        final_state = await orchestrator.process(
-            messages=self._to_langchain(request.messages),
-            user_id=ctx.user_id,
-            session_id=conversation_id,
-            config=config,
+        authority = self._generation_authority(
+            request, decision, plan, budget_meter, trajectory_id=trajectory_id,
         )
+        try:
+            with bind_workflow_generation(authority):
+                final_state = await orchestrator.process(
+                    messages=self._to_langchain(request.messages),
+                    user_id=ctx.user_id,
+                    session_id=conversation_id,
+                    config=config,
+                )
+        finally:
+            if authority is not None:
+                authority.revoke()
         answer, metadata = self._extract_payload(final_state)
         if not isinstance(answer, str) or not answer.strip():
             # A completed graph without answer text is not successful model
@@ -79,6 +93,7 @@ class WorkflowRuntime:
         plan: Optional[AuthorizedExecutionPlan] = None,
         *,
         budget_meter: ExecutionBudgetMeter | None = None,
+        trajectory_id: str | None = None,
     ) -> AsyncIterator[_SharedChatStreamChunk]:
         ctx = request.context
         conversation_id = ctx.require_conversation_id()
@@ -113,6 +128,10 @@ class WorkflowRuntime:
                 )
                 while True:
                     if run_task.done():
+                        if not run_task.cancelled():
+                            failure = run_task.exception()
+                            if isinstance(failure, NativeRetirementUnverified):
+                                raise failure
                         # Do not race a permanently completed task against a
                         # newly scheduled queue-get. Drain observed events
                         # before reporting the terminal response.
@@ -142,17 +161,34 @@ class WorkflowRuntime:
                             next_event.cancel()
                             await asyncio.gather(next_event, return_exceptions=True)
 
+                # Resolve execution errors before secondary transport errors.
+                content, metadata = await run_task
                 if dropped_event:
                     raise RuntimeError("Medusa agent progress event stream overflow")
-                content, metadata = await run_task
                 yield _SharedChatStreamChunk(
                     type="content",
                     content=content,
                     correlation_id=ctx.correlation_id,
                     metadata=metadata,
                 )
-            except asyncio.CancelledError:
+            except (asyncio.CancelledError, NativeRetirementUnverified):
                 raise
+            except OutcomeStoreError:
+                logger.error(
+                    "deepagents_receipt_reconciliation_required",
+                    extra={"correlation_id": ctx.correlation_id},
+                )
+                yield _SharedChatStreamChunk(
+                    type="error",
+                    content="Execution evidence could not be confirmed. Verify the recorded run before retrying.",
+                    correlation_id=ctx.correlation_id,
+                    metadata={
+                        "error_code": "AGENT_RECEIPT_RECONCILIATION_REQUIRED",
+                        "error_type": "OutcomeStoreError",
+                        "recoverable": False,
+                        "reconciliation_required": True,
+                    },
+                )
             except Exception:
                 logger.exception(
                     "deepagents_primary_execution_failed",
@@ -168,7 +204,23 @@ class WorkflowRuntime:
             finally:
                 if not run_task.done():
                     run_task.cancel()
-                    await asyncio.gather(run_task, return_exceptions=True)
+                interrupted = False
+                # Own the child through retirement, including repeated
+                # cancellation of this forwarding generator.
+                while not run_task.done():
+                    try:
+                        await asyncio.shield(run_task)
+                    except asyncio.CancelledError:
+                        if not run_task.cancelled():
+                            interrupted = True
+                    except Exception:
+                        break
+                if not run_task.cancelled():
+                    failure = run_task.exception()
+                    if isinstance(failure, NativeRetirementUnverified):
+                        raise failure
+                if interrupted:
+                    raise asyncio.CancelledError
             return
 
         orchestrator = await self._get_orchestrator()
@@ -178,8 +230,16 @@ class WorkflowRuntime:
             session_id=conversation_id,
             config=config,
         )
+        authority = self._generation_authority(
+            request, decision, plan, budget_meter, trajectory_id=trajectory_id,
+        )
         try:
-            async for chunk in graph_stream:
+            while True:
+                try:
+                    with bind_workflow_generation(authority):
+                        chunk = await anext(graph_stream)
+                except StopAsyncIteration:
+                    break
                 for activity_chunk in self._extract_agent_activity_chunks(
                     chunk,
                     correlation_id=ctx.correlation_id,
@@ -199,7 +259,24 @@ class WorkflowRuntime:
                         metadata=meta,
                     )
         finally:
-            await graph_stream.aclose()
+            if authority is not None:
+                authority.revoke()
+            with bind_workflow_generation(authority):
+                await graph_stream.aclose()
+
+    @staticmethod
+    def _generation_authority(
+        request: ChatExecutionRequest, decision: ExecutionDecision | None,
+        plan: AuthorizedExecutionPlan | None, meter: ExecutionBudgetMeter | None,
+        *, trajectory_id: str | None = None,
+    ) -> WorkflowGenerationAuthority | None:
+        # Compatibility graph inspection can run without a model grant.
+        # The synthesis port itself denies any model execution in that case.
+        if decision is None or plan is None or meter is None:
+            return None
+        return WorkflowGenerationAuthority.create(
+            request, decision, plan, meter, trajectory_id=trajectory_id,
+        )
 
     @staticmethod
     def _project_medusa_event(
@@ -579,6 +656,11 @@ class WorkflowRuntime:
         result = await coordinator.handle_request(agent_request)
         if result.status not in {ResponseStatus.SUCCESS, ResponseStatus.PARTIAL,
                                  ResponseStatus.DEGRADED}:
+            if (
+                result.metadata.get("reconciliation_required") is True
+                and result.metadata.get("recoverable") is False
+            ):
+                raise OutcomeStoreError("Authorized Medusa receipt reconciliation required")
             raise RuntimeError("Authorized Medusa agent execution failed")
         if not isinstance(result.content, str) or not result.content.strip():
             raise RuntimeError("Authorized Medusa agent returned no content")

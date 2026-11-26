@@ -8,7 +8,7 @@ import secrets
 import time
 from datetime import datetime, timedelta
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import jwt
 import redis
@@ -379,11 +379,15 @@ class SecureAuthMiddleware:
             path.startswith(pattern) for pattern in public_patterns
         )
 
-    async def validate_token(self, token: str) -> Dict[str, Any]:
+    async def validate_token(
+        self, token: str, *, _witness_sink: Optional[Callable[[Any], None]] = None,
+    ) -> Dict[str, Any]:
         """Never report JWT signature validity as authenticated session truth."""
         try:
             payload = self._verify_access_token(token)
-            canonical = await self._require_active_session(token, payload)
+            canonical = await self._require_active_session(
+                token, payload, _witness_sink=_witness_sink,
+            ) if _witness_sink is not None else await self._require_active_session(token, payload)
             return {"status": TokenStatus.VALID, "payload": canonical}
         except AuthenticationError as exc:
             if "revoked" in exc.message.lower():
@@ -414,7 +418,8 @@ class SecureAuthMiddleware:
         return payload
 
     async def _require_active_session(
-        self, token: str, payload: Dict[str, Any]
+        self, token: str, payload: Dict[str, Any], *,
+        _witness_sink: Optional[Callable[[Any], None]] = None,
     ) -> Dict[str, Any]:
         """Resolve canonical active-session truth after JWT verification.
 
@@ -427,7 +432,13 @@ class SecureAuthMiddleware:
             from ai_karen_engine.auth.auth_service import get_auth_service
 
             auth_service = await get_auth_service()
-            account = await auth_service.validate_session(token, strict_errors=True)
+            witness = None
+            if _witness_sink is not None:
+                account, witness = await auth_service.validate_session_with_witness(token)
+                if account is not None and not auth_service.is_issued_session_witness(witness):
+                    raise RuntimeError("Session witness unavailable")
+            else:
+                account = await auth_service.validate_session(token, strict_errors=True)
         except Exception as exc:
             logger.error(
                 "auth.session_validation_unavailable",
@@ -449,10 +460,15 @@ class SecureAuthMiddleware:
         validated["roles"] = list(account.roles or [])
         validated["email"] = account.email
         validated["permissions"] = []
+        validated.pop("_runtime_session_witness", None)
+        if _witness_sink is not None and witness is not None:
+            _witness_sink(witness)
         return validated
 
-    def _get_user_from_payload(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        return {
+    def _get_user_from_payload(
+        self, payload: Dict[str, Any], *, witness: Any = None,
+    ) -> Dict[str, Any]:
+        user = {
             "user_id": payload["sub"],
             "email": payload.get("email"),
             "user_type": payload.get("user_type", "user"),
@@ -461,25 +477,57 @@ class SecureAuthMiddleware:
             "token_id": payload.get("token_id"),
             "roles": payload.get("roles", []),
         }
+        if witness is not None:
+            from ai_karen_engine.auth.models import UserData
+
+            principal = UserData.from_dict(user)
+            principal._runtime_session_witness = (principal, witness)
+            principal["token_id"] = user["token_id"]
+            principal["user_type"] = user["user_type"]
+            return principal
+        return user
 
     async def authenticate_request(self, request: Request) -> Dict[str, Any]:
         return await self.get_current_user(request)
 
-    async def get_current_user(self, request: Request) -> Dict[str, Any]:
+    async def _authenticate_token_principal(
+        self, token: str, *, issue_witness: bool,
+    ) -> Dict[str, Any]:
+        """Keep witness collection local to this authenticated credential attempt."""
+        witnesses: List[Any] = []
+        result = (
+            await self.validate_token(token, _witness_sink=witnesses.append)
+            if issue_witness else await self.validate_token(token)
+        )
+        if result["status"] != TokenStatus.VALID:
+            raise AuthenticationError(
+                result.get("error") or "Session unavailable",
+                result.get("http_status", 401),
+            )
+        if issue_witness:
+            if len(witnesses) != 1 or witnesses[0] is None:
+                raise AuthenticationError("Session witness unavailable", 503)
+            principal = self._get_user_from_payload(result["payload"], witness=witnesses[0])
+            from ai_karen_engine.auth.auth_service import get_auth_service
+
+            issuer = await get_auth_service()
+            if not issuer.bind_issued_session_principal(witnesses[0], principal):
+                raise AuthenticationError("Session witness unavailable", 503)
+            return principal
+        return self._get_user_from_payload(result["payload"])
+
+    async def get_current_user(
+        self, request: Request, *, issue_witness: bool = False,
+    ) -> Dict[str, Any]:
         path = request.url.path
         is_public = self.is_public_endpoint(path)
         try:
             token = self._extract_token_from_request(request)
             if token:
                 try:
-                    token_result = await self.validate_token(token)
-                    if token_result["status"] == TokenStatus.VALID:
-                        return self._get_user_from_payload(token_result["payload"])
-                    if not is_public:
-                        raise AuthenticationError(
-                            token_result.get("error") or "Session unavailable",
-                            token_result.get("http_status", 401),
-                        )
+                    return await self._authenticate_token_principal(
+                        token, issue_witness=issue_witness,
+                    )
                 except AuthenticationError as exc:
                     if not is_public:
                         logger.warning(
@@ -497,14 +545,9 @@ class SecureAuthMiddleware:
             session_token = self._extract_session_token_from_request(request)
             if session_token and session_token != token:
                 try:
-                    token_result = await self.validate_token(session_token)
-                    if token_result["status"] == TokenStatus.VALID:
-                        return self._get_user_from_payload(token_result["payload"])
-                    if not is_public:
-                        raise AuthenticationError(
-                            token_result.get("error") or "Session unavailable",
-                            token_result.get("http_status", 401),
-                        )
+                    return await self._authenticate_token_principal(
+                        session_token, issue_witness=issue_witness,
+                    )
                 except AuthenticationError:
                     if not is_public:
                         raise
@@ -548,7 +591,12 @@ def get_auth_middleware() -> SecureAuthMiddleware:
     return _auth_middleware
 
 
-async def get_current_user(request: Request) -> Dict[str, Any]:
+async def get_current_user(
+    request: Request, *, issue_witness: bool = False,
+) -> Dict[str, Any]:
+    if issue_witness:
+        # Request-state dictionaries alone cannot prove a durable session grant.
+        return await get_auth_middleware().get_current_user(request, issue_witness=True)
     state_user = getattr(request.state, "user", None)
     if isinstance(state_user, dict):
         return state_user

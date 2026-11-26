@@ -130,7 +130,10 @@ async def test_both_messages_and_run_complete_inside_one_transaction() -> None:
     )
     assert "status = 'completed'" in joined
     assert "cancel_requested_at IS NULL" in joined
-    assert "app.current_tenant_id" in joined
+    assert [params["setting"] for sql, params in tx.calls
+            if "set_config(:setting" in sql] == [
+        "app.current_tenant_id", "app.tenant_id",
+    ]
     assert "app.current_user_id" in joined
     assert all(
         item["tenant"] == current.tenant_id
@@ -167,11 +170,12 @@ async def test_terminal_write_failure_rolls_back_both_messages() -> None:
 
 
 @pytest.mark.asyncio
-async def test_foreign_run_lease_never_reaches_message_insert() -> None:
+@pytest.mark.parametrize("field", ["request_id", "correlation_id"])
+async def test_foreign_run_lease_never_reaches_message_insert(field) -> None:
     current = lease()
     tx = FakeTransaction()
     user, assistant = messages(current)
-    assistant.metadata["request_id"] = "foreign-request"
+    assistant.metadata[field] = "foreign-identity"
     result = await make_repo(tx).add_completed_turn(
         user, assistant, run_lease=current,
     )
@@ -346,9 +350,10 @@ async def test_b2c2_committed_turn_read_uses_owned_parent_lock_and_exact_pair(
     else:
         assert receipt.data is (case == "committed")
     statements = [sql for sql, _ in tx.calls]
-    assert next(i for i, x in enumerate(statements) if "app.current_tenant_id" in x) < next(
-        i for i, x in enumerate(statements) if "FOR SHARE" in x
-    )
+    parent_index = next(i for i, x in enumerate(statements) if "FOR SHARE" in x)
+    for setting in ("app.current_tenant_id", "app.tenant_id"):
+        assert next(i for i, (sql, params) in enumerate(tx.calls)
+                    if "set_config(:setting" in sql and params.get("setting") == setting) < parent_index
     assert next(i for i, x in enumerate(statements) if "app.current_user_id" in x) < next(
         i for i, x in enumerate(statements) if "FOR SHARE" in x
     )
@@ -361,3 +366,96 @@ async def test_b2c2_committed_turn_read_uses_owned_parent_lock_and_exact_pair(
         "INSERT INTO messages" in sql or "UPDATE public.runtime_chat_runs" in sql
         for sql in statements
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["match", "wrong_digest", "tampered_metadata", "missing_run", "missing_pair"])
+async def test_leased_reconciliation_binds_digest_in_same_transaction(case) -> None:
+    current = lease()
+    user, assistant = messages(current)
+    for message in (user, assistant):
+        message.metadata.update({
+            "source": "chat_runtime", "session_id": "session-1",
+            "conversation_id": current.conversation_id,
+        })
+    digest = canonical_message_digest(assistant)
+    rows = [
+        {
+            "message_id": message.id, "conversation_id": message.conversation_id,
+            "role": message.role, "content": message.content,
+            "message_metadata": dict(message.metadata),
+        }
+        for message in (user, assistant)
+    ]
+    if case == "tampered_metadata":
+        rows[1]["message_metadata"]["provider"] = "unexpected"
+    if case == "missing_pair":
+        rows.pop()
+    stored_digest = "0" * 64 if case == "wrong_digest" else digest
+
+    class FinalityTransaction(FakeTransaction):
+        async def execute(self, sql, args):
+            statement = str(sql)
+            self.calls.append((statement, args))
+            if "FROM public.conversations" in statement:
+                return SimpleNamespace(scalar_one_or_none=lambda: 1)
+            if "FROM public.messages AS m" in statement:
+                assert "FOR SHARE" in statement
+                return SimpleNamespace(mappings=lambda: SimpleNamespace(all=lambda: rows))
+            if "FROM public.runtime_chat_runs r" in statement:
+                assert self._depth == 2
+                assert args["execution"] == current.execution_id
+                assert args["user_message"] == user.id
+                assert args["assistant_message"] == assistant.id
+                assert "r.assistant_message_digest = CAST(:expected_digest AS text)" in statement
+                return SimpleNamespace(scalar_one_or_none=lambda: (
+                    1 if case != "missing_run" and args["expected_digest"] == stored_digest else None
+                ))
+            return SimpleNamespace()
+
+    tx = FinalityTransaction()
+    receipt = await make_repo(tx).read_committed_turn(
+        conversation_id=current.conversation_id, tenant_id=current.tenant_id,
+        user_id=current.user_id, request_id=current.request_id,
+        correlation_id=current.correlation_id, session_id="session-1",
+        user_message_id=user.id, assistant_message_id=assistant.id,
+        user_text=user.content, assistant_text=assistant.content, run_lease=current,
+    )
+    assert receipt.success is (case == "match")
+    if case == "match":
+        assert receipt.data is True
+    else:
+        assert receipt.data is None
+        assert receipt.error == "chat_run_finality_unverified"
+    assert sum("FROM public.runtime_chat_runs r" in sql for sql, _ in tx.calls) == (
+        0 if case == "missing_pair" else 1
+    )
+    assert tx.committed and not tx.rolled_back
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["before_commit", "commit_exit", "session_exit"])
+async def test_completed_turn_marks_only_commit_boundary_failures_uncertain(phase) -> None:
+    current = lease()
+
+    class FaultTransaction(FakeTransaction):
+        async def execute(self, sql, args):
+            if phase == "before_commit" and "INSERT INTO messages" in str(sql):
+                raise ConnectionError("synthetic precommit failure")
+            return await super().execute(sql, args)
+
+        async def __aexit__(self, exc_type, exc, tb):
+            depth = self._depth
+            result = await super().__aexit__(exc_type, exc, tb)
+            if exc_type is None and (
+                (phase == "commit_exit" and depth == 2)
+                or (phase == "session_exit" and depth == 1)
+            ):
+                raise ConnectionError("synthetic receipt loss")
+            return result
+
+    tx = FaultTransaction()
+    receipt = await make_repo(tx).add_completed_turn(*messages(current), run_lease=current)
+    assert not receipt.success
+    assert receipt.error == "completed_turn_write_failed"
+    assert receipt.metadata["commit_outcome_uncertain"] is (phase != "before_commit")

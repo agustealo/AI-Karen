@@ -47,6 +47,7 @@ class ExecutionRunStatus(str, Enum):
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
+    ORPHANED = "orphaned"
 
 
 @dataclass
@@ -144,8 +145,9 @@ class MedusaRunManager:
             if existing is not None and existing.status in {
                 ExecutionRunStatus.RUNNING,
                 ExecutionRunStatus.CANCELLING,
+                ExecutionRunStatus.ORPHANED,
             }:
-                raise RuntimeError(f"Medusa run already active: {run_id}")
+                raise RuntimeError(f"Medusa run already active or unresolved: {run_id}")
             run = ExecutionRun(
                 run_id=run_id,
                 correlation_id=correlation_id,
@@ -255,8 +257,10 @@ class MedusaRunManager:
             )
         return run
 
-    async def mark_response(self, run_id: str, outcome_status: str) -> None:
-        """Persist task outcome separately from execution lifecycle."""
+    async def mark_response(
+        self, run_id: str, outcome_status: str
+    ) -> ExecutionRunStatus:
+        """Return the resolved lifecycle, not merely the proposed response."""
 
         normalized = str(outcome_status or "").strip().lower()
         if normalized not in {"success", "partial", "degraded", "error", "timeout"}:
@@ -266,7 +270,7 @@ class MedusaRunManager:
             if normalized in {"success", "partial", "degraded"}
             else ExecutionRunStatus.FAILED
         )
-        await self._mark_terminal(
+        resolved = await self._mark_terminal(
             run_id,
             lifecycle,
             outcome_status=normalized,
@@ -276,6 +280,9 @@ class MedusaRunManager:
                 else f"Response{normalized.title()}"
             ),
         )
+        if resolved is None:
+            raise RunNotFoundError(run_id)
+        return resolved
 
     async def mark_completed(self, run_id: str) -> None:
         await self._mark_terminal(
@@ -299,6 +306,19 @@ class MedusaRunManager:
             outcome_status="cancelled",
         )
 
+    async def mark_retirement_unverified(self, run_id: str) -> None:
+        """Close lost task ownership, not the underlying native execution.
+
+        Reuse the existing orphaned ledger state and owner-fenced lease
+        retirement. The timestamp records lifecycle closure only; no task
+        outcome or verified cessation is implied.
+        """
+        await self._mark_terminal(
+            run_id,
+            ExecutionRunStatus.ORPHANED,
+            error_type="NativeRetirementUnverified",
+        )
+
     async def _mark_terminal(
         self,
         run_id: str,
@@ -306,14 +326,17 @@ class MedusaRunManager:
         *,
         error_type: str | None = None,
         outcome_status: str | None = None,
-    ) -> None:
+    ) -> ExecutionRunStatus | None:
         heartbeat_task: asyncio.Task[None] | None = None
         completed_at = datetime.now(timezone.utc)
         async with self._lock:
             run = self._runs.get(run_id)
             if run is None:
-                return
-            if run.status is ExecutionRunStatus.CANCELLING:
+                return None
+            if (
+                run.status is ExecutionRunStatus.CANCELLING
+                and status is not ExecutionRunStatus.ORPHANED
+            ):
                 status = ExecutionRunStatus.CANCELLED
                 outcome_status = "cancelled"
                 error_type = None
@@ -321,8 +344,9 @@ class MedusaRunManager:
                 ExecutionRunStatus.COMPLETED,
                 ExecutionRunStatus.FAILED,
                 ExecutionRunStatus.CANCELLED,
+                ExecutionRunStatus.ORPHANED,
             }:
-                return
+                return run.status
             run.status = status
             run.completed_at = completed_at
             run.error_type = error_type
@@ -384,6 +408,7 @@ class MedusaRunManager:
                                 "outcome_status": outcome_status,
                             },
                         )
+        return status
 
     async def cancel(
         self,
@@ -540,7 +565,8 @@ class MedusaRunManager:
                     raise RunNotFoundError(run_id)
                 snapshot = run.snapshot()
                 snapshot["distributed_control"] = await self._distributed_capability(
-                    shared_registered=run.shared_registered
+                    shared_registered=run.shared_registered,
+                    orphaned=run.status is ExecutionRunStatus.ORPHANED,
                 )
                 return snapshot
 
@@ -635,14 +661,19 @@ class MedusaRunManager:
                 and (
                     include_terminal
                     or run.status
-                    in {ExecutionRunStatus.RUNNING, ExecutionRunStatus.CANCELLING}
+                    in {
+                        ExecutionRunStatus.RUNNING,
+                        ExecutionRunStatus.CANCELLING,
+                        ExecutionRunStatus.ORPHANED,
+                    }
                 )
             ]
 
         merged: dict[str, dict[str, Any]] = {}
         for snapshot, shared_registered in local_pairs:
             snapshot["distributed_control"] = await self._distributed_capability(
-                shared_registered=shared_registered
+                shared_registered=shared_registered,
+                orphaned=snapshot["status"] == ExecutionRunStatus.ORPHANED.value,
             )
             merged[snapshot["run_id"]] = snapshot
 
@@ -964,7 +995,10 @@ class MedusaRunManager:
         self,
         *,
         shared_registered: bool,
+        orphaned: bool = False,
     ) -> dict[str, Any]:
+        if orphaned:
+            return {"supported": False, "reason_code": "run_owner_unresolved"}
         if not self._settings.distributed_run_control_enabled:
             return {
                 "supported": False,

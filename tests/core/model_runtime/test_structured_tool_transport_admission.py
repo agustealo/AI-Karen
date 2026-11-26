@@ -58,13 +58,14 @@ def _model(
     *,
     url: str = "http://127.0.0.1:11434/v1",
     max_model_calls: int = 2,
+    max_duration_ms: int = 60000,
     max_external_requests: int = 2,
     principal_roles: list[str] | None = None,
     authenticated: bool = True,
     runtime: RuntimeEngine = RuntimeEngine.CUSTOM,
 ):
     budget = ExecutionBudget(
-        max_duration_ms=60000,
+        max_duration_ms=max_duration_ms,
         max_model_calls=max_model_calls,
         max_external_requests=max_external_requests,
     )
@@ -350,3 +351,69 @@ async def test_env_override_to_remote_rechecks_at_actual_transport_boundary(
         await _invoke(model)
     transport.assert_not_awaited()
     assert grant.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_expired_structured_budget_denies_before_wire(monkeypatch):
+    transport = _wire(monkeypatch)
+    model, grant = _model()
+    grant.meter._start_ms -= 61000
+    with pytest.raises(RuntimeError, match="budget_exhausted"):
+        await _invoke(model)
+    transport.assert_not_awaited()
+    assert grant.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("swallows_cancellation", [False, True])
+async def test_structured_transport_deadline_denies_late_receipt(monkeypatch, swallows_cancellation):
+    transport = _wire(monkeypatch)
+    model, grant = _model(max_duration_ms=250)
+    entered = asyncio.Event()
+    closed = asyncio.Event()
+
+    async def slow(*args, **kwargs):
+        entered.set()
+        try:
+            await asyncio.Event().wait()
+        except asyncio.CancelledError:
+            if swallows_cancellation:
+                return _receipt()
+            raise
+        finally:
+            closed.set()
+
+    transport.side_effect = slow
+    with pytest.raises(RuntimeError, match="execution_deadline_exhausted"):
+        await asyncio.wait_for(_invoke(model), timeout=3)
+    assert entered.is_set()
+    assert closed.is_set()
+    transport.assert_awaited_once()
+    assert grant.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_denied_sibling_does_not_revoke_already_admitted_structured_call(monkeypatch):
+    transport = _wire(monkeypatch)
+    model, grant = _model(max_model_calls=1)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    async def slow(*args, **kwargs):
+        entered.set()
+        await release.wait()
+        return _receipt()
+
+    transport.side_effect = slow
+    active = asyncio.create_task(_invoke(model))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        with pytest.raises(RuntimeError, match="budget_exhausted"):
+            await _invoke(model.bind_tools([]))
+        assert grant.meter.exhausted
+    finally:
+        release.set()
+        result = await asyncio.wait_for(active, timeout=2)
+    assert result.generations[0].message.content == "Observed provider result"
+    transport.assert_awaited_once()
+    assert grant.meter.model_calls == 1

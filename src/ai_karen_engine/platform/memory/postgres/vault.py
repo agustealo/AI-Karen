@@ -392,6 +392,15 @@ class PostgresNeuroVault(VaultPort):
         self._require_non_historical_write(entry)
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
+            if context.private_execution is not None:
+                # The standalone factory may return an idle session. Apply
+                # scope on this owned transaction before the auth row locks.
+                from ai_karen_engine.persistence.postgres.transactions import (
+                    apply_authenticated_transaction_context,
+                )
+                await apply_authenticated_transaction_context(
+                    session, tenant_id=context.tenant_id, user_id=context.user_id,
+                )
             return await self._persist_with_session(
                 entry, context=context, session=session, commit=True,
             )
@@ -564,6 +573,28 @@ class PostgresNeuroVault(VaultPort):
             metadata={**receipt.metadata, "pending_commit": True},
         )
 
+    @staticmethod
+    async def _require_private_execution(context: VaultContext, session: Any) -> None:
+        execution = context.private_execution
+        if execution is None:
+            return
+        from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+        try:
+            if (
+                type(execution) is not ChatExecutionContext
+                or not execution.has_runtime_attachment_scope()
+                or execution.tenant_id != context.tenant_id
+                or execution.user_id != context.user_id
+                or execution.session_id != context.session_id
+                or execution.request_id != context.request_id
+                or execution.correlation_id != context.correlation_id
+                or execution.conversation_id != context.conversation_id
+            ):
+                raise PermissionError("attachment_session_denied")
+            await execution.revalidate_runtime_attachment_session(db_session=session)
+        except Exception:
+            raise NeuroVaultAuthorizationError("attachment_session_denied") from None
+
     async def _persist_with_session(
         self, entry: MemoryEntry, *, context: VaultContext,
         session: Any, commit: bool, historical_capability: Any = None,
@@ -575,6 +606,7 @@ class PostgresNeuroVault(VaultPort):
                 "historical execution capability is not yet enabled"
             )
         self._require_non_historical_write(entry)
+        await self._require_private_execution(context, session)
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
         metadata = entry.metadata
@@ -648,20 +680,37 @@ class PostgresNeuroVault(VaultPort):
             valid_to=valid_to,
             supersedes=self._optional_uuid(entry.parent_id),
         )
-        try:
-            # Explicitly flush the parent row before inserting the child.
-            # Independent ORM objects without relationship wiring are not
-            # guaranteed to flush in FK dependency order.
+        async def stage_pair() -> None:
+            # Flush the parent before the child; do not rely on ORM ordering.
             session.add(event)
             await session.flush()
             session.add(assertion)
             await session.flush()
-            if commit:
-                await session.commit()
+
+        private_standalone = commit and context.private_execution is not None
+        try:
+            if private_standalone:
+                # Authorization and consent locks were acquired BEFORE this
+                # savepoint. A duplicate pair rolls back only the savepoint,
+                # leaving the enclosing transaction and its RLS scope intact.
+                async with session.begin_nested():
+                    await stage_pair()
+            else:
+                await stage_pair()
         except IntegrityError:
             if not commit:
                 raise
-            await session.rollback()
+            if private_standalone:
+                # Recheck current authority, including JWT expiry, under the
+                # still-held outer locks before returning any replay evidence.
+                await self._require_private_execution(context, session)
+                if not await self._consent_granted(
+                    session, tenant_id=tenant_uuid, user_id=user_uuid,
+                    scope_name=consent_scope,
+                ):
+                    raise NeuroVaultAuthorizationError("memory consent scope is revoked")
+            else:
+                await session.rollback()
             existing = await self._find_by_idempotency(
                 session,
                 self._idempotency_key(entry, context),
@@ -701,7 +750,7 @@ class PostgresNeuroVault(VaultPort):
                 raise NeuroVaultAuthorizationError(
                     "idempotency collision does not match canonical memory write"
                 )
-            return VaultWriteReceipt(
+            replay = VaultWriteReceipt(
                 memory_id=str(existing_assertion.assertion_id),
                 persisted=True,
                 version=entry.version,
@@ -712,7 +761,12 @@ class PostgresNeuroVault(VaultPort):
                     "idempotent_replay": True,
                 },
             )
+            if private_standalone:
+                await session.commit()
+            return replay
 
+        if commit:
+            await session.commit()
         return VaultWriteReceipt(
             memory_id=str(assertion_id),
             persisted=True,

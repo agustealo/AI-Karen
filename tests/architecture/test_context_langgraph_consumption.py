@@ -65,7 +65,8 @@ def test_shadow_structured_sections_are_retired() -> None:
 def test_langgraph_delegates_canonical_prompt_and_provider_execution_to_runtime() -> None:
     synth = _text("src/ai_karen_engine/core/langgraph_orchestrator/nodes/response_synth.py")
     workflow_runtime = _text("src/ai_karen_engine/core/runtime/workflow_generation.py")
-    provider = _text("src/ai_karen_engine/core/runtime/provider_runtime.py")
+    gateway = _text("src/ai_karen_engine/core/expression/gateway.py")
+    engine = _text("src/ai_karen_engine/core/expression/engines/openai_compatible_engine.py")
     router = _text("src/ai_karen_engine/core/model_runtime/routing/llm_router_service.py")
 
     assert "WorkflowGenerationRequest(" in synth
@@ -74,12 +75,17 @@ def test_langgraph_delegates_canonical_prompt_and_provider_execution_to_runtime(
     assert "get_prompt_runtime_service" in workflow_runtime
     assert "build_request_from_runtime_context" in workflow_runtime
     assert "assemble_prompt(prompt_request)" in workflow_runtime
-    assert '"prompt_text": prompt_runtime.render_text_prompt' in workflow_runtime
-    assert 'context.get("prompt_text")' in provider
-    assert 'return prompt_text.strip()' in provider
+    assert "messages=assembled.messages" in workflow_runtime
+    assert "execution_admission=admission" in workflow_runtime
+    assert "await gateway.generate(task)" in workflow_runtime
+    assert "ProviderRuntime" not in workflow_runtime
+    assert "execute_chat(" not in workflow_runtime
+    assert "await engine.generate(task)" in gateway
+    assert "await admission.reserve_transport(endpoint" in engine
+    assert "await execute_provider_endpoint(" in engine
 
-    # LLMRouter is selection-only. Prompt consumption and provider execution
-    # belong exclusively to ProviderRuntime.
+    # LLMRouter remains selection-only; governed workflow execution belongs
+    # to the expression gateway and canonical endpoint transport.
     assert 'context.get("prompt_text")' not in router
     assert "process_chat_request" not in router
     assert "_invoke_provider_for_text" not in router

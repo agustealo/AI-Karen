@@ -795,3 +795,25 @@ async def test_pin_mutation_http_requires_valid_durable_session(
         assert "committed" not in response.text
         assert "private database detail" not in response.text
         execute.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_durable_session_validation_rejects_locked_account_and_refreshes_rows():
+    active = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID), is_active=True, device_fingerprint=None,
+        expires_in=3600, created_at=datetime.utcnow(),
+    )
+    principal = SimpleNamespace(
+        user_id=uuid.UUID(USER_ID), tenant_id=uuid.UUID(TENANT_ID),
+        is_active=True, is_verified=True,
+        locked_until=datetime.utcnow() + timedelta(minutes=5),
+    )
+    db = FakeDbSession(active, principal)
+    svc = session_service(db)
+    assert await svc.validate_session(token()) is None
+    assert len(db.statements) == 2
+    assert all(
+        statement.get_execution_options().get("populate_existing") is True
+        for statement in db.statements
+    )
+    assert not db.flushed

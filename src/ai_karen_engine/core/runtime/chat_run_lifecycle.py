@@ -11,11 +11,11 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
-from contextlib import suppress
 from typing import Any, Optional
 
 from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.logging import get_structured_logger
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatStreamChunk,
@@ -54,7 +54,11 @@ class ChatRunCoordinator:
     def __init__(self, repository: Optional[SqlChatRunRepository] = None) -> None:
         self._repository = repository or SqlChatRunRepository()
 
-    async def admit(self, context: ChatExecutionContext, run_id: str) -> ChatRunLease:
+    async def admit(
+        self, context: ChatExecutionContext, run_id: str, *,
+        submission_id: Optional[str] = None,
+        submitted_text: Optional[str] = None,
+    ) -> ChatRunLease:
         context.require_authenticated_user()
         # Reauthorize against the canonical repository at run-admission time.
         # Ingress verification alone must not become the execution authority.
@@ -66,6 +70,8 @@ class ChatRunCoordinator:
             transport_run_id=run_id,
             request_id=context.request_id or context.correlation_id,
             correlation_id=context.correlation_id,
+            **({"submission_id": submission_id} if submission_id is not None else {}),
+            **({"submitted_text": submitted_text} if submitted_text is not None else {}),
         )
         if lease is None:
             raise ChatRunConflict("chat_run_already_exists")
@@ -188,6 +194,8 @@ class ChatRunCoordinator:
         allowing an unowned model result to announce completion.
         """
         terminal = False
+        cleanup_attempted = False
+        upstream_closed = False
         next_chunk: Optional[asyncio.Task[ChatStreamChunk]] = None
         last_heartbeat = time.monotonic()
 
@@ -204,22 +212,45 @@ class ChatRunCoordinator:
             raise ChatRunLeaseLost("chat_run_lease_lost")
 
         async def close_upstream(*, strict: bool = False) -> None:
-            nonlocal next_chunk
-            # Stop the actual model generator before confirming its terminal
-            # cancellation. A DB intent alone is not a completed stop.
-            if next_chunk is not None:
-                if not next_chunk.done():
-                    next_chunk.cancel()
-                with suppress(asyncio.CancelledError, StopAsyncIteration):
-                    await next_chunk
-                next_chunk = None
-            if strict:
-                # An upstream cleanup failure cannot be counted as a
-                # confirmed cancelled execution.
+            nonlocal next_chunk, cleanup_attempted, upstream_closed
+            # A failed cleanup is sticky. A later no-op aclose on a generator
+            # which already raised during teardown is not cessation evidence.
+            if cleanup_attempted:
+                if strict and not upstream_closed:
+                    raise ChatRunLeaseLost("chat_run_cleanup_unverified")
+                return
+            cleanup_attempted = True
+            try:
+                if next_chunk is not None:
+                    task, next_chunk = next_chunk, None
+                    if not task.done():
+                        task.cancel()
+                    owner = asyncio.current_task()
+                    cancellation_count = owner.cancelling() if owner else 0
+                    try:
+                        await task
+                    except asyncio.CancelledError:
+                        # Distinguish the expected child cancellation from a
+                        # new cancellation of the cleanup owner.
+                        if not task.cancelled() or (
+                            owner is not None and owner.cancelling() > cancellation_count
+                        ):
+                            raise
+                    except StopAsyncIteration:
+                        pass
                 await chunks.aclose()
-            else:
-                with suppress(Exception):
-                    await chunks.aclose()
+                upstream_closed = True
+            except BaseException as exc:
+                logger.warning(
+                    "Chat run upstream cleanup unverified",
+                    extra={
+                        "execution_id": lease.execution_id,
+                        "correlation_id": lease.correlation_id,
+                        "error_type": type(exc).__name__,
+                    },
+                )
+                if strict or not isinstance(exc, Exception):
+                    raise
 
         try:
             while True:
@@ -266,6 +297,7 @@ class ChatRunCoordinator:
                     last_heartbeat = time.monotonic()
 
                 if chunk.type == ChatStreamEventType.ERROR:
+                    await close_upstream(strict=True)
                     if not await self._repository.finish(
                         lease, status="failed", error_code="CHAT_RUNTIME_ERROR"
                     ):
@@ -289,6 +321,21 @@ class ChatRunCoordinator:
                         isinstance(persistence_status, str)
                         and persistence_status in {"persisted", "already_persisted"}
                     )
+                    if not gated and persistence_status == "unverified":
+                        # The commit may already be durable. Do not attempt a
+                        # failed/cancelled transition or manufacture a receipt.
+                        terminal = True
+                        yield ChatStreamChunk(
+                            type=ChatStreamEventType.ERROR,
+                            content="Chat persistence is unverified. Check saved history and run status before sending again.",
+                            correlation_id=lease.correlation_id,
+                            metadata={
+                                "error_code": "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED",
+                                "transcript_persistence_status": "unverified",
+                                "requires_retry": False,
+                            },
+                        )
+                        break
                     error_code = (
                         "CHAT_RUNTIME_GATED" if gated else
                         "CHAT_TRANSCRIPT_NOT_PERSISTED" if not persisted else None
@@ -309,12 +356,14 @@ class ChatRunCoordinator:
                             if await self._repository.cancel_requested(lease):
                                 raise ChatRunCancellationRequested("chat_run_cancel_requested")
                             raise ChatRunLeaseLost("chat_run_atomic_commit_not_verified")
-                    elif not await self._repository.finish(
-                        lease, status="failed", error_code=error_code,
-                    ):
-                        if await self._repository.cancel_requested(lease):
-                            raise ChatRunCancellationRequested("chat_run_cancel_requested")
-                        raise ChatRunLeaseLost("chat_run_lease_lost")
+                    else:
+                        await close_upstream(strict=True)
+                        if not await self._repository.finish(
+                            lease, status="failed", error_code=error_code,
+                        ):
+                            if await self._repository.cancel_requested(lease):
+                                raise ChatRunCancellationRequested("chat_run_cancel_requested")
+                            raise ChatRunLeaseLost("chat_run_lease_lost")
                     terminal = True
                     if error_code:
                         yield ChatStreamChunk(
@@ -335,6 +384,7 @@ class ChatRunCoordinator:
                 yield chunk
 
             if not terminal:
+                await close_upstream(strict=True)
                 terminal = await self._repository.finish(
                     lease,
                     status="failed",
@@ -363,10 +413,15 @@ class ChatRunCoordinator:
                 },
             )
             raise
+        except NativeRetirementUnverified:
+            # Do not release the unresolved admission fence. Lease expiry
+            # will project interruption/orphaning, never cancellation success.
+            await close_upstream(strict=True)
+            raise
         except BaseException as exc:
             # Connection cancellation must not become a successful assistant
             # turn. The runtime generator itself owns provider cleanup.
-            if not terminal:
+            if not terminal and (not cleanup_attempted or upstream_closed):
                 await close_upstream(strict=True)
                 try:
                     await self._repository.finish(

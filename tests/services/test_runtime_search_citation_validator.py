@@ -68,12 +68,9 @@ def test_fetched_page_can_authorize_citation():
     assert ResponseValidator().validate("History: https://verified.example/history", fetched).valid
 
 
-def test_synthesizer_rechecks_after_retry_before_returning():
-    from pathlib import Path
-    src = (Path(__file__).resolve().parents[2]
-           / "src/ai_karen_engine/services/response/response_synthesizer.py").read_text()
-    assert "verified = self.validator.validate(text, contract)" in src
-    assert 'metadata["response_source"] = "citation_validation_failure"' in src
+# Post-generation citation validation is exercised through ChatRuntime in
+# tests/core/runtime/test_search_answer_runtime_synthesis.py. The retired
+# ResponseSynthesizer must not regain a model retry path to satisfy a test.
 
 
 def test_observation_rejects_unverified_urls():

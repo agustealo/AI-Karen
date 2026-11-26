@@ -7,8 +7,7 @@ content. Maps exceptions to a safe AgentError carrying:
 - retryability
 - degradation state
 
-Raw exception text belongs only in protected observability (logger), never in
-the response returned to the user.
+Raw exception text must not enter ordinary logs or the public response.
 """
 
 from __future__ import annotations
@@ -26,8 +25,10 @@ logger = logging.getLogger(__name__)
 
 def to_safe_response(exc: Exception, *, correlation_id: Optional[str] = None) -> RuntimeResponse:
     correlation_id = correlation_id or str(uuid.uuid4())
-    # Raw exception is logged to protected observability only.
-    logger.error("medusa.execution_error", exc_info=exc, extra={"correlation_id": correlation_id})
+    logger.error(
+        "medusa.execution_error",
+        extra={"correlation_id": correlation_id, "error_type": type(exc).__name__},
+    )
 
     code, recoverable = _classify(exc)
     error = AgentError(

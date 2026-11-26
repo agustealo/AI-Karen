@@ -119,6 +119,7 @@ async def test_approval_http_transports_redact_exception_details(
     app.include_router(runtime.router)
     app.include_router(approvals.router)
     app.dependency_overrides[runtime.bypass_user_context_func] = lambda: dict(user)
+    app.dependency_overrides[runtime.get_chat_execution_context] = lambda: user
     app.dependency_overrides[approvals.get_current_user] = lambda: user
     monkeypatch.setattr(runtime, "get_approval_service", FailingApprovals)
     monkeypatch.setattr(approvals, "get_approval_service", FailingApprovals)
