@@ -747,12 +747,23 @@ test("CK-CONSUMER-01 gated consumer preview restores an owned session without in
   await expect(karenSpeaker).toHaveText("Karen");
   await expect(karenSpeaker).toHaveAttribute("aria-label", "Assistant: Karen");
   await page.setViewportSize({ width: 1440, height: 900 });
-  const intelligence = page.locator(
+  const desktopContext = page.getByTestId("karen-copilot-response-context");
+  const showContext = desktopContext.getByRole("button", { name: "Show response context" });
+  const intelligence = desktopContext.locator(
     '[data-testid="conversation-context-rail"], [data-testid="karen-copilot-rail-unverified"]',
   );
-  await expect(intelligence, "The CopilotKit desktop must render exactly one canonical intelligence rail")
+  await expect(showContext).toBeVisible();
+  await expect(showContext).toHaveAttribute("aria-expanded", "false");
+  await expect(intelligence).toHaveCount(0);
+  await showContext.click();
+  const hideContext = desktopContext.getByRole("button", { name: "Hide response context" });
+  await expect(hideContext).toHaveAttribute("aria-expanded", "true");
+  await expect(intelligence, "The expanded CopilotKit desktop must render exactly one canonical intelligence rail")
     .toHaveCount(1);
   await expect(intelligence).toBeVisible();
+  await hideContext.click();
+  await expect(intelligence).toHaveCount(0);
+  await expect(showContext).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByTestId("karen-copilot-model-discovery")).toBeVisible();
   await expect(page.getByRole("button", { name: "Find conversations" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "New conversation" })).toBeEnabled();
