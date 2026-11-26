@@ -16,6 +16,20 @@ from ai_karen_engine.platform.memory.redis import (
     get_redis_manager,
 )
 
+# Claim and publish the run identity in one Redis operation. A lost or
+# retired lease does not make an existing run identity reusable.
+_REGISTER_RUN_SCRIPT = """
+if redis.call('EXISTS', KEYS[1], KEYS[2]) ~= 0 then
+  return 0
+end
+redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
+redis.call('HSET', KEYS[2], unpack(ARGV, 5))
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[3]))
+redis.call('SADD', KEYS[3], ARGV[4])
+redis.call('EXPIRE', KEYS[3], tonumber(ARGV[3]))
+return 1
+"""
+
 _RENEW_CLAIM_SCRIPT = """
 if redis.call('GET', KEYS[1]) == ARGV[1] then
   return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
@@ -201,15 +215,6 @@ class RedisDistributedRunStore:
     ) -> None:
         client = await self._client()
         claim_key = self._claim_key(run_id)
-        claimed = await client.set(
-            claim_key,
-            worker_id,
-            nx=True,
-            ex=self._settings.run_lease_ttl_seconds,
-        )
-        if not claimed:
-            raise RuntimeError(f"Medusa distributed run already active: {run_id}")
-
         now = self._now()
         lease_expires = now + timedelta(seconds=self._settings.run_lease_ttl_seconds)
         run_key = self._run_key(run_id)
@@ -230,16 +235,20 @@ class RedisDistributedRunStore:
             "error_type": "",
             "outcome_status": "",
         }
-        try:
-            pipeline = client.pipeline(transaction=True)
-            pipeline.hset(run_key, mapping=mapping)
-            pipeline.expire(run_key, self._settings.run_terminal_retention_seconds)
-            pipeline.sadd(index_key, run_id)
-            pipeline.expire(index_key, self._settings.run_terminal_retention_seconds)
-            await pipeline.execute()
-        except Exception:
-            await client.eval(_RELEASE_CLAIM_SCRIPT, 1, claim_key, worker_id)
-            raise
+        claimed = await client.eval(
+            _REGISTER_RUN_SCRIPT,
+            3,
+            claim_key,
+            run_key,
+            index_key,
+            worker_id,
+            str(self._settings.run_lease_ttl_seconds),
+            str(self._settings.run_terminal_retention_seconds),
+            run_id,
+            *(value for pair in mapping.items() for value in pair),
+        )
+        if not claimed:
+            raise RuntimeError(f"Medusa distributed run already exists: {run_id}")
 
     async def heartbeat(self, *, run_id: str, worker_id: str) -> bool:
         client = await self._client()
