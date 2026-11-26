@@ -181,3 +181,36 @@ pass/fail/skip counts; do not publish raw private request or failure data.
 A skipped case, an empty root folder, or a source-level contract test is not
 browser acceptance. Live Storage, governed mutation execution and composer
 attachment handoff still need separately authorized observed acceptance.
+
+
+## KEXP-005B: governed local folder organization acceptance
+
+Run the existing private browser spec with the separate case
+`KFILE-MUTATION-LOCAL:` only on an isolated disposable local stack. Verify
+that its API, PostgreSQL and Storage configuration do not point at production.
+Prepare a dedicated sanitized owner and a single empty root folder named
+`KEXP-005B-disposable` on the first root page. Obtain its UUID through the
+normal authenticated hierarchy API. Set the same private local environment
+as 005A, plus:
+
+```bash
+export KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE=true
+read -r -p 'Disposable root folder UUID: ' KAREN_FILE_EXPLORER_MUTATION_FIXTURE_ID
+export KAREN_FILE_EXPLORER_MUTATION_FIXTURE_ID
+CI=1 pnpm exec playwright test e2e/file-explorer-real-acceptance.spec.ts \
+  --config=e2e/playwright.config.ts --project=chromium \
+  --grep='KFILE-MUTATION-LOCAL:' --workers=1 --retries=0
+```
+
+The separate case rejects HTTPS, hosted GitHub Actions and inherited Vercel
+bypass secrets before login; loopback alone does not prove isolated backend
+configuration. It binds the fixture name to the supplied UUID and requires
+an empty initial inventory. It checks cancel/focus restoration, two confirmed
+creates, revision-bound rename, destination-bound move, exact server receipts,
+reload and independent destination readback. It verifies exactly four
+organization write requests. No protected workflow dispatch is changed.
+No files, ACLs or existing folders are changed; only generated empty child
+folders are renamed or moved. The synthetic children remain for inspection.
+Reset the disposable fixture manually using the normal governed controls;
+never automatically retry an ambiguous mutation or delete an unknown object.
+No live browser result is claimed by this source change.

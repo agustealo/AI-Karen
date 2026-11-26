@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { type Page, type TestInfo } from "@playwright/test";
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
@@ -456,6 +457,165 @@ test("KFILE-LIVE: authenticated owner files, pagination, refresh, layout and key
   expect(info.project.name).toBe("chromium");
 });
 
+
+/**
+ * Explicitly local, disposable organization proof. Never included in the
+ * protected read-only KFILE-LIVE dispatch. The operator must verify that the
+ * local web/API/database stack is isolated from production before opting in.
+ * Only creates and moves synthetic empty folders inside one named fixture.
+ * No delete, automatic retry, upload or existing-file mutation.
+ */
+test("KFILE-MUTATION-LOCAL: confirmed create, rename and move", async ({ page }) => {
+  test.skip(!enabled || process.env.KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE !== "true",
+    "Requires explicit local disposable mutation acceptance");
+  test.setTimeout(6 * 60_000);
+  const origin = trustedOrigin();
+  if (origin.protocol !== "http:" || !["localhost", "127.0.0.1"].includes(origin.hostname) ||
+      process.env.KAREN_LOCAL_CHAT_ACCEPTANCE !== "1" ||
+      process.env.GITHUB_ACTIONS === "true" ||
+      process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined) {
+    throw new Error("Organization mutation acceptance requires an isolated local loopback stack");
+  }
+  const fixtureId = process.env.KAREN_FILE_EXPLORER_MUTATION_FIXTURE_ID;
+  const fixtureName = "KEXP-005B-disposable";
+  if (!fixtureId || !uuidPattern.test(fixtureId) || !email || !password) {
+    throw new Error("Explicit disposable fixture UUID and sanitized owner credentials required");
+  }
+  const nonce = randomUUID();
+  const sourceName = "kexp-source-" + nonce;
+  const renamedName = "kexp-renamed-" + nonce;
+  const destinationName = "kexp-destination-" + nonce;
+  const prefix = "/api/plugins/file-explorer";
+  const writes: string[] = [];
+  page.on("request", request => {
+    const url = new URL(request.url());
+    if (url.origin === origin.origin && url.pathname.startsWith(prefix + "/") &&
+        ["POST", "PATCH", "DELETE", "PUT"].includes(request.method())) {
+      writes.push(request.method() + " " + url.pathname);
+    }
+  });
+  await signInApprovedKaren(page, email, password, { allowLocalLoopback: true });
+  const rootWait = nextRealPage(page, origin);
+  await enterWorkspace(page);
+  const rootHttp = await rootWait;
+  expect(rootHttp.status()).toBe(200);
+  const root = inventoryResponse(await rootHttp.json());
+  // Names are only used for UI activation after binding to the real UUID.
+  const fixtures = root.folders.filter(folder => folder.name === fixtureName);
+  expect(fixtures.length, "Exactly one disposable root fixture must be visible").toBe(1);
+  expect(fixtures[0].folder_id === fixtureId, "Disposable fixture identity must match").toBe(true);
+  const explorer = page.getByRole("region", { name: "Shared File Explorer" });
+  const entries = explorer.getByRole("list", { name: "Files and folders" });
+  const editor = explorer.getByRole("form", { name: "Confirm organization change" });
+  const fixtureWait = nextRealPage(page, origin);
+  await entries.getByRole("button", { name: "Open folder " + fixtureName, exact: true }).click();
+  const fixtureHttp = await fixtureWait;
+  expect(fixtureHttp.status()).toBe(200);
+  const initial = inventoryResponse(await fixtureHttp.json(), fixtureId);
+  expect(initial.folders.length + initial.items.length, "Use a fresh empty disposable fixture").toBe(0);
+  expect(initial.has_more || initial.folders_has_more).toBe(false);
+  await verifyDisplayedInventory(page, initial);
+
+  function inventoryWait(parent: string) {
+    return page.waitForResponse(response => {
+      const url = new URL(response.url());
+      return url.origin === origin.origin && url.pathname === prefix + "/hierarchy" &&
+        response.request().method() === "GET" && url.searchParams.get("parent_folder_id") === parent &&
+        !url.searchParams.has("file_cursor") && !url.searchParams.has("after_folder_id") &&
+        !url.searchParams.has("search");
+    }, { timeout: 45_000 });
+  }
+  async function confirm(action: "create" | "rename" | "move", method: "POST" | "PATCH",
+    path: string, payload: Record<string, unknown>, status: number) {
+    const [http, reload] = await Promise.all([
+      page.waitForResponse(response => {
+        const url = new URL(response.url());
+        return url.origin === origin.origin && url.pathname === path && response.request().method() === method;
+      }, { timeout: 45_000 }),
+      inventoryWait(fixtureId!),
+      editor.getByRole("button", { name: "Confirm " + action, exact: true }).click(),
+    ]);
+    expect(http.status()).toBe(status);
+    expect(http.request().postDataJSON()).toEqual(payload);
+    const receipt = await http.json();
+    expect(typeof receipt.request_id === "string" && Boolean(receipt.request_id)).toBe(true);
+    expect(typeof receipt.correlation_id === "string" && Boolean(receipt.correlation_id)).toBe(true);
+    expect(reload.status()).toBe(200);
+    const inventory = inventoryResponse(await reload.json(), fixtureId);
+    await verifyDisplayedInventory(page, inventory);
+    await expect(explorer.getByText("Organization change confirmed. Reloading inventory.", { exact: true })).toBeVisible();
+    return { receipt, inventory };
+  }
+  const createButton = explorer.getByRole("button", { name: "New folder", exact: true });
+  // A cancelled editor must not submit a mutation; focus returns to its opener.
+  await expect(createButton).toBeEnabled();
+  await createButton.click();
+  await expect(editor.getByRole("textbox", { name: "Folder name" })).toBeFocused();
+  await editor.getByRole("textbox", { name: "Folder name" }).fill(sourceName);
+  await editor.getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(editor).toHaveCount(0);
+  await expect(createButton).toBeFocused();
+  expect(writes).toHaveLength(0);
+
+  async function create(name: string): Promise<Folder> {
+    await expect(createButton).toBeEnabled();
+    await createButton.click();
+    await editor.getByRole("textbox", { name: "Folder name" }).fill(name);
+    const { receipt, inventory } = await confirm("create", "POST", prefix + "/folders",
+      { name, parent_folder_id: fixtureId }, 201);
+    const folder = inventory.folders.find(item => item.name === name);
+    if (!folder) throw new Error("Created folder missing from authoritative inventory");
+    expect(folder.revision).toBe("1");
+    expect(receipt.folder).toEqual(folder);
+    return folder;
+  }
+  const source = await create(sourceName);
+  const destination = await create(destinationName);
+  expect(source.folder_id !== destination.folder_id).toBe(true);
+
+  await entries.getByRole("button", { name: "Rename " + sourceName, exact: true }).click();
+  await editor.getByRole("textbox", { name: "Folder name" }).fill(renamedName);
+  const renamedResult = await confirm("rename", "PATCH", prefix + "/folders/" + source.folder_id,
+    { name: renamedName, expected_revision: source.revision }, 200);
+  const renamed = renamedResult.inventory.folders.find(folder => folder.folder_id === source.folder_id);
+  if (!renamed) throw new Error("Renamed folder missing from authoritative inventory");
+  expect(renamed.name).toBe(renamedName);
+  expect(renamed.revision).toBe((BigInt(source.revision) + BigInt(1)).toString());
+  expect(renamedResult.receipt.folder).toEqual(renamed);
+
+  await entries.getByRole("button", { name: "Move " + renamedName, exact: true }).click();
+  const browser = editor.getByRole("region", { name: "Move destination browser" });
+  await browser.getByRole("button", { name: "Browse destination " + fixtureName, exact: true }).click();
+  await browser.getByRole("button", { name: "Browse destination " + destinationName, exact: true }).click();
+  await expect(browser.getByText("Selected destination: " + destinationName, { exact: true })).toBeVisible();
+  const moved = await confirm("move", "POST", prefix + "/move/folder/" + source.folder_id,
+    { destination_id: destination.folder_id, expected_revision: renamed.revision }, 200);
+  const movedRevision = (BigInt(renamed.revision) + BigInt(1)).toString();
+  expect(moved.receipt).toMatchObject({
+    source_id: source.folder_id, kind: "folder", parent_folder_id: destination.folder_id,
+    organization_revision: movedRevision,
+  });
+  expect(moved.inventory.folders.some(folder => folder.folder_id === source.folder_id)).toBe(false);
+  const [destinationHttp] = await Promise.all([
+    inventoryWait(destination.folder_id),
+    entries.getByRole("button", { name: "Open folder " + destinationName, exact: true }).click(),
+  ]);
+  expect(destinationHttp.status()).toBe(200);
+  const readback = inventoryResponse(await destinationHttp.json(), destination.folder_id);
+  expect(readback.folders).toEqual([{
+    folder_id: source.folder_id, name: renamedName,
+    parent_folder_id: destination.folder_id, revision: movedRevision,
+  }]);
+  expect(readback.items.length).toBe(0);
+  await verifyDisplayedInventory(page, readback);
+  expect(writes).toEqual([
+    "POST " + prefix + "/folders", "POST " + prefix + "/folders",
+    "PATCH " + prefix + "/folders/" + source.folder_id,
+    "POST " + prefix + "/move/folder/" + source.folder_id,
+  ]);
+  // Leave evidence in the disposable fixture. Do not guess at cleanup after
+  // a failed or uncertain receipt. The operator resets the local fixture.
+});
 
 /**
  * Opt-in real selection-to-analysis evidence. The dedicated acceptance owner

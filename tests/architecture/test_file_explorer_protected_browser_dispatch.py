@@ -84,3 +84,20 @@ def test_content_intelligence_real_browser_scenario_is_not_permanently_skipped()
     assert "KAREN_CONTENT_INTELLIGENCE_SOURCE_ID" in spec
     assert "/api/plugins/content-intelligence/owner-sources" in spec
     assert "route.fulfill(" not in spec
+
+
+def test_organization_mutations_are_local_opt_in_and_not_protected_dispatch():
+    source = SPEC.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert 'KFILE-MUTATION-LOCAL:' in source
+    assert 'KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE !== "true"' in source
+    assert 'KAREN_FILE_EXPLORER_MUTATION_FIXTURE_ID' in source
+    assert 'origin.protocol !== "http:"' in source
+    assert 'process.env.GITHUB_ACTIONS === "true"' in source
+    assert 'process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined' in source
+    assert 'Use a fresh empty disposable fixture' in source
+    assert 'expected_revision: renamed.revision' in source
+    assert 'destination_id: destination.folder_id' in source
+    assert 'expect(writes).toEqual([' in source
+    assert 'KFILE-MUTATION-LOCAL' not in workflow
+    assert 'KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE' not in workflow
