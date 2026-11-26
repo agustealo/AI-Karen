@@ -41,7 +41,7 @@ case "${2:-readback}" in
     [[ "$KAREN_CHAT_BOOT_REVISION" =~ ^[a-f0-9]{40}$ ]] ||
       { echo "::error::Exact reviewed revision required"; exit 1; }
     spec='e2e/copilotkit-consumer-boot.spec.ts'
-    title='persists a real user message and a real assistant reply'
+    title='ARM-08 fresh ordinary-chat specialist execution survives reload'
     ;;
   *) echo "::error::Unsupported specialist acceptance scenario"; exit 1 ;;
 esac
@@ -91,4 +91,8 @@ then
   echo "::error::Exactly one passing real specialist scenario is required"
   exit 1
 fi
-echo "Protected specialist readback: one passing scenario, zero skips"
+if [[ "${2:-readback}" == ordinary-chat ]]; then
+  echo "Protected ordinary-chat specialist acceptance: one passing scenario, zero skips"
+else
+  echo "Protected specialist readback: one passing scenario, zero skips"
+fi

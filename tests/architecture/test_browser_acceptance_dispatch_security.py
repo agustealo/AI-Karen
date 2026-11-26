@@ -640,3 +640,13 @@ def test_ordinary_specialist_runner_rejects_unapproved_modes_before_browser(tmp_
     assert result.returncode != 0
     assert "private diagnostics suppressed" in result.stdout
     assert not list(tmp_path.glob("specialist-acceptance.*"))
+
+
+def test_ordinary_specialist_has_distinct_report_identity() -> None:
+    """A greeting-mode pass cannot certify a specialist trial."""
+    title = "ARM-08 fresh ordinary-chat specialist execution survives reload"
+    source = (ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/copilotkit-consumer-boot.spec.ts").read_text(encoding="utf-8")
+    shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text(encoding="utf-8")
+    assert f'test(approvedSpecialist ? "{title}" :' in source
+    assert f"title='{title}'" in shell
+    assert 'title=\'persists a real user message and a real assistant reply\'' not in shell

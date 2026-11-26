@@ -361,7 +361,7 @@ test.use({
 test.describe("canonical consumer chat cold-load acceptance", () => {
   test.skip(!enabled, "Set KAREN_LOCAL_CHAT_ACCEPTANCE=1 or KAREN_CHAT_BOOT_ACCEPTANCE=1 for real backend/browser proof");
 
-  test("persists a real user message and a real assistant reply", async ({ page }, testInfo) => {
+  test(approvedSpecialist ? "ARM-08 fresh ordinary-chat specialist execution survives reload" : "persists a real user message and a real assistant reply", async ({ page }, testInfo) => {
     test.setTimeout(approvedSpecialist ? 12 * 60_000 : personalContextAcceptance ? 18 * 60_000 : 180_000);
     const target = new URL(approvedUrl!);
     const browserErrors: string[] = [];
