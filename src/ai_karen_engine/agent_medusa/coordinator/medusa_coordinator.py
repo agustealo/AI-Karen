@@ -339,9 +339,11 @@ class MedusaCoordinator:
                 reason = (
                     "dependency_blocked"
                     if (step.error or "").startswith("blocked_dependencies:")
-                    else "execution_budget_exhausted"
-                    if step.error == "execution_budget_exhausted"
-                    else "unspecified"
+                    else (
+                        "execution_budget_exhausted"
+                        if step.error == "execution_budget_exhausted"
+                        else "unspecified"
+                    )
                 )
                 await request_emitter.emit(
                     AgentEvent(
