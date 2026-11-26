@@ -2465,3 +2465,137 @@ async def test_direct_governed_http_does_not_duplicate_transport_health(monkeypa
     observations.assert_called_once()
     caller_observations.assert_not_called()
     assert admission.meter.model_calls == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["generation", "embedding"])
+@pytest.mark.parametrize("case", ["success", "preparation_denied", "execution_failure", "cancelled", "deadline", "retirement_unverified"])
+async def test_direct_native_observation_uses_actual_library_call_and_owned_terminal(
+    monkeypatch, operation, case,
+):
+    from unittest.mock import Mock
+    from ai_karen_engine.core.model_runtime import provider_health_monitor
+    from ai_karen_engine.core.model_runtime.embedding_manager import EmbeddingManager
+    from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
+    from ai_karen_engine.core.model_runtime.providers import transformers_runtime as native
+    from ai_karen_engine.core.model_runtime.runtime_engine import EndpointProtocol, RuntimeEngine
+    from ai_karen_engine.platform.observability import metrics
+
+    if operation == "embedding" and case == "retirement_unverified":
+        pytest.skip("Encoder has no explicit native device-retirement contract")
+    manager, _, endpoint = _local_manager(monkeypatch)
+    endpoint = replace(
+        endpoint, provider_id="builtin_transformers", base_url=None,
+        builtin=True, tenant_scoped=False,
+        endpoint_type=ProviderEndpointType.BUILTIN_TRANSFORMERS,
+        protocol=EndpointProtocol.NATIVE, runtime_engine=RuntimeEngine.TRANSFORMERS,
+    )
+    monitor = provider_health_monitor.ProviderHealthMonitor(
+        registry=SimpleNamespace(get_provider_endpoint=lambda _: endpoint),
+    )
+    health = Mock(wraps=monitor.update_provider_health)
+    monkeypatch.setattr(monitor, "update_provider_health", health)
+    monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
+    collector = metrics.MetricsCollector()
+    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: collector)
+    admission = _scope(calls=1)
+    loop = asyncio.get_running_loop()
+    entered = asyncio.Event()
+    release = threading.Event()
+    retired = threading.Event()
+    calls = []
+
+    def compute(*args, **kwargs):
+        calls.append(operation)
+        try:
+            if case in {"cancelled", "deadline"}:
+                loop.call_soon_threadsafe(entered.set)
+                if not release.wait(5):
+                    raise RuntimeError("worker test release deadline")
+            if case == "execution_failure":
+                raise ValueError("private error body")
+            if operation == "embedding":
+                return SimpleNamespace(tolist=lambda: [0.1, 0.2])
+            return [{"generated_text": "Actual model output"}]
+        finally:
+            retired.set()
+
+    if operation == "generation":
+        selection = RuntimeSelection(
+            provider_id=endpoint.provider_id, display_name=endpoint.display_name,
+            endpoint_type=endpoint.endpoint_type, model=endpoint.default_model,
+            runtime_engine=endpoint.runtime_engine.value, base_url=None,
+        )
+        class Pipeline:
+            device = SimpleNamespace(type="cpu")
+            tokenizer = SimpleNamespace(eos_token_id=1)
+
+            def __call__(self, *args, **kwargs):
+                return compute(*args, **kwargs)
+
+        provider = object.__new__(native.TransformersRuntime)
+        provider._pipeline = Pipeline()
+        provider.model_path = endpoint.default_model
+        provider._transformers_available = True
+        provider._generation_lock = threading.RLock()
+        monkeypatch.setattr(provider, "warm", lambda *a, **kw: case != "preparation_denied")
+        monkeypatch.setattr(native, "generation_checkpoint_options", lambda _: {})
+        monkeypatch.setattr(native.TransformersRuntime, "_native_retirement_hold", threading.Event())
+        if case == "retirement_unverified":
+            def fail_retirement(_device):
+                raise RuntimeError("unverified device fence")
+            monkeypatch.setattr(provider, "_synchronize_native_device", fail_retirement)
+        monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+        monkeypatch.setattr(manager, "_resolve_endpoint", lambda _: endpoint)
+        monkeypatch.setattr(manager, "resolve_runtime", lambda _: provider)
+        invoke = manager.generate_chat(
+            [{"role": "user", "content": "input"}],
+            return_receipt=True, execution_admission=admission,
+        )
+    else:
+        encoder = EmbeddingManager(model_name="local-embedding-model")
+        encoder.model = SimpleNamespace(encode=compute)
+        encoder.model_loaded = case != "preparation_denied"
+        manager.embedding_manager = encoder
+        invoke = manager.generate_embedding("input", execution_admission=admission)
+
+    task = asyncio.create_task(invoke)
+    if case in {"cancelled", "deadline"}:
+        try:
+            await asyncio.wait_for(entered.wait(), timeout=2)
+            if case == "cancelled":
+                task.cancel()
+                await asyncio.sleep(0)
+                assert not task.done()
+                assert not retired.is_set()
+            else:
+                admission.meter._start_ms -= 61000
+            assert "kari_native_execution_observations_total" not in collector.snapshot()["counters"]
+        finally:
+            release.set()
+    if case == "success":
+        result = await asyncio.wait_for(task, timeout=3)
+        assert result == [0.1, 0.2] if operation == "embedding" else result.text == "Actual model output"
+    elif case == "cancelled":
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=3)
+    elif case == "retirement_unverified":
+        with pytest.raises(NativeRetirementUnverified):
+            await asyncio.wait_for(task, timeout=3)
+    else:
+        with pytest.raises(RuntimeError):
+            await asyncio.wait_for(task, timeout=3)
+
+    counters = collector.snapshot()["counters"]
+    if case == "preparation_denied":
+        assert calls == []
+        assert "kari_native_execution_observations_total" not in counters
+    else:
+        assert calls == [operation]
+        assert retired.is_set()
+        expected = {
+            "success": "success", "cancelled": "cancelled", "deadline": "deadline_exceeded",
+            "execution_failure": "execution_failed", "retirement_unverified": "retirement_unverified",
+        }[case]
+        assert counters["kari_native_execution_observations_total"]["values"] == {(operation, expected): 1.0}
+    assert health.call_count == int(operation == "generation" and case == "success")

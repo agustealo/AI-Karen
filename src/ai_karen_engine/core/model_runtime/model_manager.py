@@ -39,6 +39,7 @@ from ai_karen_engine.core.model_runtime.provider_endpoint import (
 )
 from ai_karen_engine.core.model_runtime.provider_health_monitor import (
     HealthStatus,
+    NativeExecutionObservation,
     ProviderHealthMonitor,
 )
 from ai_karen_engine.core.model_runtime.provider_registry_service import (
@@ -375,7 +376,7 @@ class ModelManager:
                 # Check policy against the concrete target, not an auto alias.
                 await execution_admission.reserve_native_generation(endpoint, model=target)
                 return await self._execute_admitted_native(
-                    selection, execution_admission, prompt=prompt, target=target,
+                    selection, execution_admission, endpoint=endpoint, prompt=prompt, target=target,
                     return_receipt=return_receipt, breaker=breaker, options=kwargs,
                 )
             await execution_admission.reserve_transport(endpoint, model=selection.model)
@@ -514,6 +515,7 @@ class ModelManager:
         selection: RuntimeSelection,
         admission: GovernedToolModelAdmission,
         *,
+        endpoint: ProviderEndpoint,
         prompt: str,
         target: str,
         return_receipt: bool,
@@ -525,7 +527,7 @@ class ModelManager:
             TransformersRuntime,
         )
 
-        start = time.perf_counter()
+        observation = NativeExecutionObservation("generation", endpoint=endpoint)
         try:
             async with admission.admitted_execution_deadline():
                 provider = self.resolve_runtime(selection)
@@ -534,9 +536,10 @@ class ModelManager:
 
                 def generate_selected(checkpoint: Callable[[], None]) -> tuple[str, str]:
                     checkpoint()
-                    text, observed = provider.generate_text_with_model(
-                        prompt, required_model=target, before_generate=checkpoint, **options,
-                    )
+                    with observation.bind():
+                        text, observed = provider.generate_text_with_model(
+                            prompt, required_model=target, before_generate=checkpoint, **options,
+                        )
                     if not isinstance(observed, str) or os.path.realpath(target) != os.path.realpath(observed):
                         raise ProviderNotAvailable("executed_model_registry_identity_drift")
                     return text, observed
@@ -559,14 +562,11 @@ class ModelManager:
                     text=response, model=observed_model,
                     provider_id=selection.provider_id, runtime_engine=selection.runtime_engine,
                 )
-            self._record_provider_result(selection.provider_id, True, start)
-            breaker.record_success()
+            if observation.finish("success"):
+                breaker.record_success()
             return receipt if return_receipt else receipt.text
-        except Exception as exc:
-            self._record_provider_result(
-                selection.provider_id, False, start, error_message=type(exc).__name__,
-            )
-            breaker.record_failure()
+        except (Exception, asyncio.CancelledError) as exc:
+            observation.finish_exception(exc)
             logger.warning(
                 "governed_model_native_failed",
                 extra={"provider_id": selection.provider_id, "error_type": type(exc).__name__},
@@ -601,13 +601,22 @@ class ModelManager:
         await execution_admission.reserve_local_embedding(
             model=self.embedding_manager.model_name,
         )
+        observation = NativeExecutionObservation("embedding")
+
         def encode(checkpoint: Callable[[], None]) -> List[float]:
             checkpoint()
-            vector = self.embedding_manager.embed_authoritative(text)
+            with observation.bind():
+                vector = self.embedding_manager.embed_authoritative(text)
             checkpoint()
             return vector
 
-        return await execution_admission.run_admitted_blocking(encode)
+        try:
+            vector = await execution_admission.run_admitted_blocking(encode)
+        except (Exception, asyncio.CancelledError) as exc:
+            observation.finish_exception(exc)
+            raise
+        observation.finish("success")
+        return vector
 
     @classmethod
     async def invoke_provider(cls, provider: Any, prompt: str, **kwargs: Any) -> Any:

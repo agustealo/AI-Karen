@@ -18,6 +18,8 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
     ProviderNotAvailable,
 )
 
+from ai_karen_engine.core.model_runtime.provider_health_monitor import observe_native_compute
+
 logger = logging.getLogger(__name__)
 
 
@@ -410,15 +412,19 @@ class TransformersRuntime(LLMProviderBase):
                         self._native_device_scope(getattr(active_pipeline, "device", None))
                         if before_generate is not None else nullcontext()
                     )
+                    pad_token_id = active_pipeline.tokenizer.eos_token_id
                     with retirement:
-                        result = active_pipeline(
-                            prompt,
-                            max_new_tokens=max_new_tokens,
-                            temperature=temperature,
-                            do_sample=temperature > 0,
-                            pad_token_id=active_pipeline.tokenizer.eos_token_id,
-                            **generation_options,
-                        )
+                        if before_generate is not None:
+                            before_generate()
+                        with observe_native_compute("generation"):
+                            result = active_pipeline(
+                                prompt,
+                                max_new_tokens=max_new_tokens,
+                                temperature=temperature,
+                                do_sample=temperature > 0,
+                                pad_token_id=pad_token_id,
+                                **generation_options,
+                            )
                     if before_generate is not None:
                         before_generate()
                 if result and isinstance(result, list) and "generated_text" in result[0]:

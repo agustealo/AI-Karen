@@ -625,7 +625,9 @@ async def test_shared_gateway_deadline_rejects_blocked_or_late_engine(swallows_c
             "ai_karen_engine.core.expression.gateway.get_engine",
             side_effect=lambda engine_id, _: SlowEngine(engine_id, visited),
         ),
-        patch.object(ExpressionGateway, "_observe_verified_model_success") as observe,
+        patch(
+            "ai_karen_engine.core.model_runtime.provider_health_monitor.get_health_monitor"
+        ) as observe,
     ):
         with pytest.raises(EngineUnavailableError, match="execution_budget_exhausted_duration"):
             await asyncio.wait_for(ExpressionGateway(_settings()).generate(task), timeout=2)

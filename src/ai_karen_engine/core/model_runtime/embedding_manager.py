@@ -14,6 +14,7 @@ from functools import lru_cache
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.model_runtime.provider_contracts import EmbeddingFailed
+from ai_karen_engine.core.model_runtime.provider_health_monitor import observe_native_compute
 
 if TYPE_CHECKING:
     from sentence_transformers import SentenceTransformer
@@ -225,12 +226,13 @@ class EmbeddingManager:
         try:
             # Use sentence-transformers for proper semantic embeddings
             if self.model is not None:
-                vector = self.model.encode(text, convert_to_numpy=True)
+                with observe_native_compute("embedding"):
+                    vector = self.model.encode(text, convert_to_numpy=True)
                 return vector.tolist()
             else:
                 raise RuntimeError("Model is None during embedding computation")
         except Exception as exc:
-            logger.error(f"[EmbeddingManager] DistilBERT encoding failed: {exc}")
+            logger.warning("embedding_encoding_failed", extra={"error_type": type(exc).__name__})
             raise
 
     def _simple_embedding_fallback(self, text: str) -> List[float]:

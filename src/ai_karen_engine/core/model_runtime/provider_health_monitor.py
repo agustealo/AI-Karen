@@ -17,8 +17,10 @@ from __future__ import annotations
 import logging
 import math
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Set
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -62,6 +64,87 @@ class ProviderHealthInfo:
     error_type: Optional[str] = None
 
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+# This is worker-local evidence, not a grant, reservation, or model registry.
+_native_observation: ContextVar[NativeExecutionObservation | None] = ContextVar(
+    "native_execution_observation", default=None,
+)
+
+
+@dataclass(slots=True)
+class NativeExecutionObservation:
+    """One direct governed native call, published only by the owning coroutine."""
+
+    operation: str
+    endpoint: ProviderEndpoint | None = None
+    started: float | None = None
+    compute_calls: int = 0
+    compute_returned: bool = False
+    finished: bool = False
+
+    @contextmanager
+    def bind(self) -> Iterator[None]:
+        token = _native_observation.set(self)
+        try:
+            yield
+        finally:
+            _native_observation.reset(token)
+
+    def finish(self, outcome: str) -> bool:
+        """Report a bounded outcome after the admitted worker has retired.
+
+        Model-specific failures are not evidence that every model on a shared
+        native provider is unhealthy. Embeddings do not certify chat health.
+        """
+        if self.finished or self.started is None:
+            return False
+        self.finished = True
+        if self.compute_calls != 1 or (outcome == "success" and not self.compute_returned):
+            outcome = "unverified_result"
+        elapsed = time.perf_counter() - self.started
+        try:
+            return get_health_monitor().record_native_execution(
+                self.endpoint, operation=self.operation,
+                outcome=outcome, response_time=elapsed,
+            )
+        except Exception:
+            return False
+
+    def finish_exception(self, exc: BaseException) -> None:
+        import asyncio
+        from ai_karen_engine.core.model_runtime.governed_model_admission import (
+            ModelAdmissionDeadlineExceeded,
+        )
+        from ai_karen_engine.core.model_runtime.provider_contracts import (
+            NativeRetirementUnverified,
+        )
+
+        if isinstance(exc, NativeRetirementUnverified):
+            outcome = "retirement_unverified"
+        elif isinstance(exc, asyncio.CancelledError):
+            outcome = "cancelled"
+        elif isinstance(exc, ModelAdmissionDeadlineExceeded):
+            outcome = "deadline_exceeded"
+        elif self.compute_returned:
+            outcome = "unverified_result"
+        else:
+            outcome = "execution_failed"
+        self.finish(outcome)
+
+
+@contextmanager
+def observe_native_compute(operation: str) -> Iterator[None]:
+    """Mark the actual library invocation inside the already-owned worker."""
+    observation = _native_observation.get()
+    if observation is None or observation.operation != operation:
+        yield
+        return
+    observation.compute_calls += 1
+    if observation.started is None:
+        observation.started = time.perf_counter()
+    yield
+    observation.compute_returned = True
 
 
 class ProviderHealthMonitor:
@@ -239,6 +322,52 @@ class ProviderHealthMonitor:
             # Metrics failure must not reverse an observed health update.
             pass
         return True
+
+    def record_native_execution(
+        self, endpoint: ProviderEndpoint | None, *, operation: str,
+        outcome: str, response_time: float,
+    ) -> bool:
+        """Observe direct native execution without conflating encoder and chat health."""
+        if (
+            operation not in {"generation", "embedding"}
+            or outcome not in {
+                "success", "cancelled", "deadline_exceeded", "execution_failed",
+                "unverified_result", "retirement_unverified",
+            }
+            or not math.isfinite(response_time)
+            or response_time < 0
+        ):
+            return False
+        try:
+            from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
+            collector = get_metrics_collector()
+            labels = {"operation": operation, "outcome": outcome}
+            collector.counter(
+                "kari_native_execution_observations_total",
+                "Direct governed native execution outcomes after worker retirement",
+                ["operation", "outcome"],
+            ).labels(**labels).inc()
+            collector.histogram(
+                "kari_native_execution_observation_duration_seconds",
+                "Elapsed native invocation to admitted terminal outcome",
+                ["operation", "outcome"],
+            ).labels(**labels).observe(response_time)
+        except Exception:
+            pass
+        if (
+            operation == "generation" and outcome == "success"
+            and endpoint is not None and endpoint.tenant_scoped is False
+            and self._registry is not None
+            and self._registry.get_provider_endpoint(endpoint.provider_id) == endpoint
+        ):
+            from ai_karen_engine.core.model_runtime.runtime_engine import EndpointProtocol
+            if endpoint.protocol is EndpointProtocol.NATIVE:
+                self.update_provider_health(
+                    endpoint.provider_id, is_healthy=True, response_time=response_time,
+                )
+                return True
+        return False
 
     def _emit_transition_if_changed(
         self,
