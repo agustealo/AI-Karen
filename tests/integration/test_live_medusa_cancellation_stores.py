@@ -272,6 +272,18 @@ async def _run_acceptance() -> None:
             redis=redis, ledger=ledger, prefix=prefix,
             tenant_id=tenant_a, marker=marker
         )
+        await _terminal_arbitration_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix,
+            tenant_id=tenant_a, marker=marker,
+        )
+        await _terminal_rollback_recovery_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix,
+            tenant_id=tenant_a, marker=marker,
+        )
+        await _retention_retry_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix,
+            tenant_id=tenant_a, marker=marker,
+        )
     finally:
         # Failure before the first cancellation must not strand workload cleanup.
         release_retirement.set()
@@ -563,6 +575,7 @@ async def _retirement_replay_acceptance(
         if retirement == "explicit":
             await owner_store.mark_terminal(
                 run_id=run_id,
+                tenant_id=tenant_id,
                 worker_id=owner_settings.worker_id,
                 status="orphaned",
                 completed_at=datetime.now(timezone.utc),
@@ -617,6 +630,337 @@ async def _retirement_replay_acceptance(
             await asyncio.gather(run.heartbeat_task, return_exceptions=True)
 
 
+async def _terminal_arbitration_acceptance(
+    *,
+    redis: RedisConnectionManager,
+    ledger: PostgresDurableRunLedger,
+    prefix: str,
+    tenant_id: str,
+    marker: str,
+) -> None:
+    """Real durable-only and Redis-only cancellation plus stale terminal rejection."""
+    client = redis.client
+    assert client is not None
+    settings = _settings(worker=f"terminal-owner-{marker}", prefix=prefix)
+    store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+    for mode in ("durable_cancel", "redis_cancel", "lost_claim", "success"):
+        run_id = f"{marker}-terminal-{mode}"
+        owner = MedusaRunManager(
+            settings=settings, distributed_store=store, durable_ledger=ledger
+        )
+        task = asyncio.create_task(asyncio.sleep(0))
+        run = None
+        try:
+            run = await owner.register(
+                run_id=run_id,
+                tenant_id=tenant_id,
+                correlation_id=f"corr-{run_id}",
+                user_id="terminal-owner",
+                task=task,
+            )
+            await task
+            assert run.shared_registered and run.durable_registered
+            if mode == "durable_cancel":
+                # Commit cancellation before its Redis signal reaches the owner.
+                await ledger.mark_cancelling(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    requested_at=datetime.now(timezone.utc),
+                    audit_event_ref=f"audit-{run_id}",
+                    source="admin_cancel",
+                )
+                assert (await store.get(run_id=run_id, tenant_id=tenant_id))[
+                    "status"
+                ] == "running"
+            elif mode == "redis_cancel":
+                await store.request_cancel(run_id=run_id, tenant_id=tenant_id)
+                pending = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+                assert pending is not None and pending["status"] == "running"
+            elif mode == "lost_claim":
+                await client.delete(f"{prefix}:claim:{run_id}")
+
+            before = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+            assert before is not None
+            resolved = await owner.mark_response(run_id, "success")
+            local = await owner.get(run_id=run_id, tenant_id=tenant_id)
+            durable = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+            assert durable is not None
+            shared = await store.get(run_id=run_id, tenant_id=tenant_id)
+            if mode == "lost_claim":
+                assert resolved.value == local["status"] == "orphaned"
+                assert local["completed_at"] is None
+                assert local["outcome_status"] is None
+                assert durable == before
+                assert shared["status"] == "orphaned"
+                assert shared["outcome_status"] is None
+            else:
+                expected = "completed" if mode == "success" else "cancelled"
+                outcome = "success" if mode == "success" else "cancelled"
+                assert resolved.value == expected
+                assert local["status"] == durable["status"] == shared["status"] == expected
+                assert (
+                    local["outcome_status"]
+                    == durable["outcome_status"]
+                    == shared["outcome_status"]
+                    == outcome
+                )
+                assert local["completed_at"] == durable["completed_at"] == shared["completed_at"]
+                if mode == "durable_cancel":
+                    assert durable["audit_event_ref"] == f"audit-{run_id}"
+            assert not await client.exists(f"{prefix}:claim:{run_id}")
+            assert await owner.mark_response(run_id, "success") is resolved
+            assert await ledger.get(run_id=run_id, tenant_id=tenant_id) == durable
+        finally:
+            if run is not None and run.heartbeat_task is not None:
+                run.heartbeat_task.cancel()
+                await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+            await client.delete(f"{prefix}:claim:{run_id}", f"{prefix}:run:{run_id}")
+
+
+async def _terminal_rollback_recovery_acceptance(
+    *,
+    redis: RedisConnectionManager,
+    ledger: PostgresDurableRunLedger,
+    prefix: str,
+    tenant_id: str,
+    marker: str,
+) -> None:
+    """Commit Redis, roll back real SQL, admit late intent, then reconcile."""
+    class RollbackLedger(PostgresDurableRunLedger):
+        async def _append_transition(self, session, **kwargs):
+            await super()._append_transition(session, **kwargs)
+            if kwargs["to_status"] == "completed":
+                raise DurableRunLedgerUnavailable("injected terminal SQL rollback")
+
+    settings = _settings(worker=f"rollback-owner-{marker}", prefix=prefix)
+    store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+    owner = MedusaRunManager(
+        settings=settings,
+        distributed_store=store,
+        durable_ledger=RollbackLedger(postgres=get_postgres_engine()),
+    )
+    scope = dict(run_id=f"{marker}-terminal-rollback", tenant_id=tenant_id)
+    task = asyncio.create_task(asyncio.sleep(0))
+    run = None
+    try:
+        run = await owner.register(
+            **scope, correlation_id=f"rollback-{marker}", user_id="owner", task=task
+        )
+        await task
+        assert (await owner.mark_response(run.run_id, "success")).value == "orphaned"
+        shared = await store.get(**scope)
+        assert shared["status"] == "completed"
+        assert shared["terminal_authority"] == "durable_arbitrated"
+        client = redis.client
+        assert client is not None
+        run_key = f"{prefix}:run:{run.run_id}"
+        index_key = f"{prefix}:tenant:{tenant_id}"
+        assert await client.pttl(run_key) == -1
+        # Expire the discovery index independently of the retained receipt.
+        # An unrelated/mismatched receipt cannot release the hold.
+        assert not await store.acknowledge_durable_terminal(
+            tenant_id=tenant_id,
+            receipt={**shared, "outcome_status": "partial"},
+        )
+        assert await client.pttl(run_key) == -1
+        await client.pexpire(index_key, 1)
+        await asyncio.sleep(0.02)
+        assert not await client.exists(index_key)
+        assert await client.pttl(run_key) == -1
+        pending = await ledger.get(**scope)
+        assert pending is not None and pending["status"] == "running"
+        await ledger.mark_cancelling(
+            **scope,
+            requested_at=datetime.now(timezone.utc),
+            audit_event_ref=f"late-{marker}",
+            source="admin_cancel",
+        )
+        with pytest.raises(DistributedRunNotCancellable):
+            await store.request_cancel(**scope)
+        # The injected fault only affects runtime completion; restore the
+        # genuine ledger for history recovery, not a new execution attempt.
+        helper = Path(__file__).with_name("medusa_real_store_worker.py")
+        process = await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-u",
+            str(helper),
+            run.run_id,
+            tenant_id,
+            f"recovery-worker-{marker}",
+            prefix,
+            "recover_terminal",
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.PIPE,
+            env=os.environ.copy(),
+        )
+        try:
+            event = await _read_worker_event(process, "recovered_terminal")
+            assert process.pid != os.getpid()
+            recovered = event["receipt"]
+            assert isinstance(recovered, dict)
+            assert recovered["status"] == "completed"
+            assert recovered["outcome_status"] == "success"
+            assert await asyncio.wait_for(process.wait(), timeout=8) == 0
+        finally:
+            if process.returncode is None:
+                process.kill()
+                await asyncio.wait_for(process.wait(), timeout=8)
+        assert 0 < await client.pttl(run_key) <= settings.run_terminal_retention_seconds * 1000
+        owner._durable_ledger = ledger
+        local = await owner.get(**scope)
+        durable = await ledger.get(**scope)
+        assert durable is not None
+        assert local["status"] == durable["status"] == shared["status"] == "completed"
+        assert local["outcome_status"] == durable["outcome_status"] == "success"
+        assert local["completed_at"] == durable["completed_at"] == shared["completed_at"]
+        assert durable["audit_event_ref"] == f"late-{marker}"
+        assert (await owner.mark_response(run.run_id, "success")).value == "orphaned"
+        assert await ledger.get(**scope) == durable
+        connection = await asyncpg.connect(os.environ["DATABASE_URL"])
+        try:
+            rows = await connection.fetch(
+                """
+                SELECT to_status, source, metadata
+                FROM agent_medusa_run_transitions
+                WHERE run_id = $1 ORDER BY transition_id
+                """,
+                run.run_id,
+            )
+            assert [row["to_status"] for row in rows] == [
+                "created", "running", "cancellation_requested", "completed"
+            ]
+            assert rows[-1]["source"] == "redis_reconciliation"
+            assert json.loads(rows[-1]["metadata"])["late_cancellation"] is True
+        finally:
+            await connection.close()
+        # An acknowledgement is idempotent and cannot extend existing TTL.
+        await client.pexpire(run_key, 100)
+        assert not await store.acknowledge_durable_terminal(
+            tenant_id=tenant_id, receipt=durable
+        )
+        assert 0 < await client.pttl(run_key) <= 100
+        await asyncio.sleep(0.15)
+        assert not await client.exists(run_key)
+        after_expiration = MedusaRunManager(
+            settings=settings, distributed_store=store, durable_ledger=ledger
+        )
+        restored = await after_expiration.get(**scope)
+        assert restored["status"] == "completed"
+        assert restored["outcome_status"] == "success"
+        assert restored["completed_at"] == durable["completed_at"]
+    finally:
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+        if not task.done():
+            task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
+
+async def _retention_retry_acceptance(
+    *,
+    redis: RedisConnectionManager,
+    ledger: PostgresDurableRunLedger,
+    prefix: str,
+    tenant_id: str,
+    marker: str,
+) -> None:
+    """Recover deferred cleanup from owner reads and a fresh scoped listing."""
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunStoreUnavailable,
+    )
+
+    class DeferredStore(RedisDistributedRunStore):
+        fail_ack = True
+        attempts = 0
+
+        async def acknowledge_durable_terminal(self, **kwargs: Any) -> bool:
+            self.attempts += 1
+            if self.fail_ack:
+                raise DistributedRunStoreUnavailable("injected retention failure")
+            return await super().acknowledge_durable_terminal(**kwargs)
+
+    client = redis.client
+    assert client is not None
+    settings = _settings(worker=f"retention-owner-{marker}", prefix=prefix)
+    store = DeferredStore(settings=settings, redis_manager=redis)
+    index = store._pending_terminal_index(tenant_id)
+    # Prove the rotating discovery cursor advances past an unrepaired item.
+    await client.zadd(index, {"probe-a": 0, "probe-b": 1, "probe-c": 2})
+    try:
+        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
+            "probe-a"
+        ]
+        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
+            "probe-b"
+        ]
+        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
+            "probe-c"
+        ]
+        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
+            "probe-a"
+        ]
+    finally:
+        await client.zrem(index, "probe-a", "probe-b", "probe-c")
+    for mode in ("owner_get", "fresh_list"):
+        owner = MedusaRunManager(
+            settings=settings, distributed_store=store, durable_ledger=ledger
+        )
+        scope = dict(run_id=f"{marker}-retention-{mode}", tenant_id=tenant_id)
+        task = asyncio.create_task(asyncio.sleep(0))
+        run = None
+        store.fail_ack = True
+        before = store.attempts
+        try:
+            run = await owner.register(
+                **scope, correlation_id=f"corr-{mode}", user_id="retention-user", task=task
+            )
+            await task
+            assert (await owner.mark_response(run.run_id, "success")).value == "completed"
+            key = store._run_key(run.run_id)
+            assert store.attempts == before + 1
+            assert await client.pttl(key) == -1
+            assert await client.zscore(index, run.run_id) is not None
+            assert await client.pttl(index) == -1
+            store.fail_ack = False
+            if mode == "owner_get":
+                assert (await owner.get(**scope))["status"] == "completed"
+                assert store.attempts == before + 2
+                assert not run.retention_pending
+            else:
+                await client.delete(store._tenant_index(tenant_id))
+                fresh = MedusaRunManager(
+                    settings=settings, distributed_store=store, durable_ledger=ledger
+                )
+                rows = await fresh.list_runs(
+                    tenant_id=tenant_id,
+                    user_id="retention-user",
+                )
+                assert any(
+                    row["run_id"] == run.run_id and row["status"] == "completed"
+                    for row in rows
+                )
+            assert await client.pttl(key) > 0
+            assert await client.zscore(index, run.run_id) is None
+            durable = await ledger.get(**scope)
+            assert durable is not None and durable["outcome_status"] == "success"
+            previous_ttl = await client.pttl(key)
+            assert not await store.acknowledge_durable_terminal(
+                tenant_id=tenant_id, receipt=durable
+            )
+            assert 0 < await client.pttl(key) <= previous_ttl
+        finally:
+            if run is not None and run.heartbeat_task is not None:
+                run.heartbeat_task.cancel()
+                await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+
 @pytest.mark.parametrize(
     "change",
     [
@@ -629,10 +973,11 @@ async def _retirement_replay_acceptance(
         "terminal",
     ],
 )
-def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
-    change: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("operation", ["heartbeat", "terminal"])
+def test_real_redis_mutation_rechecks_live_authority(
+    change: str, operation: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Race the real Lua mutation against a stale advisory read on isolated keys."""
+    """Inject a change at each real Lua operation's authorization boundary."""
     from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
         DistributedRunNotFound,
         DistributedRunOwnershipLost,
@@ -645,7 +990,7 @@ def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
             client = redis.client
             assert client is not None
             marker = uuid4().hex
-            prefix = f"ci:medusa:heartbeat:{marker}"
+            prefix = f"ci:medusa:{operation}:{marker}"
             settings = _settings(worker=f"owner-{marker}", prefix=prefix)
             store = RedisDistributedRunStore(
                 settings=settings, redis_manager=redis
@@ -675,10 +1020,11 @@ def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
                 before = None
                 before_ttls = None
 
-                async def stale_read(key: str):
+                original_eval = client.eval
+
+                async def inject_change() -> None:
                     nonlocal before, before_ttls
-                    snapshot = await original_read(key)
-                    assert key == run_key and before is None
+                    assert before is None
                     if change == "deleted_claim":
                         await client.delete(claim)
                     elif change == "replaced_claim":
@@ -711,19 +1057,41 @@ def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
                     before_ttls = [
                         await client.pttl(k) for k in (claim, run_key, index)
                     ]
+                async def stale_read(key: str):
+                    snapshot = await original_read(key)
+                    assert key == run_key
+                    await inject_change()
                     return snapshot
 
+                async def stale_eval(*args):
+                    await inject_change()
+                    return await original_eval(*args)
+
                 with monkeypatch.context() as patch:
-                    patch.setattr(client, "hgetall", stale_read)
+                    if operation == "heartbeat":
+                        patch.setattr(client, "hgetall", stale_read)
+                    else:
+                        patch.setattr(client, "eval", stale_eval)
                     error = (
                         DistributedRunNotFound
                         if change == "deleted_hash"
                         else DistributedRunOwnershipLost
                     )
                     with pytest.raises(error):
-                        await store.heartbeat(
-                            run_id=run_id, worker_id=settings.worker_id
-                        )
+                        if operation == "heartbeat":
+                            await store.heartbeat(
+                                run_id=run_id, worker_id=settings.worker_id
+                            )
+                        else:
+                            await store.mark_terminal(
+                                run_id=run_id,
+                                tenant_id=tenant_id,
+                                worker_id=settings.worker_id,
+                                status="completed",
+                                completed_at=datetime.now(timezone.utc),
+                                error_type=None,
+                                outcome_status="success",
+                            )
                 assert before is not None and before_ttls is not None
                 assert (
                     await client.get(claim),
@@ -738,6 +1106,186 @@ def test_real_redis_heartbeat_rechecks_identity_after_advisory_read(
                         assert after == -2
                     else:
                         assert 0 < after <= prior
+            finally:
+                await client.delete(claim, run_key, index)
+        finally:
+            await redis.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize(
+    ("cancelling", "proposed", "outcome", "resolved", "resolved_outcome"),
+    [
+        (False, "completed", "success", "completed", "success"),
+        (False, "failed", "timeout", "failed", "timeout"),
+        (True, "completed", "success", "cancelled", "cancelled"),
+        (True, "orphaned", None, "orphaned", ""),
+    ],
+)
+def test_real_redis_terminal_receipt_is_atomic(
+    cancelling: bool,
+    proposed: str,
+    outcome: str | None,
+    resolved: str,
+    resolved_outcome: str,
+) -> None:
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunOwnershipLost,
+    )
+
+    async def scenario() -> None:
+        redis = RedisConnectionManager(redis_url=os.environ["REDIS_URL"])
+        try:
+            assert await redis.initialize(), "Real Redis must be available"
+            client = redis.client
+            assert client is not None
+            marker = uuid4().hex
+            prefix = f"ci:medusa:terminal-receipt:{marker}"
+            settings = _settings(worker=f"owner-{marker}", prefix=prefix)
+            store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+            run_id = f"run-{marker}"
+            tenant_id = str(uuid4())
+            claim = f"{prefix}:claim:{run_id}"
+            run_key = f"{prefix}:run:{run_id}"
+            index = f"{prefix}:tenant:{tenant_id}"
+            await store.register(
+                run_id=run_id,
+                correlation_id=f"corr-{marker}",
+                tenant_id=tenant_id,
+                user_id="ci-owner",
+                worker_id=settings.worker_id,
+                started_at=datetime.now(timezone.utc),
+            )
+            try:
+                if cancelling:
+                    await store.request_cancel(run_id=run_id, tenant_id=tenant_id)
+                completed_at = datetime.now(timezone.utc)
+                error_type = (
+                    "NativeRetirementUnverified" if proposed == "orphaned" else None
+                )
+                args = dict(
+                    run_id=run_id,
+                    tenant_id=tenant_id,
+                    worker_id=settings.worker_id,
+                    status=proposed,
+                    completed_at=completed_at,
+                    error_type=error_type,
+                    outcome_status=outcome,
+                )
+                assert await store.mark_terminal(**args) == resolved
+                receipt = await client.hgetall(run_key)
+                assert receipt["status"] == resolved
+                assert receipt["outcome_status"] == resolved_outcome
+                assert receipt["completed_at"] == completed_at.isoformat()
+                assert receipt["error_type"] == (error_type or "")
+                assert receipt["lease_expires_at"] == ""
+                assert not await client.exists(claim)
+                assert await client.sismember(index, run_id)
+                assert await client.pttl(run_key) > 0
+                assert await client.pttl(index) > 0
+                with pytest.raises(DistributedRunOwnershipLost):
+                    await store.mark_terminal(**args)
+                assert await client.hgetall(run_key) == receipt
+            finally:
+                await client.delete(claim, run_key, index)
+        finally:
+            await redis.close()
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("read_mode", ["get", "list"])
+def test_real_redis_observation_cannot_tear_terminal_receipt(
+    read_mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Commit a terminal receipt immediately after an active Redis observation."""
+
+    async def scenario() -> None:
+        redis = RedisConnectionManager(redis_url=os.environ["REDIS_URL"])
+        try:
+            assert await redis.initialize()
+            client = redis.client
+            assert client is not None
+            marker = uuid4().hex
+            prefix = f"ci:medusa:atomic-read:{marker}"
+            settings = _settings(worker=f"owner-{marker}", prefix=prefix)
+            store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+            run_id = f"run-{marker}"
+            tenant_id = str(uuid4())
+            claim = f"{prefix}:claim:{run_id}"
+            run_key = f"{prefix}:run:{run_id}"
+            index = f"{prefix}:tenant:{tenant_id}"
+            await store.register(
+                run_id=run_id,
+                correlation_id=f"corr-{marker}",
+                tenant_id=tenant_id,
+                user_id="ci-owner",
+                worker_id=settings.worker_id,
+                started_at=datetime.now(timezone.utc),
+            )
+            committed = False
+            completed_at = datetime.now(timezone.utc)
+
+            async def retire() -> None:
+                nonlocal committed
+                assert not committed
+                assert (
+                    await store.mark_terminal(
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        worker_id=settings.worker_id,
+                        status="completed",
+                        completed_at=completed_at,
+                        error_type=None,
+                        outcome_status="success",
+                    )
+                    == "completed"
+                )
+                committed = True
+
+            original_read = client.hgetall
+            original_pipeline = client.pipeline
+
+            async def split_read(key: str):
+                result = await original_read(key)
+                if key == run_key:
+                    await retire()
+                return result
+
+            def atomic_pipeline(*args, **kwargs):
+                assert kwargs.get("transaction") is True
+                pipe = original_pipeline(*args, **kwargs)
+                execute = pipe.execute
+
+                async def execute_then_retire(*args, **kwargs):
+                    result = await execute(*args, **kwargs)
+                    await retire()
+                    return result
+
+                monkeypatch.setattr(pipe, "execute", execute_then_retire)
+                return pipe
+
+            try:
+                with monkeypatch.context() as patch:
+                    patch.setattr(client, "hgetall", split_read)
+                    patch.setattr(client, "pipeline", atomic_pipeline)
+                    if read_mode == "get":
+                        snapshot = await store.get(
+                            run_id=run_id, tenant_id=tenant_id
+                        )
+                    else:
+                        (snapshot,) = await store.list_runs(
+                            tenant_id=tenant_id, include_terminal=True
+                        )
+                assert committed
+                assert snapshot["status"] == "running"
+                assert snapshot["distributed_control"]["lease_alive"]
+                receipt = await store.get(run_id=run_id, tenant_id=tenant_id)
+                assert receipt["status"] == "completed"
+                assert receipt["outcome_status"] == "success"
+                assert receipt["completed_at"] == completed_at.isoformat()
+                assert not await client.exists(claim)
             finally:
                 await client.delete(claim, run_key, index)
         finally:
