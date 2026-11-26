@@ -345,6 +345,8 @@ Definitions: **TAKE** = adopt native CopilotKit behavior/hooks/UI where availabl
 - [ ] **KCON-970** Human consumer-readiness signoff before production rollout/distribution; exact deployed revision, browser proof and rollback verified. **Proof:** signed human review + release evidence.
 - [ ] **KCON-980** Close initiative only when **every required checkbox** is DONE or explicitly marked DEFERRED by a documented product decision; no open P0, no bypassed security gate, no unresolved first-prompt/replay loss. **Proof:** final review against this document.
 
+**2026-11-26 ARM-05C.6D relation-availability proof (KCON-450, KCON-471, KCON-770): SOURCE_CANDIDATE.** Extend the existing `tests/integration/test_verification_review_postgres.py` disposable PostgreSQL specialist readback; temporarily make the canonical outcome relation unavailable only inside the designated local test database, require a real read error for both previously recorded and previously empty scopes, restore the relation in `finally`, and prove unchanged results using the original reader. This is a controlled relation-level database fault, not a host outage or authenticated browser proof. No production code, migration, store, endpoint or RBAC changes. Exact-head CI, independent review, real disposable execution and protected browser acceptance remain required. All tasks stay unchecked.
+
 ## 5. Mandatory acceptance matrix, real user prompts
 
 All cases start from a **fresh authenticated browser** and **one user action** unless explicitly marked as follow-up. Compare text, observed tool/model receipt, state, database records, stream, reload and any permitted screenshot. Never infer actual tool execution from a badge.
