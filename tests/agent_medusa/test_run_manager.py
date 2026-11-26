@@ -128,3 +128,166 @@ async def test_unverified_retirement_never_claims_cancellation_or_success(
         task.cancel()
         with pytest.raises(asyncio.CancelledError):
             await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["disabled", "outage", "absent", "recorded"])
+async def test_strict_history_lookup_distinguishes_unavailable_from_absent(mode):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+        DurableRunLedgerUnavailable,
+    )
+    from ai_karen_engine.agent_medusa.execution.run_manager import RunNotFoundError
+
+    record = {"run_id": "run", "tenant_id": "tenant-a", "user_id": "owner"}
+    ledger = SimpleNamespace(
+        get=AsyncMock(return_value=record if mode == "recorded" else None)
+    )
+    if mode == "outage":
+        ledger.get.side_effect = DurableRunLedgerUnavailable("private failure")
+    settings = AgentMedusaRuntimeSettings(
+        distributed_run_control_enabled=False,
+        durable_run_ledger_enabled=mode != "disabled",
+        durable_run_ledger_required=mode != "disabled",
+        worker_id="test-local-worker",
+    )
+    manager = MedusaRunManager(settings=settings, durable_ledger=ledger)
+    scope = dict(run_id="run", tenant_id="tenant-a", require_durable_history=True)
+    if mode == "recorded":
+        assert await manager.get(**scope) == record
+    else:
+        expected = RunNotFoundError if mode == "absent" else DurableRunLedgerUnavailable
+        with pytest.raises(expected):
+            await manager.get(**scope)
+    if mode == "disabled":
+        ledger.get.assert_not_awaited()
+        # Preserve the existing non-strict read contract.
+        with pytest.raises(RunNotFoundError):
+            await manager.get(run_id="run", tenant_id="tenant-a")
+    else:
+        ledger.get.assert_awaited_once_with(run_id="run", tenant_id="tenant-a")
+
+
+@pytest.mark.asyncio
+async def test_strict_history_lookup_can_use_live_owner_without_durable_ledger():
+    manager = MedusaRunManager(settings=_local_settings())
+    task = asyncio.create_task(asyncio.sleep(60))
+    try:
+        await manager.register(
+            run_id="live",
+            correlation_id="corr",
+            tenant_id="tenant-a",
+            user_id="owner",
+            task=task,
+        )
+        record = await manager.get(
+            run_id="live", tenant_id="tenant-a", require_durable_history=True
+        )
+        assert record["user_id"] == "owner"
+        with pytest.raises(RunTenantMismatchError):
+            await manager.get(
+                run_id="live", tenant_id="tenant-b", require_durable_history=True
+            )
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "mode",
+    [
+        "match",
+        "foreign_owner",
+        "foreign_tenant",
+        "missing",
+        "outage",
+        "disabled",
+        "wrong_run",
+        "wrong_owner",
+        "wrong_tenant",
+        "wrong_correlation",
+        "missing_request",
+        "conflicting_request",
+    ],
+)
+async def test_strict_remote_history_requires_exact_durable_identity(mode):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+        DurableRunLedgerUnavailable,
+    )
+    from ai_karen_engine.agent_medusa.execution.run_manager import RunNotFoundError
+
+    shared = {
+        "run_id": "run",
+        "tenant_id": "tenant-a",
+        "user_id": "owner",
+        "correlation_id": "corr",
+        "status": "running",
+        "cancellable": True,
+    }
+    record = {
+        **shared,
+        "request_id": "original-request",
+        "status": "completed",
+        "cancellable": False,
+    }
+    if mode == "foreign_owner":
+        shared["user_id"] = "foreign"
+    elif mode == "foreign_tenant":
+        shared["tenant_id"] = "foreign"
+    elif mode == "wrong_run":
+        record["run_id"] = "different"
+    elif mode == "wrong_owner":
+        record["user_id"] = "different"
+    elif mode == "wrong_tenant":
+        record["tenant_id"] = "different"
+    elif mode == "wrong_correlation":
+        record["correlation_id"] = "different"
+    elif mode == "missing_request":
+        record["request_id"] = ""
+    elif mode == "conflicting_request":
+        shared["request_id"] = "different"
+
+    ledger = SimpleNamespace(
+        get=AsyncMock(return_value=None if mode == "missing" else record)
+    )
+    if mode == "outage":
+        ledger.get.side_effect = DurableRunLedgerUnavailable("private failure")
+    store = SimpleNamespace(
+        available=AsyncMock(return_value=True),
+        get=AsyncMock(return_value=shared),
+    )
+    settings = AgentMedusaRuntimeSettings(
+        distributed_run_control_enabled=True,
+        durable_run_ledger_enabled=mode != "disabled",
+        durable_run_ledger_required=mode != "disabled",
+        worker_id="observer",
+    )
+    manager = MedusaRunManager(
+        settings=settings, distributed_store=store, durable_ledger=ledger
+    )
+    scope = dict(run_id="run", tenant_id="tenant-a", user_id="owner")
+    if mode == "match":
+        result = await manager.get(**scope, require_durable_history=True)
+        assert result == {**shared, "request_id": "original-request"}
+        assert result["status"] == "running"
+        assert result["cancellable"] is True
+        assert "request_id" not in shared
+        assert await manager.get(**scope) == shared
+    else:
+        expected = {
+            "foreign_owner": RunNotFoundError,
+            "foreign_tenant": RunTenantMismatchError,
+        }.get(mode, DurableRunLedgerUnavailable)
+        with pytest.raises(expected):
+            await manager.get(**scope, require_durable_history=True)
+    if mode in {"foreign_owner", "foreign_tenant", "disabled"}:
+        ledger.get.assert_not_awaited()
+    else:
+        ledger.get.assert_awaited_once_with(run_id="run", tenant_id="tenant-a")

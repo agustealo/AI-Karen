@@ -58,6 +58,18 @@ class OutcomeStore(ABC):
                 "Atomic governed outcome batch persistence unavailable"
             )
 
+    async def list_specialist_participation_async(
+        self,
+        *,
+        trajectory_id: str,
+        correlation_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Read durable specialist observations for the exact principal and run."""
+        raise OutcomeStoreError("Specialist participation evidence unavailable")
+
     async def list_task_reviews_async(
         self, task_id: str, *, tenant_id: str, user_id: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
@@ -914,6 +926,83 @@ class PostgresOutcomeStore(OutcomeStore):
                 },
             )
             raise OutcomeStoreError("Tool receipts unavailable") from exc
+
+    async def list_specialist_participation_async(
+        self,
+        *,
+        trajectory_id: str,
+        correlation_id: str,
+        tenant_id: str,
+        user_id: str,
+        limit: int = 100,
+    ) -> tuple[list[dict[str, Any]], bool]:
+        """Read a bounded validated receipt window, never inferred run status."""
+        tenant = self._require_tenant(tenant_id)
+        if any(
+            not isinstance(value, str) or not value or value != value.strip()
+            or len(value) > 256
+            for value in (tenant, user_id, trajectory_id, correlation_id)
+        ) or tenant.lower() in {"default", "dev-tenant"}:
+            raise OutcomeStoreError("Exact specialist participation scope required")
+        bounded = max(1, min(int(limit), 100))
+        try:
+            async with async_transaction_scope(tenant) as session:
+                result = await session.execute(
+                    text(
+                        """
+                        SELECT outcome_id, payload FROM public.outcome_records
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND user_id = CAST(:user_id AS uuid)
+                          AND trajectory_id = :trajectory_id
+                          AND correlation_id = :correlation_id
+                          AND source = 'runtime.execution'
+                          AND (
+                            payload->'metadata'->>'event_type' = 'agent.specialist.participation'
+                            OR payload->'metadata'->>'receipt_version' = 'specialist-participation.v1'
+                          )
+                        ORDER BY recorded_at DESC, outcome_id DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {
+                        "tenant_id": tenant,
+                        "user_id": user_id,
+                        "trajectory_id": trajectory_id,
+                        "correlation_id": correlation_id,
+                        "limit": bounded + 1,
+                    },
+                )
+                receipts = []
+                seen = set()
+                for row in result.mappings().all():
+                    payload = self._payload_from_row(row["payload"])
+                    self._validate_specialist_participation(payload)
+                    if (
+                        payload["tenant_id"] != tenant
+                        or payload["user_id"] != user_id
+                        or payload["trajectory_id"] != trajectory_id
+                        or payload["correlation_id"] != correlation_id
+                        or payload["outcome_id"] != str(row["outcome_id"])
+                        or payload["outcome_id"] in seen
+                    ):
+                        raise OutcomeStoreError("Specialist participation scope mismatch")
+                    seen.add(payload["outcome_id"])
+                    receipts.append(payload)
+                return list(reversed(receipts[:bounded])), len(receipts) > bounded
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.specialist_participation_read_failed",
+                extra={
+                    "tenant_id": tenant,
+                    "user_id": user_id,
+                    "trajectory_id": trajectory_id,
+                    "correlation_id": correlation_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+            raise OutcomeStoreError("Specialist participation evidence unavailable") from exc
 
     async def list_task_reviews_async(
         self,

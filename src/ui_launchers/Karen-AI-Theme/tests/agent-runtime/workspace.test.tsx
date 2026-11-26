@@ -16,7 +16,7 @@ vi.mock("@/lib/api", () => ({
   apiClient: { get: (...args: unknown[]) => mocks.get(...args), post: (...args: unknown[]) => mocks.post(...args) },
 }));
 
-import AgentsPage, { isAgentRunRecord, isAgentRunsResponse, isRuntimeApproval, isRunTransitionsResponse } from "@/components/automation/AgentsPage";
+import AgentsPage, { isAgentRunRecord, isAgentRunsResponse, isRuntimeApproval, isRunTransitionsResponse, isRunParticipationResponse } from "@/components/automation/AgentsPage";
 
 const run = { run_id: "run-123456789", status: "running" };
 const history = (runs: unknown[]) => ({ runs, total: runs.length, generated_at: "2026-11-25T00:00:00Z" });
@@ -565,5 +565,92 @@ describe("ARM-05 durable transition timeline", () => {
     await act(async () => { pending.resolve(receipt); });
     expect(screen.queryByText("Migration backfill (not an observed live event)")).toBeNull();
     expect(screen.queryByRole("region", { name: "Recorded execution timeline" })).toBeNull();
+  });
+});
+
+
+describe("ARM-05C recorded specialist participation", () => {
+  const endpoint = "/api/agent-runtime/my-runs/" + run.run_id + "/participation";
+  const entry = { receipt_id: "11111111-1111-5111-8111-111111111111", step_id: "step-a", specialist_id: "researcher", phase: "started", observed_at: "2026-11-26T00:00:00.123456+00:00" };
+  const interrupted = { ...entry, receipt_id: "22222222-2222-5222-8222-222222222222", phase: "interrupted" };
+  const evidence = { run_id: run.run_id, evidence_status: "recorded", receipts: [entry, interrupted], truncated: true, response_source: "postgres_outcome_records" };
+
+  function installParticipation(read: () => Promise<unknown>) {
+    const fallback = mocks.get.getMockImplementation()!;
+    mocks.get.mockImplementation((path: string) => {
+      if (path === "/api/agent-runtime/my-runs" || path === "/api/admin/agents/runs?include_terminal=true") return Promise.resolve(history([run]));
+      if (path === endpoint) return read();
+      if (path.endsWith("/" + run.run_id)) return Promise.resolve(run);
+      return fallback(path);
+    });
+  }
+
+  it("validates scope shape, provenance, timestamps, phase consistency and bounded receipts", () => {
+    expect(isRunParticipationResponse(evidence)).toBe(true);
+    expect(isRunParticipationResponse({ ...evidence, evidence_status: "empty", receipts: [], truncated: false })).toBe(true);
+    for (const invalid of [
+      { ...evidence, evidence_status: "empty" },
+      { ...evidence, receipts: [] },
+      { ...evidence, response_source: "worker_local_execution" },
+      { ...evidence, receipts: [entry, entry] },
+      { ...evidence, receipts: [{ ...entry, receipt_id: "invalid" }] },
+      { ...evidence, receipts: [{ ...entry, phase: "running" }] },
+      { ...evidence, receipts: [{ ...entry, observed_at: "2026-11-26T00:00:00" }] },
+      { ...evidence, receipts: [{ ...entry, specialist_id: "x".repeat(257) }] },
+      { ...evidence, receipts: [entry, { ...interrupted, specialist_id: "other" }] },
+      { ...evidence, receipts: [entry, { ...interrupted, phase: "skipped" }] },
+      { ...evidence, receipts: [interrupted, { ...entry, phase: "completed" }] },
+      { ...evidence, receipts: Array.from({ length: 101 }, () => entry) },
+    ]) expect(isRunParticipationResponse(invalid)).toBe(false);
+  });
+
+  it("renders recorded entry, interruption, truncation and provenance without claiming completion", async () => {
+    installParticipation(async () => evidence);
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("researcher · Invocation interrupted");
+    expect(screen.getByText("researcher · Method entered")).toBeTruthy();
+    expect(screen.getByText(/earlier receipts are omitted/)).toBeTruthy();
+    expect(screen.getByText(/without a recorded terminal observation/)).toBeTruthy();
+    expect(screen.queryByText("researcher · Invocation returned")).toBeNull();
+    expect(mocks.get).toHaveBeenCalledWith(endpoint);
+  });
+
+  it("distinguishes a successful empty read from rejected or mismatched evidence", async () => {
+    let response: unknown = { ...evidence, evidence_status: "empty", receipts: [], truncated: false };
+    installParticipation(async () => response);
+    const view = render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText(/No durable specialist participation was recorded/);
+    response = { ...evidence, run_id: "other-run" };
+    view.unmount();
+    render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText(/Specialist participation evidence is unavailable/);
+    expect(screen.queryByText(/No durable specialist participation was recorded/)).toBeNull();
+  });
+
+  it("does not use the owner-only endpoint in tenant administration", async () => {
+    installParticipation(async () => evidence);
+    render(<AgentsPage />);
+    await screen.findByRole("button", { name: /Execution run-1234/ });
+    fireEvent.click(screen.getByRole("button", { name: "Tenant administration" }));
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Reported task outcome");
+    expect(mocks.get).not.toHaveBeenCalledWith(endpoint);
+    expect(screen.queryByRole("region", { name: "Recorded specialist participation" })).toBeNull();
+  });
+
+  it("discards a delayed prior-principal receipt", async () => {
+    const pending = deferred<unknown>();
+    installParticipation(() => pending.promise);
+    const view = render(<AgentsPage />);
+    fireEvent.click(await screen.findByRole("button", { name: /Execution run-1234/ }));
+    await screen.findByText("Loading recorded participation…");
+    mocks.user = { tenant_id: "tenant-B", user_id: "user-B", roles: [] };
+    view.rerender(<AgentsPage />);
+    await act(async () => { pending.resolve(evidence); });
+    expect(screen.queryByText("researcher · Invocation interrupted")).toBeNull();
+    expect(screen.queryByRole("region", { name: "Recorded specialist participation" })).toBeNull();
   });
 });

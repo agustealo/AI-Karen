@@ -28,6 +28,7 @@ from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
 )
 from ai_karen_engine.agent_medusa.execution.run_manager import (
     MedusaRunManager,
+    RunNotFoundError,
     RunTenantMismatchError,
 )
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
@@ -132,6 +133,23 @@ async def _run_acceptance() -> None:
             task=task,
         )
         assert run.shared_registered and run.durable_registered
+
+        # Remote Redis observations are not original request identity.
+        remote_live = await remote.get(run_id=run_id, tenant_id=tenant_a)
+        assert "request_id" not in remote_live
+        strict = await remote.get(
+            run_id=run_id, tenant_id=tenant_a, user_id="ci-user-a",
+            require_durable_history=True,
+        )
+        assert strict["request_id"] == f"ci-request-{marker}"
+        assert strict["correlation_id"] == f"ci-correlation-{marker}"
+        assert strict["status"] == "running"
+        assert strict["cancellable"] is True
+        with pytest.raises(RunNotFoundError):
+            await remote.get(
+                run_id=run_id, tenant_id=tenant_a, user_id="foreign-owner",
+                require_durable_history=True,
+            )
 
         # A tenant-B requester must never observe or cancel tenant-A's run.
         assert await ledger.get(run_id=run_id, tenant_id=tenant_b) is None
