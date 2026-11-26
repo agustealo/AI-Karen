@@ -152,3 +152,148 @@ test("KUI-AUTOMATION: signed-out revocation and real A-to-B data isolation", asy
   expect(new URL(page.url()).origin).toBe(origin);
   await inspectCurrentAccount(page, 1, origin);
 });
+
+/**
+ * ARM-05C.5B: real personal Mission Control readback, using two dedicated
+ * non-admin accounts in the same tenant and pre-existing terminal runs.
+ * No execution creation, receipt seeding, approval or cancellation.
+ */
+const participationEnabled = process.env.KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE === "true";
+const participationRunIds = [
+  process.env.KAREN_UX_ACCOUNT_A_PARTICIPATION_RUN_ID,
+  process.env.KAREN_UX_ACCOUNT_B_PARTICIPATION_RUN_ID,
+] as const;
+const personalRunsPath = "/api/agent-runtime/my-runs";
+const phases = {
+  started: "Method entered",
+  completed: "Invocation returned",
+  failed: "Invocation failed",
+  interrupted: "Invocation interrupted",
+  skipped: "Invocation skipped",
+} as const;
+type ParticipationRow = {
+  receipt_id: string;
+  step_id: string;
+  specialist_id: string;
+  phase: keyof typeof phases;
+  observed_at: string;
+};
+type ParticipationReadback = {
+  run_id: string;
+  evidence_status: "recorded";
+  receipts: ParticipationRow[];
+  truncated: false;
+  response_source: "postgres_outcome_records";
+};
+
+function participationPath(runId: string): string {
+  return personalRunsPath + "/" + encodeURIComponent(runId) + "/participation";
+}
+
+async function readParticipation(page: Page, origin: string, runId: string): Promise<ParticipationReadback> {
+  const response = await page.request.get(origin + participationPath(runId), { maxRedirects: 0 });
+  expect(response.status(), "Owner participation read must return 200").toBe(200);
+  const receipt = await response.json() as ParticipationReadback;
+  expect(receipt.run_id === runId).toBe(true);
+  expect(receipt.response_source).toBe("postgres_outcome_records");
+  expect(receipt.evidence_status).toBe("recorded");
+  expect(receipt.truncated, "Fixture must have complete bounded receipt inventory").toBe(false);
+  expect(Array.isArray(receipt.receipts) && receipt.receipts.length > 0 && receipt.receipts.length <= 100).toBe(true);
+  expect(new Set(receipt.receipts.map(row => row.receipt_id)).size).toBe(receipt.receipts.length);
+  for (const row of receipt.receipts) {
+    expect(typeof row.specialist_id === "string" && row.specialist_id.length > 0).toBe(true);
+    expect(typeof row.step_id === "string" && row.step_id.length > 0).toBe(true);
+    expect(/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.receipt_id)).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(phases, row.phase)).toBe(true);
+    expect(Number.isFinite(Date.parse(row.observed_at))).toBe(true);
+  }
+  expect(receipt.receipts.some(row => row.phase !== "started"), "Terminal observation fixture required").toBe(true);
+  return receipt;
+}
+
+async function verifyParticipationProjection(
+  page: Page, origin: string, own: string, foreign: string, expected: ParticipationReadback,
+): Promise<void> {
+  const listResponse = realResponse(page, personalRunsPath, origin);
+  await openAutomationWorkspace(page, "Agents", true);
+  const response = await listResponse;
+  expect(response.status(), "Personal execution history must be authenticated").toBe(200);
+  const body = await response.json() as { runs: Array<{ run_id: string; status: string }>; total: number };
+  expect(Array.isArray(body.runs) && body.total === body.runs.length).toBe(true);
+  expect(body.runs.some(run => run.run_id === own && ["completed", "failed", "cancelled", "canceled", "succeeded"].includes(run.status.toLowerCase()))).toBe(true);
+  expect(body.runs.some(run => run.run_id === foreign), "Foreign run must not appear in personal history").toBe(false);
+  const root = page.getByTestId("agent-runtime-page");
+  await expect(root.getByRole("heading", { name: "Mission Control", exact: true })).toBeVisible();
+  await expect(root.getByRole("heading", { name: "Mission history", exact: true })).toBeVisible();
+  const list = root.locator('[aria-label="Execution list"]');
+  await expect(list.getByText(own, { exact: true })).toBeVisible();
+  await expect(list.getByText(foreign, { exact: true })).toHaveCount(0);
+  const pending = realResponse(page, participationPath(own), origin);
+  await list.getByRole("button").filter({ has: page.getByText(own, { exact: true }) }).click();
+  const observed = await pending;
+  expect(observed.status()).toBe(200);
+  // Compare the actual UI request with a separate authenticated read.
+  expect(await observed.json()).toEqual(expected);
+  const region = root.getByRole("region", { name: "Recorded specialist participation" });
+  await expect(region).toBeVisible();
+  await expect(region.getByText(/do not prove inference, external actions, or overall task success/)).toBeVisible();
+  const rows = region.getByRole("listitem");
+  await expect(rows).toHaveCount(expected.receipts.length);
+  for (const [index, row] of expected.receipts.entries()) {
+    const item = rows.nth(index);
+    await expect(item.getByText(row.specialist_id + " · " + phases[row.phase], { exact: true })).toBeVisible();
+    await expect(item.getByText("Step: " + row.step_id, { exact: true })).toBeVisible();
+    await expect(item.locator("time")).toHaveAttribute("datetime", row.observed_at);
+  }
+}
+
+test("ARM-05C.5B real participation receipts survive reload and deny a second account", async ({ page }) => {
+  test.skip(!participationEnabled, "Opt in with KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE=true.");
+  test.setTimeout(6 * 60_000);
+  const origin = requireApprovedOrigin();
+  const [a, b] = participationRunIds;
+  if (!a || !b || a === b || !/^[A-Za-z0-9_-]{1,128}$/.test(a) || !/^[A-Za-z0-9_-]{1,128}$/.test(b)
+      || accounts.some(account => !account.email?.trim() || !account.password)
+      || accounts[0].email?.trim().toLowerCase() === accounts[1].email?.trim().toLowerCase()) {
+    throw new Error("Two distinct sanitized accounts and two distinct terminal run IDs are mandatory.");
+  }
+  await page.setViewportSize({ width: 1440, height: 900 });
+  const forbidden: string[] = [];
+  page.context().on("request", request => {
+    const url = new URL(request.url());
+    if (url.origin !== origin || ["GET", "HEAD", "OPTIONS"].includes(request.method())) return;
+    if (["/api/copilotkit/agent/default/run", "/api/chat", "/api/chat/ag-ui", "/api/chat/stream"].includes(url.pathname)
+        || url.pathname.startsWith("/api/agent-runtime/") || url.pathname.startsWith("/api/admin/agents/")) {
+      forbidden.push(request.method());
+    }
+  });
+  let firstIdentity: { user_id: string; tenant_id: string } | undefined;
+  for (const [index, own, foreign] of [[0, a, b], [1, b, a]] as const) {
+    await signInApprovedKaren(page, accounts[index].email!, accounts[index].password!, { allowLocalLoopback: local });
+    const identityResponse = await page.request.get(origin + "/api/auth/me", { maxRedirects: 0 });
+    expect(identityResponse.status()).toBe(200);
+    const identity = await identityResponse.json() as { user_id: string; tenant_id: string; roles: string[] };
+    expect(typeof identity.user_id === "string" && identity.user_id.length > 0).toBe(true);
+    expect(typeof identity.tenant_id === "string" && !["", "default", "dev-tenant"].includes(identity.tenant_id.toLowerCase())).toBe(true);
+    expect(Array.isArray(identity.roles) && !identity.roles.includes("admin")).toBe(true);
+    if (index === 0) firstIdentity = identity;
+    else {
+      expect(identity.user_id !== firstIdentity?.user_id).toBe(true);
+      expect(identity.tenant_id === firstIdentity?.tenant_id, "Prove same-tenant owner isolation").toBe(true);
+    }
+    const denied = await page.request.get(origin + participationPath(foreign), { maxRedirects: 0 });
+    expect(denied.status(), "Authenticated non-owner must receive 404").toBe(404);
+    const expected = await readParticipation(page, origin, own);
+    await verifyParticipationProjection(page, origin, own, foreign, expected);
+    // Reopen after a fresh document load; selection persistence is not claimed.
+    await page.goto(origin + "/dashboard");
+    expect(await readParticipation(page, origin, own)).toEqual(expected);
+    await verifyParticipationProjection(page, origin, own, foreign, expected);
+    await openAutomationWorkspace(page, "My Account", false);
+    await page.getByRole("button", { name: "Sign out", exact: true }).click();
+    await expect(page).toHaveURL(/\/login(?:[?#]|$)/, { timeout: 30_000 });
+    const signedOut = await page.request.get(origin + participationPath(own), { maxRedirects: 0 });
+    expect([401, 403], "Signed-out principal must not read participation").toContain(signedOut.status());
+  }
+  expect(forbidden, "Readback must not submit inference or mutate executions").toEqual([]);
+});

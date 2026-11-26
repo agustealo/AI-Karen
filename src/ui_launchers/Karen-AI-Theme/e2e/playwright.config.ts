@@ -21,7 +21,8 @@ const cardStudioAcceptance = process.env.KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE ===
 // A local benchmark signs in with real credentials. Disable sensitive
 // recordings at configuration authority, even if a future spec forgets
 // its own test.use privacy override or someone opts into capture video.
-const privateBrowserRun = localBenchmark ||
+const participationAcceptance = process.env.KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE === 'true';
+const privateBrowserRun = participationAcceptance || localBenchmark ||
   process.env.KAREN_UX_IDENTITY_REPLAY === 'true' ||
   process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true' ||
   navigationAcceptance ||
@@ -42,13 +43,13 @@ export default defineConfig({
 
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || cardStudioAcceptance ? 0 : process.env.CI ? 2 : 0,
+  retries: participationAcceptance || localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || cardStudioAcceptance ? 0 : process.env.CI ? 2 : 0,
   workers: 1,
 
   // Authenticated Settings acceptance must not persist response text,
   // failure stacks or browser state into local HTML/JSON result artifacts.
   // The console list reporter supplies the protected job's result.
-  reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || documentAuthorAcceptance || cardStudioAcceptance
+  reporter: participationAcceptance || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || documentAuthorAcceptance || cardStudioAcceptance
     ? [['list']]
     : [
         ['html', { outputFolder: 'playwright-report' }],
