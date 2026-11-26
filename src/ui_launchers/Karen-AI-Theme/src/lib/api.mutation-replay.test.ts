@@ -248,6 +248,7 @@ describe('request diagnostic privacy', () => {
   const endpoint = `/api/plugins/file-explorer/inventory?search=${marker}%20plan&cursor=private-cursor`;
 
   beforeEach(() => {
+    vi.clearAllMocks();
     localStorage.clear();
     vi.spyOn(clientInternals, 'getPreferredBaseUrl').mockReturnValue('http://api:8000');
     vi.spyOn(clientInternals, 'getFallbackBaseUrl').mockReturnValue(null);
@@ -304,7 +305,13 @@ describe('request diagnostic privacy', () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response('Unauthorized', { status: 401 }));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(apiClient.getUnauthenticated(endpoint)).rejects.toMatchObject({ status: 401 });
+    // Preserve the existing safe-read 401 contract: session invalidation,
+    // not an ApiError or a replay of the unauthorized request.
+    await expect(apiClient.getUnauthenticated(endpoint)).resolves.toBeUndefined();
+    const { authService } = await import('@/lib/auth');
+    const { dispatchAuthInvalidated } = await import('@/lib/auth-events');
+    expect(authService.clearAuth).toHaveBeenCalledTimes(1);
+    expect(dispatchAuthInvalidated).toHaveBeenCalledWith('terminal_401');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe(endpoint);
     assertPrivate();
