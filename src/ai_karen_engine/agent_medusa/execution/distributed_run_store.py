@@ -569,33 +569,32 @@ class RedisDistributedRunStore:
         if result == -2:
             raise DistributedRunTenantMismatch(run_id)
         if result in {-1, -3, 0}:
-            refreshed = await client.hgetall(run_key)
-            if not refreshed:
-                raise DistributedRunNotFound(run_id)
-            owner = await client.get(self._claim_key(run_id))
-            snapshot = self._snapshot(
-                refreshed,
-                claim_alive=bool(owner and owner == refreshed.get("owner_worker_id")),
-            )
+            snapshot = await self.get(run_id=run_id, tenant_id=tenant_id)
             raise DistributedRunNotCancellable(
                 f"Run {run_id} is {snapshot['status']}, not cancellable"
             )
 
-        refreshed = await client.hgetall(run_key)
-        owner = await client.get(self._claim_key(run_id))
-        return self._snapshot(
-            refreshed,
-            claim_alive=bool(owner and owner == refreshed.get("owner_worker_id")),
-        )
+        return await self.get(run_id=run_id, tenant_id=tenant_id)
+
+    async def _read_run_authority(
+        self, client: Any, run_id: str
+    ) -> tuple[dict[str, str], str | None]:
+        # MULTI/EXEC is required: a terminal write retires the claim and
+        # updates the hash atomically. Two independent reads can combine
+        # the old active hash with the retired claim and invent an orphan.
+        async with client.pipeline(transaction=True) as pipe:
+            pipe.hgetall(self._run_key(run_id))
+            pipe.get(self._claim_key(run_id))
+            record, owner = await pipe.execute()
+        return record, owner
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         client = await self._client()
-        record = await client.hgetall(self._run_key(run_id))
-        if not record:
+        record, owner = await self._read_run_authority(client, run_id)
+        if not record or record.get("run_id") != run_id:
             raise DistributedRunNotFound(run_id)
         if record.get("tenant_id") != tenant_id:
             raise DistributedRunTenantMismatch(run_id)
-        owner = await client.get(self._claim_key(run_id))
         return self._snapshot(
             record,
             claim_alive=bool(owner and owner == record.get("owner_worker_id")),
@@ -614,7 +613,7 @@ class RedisDistributedRunStore:
         stale: list[str] = []
         for run_id in run_ids:
             normalized_run_id = str(run_id)
-            record = await client.hgetall(self._run_key(normalized_run_id))
+            record, owner = await self._read_run_authority(client, normalized_run_id)
             if not record:
                 stale.append(normalized_run_id)
                 continue
@@ -623,7 +622,6 @@ class RedisDistributedRunStore:
                 or record.get("run_id") != normalized_run_id
             ):
                 continue
-            owner = await client.get(self._claim_key(normalized_run_id))
             snapshot = self._snapshot(
                 record,
                 claim_alive=bool(owner and owner == record.get("owner_worker_id")),

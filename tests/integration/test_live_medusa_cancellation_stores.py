@@ -1193,3 +1193,102 @@ def test_real_redis_terminal_receipt_is_atomic(
             await redis.close()
 
     asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("read_mode", ["get", "list"])
+def test_real_redis_observation_cannot_tear_terminal_receipt(
+    read_mode: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Commit a terminal receipt immediately after an active Redis observation."""
+
+    async def scenario() -> None:
+        redis = RedisConnectionManager(redis_url=os.environ["REDIS_URL"])
+        try:
+            assert await redis.initialize()
+            client = redis.client
+            assert client is not None
+            marker = uuid4().hex
+            prefix = f"ci:medusa:atomic-read:{marker}"
+            settings = _settings(worker=f"owner-{marker}", prefix=prefix)
+            store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+            run_id = f"run-{marker}"
+            tenant_id = str(uuid4())
+            claim = f"{prefix}:claim:{run_id}"
+            run_key = f"{prefix}:run:{run_id}"
+            index = f"{prefix}:tenant:{tenant_id}"
+            await store.register(
+                run_id=run_id,
+                correlation_id=f"corr-{marker}",
+                tenant_id=tenant_id,
+                user_id="ci-owner",
+                worker_id=settings.worker_id,
+                started_at=datetime.now(timezone.utc),
+            )
+            committed = False
+            completed_at = datetime.now(timezone.utc)
+
+            async def retire() -> None:
+                nonlocal committed
+                assert not committed
+                assert (
+                    await store.mark_terminal(
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        worker_id=settings.worker_id,
+                        status="completed",
+                        completed_at=completed_at,
+                        error_type=None,
+                        outcome_status="success",
+                    )
+                    == "completed"
+                )
+                committed = True
+
+            original_read = client.hgetall
+            original_pipeline = client.pipeline
+
+            async def split_read(key: str):
+                result = await original_read(key)
+                if key == run_key:
+                    await retire()
+                return result
+
+            def atomic_pipeline(*args, **kwargs):
+                assert kwargs.get("transaction") is True
+                pipe = original_pipeline(*args, **kwargs)
+                execute = pipe.execute
+
+                async def execute_then_retire(*args, **kwargs):
+                    result = await execute(*args, **kwargs)
+                    await retire()
+                    return result
+
+                monkeypatch.setattr(pipe, "execute", execute_then_retire)
+                return pipe
+
+            try:
+                with monkeypatch.context() as patch:
+                    patch.setattr(client, "hgetall", split_read)
+                    patch.setattr(client, "pipeline", atomic_pipeline)
+                    if read_mode == "get":
+                        snapshot = await store.get(
+                            run_id=run_id, tenant_id=tenant_id
+                        )
+                    else:
+                        (snapshot,) = await store.list_runs(
+                            tenant_id=tenant_id, include_terminal=True
+                        )
+                assert committed
+                assert snapshot["status"] == "running"
+                assert snapshot["distributed_control"]["lease_alive"]
+                receipt = await store.get(run_id=run_id, tenant_id=tenant_id)
+                assert receipt["status"] == "completed"
+                assert receipt["outcome_status"] == "success"
+                assert receipt["completed_at"] == completed_at.isoformat()
+                assert not await client.exists(claim)
+            finally:
+                await client.delete(claim, run_key, index)
+        finally:
+            await redis.close()
+
+    asyncio.run(scenario())
