@@ -873,3 +873,24 @@ bash ../../../scripts/ci/run_specialist_browser_acceptance.sh local ordinary-cha
 ````
 
 Install pinned frontend dependencies and Chromium before entering credentials. The local runner rejects dirty/wrong revisions, unapproved or non-loopback origins, inherited bypass credentials and partial configuration. It requires exactly one passing local scenario, no skips or retries, and deletes private browser output. Signed Docker and Vercel scenarios keep their existing admission rules; a local report cannot substitute for either. Report local runtime proof separately from image provenance and external deployment status.
+
+
+### KIQ-03G6: real local generated document delivery
+
+Use the existing `copilotkit-consumer-boot.spec.ts` on a disposable, explicitly approved loopback installation with exact reviewed frontend revision, real local provider, PostgreSQL and private Supabase Storage. No signed-release claim is implied. Configure three dedicated non-admin accounts (owner, distinct same-tenant B, distinct cross-tenant C), each with normal data-read access, and the owner with artifact-create permission. Independently verify the running images, installed local model, private bucket and account scopes. The trial creates one conversation and one text file, reads the actual bytes, downloads and deletes the temporary browser copy, reloads the conversation, tests signed-out and foreign denial while active, and archives only the exact verified owner file. If creation cannot be verified, the test refuses to guess a cleanup target; inspect the disposable tenant manually. A failed test is not acceptance. No traces, videos, screenshots, HTML/JSON reports or retries are allowed.
+
+From `src/ui_launchers/Karen-AI-Theme/e2e` after installing pinned dependencies and Chromium, set the owner and foreign credentials (`KAREN_UX_EMAIL/PASSWORD`, `KAREN_UX_ACCOUNT_B_EMAIL/PASSWORD`, `KAREN_UX_ACCOUNT_C_EMAIL/PASSWORD`) securely in the environment. Set `KAREN_GENERATED_DOCUMENT_TENANT_ID`, `KAREN_GENERATED_DOCUMENT_USER_ID`, `KAREN_GENERATED_DOCUMENT_B_USER_ID`, `KAREN_GENERATED_DOCUMENT_C_TENANT_ID`, `KAREN_GENERATED_DOCUMENT_C_USER_ID` to the independently verified UUIDs and `KAREN_GENERATED_DOCUMENT_PROVIDER`, `KAREN_GENERATED_DOCUMENT_MODEL`, `KAREN_GENERATED_DOCUMENT_ENGINE` to the approved installed executor identifiers. Set `KAREN_CHAT_BOOT_REVISION` to the reviewed 40-character SHA. Do not use production credentials, saved browser state, a Vercel bypass token or shared user data. Only after operator approval:
+
+```bash
+KAREN_GENERATED_DOCUMENT_ACCEPTANCE=true \\
+KAREN_GENERATED_DOCUMENT_APPROVED=true \\
+KAREN_SANITIZED_ACCOUNT=true \\
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \\
+KAREN_SEARCH_ACCEPTANCE_PLATFORM=local \\
+KAREN_LOCAL_SEARCH_ACCEPTANCE=1 \\
+KAREN_SEARCH_ACCEPTANCE_REQUIRED=true \\
+KAREN_BASE_URL=http://127.0.0.1:8010 \\
+npx playwright test copilotkit-consumer-boot.spec.ts --project=chromium --retries=0 --grep 'KIQ-03G6 local generated document download and revocation'
+```
+
+Require exactly one executed passing test, zero skips or retries. Keep console output private; never upload credentials, response bodies, downloaded files or browser profiles. Source gates are not authenticated execution proof.

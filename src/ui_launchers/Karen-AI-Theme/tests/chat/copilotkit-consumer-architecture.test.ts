@@ -179,7 +179,26 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(postflights[0].index!).toBeGreaterThan(isolation);
     // The local postflight is an extra integrity check, not another login.
     // Every actual owner or foreign-account login still needs its own preflight.
-    const beforeCredentials = liveBrowser.replace(postflight, "");
+    const documentStart = liveBrowser.indexOf('test("KIQ-03G6 local generated document download and revocation"');
+    const documentEnd = liveBrowser.indexOf('test("boots, restores and loads assets without an inspector chunk failure"', documentStart);
+    expect(documentStart).toBeGreaterThanOrEqual(0);
+    expect(documentEnd).toBeGreaterThan(documentStart);
+    const documentTrial = liveBrowser.slice(documentStart, documentEnd);
+    const ownerPreflight = documentTrial.indexOf("await requireLiveCanonicalBackend(page, target);");
+    const ownerLogin = documentTrial.indexOf("await signInApprovedKaren(page, owner.email!");
+    const foreignPreflight = documentTrial.indexOf("await requireLiveCanonicalBackend(active, target);");
+    const foreignLogin = documentTrial.indexOf("await signInApprovedKaren(active, account.email!");
+    expect(ownerPreflight).toBeGreaterThanOrEqual(0);
+    expect(ownerLogin).toBeGreaterThan(ownerPreflight);
+    expect(foreignPreflight).toBeGreaterThan(ownerLogin);
+    expect(foreignLogin).toBeGreaterThan(foreignPreflight);
+    expect(documentTrial.match(/await signInApprovedKaren\(/g)).toHaveLength(2);
+    expect(documentTrial.match(/await requireLiveCanonicalBackend\(page, target\);/g)).toHaveLength(2);
+    expect(documentTrial.match(/await requireLiveCanonicalBackend\(active, target\);/g)).toHaveLength(1);
+    expect(documentTrial.lastIndexOf("await requireLiveCanonicalBackend(page, target);")).toBeGreaterThan(
+      documentTrial.indexOf("await archiveCreatedFile()"),
+    );
+    const beforeCredentials = (liveBrowser.slice(0, documentStart) + liveBrowser.slice(documentEnd)).replace(postflight, "");
     const preflights = [...beforeCredentials.matchAll(/await requireLiveCanonicalBackend\(page, target\);/g)]
       .map(match => match.index!);
     const signIns = [...beforeCredentials.matchAll(/await signInApprovedKaren\(page, (?:approvedEmail!, approvedPassword!|account\.email!, account\.password!), \{ allowLocalLoopback: localMode \}\);/g)]
