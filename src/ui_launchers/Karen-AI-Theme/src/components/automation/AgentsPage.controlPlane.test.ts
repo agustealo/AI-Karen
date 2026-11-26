@@ -14,6 +14,11 @@ const approvalController = readFileSync(
   "utf8",
 );
 
+const approvalPanel = readFileSync(
+  fileURLToPath(new URL("../approvals/ApprovalReviewPanel.tsx", import.meta.url)),
+  "utf8",
+);
+
 describe("AgentsPage canonical Medusa boundary", () => {
   it("uses the canonical Medusa catalog instead of the legacy agent registry", () => {
     expect(source).toContain('"/api/agent-runtime/catalog"');
@@ -67,21 +72,24 @@ describe("Agent Runtime governed approvals", () => {
     expect(source).toContain("useRuntimeApprovalContext()");
     expect(source).not.toContain("useRuntimeApprovals(");
     expect(approvalController).toContain('approval.workflow_kind === "runtime_approval"');
-    expect(source).toContain("canDecideRuntimeApproval(approval)");
+    expect(approvalPanel).toContain("canDecideRuntimeApproval(approval)");
     expect(source).not.toContain('"/api/approvals/"');
-    expect(source).toContain('data-testid="agent-runtime-approvals"');
-    expect(source).toContain("Review approval");
-    expect(source).toContain("Review rejection");
-    expect(source).toContain("A decision alone does not execute an action.");
+    expect(source).toContain('testId="agent-runtime-approvals"');
+    expect(source).toContain("<ApprovalReviewPanel");
+    expect(source).not.toContain("Review approval");
+    expect(approvalPanel).toContain("useRuntimeApprovalContext()");
+    expect(approvalPanel).toContain("Review approval");
+    expect(approvalPanel).toContain("Review rejection");
+    expect(approvalPanel).toContain("A decision alone does not execute an action.");
     expect(approvalController).toContain("Karen must still revalidate and resume the original request.");
   });
 });
 
 describe("Agent Runtime provenance and continuation", () => {
   it("shows conversation association without pretending navigation resumes a request", () => {
-    expect(source).toContain("Related conversation:");
-    expect(source).toContain("Open Karen chat");
-    expect(source).toContain("does not automatically select a conversation or execute work");
+    expect(approvalPanel).toContain("Related conversation:");
+    expect(approvalPanel).toContain("Open Karen chat");
+    expect(approvalPanel).toContain("does not automatically select a conversation or execute work");
     expect(source).toContain("A saved artifact is not implied by this status.");
     expect(source).toContain("Cancellation requested, awaiting confirmed terminal status.");
   });
@@ -127,8 +135,9 @@ describe("Agent Runtime truthful availability states", () => {
 
   it("does not present unavailable metrics as zero or an unverified approval inbox as empty", () => {
     expect(approvalController).toContain("const [isLoadingApprovals, setIsLoadingApprovals] = useState(true)");
-    expect(source).toContain("Loading approval requests…");
-    expect(source).toContain("Approval requests are unavailable. Refresh runtime to try again.");
+    expect(approvalPanel).toContain("Loading approval requests…");
+    expect(approvalPanel).toContain("Approval requests are unavailable.");
+    expect(approvalPanel).toContain('"Refresh runtime"');
     expect(source).not.toContain("catalog?.total ?? 0");
   });
 });
