@@ -235,10 +235,31 @@ function sameParticipation(left: ParticipationReadback, right: ParticipationRead
     });
 }
 
+// Use the same first-party bearer as the actual browser API client. Do not
+// export the token from the page, attach it to artifacts, or follow redirects.
+async function scopedParticipationGet(page: Page, origin: string, path: string, authenticated = true): Promise<{ status: number; payload: unknown }> {
+  return page.evaluate(async ({ origin, path, authenticated }) => {
+    const url = new URL(path, window.location.origin);
+    if (window.location.origin !== origin || url.origin !== origin ||
+        (url.pathname !== "/api/auth/validate-session" &&
+          !/^\/api\/agent-runtime\/my-runs\/[A-Za-z0-9_-]{1,128}\/participation$/.test(url.pathname))) {
+      throw new Error("Refusing unapproved participation authorization probe");
+    }
+    const bearer = window.localStorage.getItem("access_token");
+    if (authenticated && !bearer) throw new Error("Authenticated browser bearer missing");
+    if (!authenticated && bearer) throw new Error("Signed-out browser retained its bearer");
+    const response = await window.fetch(url.toString(), {
+      method: "GET", cache: "no-store", credentials: "same-origin", redirect: "error",
+      headers: authenticated ? { Authorization: "Bearer " + bearer } : {},
+    });
+    return { status: response.status, payload: response.ok && authenticated ? await response.json() as unknown : null };
+  }, { origin, path, authenticated });
+}
+
 async function readParticipation(page: Page, origin: string, runId: string): Promise<ParticipationReadback> {
-  const response = await page.request.get(origin + participationPath(runId), { maxRedirects: 0 });
-  expect(response.status(), "Owner participation read must return 200").toBe(200);
-  return parseParticipation(await response.json(), runId);
+  const response = await scopedParticipationGet(page, origin, participationPath(runId));
+  expect(response.status, "Owner participation read must return 200").toBe(200);
+  return parseParticipation(response.payload, runId);
 }
 
 // Pure negative control: synthetic test-only values, no authenticated host.
@@ -321,9 +342,13 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
   let firstIdentity: { user_id: string; tenant_id: string } | undefined;
   for (const [index, own, foreign] of [[0, a, b], [1, b, a]] as const) {
     await signInApprovedKaren(page, accounts[index].email!, accounts[index].password!, { allowLocalLoopback: local });
-    const identityResponse = await page.request.get(origin + "/api/auth/me", { maxRedirects: 0 });
-    expect(identityResponse.status()).toBe(200);
-    const identity = await identityResponse.json() as { user_id: string; tenant_id: string; roles: string[] };
+    const identityResponse = await scopedParticipationGet(page, origin, "/api/auth/validate-session");
+    expect(identityResponse.status).toBe(200);
+    const envelope = identityResponse.payload as { valid?: boolean; session_valid?: boolean; authenticated?: boolean; user?: { user_id: string; tenant_id: string; roles: string[] } };
+    if (envelope?.valid !== true || envelope.session_valid !== true || envelope.authenticated !== true || !envelope.user) {
+      throw new Error("Canonical session validation was not affirmative");
+    }
+    const identity = envelope.user;
     expect(typeof identity.user_id === "string" && identity.user_id.length > 0).toBe(true);
     expect(typeof identity.tenant_id === "string" && !["", "default", "dev-tenant"].includes(identity.tenant_id.toLowerCase())).toBe(true);
     expect(Array.isArray(identity.roles) && !identity.roles.includes("admin")).toBe(true);
@@ -332,8 +357,8 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
       expect(identity.user_id !== firstIdentity?.user_id).toBe(true);
       expect(identity.tenant_id === firstIdentity?.tenant_id, "Prove same-tenant owner isolation").toBe(true);
     }
-    const denied = await page.request.get(origin + participationPath(foreign), { maxRedirects: 0 });
-    expect(denied.status(), "Authenticated non-owner must receive 404").toBe(404);
+    const denied = await scopedParticipationGet(page, origin, participationPath(foreign));
+    expect(denied.status, "Authenticated non-owner must receive 404").toBe(404);
     const expected = await readParticipation(page, origin, own);
     await verifyParticipationProjection(page, origin, own, foreign, expected);
     // Reopen after a fresh document load; selection persistence is not claimed.
@@ -344,8 +369,8 @@ test("ARM-05C.5B real participation receipts survive reload and deny a second ac
     await openAutomationWorkspace(page, "My Account", false);
     await page.getByRole("button", { name: "Sign out", exact: true }).click();
     await expect(page).toHaveURL(/\/login(?:[?#]|$)/, { timeout: 30_000 });
-    const signedOut = await page.request.get(origin + participationPath(own), { maxRedirects: 0 });
-    expect([401, 403], "Signed-out principal must not read participation").toContain(signedOut.status());
+    const signedOut = await scopedParticipationGet(page, origin, participationPath(own), false);
+    expect([401, 403], "Signed-out principal must not read participation").toContain(signedOut.status);
   }
   expect(forbidden, "Readback must not submit inference or mutate executions").toEqual([]);
 });

@@ -68,9 +68,12 @@ def test_card_studio_browser_spec_does_not_forge_authenticated_responses() -> No
 def test_card_studio_protects_credential_bearing_playwright_evidence() -> None:
     config = (THEME / "e2e/playwright.config.ts").read_text(encoding="utf-8")
     assert "const cardStudioAcceptance =" in config
-    assert "cardStudioAcceptance;" in config
-    assert "pinReadbackAcceptance || cardStudioAcceptance ? 0" in config
-    assert "documentAuthorAcceptance || cardStudioAcceptance" in config
+    private_modes = config.split("const privateBrowserRun =", 1)[1].split(";", 1)[0]
+    retry_modes = config.split("retries:", 1)[1].split("?", 1)[0]
+    reporter_modes = config.split("reporter:", 1)[1].split("?", 1)[0]
+    for modes in (private_modes, retry_modes, reporter_modes):
+        assert "cardStudioAcceptance" in {term.strip() for term in modes.split("||")}
+    assert " ? 0 : process.env.CI ? 2 : 0," in config
     assert "screenshot: privateBrowserRun ? 'off'" in config
     assert "video: privateBrowserRun" in config
     assert "trace: privateBrowserRun" in config

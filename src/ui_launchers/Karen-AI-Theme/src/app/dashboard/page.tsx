@@ -36,6 +36,7 @@ import AccountPage from "@/components/account/AccountPage";
 import GrowthPage from "@/components/growth/GrowthPage";
 import { SessionProvider, useSession } from "@/components/chat/SessionProvider";
 import { useVerifiedConversationHandoff } from "@/components/chat/useVerifiedConversationHandoff";
+import { RuntimeApprovalProvider } from "@/components/approvals/RuntimeApprovalProvider";
 import { CardStudioWorkspace } from "@/components/card-studio/CardStudioWorkspace";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
 
@@ -73,7 +74,7 @@ function PrincipalScopedSessionProvider({ children }: { children: React.ReactNod
       tenant_id: user.tenant_id,
       user_id: user.user_id,
     }}>
-      {children}
+      <RuntimeApprovalProvider>{children}</RuntimeApprovalProvider>
     </SessionProvider>
   );
 }
