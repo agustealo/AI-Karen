@@ -11,14 +11,16 @@ import asyncio
 import uuid
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Dict, Optional, TYPE_CHECKING
+from typing import Any, Callable, Dict, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+    from sqlalchemy.ext.asyncio import AsyncSession
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease, SqlChatRunRepository
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.persistence.postgres import get_postgres_engine
+from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 from ai_karen_engine.services.database.repositories import (
     Conversation,
     ConversationQuery,
@@ -27,6 +29,7 @@ from ai_karen_engine.services.database.repositories import (
     RepositoryFactory,
 )
 from ai_karen_engine.services.database.repositories.conversation_repository import (
+    canonical_message_digest,
     validate_draft_attachment_references,
 )
 from ai_karen_engine.utils.chat_helpers import normalize_session_id
@@ -47,6 +50,7 @@ _SAFE_TRANSCRIPT_FAILURE_CODES = frozenset({
     "conversation_history_persona_scope_mismatch",
     "conversation_storage_unavailable", "message_idempotency_conflict",
     "incomplete_turn_replay", "invalid_completed_turn",
+    "attachment_session_denied",
     "chat_run_transcript_scope_mismatch", "chat_run_commit_not_authorized",
     "completed_turn_write_failed", "assistant_write_failed",
     "user_write_failed", "duplicate_conversation_id",
@@ -312,16 +316,19 @@ class ConversationRuntimeGateway:
         *,
         message_limit: int = 100,
         message_offset: int = 0,
+        db_session: Optional[AsyncSession] = None,
     ) -> ConversationSnapshot:
         """Read one owner-validated canonical message page, never an SDK store."""
         if message_offset < 0:
             raise ValueError("invalid_message_offset")
-        conversation = await self.require_owned_conversation(context)
+        session_kwargs = {"db_session": db_session} if db_session is not None else {}
+        conversation = await self.require_owned_conversation(context, **session_kwargs)
         messages_result = await self._repository.get_messages(
             str(conversation.id),
             context.tenant_id,
             limit=max(0, int(message_limit)),
             offset=int(message_offset),
+            **session_kwargs,
         )
         if not messages_result.success:
             raise RuntimeError(
@@ -337,6 +344,7 @@ class ConversationRuntimeGateway:
         context: ChatExecutionContext,
         *,
         message_limit: int = 501,
+        db_session: Optional[AsyncSession] = None,
     ) -> ConversationSnapshot:
         """Return the newest bounded canonical messages in chronological order.
 
@@ -347,13 +355,15 @@ class ConversationRuntimeGateway:
         """
         if not 1 <= message_limit <= 501:
             raise ValueError("invalid_recent_message_limit")
-        conversation = await self.require_owned_conversation(context)
+        session_kwargs = {"db_session": db_session} if db_session is not None else {}
+        conversation = await self.require_owned_conversation(context, **session_kwargs)
         result = await self._repository.get_messages(
             str(conversation.id),
             context.tenant_id,
             limit=message_limit,
             offset=0,
             newest_first=True,
+            **session_kwargs,
         )
         if not result.success:
             raise RuntimeError(_safe_repository_reason(result.error, "conversation_history_read_failed"))
@@ -494,13 +504,16 @@ class ConversationRuntimeGateway:
     async def require_owned_conversation(
         self,
         context: ChatExecutionContext,
+        *, db_session: Optional[AsyncSession] = None,
     ) -> Conversation:
         """Return one canonical conversation only when tenant/user ownership matches."""
         self._require_conversation_identity(context)
         conversation_id = resolve_runtime_conversation_id(context)
+        session_kwargs = {"db_session": db_session} if db_session is not None else {}
         existing = await self._repository.get_conversation(
             conversation_id,
             context.tenant_id,
+            **session_kwargs,
         )
         if not existing.success:
             raise RuntimeError(_safe_repository_reason(existing.error, "conversation_lookup_failed"))
@@ -855,8 +868,9 @@ class ConversationRuntimeGateway:
         assistant_text: str,
         persona_scope_id: str | None = None,
         run_lease: Optional["ChatRunLease"] = None,
+        expected_assistant_digest: Optional[str] = None,
     ) -> TranscriptPersistenceResult:
-        """Verify committed transcript truth after cancellation during a write.
+        """Verify committed transcript truth after interruption or receipt loss.
 
         No replay, new conversation, storage mutation, or inference is allowed.
         A negative receipt is only returned following a successful, scoped
@@ -896,29 +910,23 @@ class ConversationRuntimeGateway:
                 user_text=text_user,
                 assistant_text=text_assistant,
                 persona_scope_id=persona_scope_id,
+                **({"private_execution": context}
+                   if context.has_runtime_attachment_scope() else {}),
+                **({"run_lease": run_lease} if run_lease is not None else {}),
+                **({"expected_assistant_digest": expected_assistant_digest}
+                   if expected_assistant_digest is not None else {}),
             )
             if not observed.success:
                 return TranscriptPersistenceResult(
                     status="unverified", conversation_id=conversation_id,
-                    reason="committed_turn_read_unavailable",
+                    reason=("chat_run_finality_unverified"
+                            if observed.error == "chat_run_finality_unverified"
+                            else "committed_turn_read_unavailable"),
                 )
             if not observed.data:
                 return TranscriptPersistenceResult(
                     status="not_found", conversation_id=conversation_id,
                 )
-            if run_lease is not None:
-                # The canonical run ledger is atomically completed with the
-                # same transcript transaction. Never promote a detached pair
-                # to a completed leased run if that receipt cannot be read.
-                from ai_karen_engine.persistence.repositories.chat_run_repository import (
-                    SqlChatRunRepository,
-                )
-
-                if not await SqlChatRunRepository().completed(run_lease):
-                    return TranscriptPersistenceResult(
-                        status="unverified", conversation_id=conversation_id,
-                        reason="chat_run_finality_unverified",
-                    )
             return TranscriptPersistenceResult(
                 status="already_persisted",
                 conversation_id=conversation_id,
@@ -1028,7 +1036,18 @@ class ConversationRuntimeGateway:
                     "transcript_actor": "assistant",
                 },
             )
-            if run_lease is not None:
+            if context.has_runtime_attachment_scope():
+                try:
+                    write_result = await self._repository.add_completed_turn(
+                        user_message, assistant_message, run_lease=run_lease,
+                        private_execution=context,
+                    )
+                except TypeError:
+                    return TranscriptPersistenceResult(
+                        status="rejected", conversation_id=conversation_id,
+                        reason="attachment_session_denied",
+                    )
+            elif run_lease is not None:
                 write_result = await self._repository.add_completed_turn(
                     user_message, assistant_message, run_lease=run_lease,
                 )
@@ -1037,8 +1056,25 @@ class ConversationRuntimeGateway:
                     user_message, assistant_message,
                 )
             if not write_result.success:
+                if (
+                    write_result.error == "completed_turn_write_failed"
+                    and write_result.metadata.get("commit_outcome_uncertain") is True
+                ):
+                    receipt = await self.reconcile_interrupted_turn(
+                        context, user_text=user_text, assistant_text=assistant_text,
+                        persona_scope_id=persona_scope_id, run_lease=run_lease,
+                        expected_assistant_digest=canonical_message_digest(assistant_message),
+                    )
+                    if receipt.success:
+                        return receipt
+                    # A negative or unavailable observation is not proof that
+                    # an uncertain commit rolled back (e.g. concurrent erasure).
+                    return TranscriptPersistenceResult(
+                        status="unverified", conversation_id=conversation_id,
+                        reason="transcript_commit_outcome_unverified",
+                    )
                 return TranscriptPersistenceResult(
-                    status="failed",
+                    status="rejected" if write_result.error == "attachment_session_denied" else "failed",
                     conversation_id=conversation_id,
                     user_message_id=user_message_id,
                     assistant_message_id=assistant_message_id,
@@ -1180,6 +1216,66 @@ class ConversationRuntimeGateway:
             raise ValueError(
                 "transcript_message_identity_incomplete:request_id"
             )
+
+
+@dataclass(frozen=True)
+class OwnedHistoryEvidence:
+    snapshot: ConversationSnapshot
+    recovery_run: Optional[dict[str, Any]]
+    attestations: dict[str, tuple[str, str]]
+    observed_activity: dict[str, tuple[str, str, str, list[dict[str, Any]]]]
+    window_has_older: bool
+
+
+async def read_owned_history_evidence(
+    context: ChatExecutionContext,
+    *,
+    gateway: ConversationRuntimeGateway,
+    ledger_factory: Callable[[], SqlChatRunRepository],
+    text_mode: bool,
+    include_activity: bool,
+) -> OwnedHistoryEvidence:
+    """Read one coherent owned history/ledger snapshot, never an execution grant."""
+    context.require_authenticated_user()
+    scope = {
+        "tenant_id": context.tenant_id,
+        "user_id": context.user_id,
+        "conversation_id": context.require_conversation_id(),
+    }
+    async with async_transaction_scope(
+        context.tenant_id, user_id=context.user_id, read_only_snapshot=True,
+    ) as session:
+        if text_mode:
+            recent = await gateway.get_owned_recent_snapshot(
+                context, message_limit=501, db_session=session,
+            )
+            window_has_older = len(recent.messages) > 500
+            snapshot = ConversationSnapshot(
+                conversation=recent.conversation, messages=recent.messages[-500:],
+            )
+        else:
+            snapshot = await gateway.get_owned_snapshot(
+                context, message_limit=501, db_session=session,
+            )
+            window_has_older = False
+        # Instantiate only after the canonical owner check succeeds.
+        ledger = ledger_factory()
+        recovery_run = await ledger.read_recovery_run(**scope, db_session=session)
+        attestations = await ledger.completed_replay_attestations(**scope, db_session=session)
+        observed_activity = (
+            await ledger.completed_agent_activity(**scope, db_session=session)
+            if include_activity else {}
+        )
+    if window_has_older:
+        eligible = {str(m.id) for m in snapshot.messages if str(m.role) == "assistant"}
+        observed_activity = {
+            identifier: activity for identifier, activity in observed_activity.items()
+            if identifier in eligible
+        }
+    return OwnedHistoryEvidence(
+        snapshot=snapshot, recovery_run=recovery_run, attestations=attestations,
+        observed_activity=observed_activity, window_has_older=window_has_older,
+    )
 
 
 _gateway: Optional[ConversationRuntimeGateway] = None

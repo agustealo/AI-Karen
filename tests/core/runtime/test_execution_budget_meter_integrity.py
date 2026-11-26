@@ -232,22 +232,39 @@ async def test_original_remaining_deadline_cannot_be_extended_by_child_runtime(m
 
 
 @pytest.mark.asyncio
+async def test_admitted_duration_survives_sibling_quota_denial_but_never_expiry(monkeypatch):
+    clock = _clock(monkeypatch)
+    meter = ExecutionBudgetMeter(ExecutionBudget(max_model_calls=1, max_duration_ms=1000))
+    assert await meter.remaining_admitted_duration_ms() == 0
+    assert await meter.reserve_model_execution()
+    assert not await meter.reserve_model_execution()
+    assert meter.exhausted
+    assert await meter.remaining_duration_ms() == 0
+    clock["seconds"] = 100.4
+    assert await meter.remaining_admitted_duration_ms() == pytest.approx(600.0)
+    clock["seconds"] = 101.0
+    assert await meter.remaining_admitted_duration_ms() == 0
+    assert not await meter.reserve_model_execution()
+    assert meter.model_calls == 1
+
+
+@pytest.mark.asyncio
 async def test_evidence_time_does_not_restore_exhausted_execution_authority(monkeypatch):
     clock = _clock(monkeypatch)
     meter = ExecutionBudgetMeter(
         ExecutionBudget(max_duration_ms=1000, max_model_calls=1),
     )
-    assert await meter.remaining_evidence_duration_ms() == 0.0
+    assert await meter.remaining_admitted_duration_ms() == 0.0
     meter.start()
     assert await meter.reserve_model_execution()
     assert not await meter.reserve_model_execution()
     clock["seconds"] = 100.4
     assert await meter.remaining_duration_ms() == 0.0
-    assert await meter.remaining_evidence_duration_ms() == pytest.approx(600.0)
+    assert await meter.remaining_admitted_duration_ms() == pytest.approx(600.0)
     assert meter.exhausted
     assert not await meter.reserve_tool_call()
     assert meter.model_calls == 1
     assert meter.tool_calls == 0
     clock["seconds"] = 101.0
-    assert await meter.remaining_evidence_duration_ms() == 0.0
+    assert await meter.remaining_admitted_duration_ms() == 0.0
     assert not await meter.check_duration()

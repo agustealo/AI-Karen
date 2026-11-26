@@ -22,6 +22,7 @@ function ownedHistory(extra: Record<string, unknown> = {}) {
     owner_tenant_id: "tenant-A",
     response_source: "persisted_history",
     replay_only: true,
+    recovery_run: null,
     messages: [
       { id: "u1", role: "user", content: "Time?" },
       { id: "a1", role: "assistant", content: "It is 10:42 PM" },
@@ -185,7 +186,7 @@ describe("CK-07D governed CopilotKit history and reconnect", () => {
         { id: "u1", role: "user", content: "Time?" },
         { id: "a1", role: "assistant", content: "It is 10:42 PM" },
       ],
-      replayEvents: [], text_only: true,
+      replayEvents: [], text_only: true, recovery_run: null,
       continuation_authorized: true, omitted_rich_message_count: 1,
       history_window_has_older: false, history_window_message_limit: 500,
     });
@@ -435,4 +436,23 @@ describe("CK-07D governed CopilotKit history and reconnect", () => {
     expect(response.status).toBe(503);
     expect(called).toEqual([AUTH, FLAGS, HISTORY]);
   });
+});
+
+
+it("forwards only scoped run recovery evidence and refuses synthetic reconnect", async () => {
+  const pending = { runId: "old-run", submissionId: "old-turn", status: "interrupted" };
+  setup(() => Response.json(ownedHistory({ recovery_run: { ...pending, lease_token: "private" } })));
+  const response = await GET(req("history"));
+  expect(response.status).toBe(200);
+  expect((await response.json()).recovery_run).toEqual(pending);
+  const reconnect = await POST(req("connect"));
+  expect(reconnect.status).toBe(409);
+  expect(await reconnect.text()).not.toContain("RUN_FINISHED");
+});
+
+it("fails closed if governed recovery evidence is absent or malformed", async () => {
+  for (const recovery_run of [undefined, { runId: "bad id", submissionId: null, status: "running" }]) {
+    setup(() => Response.json(ownedHistory({ recovery_run })));
+    expect((await GET(req("history"))).status).toBe(503);
+  }
 });

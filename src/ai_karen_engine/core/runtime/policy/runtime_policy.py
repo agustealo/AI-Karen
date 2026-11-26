@@ -108,6 +108,8 @@ class PolicyEvaluationRequest:
     permissions: List[str] = field(default_factory=list)
     action: str = "general_assist"
     resource: Optional[str] = None
+    # Host-normalized selected artifact revisions, not client-granted access.
+    attachment_references: List[Dict[str, str]] = field(default_factory=list)
     requested_capabilities: List[str] = field(default_factory=list)
     forbidden_capabilities: List[str] = field(default_factory=list)
     requested_reasoning_modes: List[str] = field(default_factory=list)
@@ -926,6 +928,16 @@ class RuntimePolicyEnforcer:
                 or constraints.get("correlation_id") != context.correlation_id
             ):
                 return False
+            # Source/revision scope must match the issuer's original decision.
+            issued_attachments = constraints.get("attachment_references", [])
+            selected_scope = plan.resource_scope.get(
+                "attachment_references", []
+            ) if isinstance(plan.resource_scope, dict) else None
+            if (
+                selected_scope != issued_attachments
+                or (issued_attachments and "data:read" not in plan.allowed_capabilities)
+            ):
+                return False
             # A standalone coordinator must not self-issue tool/plugin/agent
             # grants by modifying a serialized plan before first binding.
             # These are the *actual*, issuer-returned allowlists. Empty means
@@ -1127,6 +1139,44 @@ class RuntimePolicyEnforcer:
                     denied_reasoning_modes=list(request.requested_reasoning_modes),
                     evaluated_at=evaluated_at,
                 )
+
+        # Freeze the exact selected sources in the issuer's authorization.
+        # Client-provided reference IDs never confer read rights by themselves.
+        if request.attachment_references:
+            from ai_karen_engine.services.database.repositories.conversation_repository import (
+                validate_draft_attachment_references,
+            )
+
+            try:
+                authorized_attachments = validate_draft_attachment_references(
+                    request.attachment_references
+                )
+            except ValueError:
+                authorized_attachments = []
+            from ai_karen_engine.auth.models import UserData
+            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+            principal = UserData(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                roles=list(request.roles),
+                permissions=list(request.permissions),
+            )
+            if (
+                not authorized_attachments
+                or "data:read" not in request.requested_capabilities
+                or not get_rbac_manager().has_permission(principal, Permission.DATA_READ)
+            ):
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=["data:read"],
+                    evaluated_at=evaluated_at,
+                )
+        else:
+            authorized_attachments = []
 
         # Planner reads expose tenant-private commitments. Requested capability
         # alone never grants access, even for a read-only presentation.
@@ -1331,6 +1381,9 @@ class RuntimePolicyEnforcer:
                 "allowed_plugins": allowed_plugins,
                 "allowed_tools": allowed_tools,
                 "allowed_agents": allowed_agents,
+                "attachment_references": [
+                    dict(item) for item in authorized_attachments
+                ],
                 "authorized_user_id": request.user_id,
                 "authorized_tenant_id": request.tenant_id,
                 "authorized_session_id": request.session_id,

@@ -4,6 +4,7 @@ import time
 from typing import Optional
 
 from ai_karen_engine.core.expression.errors import EngineUnavailableError
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.model_runtime.provider_policy import evaluate_provider_policy
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -42,6 +43,8 @@ async def build_runtime_fallback(
     # Recovery is still part of the original authorized execution. It may
     # never mint a new plan, reset the execution budget or silently substitute
     # a generated answer for a failed governed tool/plugin/approval operation.
+    if isinstance(failure, NativeRetirementUnverified):
+        raise failure
     if decision is None or authorized_plan is None or meter is None:
         return None
     ctx = request.context
@@ -82,6 +85,8 @@ async def build_runtime_fallback(
         text, normalized = await runtime._run_simple(
             request, decision, plan, meter, memory_recall_meta
         )
+    except NativeRetirementUnverified:
+        raise
     except Exception as fb_exc:  # pragma: no cover - defensive boundary
         # Consent withdrawal is a terminal runtime policy denial, not a
         # recoverable provider failure. Preserve it for ChatRuntime's

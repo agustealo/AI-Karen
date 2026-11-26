@@ -3529,3 +3529,30 @@ async def test_kis_graph_01c2r_f_live_postgres_stream_acceptance():
         if failure_type is None:
             assert cleanup_error is None, "PostgreSQL streaming fixture cleanup failed"
             assert engine.async_engine.pool.checkedout() == checked_out_before
+
+
+@pytest.mark.asyncio
+async def test_unverified_stream_projects_no_success_or_retry_receipt():
+    gateway = _TranscriptGateway(TranscriptPersistenceResult(
+        status="unverified", conversation_id=CONVERSATION_ID,
+        reason="transcript_commit_outcome_unverified",
+    ))
+    runtime, _ = _make_runtime(gateway)
+
+    async def fake_stream(*args, **kwargs):
+        yield ChatStreamChunk(type="content", content="hi", correlation_id="corr-1")
+
+    chunks = await _collect_stream(
+        runtime, _make_request(), _make_decision(), _make_plan(), fake_stream,
+    )
+    assert len(gateway.calls) == 1
+    assert chunks[-1].metadata["transcript_persistence_status"] == "unverified"
+    assert chunks[-1].metadata["requires_retry"] is False
+    projection = AGUIEventProjection(thread_id=CONVERSATION_ID, run_id="run-uncertain")
+    projected = [projection.begin()]
+    for chunk in chunks:
+        projected.extend(projection.project(chunk))
+    assert "RUN_FINISHED" not in [event["type"] for event in projected]
+    assert [event["type"] for event in projected].count("RUN_ERROR") == 1
+    assert projected[-1]["code"] == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+    assert "karen.execution_receipt.v1" not in str(projected)

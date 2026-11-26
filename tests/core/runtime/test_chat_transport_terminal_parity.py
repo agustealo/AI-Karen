@@ -17,6 +17,9 @@ from ai_karen_engine.api_routes.chat import websocket as websocket_route
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
+    ChatExecutionResult,
+    ChatExecutionStatus,
+    ChatRuntimeMetadata,
     ChatStreamChunk,
     ChatStreamEventType,
 )
@@ -73,6 +76,18 @@ def _runtime(scenario: str) -> SimpleNamespace:
             yield _event(ChatStreamEventType.CONTENT, "verified answer")
             yield _event(ChatStreamEventType.COMPLETE, "")
             yield _event(ChatStreamEventType.CONTENT, "forbidden late text")
+        elif scenario == "unverified_finality":
+            yield _event(ChatStreamEventType.CONTENT, "observed prefix")
+            yield ChatStreamChunk(
+                type=ChatStreamEventType.COMPLETE,
+                content="private unverified terminal answer",
+                correlation_id="chat-smoke-correlation",
+                metadata={
+                    "transcript_persistence_status": "unverified",
+                    "private_debug": "private terminal metadata",
+                },
+            )
+            yield _event(ChatStreamEventType.CONTENT, "forbidden late text")
         elif scenario == "invalid_serialization":
             yield ChatStreamChunk(
                 type=ChatStreamEventType.CONTENT,
@@ -124,6 +139,7 @@ class _RecordingSocket:
         ("error_then_complete", ["error"]),
         ("complete_then_content", ["content", "complete"]),
         ("invalid_serialization", ["error"]),
+        ("unverified_finality", ["content", "error"]),
     ],
 )
 async def test_all_chat_transports_share_fail_closed_terminal_and_redaction(
@@ -177,6 +193,10 @@ async def test_all_chat_transports_share_fail_closed_terminal_and_redaction(
                 "CHAT_STREAM_RUNTIME_EXCEPTION",
             )
 
+        if scenario == "unverified_finality":
+            assert events[-1]["metadata"]["error_code"] == "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED"
+            assert events[-1]["metadata"]["requires_retry"] is False
+
     for frames in (canonical, legacy, copilot_frames):
         assert frames[0] == ": stream_connected\n\n"
         assert frames[-1] == "data: [DONE]\n\n"
@@ -192,6 +212,8 @@ async def test_all_chat_transports_share_fail_closed_terminal_and_redaction(
     assert "private SQL-bound secret" not in all_wire
     assert "forbidden late text" not in all_wire
     assert "incorrect success" not in all_wire
+    assert "private unverified terminal answer" not in all_wire
+    assert "private terminal metadata" not in all_wire
 
 
 @pytest.mark.asyncio
@@ -212,3 +234,42 @@ async def test_terminal_serializer_does_not_claim_success_for_empty_runtime(
     assert [event["type"] for event in events] == ["error"]
     assert events[0]["metadata"]["error_code"] == "CHAT_SSE_MISSING_TERMINAL"
     assert frames[-1] == "data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("code", "expected_status", "requires_retry"),
+    [
+        ("CHAT_TRANSCRIPT_FINALITY_UNVERIFIED", 409, False),
+        ("CHAT_EXECUTION_FAILED", 503, True),
+    ],
+)
+async def test_copilot_http_runtime_failure_reuses_canonical_translation(
+    monkeypatch: pytest.MonkeyPatch, code: str, expected_status: int, requires_retry: bool,
+) -> None:
+    result = ChatExecutionResult(
+        answer="private unsuccessful answer",
+        status=ChatExecutionStatus.ERROR,
+        metadata=ChatRuntimeMetadata(
+            correlation_id="chat-smoke-correlation",
+            extra={"error_code": code, "private_debug": "private runtime metadata"},
+        ),
+    )
+
+    async def execute(_request: ChatExecutionRequest):
+        return result
+
+    monkeypatch.setattr(
+        copilot_route, "get_chat_runtime", lambda: SimpleNamespace(execute=execute),
+    )
+    response = await copilot_route.copilot_assist(
+        copilot_route.AssistRequest(message="hello", session_id="chat-smoke-session"),
+        SimpleNamespace(headers={"X-Correlation-Id": "chat-smoke-correlation"}),
+        user=_user(),
+    )
+    assert response.status_code == expected_status
+    payload = json.loads(response.body)
+    assert payload["error_code"] == code
+    assert payload["requires_retry"] is requires_retry
+    assert "private unsuccessful answer" not in response.body.decode()
+    assert "private runtime metadata" not in response.body.decode()

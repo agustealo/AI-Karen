@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Protocol, Sequence, runtime_checkable
+from typing import Any, Callable, Protocol, Sequence, runtime_checkable
 
 from ai_karen_engine.core.model_runtime.provider_contracts import (
     GenerationFailed,
     ModelRuntimeCapabilities,
+    ProviderNotAvailable,
 )
 from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
     SoftBatchVerification,
@@ -121,6 +122,7 @@ class RuntimeMultiGenerateVerifier:
         prompt_service: PromptRuntimeService,
         answer_extractor: FinalAnswerExtractorPort | None = None,
         config: MultiGenerateVerifierConfig | None = None,
+        checkpoint: Callable[[], None] | None = None,
     ) -> None:
         if not isinstance(runtime, SoftVerifierGenerationRuntime):
             raise TypeError("runtime must implement SoftVerifierGenerationRuntime")
@@ -129,6 +131,7 @@ class RuntimeMultiGenerateVerifier:
         self._prompt_service = prompt_service
         self._extractor = answer_extractor or NormalizedFinalAnswerExtractor()
         self._config = config or MultiGenerateVerifierConfig()
+        self._checkpoint = checkpoint
         ensure_soft_reasoning_prompts(self._registry)
 
     def verify_batch(
@@ -161,11 +164,22 @@ class RuntimeMultiGenerateVerifier:
         prompt = self._prompt_service.render_text_prompt(messages)
 
         try:
+            generation_options: dict[str, Any] = {}
+            if self._checkpoint is not None:
+                self._checkpoint()
+                # Runtime's existing generation path installs the same
+                # cooperative stop criterion without warming another model.
+                generation_options["before_generate"] = self._checkpoint
             refined = self._runtime.generate_text(
                 prompt,
                 max_new_tokens=self._config.max_output_tokens,
                 temperature=self._config.temperature,
+                **generation_options,
             ).strip()
+            if self._checkpoint is not None:
+                self._checkpoint()
+        except ProviderNotAvailable:
+            raise
         except Exception as exc:
             raise GenerationFailed(
                 f"Soft Reasoning Multi-Generate verifier failed: {exc}"
@@ -186,6 +200,8 @@ class RuntimeMultiGenerateVerifier:
             for response in responses
         )
         capabilities = self._runtime.runtime_capabilities()
+        if self._checkpoint is not None:
+            self._checkpoint()
         return SoftBatchVerification(
             refined_output=refined,
             candidate_scores=candidate_scores,

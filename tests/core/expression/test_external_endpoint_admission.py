@@ -312,3 +312,62 @@ def test_canonical_wire_preserves_loopback_openers(monkeypatch):
     )
     assert response == ("http://127.0.0.1:11434/v1/models", 1.0)
     assert len(seen) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_private_evidence_denies_remote_transport_even_with_admin_approval(stream):
+    endpoint = _endpoint("https://remote.example/v1")
+    engine = OpenAICompatibleEngine()
+    engine.engine_id = "local"
+    sink = AsyncMock() if stream else None
+    task = _task(token_sink=sink)
+    task.local_only = True
+    approval = AsyncMock(return_value=True)
+    task.authorize_external_engine_attempt = approval
+    with (
+        patch("ai_karen_engine.core.model_runtime.provider_registry_service.get_provider_registry_service",
+              return_value=SimpleNamespace(get_provider_endpoint=lambda _: endpoint)),
+        patch.object(engine, "_resolve_provider", return_value=endpoint.provider_id),
+        patch("ai_karen_engine.core.expression.engines.openai_compatible_engine.execute_provider_endpoint",
+              new_callable=AsyncMock) as regular,
+        patch("ai_karen_engine.core.expression.engines.openai_compatible_engine.stream_provider_endpoint") as streaming,
+    ):
+        result = await engine.generate(task)
+    regular.assert_not_awaited()
+    streaming.assert_not_called()
+    approval.assert_not_awaited()
+    assert result.degradation_reason == "private_evidence_local_only"
+    assert not task.stream_started
+    if sink is not None:
+        sink.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_private_evidence_rejects_destination_substitution_at_transport(monkeypatch, stream):
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    endpoint = _endpoint("http://127.0.0.1:11434/v1", runtime=RuntimeEngine.OLLAMA)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434/v1")
+    assert not provider_endpoint_requires_external_permission(endpoint)
+    monkeypatch.setenv("OLLAMA_BASE_URL", "https://remote.example/v1")
+    forbidden = AsyncMock(side_effect=AssertionError("Unexpected HTTP client"))
+    with (
+        patch.object(provider_execution, "_post_chat_completions",
+                     side_effect=AssertionError("Unexpected POST")) as post,
+        patch("httpx.AsyncClient", forbidden),
+    ):
+        kwargs = dict(messages=_task().messages, model="remote-model",
+                      max_tokens=128, temperature=0.1, local_only=True)
+        with pytest.raises(provider_execution.ProviderExecutionError,
+                           match="private_evidence_local_only"):
+            if stream:
+                async for _ in provider_execution.stream_provider_endpoint(
+                    endpoint, timeout_ms=1000, **kwargs,
+                ):
+                    pytest.fail("Unexpected provider stream")
+            else:
+                await provider_execution.execute_provider_endpoint(endpoint, **kwargs)
+        post.assert_not_called()
+        forbidden.assert_not_called()

@@ -10,10 +10,12 @@ import json
 import re
 import uuid
 from collections.abc import Mapping
+from contextlib import nullcontext
 from dataclasses import dataclass
 from typing import Any, Optional
 
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_karen_engine.core.runtime.presentation_contract import (
     contains_revocable_code_artifact,
@@ -33,6 +35,30 @@ _MAX_EVENTS_PER_RUN = 2048
 _MAX_JOURNAL_BYTES = 8 * 1024 * 1024
 _MAX_EVENT_READ = 100
 
+# Shared exact transcript binding for the scoped ledger alias r. Payload
+# digest recomputation remains with the existing transcript/replay verifier.
+_COMMITTED_TRANSCRIPT_EXISTS = """
+    EXISTS (
+        SELECT 1 FROM conversations c
+        JOIN messages u
+          ON u.conversation_id = c.conversation_id
+         AND u.message_id::text = r.user_message_id::text
+         AND u.role = 'user'
+        JOIN messages a
+          ON a.conversation_id = c.conversation_id
+         AND a.message_id::text = r.assistant_message_id::text
+         AND a.role = 'assistant'
+        WHERE c.conversation_id = r.conversation_id
+          AND c.tenant_id = r.tenant_id
+          AND c.user_id = r.user_id
+          AND r.user_message_id IS NOT NULL
+          AND r.assistant_message_id IS NOT NULL
+          AND r.assistant_message_digest ~ '^[0-9a-f]{64}$'
+          AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
+          AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
+    )
+"""
+
 
 @dataclass(frozen=True)
 class ChatRunLease:
@@ -46,6 +72,21 @@ class ChatRunLease:
     transport_run_id: str
     request_id: str
     correlation_id: str
+    submission_id: Optional[str] = None
+
+
+def draft_revision_from_submission_id(submission_id: Optional[str]) -> Optional[int]:
+    """Recognize the reserved original-draft identity; no client authority."""
+    if submission_id is None or not submission_id.startswith("draft-v1-"):
+        return None
+    match = re.fullmatch(r"draft-v1-([1-9][0-9]{0,15})", submission_id)
+    if match is None or int(match[1]) > 9007199254740990:
+        raise ValueError("invalid_draft_submission_identity")
+    return int(match[1])
+
+
+class DraftSubmissionConflict(Exception):
+    """The original owned draft no longer matches the submitted turn."""
 
 
 def _uuid(value: str) -> str:
@@ -72,7 +113,19 @@ class SqlChatRunRepository:
         transport_run_id: str,
         request_id: str,
         correlation_id: str,
+        submission_id: Optional[str] = None,
+        submitted_text: Optional[str] = None,
     ) -> Optional[ChatRunLease]:
+        if submission_id is not None and (
+            not isinstance(submission_id, str) or not _RUN_ID_PATTERN.fullmatch(submission_id)
+        ):
+            raise ValueError("invalid_chat_submission_id")
+        draft_revision = draft_revision_from_submission_id(submission_id)
+        if draft_revision is not None and (
+            not isinstance(submitted_text, str) or not submitted_text.strip()
+            or len(submitted_text) > 10000
+        ):
+            raise ValueError("invalid_draft_submission_text")
         if not _RUN_ID_PATTERN.fullmatch(transport_run_id):
             raise ValueError("invalid_transport_run_id")
         if not request_id or not correlation_id:
@@ -83,8 +136,25 @@ class SqlChatRunRepository:
         execution = str(uuid.uuid4())
         token = str(uuid.uuid4())
         async with async_transaction_scope(tenant, user_id=user) as session:
-            # Only reconcile this authenticated user's expired leases. No
-            # globally sweeping, unscoped mutation from a consumer request.
+            # Never silently run without the admission constraints during a
+            # rolling upgrade or failed migration. No runtime schema writes.
+            readiness = await session.execute(text("""
+                SELECT COUNT(*) = 3
+                FROM pg_catalog.pg_index
+                WHERE indrelid = to_regclass('public.runtime_chat_runs')
+                  AND indexrelid IN (
+                    to_regclass('public.uq_runtime_chat_run_scoped_transport'),
+                    to_regclass('public.runtime_chat_runs_unresolved_idx'),
+                    to_regclass('public.runtime_chat_runs_submission_idx')
+                  )
+                  AND indisunique AND indisvalid AND indisready AND indislive
+            """), {})
+            if readiness.scalar_one_or_none() is not True:
+                raise RuntimeError("chat_run_admission_schema_unavailable")
+            # Reconcile expired leases only in the requested conversation.
+            # The unresolved-run unique index retains the fence when a lease
+            # becomes orphaned. A fresh transport/submission ID cannot bypass
+            # uncertainty, even during a concurrent stop or expiry transition.
             await session.execute(
                 text(
                     """
@@ -95,30 +165,31 @@ class SqlChatRunRepository:
                         updated_at = NOW()
                     WHERE tenant_id = CAST(:tenant AS uuid)
                       AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
                       AND status IN ('running', 'cancelling')
                       AND lease_expires_at <= NOW()
                     """
                 ),
-                {"tenant": tenant, "owner": user},
+                {"tenant": tenant, "owner": user, "conversation": conversation},
             )
             result = await session.execute(
                 text(
                     """
                     INSERT INTO public.runtime_chat_runs (
                         execution_id, tenant_id, user_id, conversation_id,
-                        transport_run_id, request_id, correlation_id,
+                        transport_run_id, request_id, correlation_id, submission_id,
                         status, lease_token, lease_expires_at
                     )
                     VALUES (
                         CAST(:execution AS uuid), CAST(:tenant AS uuid),
                         CAST(:owner AS uuid), CAST(:conversation AS uuid),
-                        :run_id, :request_id, :correlation_id,
+                        :run_id, :request_id, :correlation_id, :submission_id,
                         'running', CAST(:token AS uuid),
                         NOW() + make_interval(secs => :ttl)
                     )
-                    ON CONFLICT (
-                        tenant_id, user_id, conversation_id, transport_run_id
-                    ) DO NOTHING
+                    -- Transport replay, submission replay and a live
+                    -- or unresolved conversation execution prevents admission.
+                    ON CONFLICT DO NOTHING
                     RETURNING execution_id
                     """
                 ),
@@ -128,6 +199,7 @@ class SqlChatRunRepository:
                     "owner": user,
                     "conversation": conversation,
                     "run_id": transport_run_id,
+                    "submission_id": submission_id,
                     "request_id": request_id,
                     "correlation_id": correlation_id,
                     "token": token,
@@ -136,6 +208,18 @@ class SqlChatRunRepository:
             )
             if result.scalar_one_or_none() is None:
                 return None
+            if draft_revision is not None:
+                # Keep the original text durable until transcript completion.
+                # Failure raises inside this transaction, rolling back admission.
+                from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
+                    PostgresConversationRepository,
+                )
+                if not await PostgresConversationRepository.lock_matching_submission_draft(
+                    session, tenant_id=tenant, user_id=user,
+                    conversation_id=conversation, revision=draft_revision,
+                    submitted_text=submitted_text,
+                ):
+                    raise DraftSubmissionConflict("composer_draft_submission_conflict")
         return ChatRunLease(
             execution_id=execution,
             lease_token=token,
@@ -145,6 +229,7 @@ class SqlChatRunRepository:
             transport_run_id=transport_run_id,
             request_id=request_id,
             correlation_id=correlation_id,
+            submission_id=submission_id,
         )
 
     async def renew(self, lease: ChatRunLease) -> bool:
@@ -222,37 +307,35 @@ class SqlChatRunRepository:
         *,
         user_message_id: str,
         assistant_message_id: str,
+        expected_assistant_digest: str | None = None,
+        db_session: AsyncSession | None = None,
     ) -> bool:
         """Read-only proof that the completed run and BOTH messages committed.
 
         A terminal receipt is not inferred from a model COMPLETE chunk. The
         repository must have atomically committed the scoped run and the two
-        idempotent canonical transcript messages.
+        idempotent canonical transcript messages. Reconciliation supplies the
+        digest of the locked assistant row and its already-scoped transaction;
+        no second authorization or storage snapshot is opened in that case.
         """
         try:
             user_message = _uuid(user_message_id)
             assistant_message = _uuid(assistant_message_id)
         except (TypeError, ValueError, AttributeError):
             return False
-        async with async_transaction_scope(
-            lease.tenant_id, user_id=lease.user_id,
-        ) as session:
+        if expected_assistant_digest is not None and (
+            not isinstance(expected_assistant_digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", expected_assistant_digest) is None
+        ):
+            return False
+        if db_session is not None and expected_assistant_digest is None:
+            return False
+
+        async def observe(session: AsyncSession) -> bool:
             result = await session.execute(
-                text("""
+                text(f"""
                     SELECT 1
                     FROM public.runtime_chat_runs r
-                    JOIN conversations c
-                      ON c.conversation_id = r.conversation_id
-                     AND c.tenant_id = r.tenant_id
-                     AND c.user_id = r.user_id
-                    JOIN messages u
-                      ON u.conversation_id = c.conversation_id
-                     AND u.message_id::text = :user_message
-                     AND u.role = 'user'
-                    JOIN messages a
-                      ON a.conversation_id = c.conversation_id
-                     AND a.message_id::text = :assistant_message
-                     AND a.role = 'assistant'
                     WHERE r.execution_id = CAST(:execution AS uuid)
                       AND r.tenant_id = CAST(:tenant AS uuid)
                       AND r.user_id = CAST(:owner AS uuid)
@@ -264,9 +347,9 @@ class SqlChatRunRepository:
                       AND r.terminal_at IS NOT NULL
                       AND r.user_message_id = CAST(:user_message AS uuid)
                       AND r.assistant_message_id = CAST(:assistant_message AS uuid)
-                      AND r.assistant_message_digest IS NOT NULL
-                      AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
-                      AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
+                      AND (CAST(:expected_digest AS text) IS NULL
+                           OR r.assistant_message_digest = CAST(:expected_digest AS text))
+                      AND {_COMMITTED_TRANSCRIPT_EXISTS}
                     LIMIT 1
                 """),
                 {
@@ -276,9 +359,17 @@ class SqlChatRunRepository:
                     "correlation_id": lease.correlation_id,
                     "user_message": user_message,
                     "assistant_message": assistant_message,
+                    "expected_digest": expected_assistant_digest,
                 },
             )
             return result.scalar_one_or_none() is not None
+
+        if db_session is not None:
+            return await observe(db_session)
+        async with async_transaction_scope(
+            lease.tenant_id, user_id=lease.user_id,
+        ) as session:
+            return await observe(session)
 
     async def append_projected_event(
         self, lease: ChatRunLease, *, event: Mapping[str, Any],
@@ -664,6 +755,7 @@ class SqlChatRunRepository:
 
     async def completed_agent_activity(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
+        db_session: Optional[AsyncSession] = None,
     ) -> dict[str, tuple[str, str, str, list[dict[str, Any]]]]:
         """Owner-scoped, finalized journal steps correlated to saved messages.
 
@@ -674,7 +766,10 @@ class SqlChatRunRepository:
             "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
             "conversation": _uuid(conversation_id),
         }
-        async with async_transaction_scope(scope["tenant"], user_id=scope["owner"]) as session:
+        async with (
+            nullcontext(db_session) if db_session is not None else
+            async_transaction_scope(scope["tenant"], user_id=scope["owner"])
+        ) as session:
             result = await session.execute(text("""
                 SELECT r.assistant_message_id::text AS message_id,
                        r.request_id, r.assistant_message_digest,
@@ -763,6 +858,7 @@ class SqlChatRunRepository:
 
     async def completed_replay_attestations(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
+        db_session: Optional[AsyncSession] = None,
     ) -> dict[str, tuple[str, str]]:
         """Read message ID to (request ID, saved digest) under owner RLS.
 
@@ -775,36 +871,21 @@ class SqlChatRunRepository:
             "owner": _uuid(user_id),
             "conversation": _uuid(conversation_id),
         }
-        async with async_transaction_scope(
-            scope["tenant"], user_id=scope["owner"],
+        async with (
+            nullcontext(db_session) if db_session is not None else
+            async_transaction_scope(scope["tenant"], user_id=scope["owner"])
         ) as session:
             result = await session.execute(
-                text("""
+                text(f"""
                     SELECT r.assistant_message_id::text AS message_id,
                            r.request_id, r.assistant_message_digest
                     FROM public.runtime_chat_runs r
-                    JOIN conversations c
-                      ON c.conversation_id = r.conversation_id
-                     AND c.tenant_id = r.tenant_id
-                     AND c.user_id = r.user_id
-                    JOIN messages a
-                      ON a.conversation_id = c.conversation_id
-                     AND a.message_id::text = r.assistant_message_id::text
-                     AND a.role = 'assistant'
-                    JOIN messages u
-                      ON u.conversation_id = c.conversation_id
-                     AND u.message_id::text = r.user_message_id::text
-                     AND u.role = 'user'
                     WHERE r.tenant_id = CAST(:tenant AS uuid)
                       AND r.user_id = CAST(:owner AS uuid)
                       AND r.conversation_id = CAST(:conversation AS uuid)
                       AND r.status = 'completed'
                       AND r.terminal_at IS NOT NULL
-                      AND r.user_message_id IS NOT NULL
-                      AND r.assistant_message_id IS NOT NULL
-                      AND r.assistant_message_digest ~ '^[0-9a-f]{64}$'
-                      AND a.message_metadata::jsonb ->> 'request_id' = r.request_id
-                      AND u.message_metadata::jsonb ->> 'request_id' = r.request_id
+                      AND {_COMMITTED_TRANSCRIPT_EXISTS}
                     ORDER BY r.created_at, r.execution_id
                     LIMIT 501
                 """),
@@ -956,12 +1037,15 @@ class SqlChatRunRepository:
             scope["tenant"], user_id=scope["owner"],
         ) as session:
             result = await session.execute(
-                text("""
+                text(f"""
                     SELECT status,
                            cancel_requested_at IS NOT NULL AS stop_requested,
                            terminal_at IS NOT NULL AS terminal_recorded,
-                           lease_expires_at > clock_timestamp() AS lease_live
-                    FROM public.runtime_chat_runs
+                           lease_expires_at > clock_timestamp() AS lease_live,
+                       CASE WHEN r.status = 'completed'
+                            THEN {_COMMITTED_TRANSCRIPT_EXISTS}
+                            ELSE TRUE END AS completion_bound
+                    FROM public.runtime_chat_runs r
                     WHERE tenant_id = CAST(:tenant AS uuid)
                       AND user_id = CAST(:owner AS uuid)
                       AND conversation_id = CAST(:conversation AS uuid)
@@ -973,6 +1057,10 @@ class SqlChatRunRepository:
             row = result.mappings().one_or_none()
         if row is None:
             return None
+        return self._project_run_status(row)
+
+    @staticmethod
+    def _project_run_status(row: Mapping[str, Any]) -> dict[str, Any]:
         status = str(row["status"])
         if status not in {
             "running", "cancelling", "cancelled", "completed",
@@ -983,6 +1071,8 @@ class SqlChatRunRepository:
         terminal = row["terminal_recorded"] is True
         if status in {"completed", "cancelled", "failed", "orphaned"} and not terminal:
             raise RuntimeError("unverified_chat_run_terminal")
+        if status == "completed" and row.get("completion_bound") is not True:
+            raise RuntimeError("unverified_chat_run_completion_binding")
         if status in {"running", "cancelling"} and row["lease_live"] is not True:
             status = "interrupted"
         return {
@@ -992,6 +1082,58 @@ class SqlChatRunRepository:
                 status == "cancelled" and requested and terminal
             ),
         }
+
+    async def read_recovery_run(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+        db_session: Optional[AsyncSession] = None,
+    ) -> Optional[dict[str, Any]]:
+        """Observe the active run or newest unresolved terminal without executing.
+
+        Unresolved rows take precedence over historical resolved rows. An
+        orphaned run is not a verified completion. No lease or request payload leaves
+        this repository; neither identifier grants authority.
+        """
+        scope = {
+            "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
+            "conversation": _uuid(conversation_id),
+        }
+        async with (
+            nullcontext(db_session) if db_session is not None else
+            async_transaction_scope(scope["tenant"], user_id=scope["owner"])
+        ) as session:
+            result = await session.execute(text(f"""
+                SELECT transport_run_id, submission_id, status,
+                       cancel_requested_at IS NOT NULL AS stop_requested,
+                       terminal_at IS NOT NULL AS terminal_recorded,
+                       lease_expires_at > clock_timestamp() AS lease_live,
+                       CASE WHEN r.status = 'completed'
+                            THEN {_COMMITTED_TRANSCRIPT_EXISTS}
+                            ELSE TRUE END AS completion_bound
+                FROM public.runtime_chat_runs r
+                WHERE tenant_id = CAST(:tenant AS uuid)
+                  AND user_id = CAST(:owner AS uuid)
+                  AND conversation_id = CAST(:conversation AS uuid)
+                ORDER BY CASE WHEN status IN ('running', 'cancelling', 'orphaned')
+                              THEN 0 ELSE 1 END,
+                         created_at DESC, execution_id DESC
+                LIMIT 1
+            """), scope)
+            row = result.mappings().one_or_none()
+        if row is None:
+            return None
+        status = self._project_run_status(row)["status"]
+        if status in {"completed", "failed", "cancelled"}:
+            return None
+        run_id, submission_id = row["transport_run_id"], row["submission_id"]
+        if (
+            not isinstance(run_id, str) or not _RUN_ID_PATTERN.fullmatch(run_id)
+            or (submission_id is not None and (
+                not isinstance(submission_id, str)
+                or not _RUN_ID_PATTERN.fullmatch(submission_id)
+            ))
+        ):
+            raise RuntimeError("unverified_chat_run_recovery_identity")
+        return {"runId": run_id, "submissionId": submission_id, "status": status}
 
     async def cancel_requested(self, lease: ChatRunLease) -> bool:
         """Observe an authorized stop without accepting a caller's SDK token."""

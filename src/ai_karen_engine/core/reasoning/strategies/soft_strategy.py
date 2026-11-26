@@ -8,8 +8,9 @@ plugins, or memory stores.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, List
+from typing import Any, Awaitable, Callable, List
 
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningAssessment,
     ReasoningBudget,
@@ -20,6 +21,7 @@ from ai_karen_engine.core.reasoning.contracts import (
     ReasoningResult,
     ReasoningStatus,
 )
+from ai_karen_engine.core.reasoning.soft_reasoning.contracts import SoftExplorationTrace
 from ai_karen_engine.core.reasoning.soft_reasoning.exploration import (
     SoftExplorationEngine,
     SoftReasoningBudgetError,
@@ -50,8 +52,12 @@ class SoftReasoner(ReasoningStrategyEngine):
     }
     determinism = "seeded_stochastic"
 
-    def __init__(self, engine: SoftExplorationEngine) -> None:
+    def __init__(
+        self, engine: SoftExplorationEngine, *,
+        run_exploration: Callable[..., Awaitable[SoftExplorationTrace]] | None = None,
+    ) -> None:
         self._engine = engine
+        self._run_exploration = run_exploration
 
     async def execute(
         self,
@@ -86,21 +92,34 @@ class SoftReasoner(ReasoningStrategyEngine):
             for item in evidence
             if isinstance(item.content, str) and item.content
         )
+        attempts = 0
+
+        def observe_attempt() -> None:
+            nonlocal attempts
+            attempts += 1
+
         try:
-            trace = await asyncio.to_thread(
-                self._engine.explore,
-                prompt,
+            kwargs = dict(
                 objective=objective,
                 evidence=evidence_text,
                 max_model_calls=budget.max_model_calls,
                 max_output_tokens=budget.max_output_tokens,
                 correlation_id=context.correlation_id,
+                on_model_attempt=observe_attempt,
             )
+            if self._run_exploration is not None:
+                trace = await self._run_exploration(prompt, **kwargs)
+            else:
+                # Explicit research-only composition retains compatibility.
+                trace = await asyncio.to_thread(self._engine.explore, prompt, **kwargs)
+        except NativeRetirementUnverified:
+            raise
         except SoftReasoningUnavailable as exc:
             return self._failed(
                 str(exc),
                 ReasoningErrorCode.STRATEGY_UNAVAILABLE,
                 evidence=evidence,
+                model_attempts=attempts,
                 status=ReasoningStatus.ABSTAINED,
             )
         except SoftReasoningBudgetError as exc:
@@ -108,6 +127,7 @@ class SoftReasoner(ReasoningStrategyEngine):
                 str(exc),
                 ReasoningErrorCode.BUDGET_EXCEEDED,
                 evidence=evidence,
+                model_attempts=attempts,
                 status=ReasoningStatus.ABSTAINED,
             )
         except Exception as exc:
@@ -115,15 +135,21 @@ class SoftReasoner(ReasoningStrategyEngine):
                 f"Soft exploration failed: {exc}",
                 ReasoningErrorCode.STRATEGY_FAILURE,
                 evidence=evidence,
+                model_attempts=attempts,
+                status=(
+                    ReasoningStatus.ABSTAINED if self._run_exploration is not None
+                    else ReasoningStatus.FAILED
+                ),
             )
 
         best = trace.best_candidate
-        total_model_calls = int(trace.model_calls) + int(trace.verifier_calls)
-        if total_model_calls > budget.max_model_calls:
+        total_model_calls = 1 + int(trace.model_calls) + int(trace.verifier_calls)
+        if total_model_calls > budget.max_model_calls or total_model_calls != attempts:
             return self._failed(
                 "Soft reasoning exceeded the authorized total model-call budget",
                 ReasoningErrorCode.BUDGET_EXCEEDED,
                 evidence=evidence,
+                model_attempts=attempts,
                 status=ReasoningStatus.ABSTAINED,
             )
 
@@ -156,6 +182,7 @@ class SoftReasoner(ReasoningStrategyEngine):
                 "candidate_count": len(trace.candidates),
                 "generation_calls": trace.model_calls,
                 "verifier_calls": trace.verifier_calls,
+                "reference_calls": 1,
                 "model_calls": total_model_calls,
                 "batches": trace.batches,
             },
@@ -191,6 +218,7 @@ class SoftReasoner(ReasoningStrategyEngine):
                 "candidate_count": len(trace.candidates),
                 "generation_calls": trace.model_calls,
                 "verifier_calls": trace.verifier_calls,
+                "reference_calls": 1,
                 # ReasoningExecutor consumes this field as the authorized model
                 # call accounting contract. Verifier generations are not free.
                 "model_calls": total_model_calls,
@@ -231,6 +259,7 @@ class SoftReasoner(ReasoningStrategyEngine):
         *,
         evidence: List[ReasoningEvidence],
         status: ReasoningStatus = ReasoningStatus.FAILED,
+        model_attempts: int = 0,
     ) -> ReasoningResult:
         return ReasoningResult(
             reasoning_id="",
@@ -246,7 +275,9 @@ class SoftReasoner(ReasoningStrategyEngine):
             suggested_next_actions=[],
             status=status.value,
             error_code=error_code.value,
-            diagnostics={"strategy": "soft_exploration", "error": reason},
+            diagnostics={
+                "strategy": "soft_exploration", "error": reason, "model_calls": model_attempts,
+            },
             memory_candidates=[],
         )
 

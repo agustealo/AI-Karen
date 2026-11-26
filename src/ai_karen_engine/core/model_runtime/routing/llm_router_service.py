@@ -21,7 +21,6 @@ from typing import (
     Iterable,
     List,
     Optional,
-    Sequence,
     Set,
     Union,
 )
@@ -33,6 +32,7 @@ from ai_karen_engine.config.runtime_provider_manager import RuntimeProviderManag
 from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
 
 from ai_karen_engine.core.model_runtime.runtime_contracts import ProviderRouteDecision
+from ai_karen_engine.core.model_runtime.provider_contracts import ProviderProcessingError as ProviderProcessingError
 # from ai_karen_engine.core.model_runtime.runtime_registry_adapter import get_registry, LLMRegistry  <- Moved to local scope
 from ai_karen_engine.core.model_runtime.llm_adapter import LLMProviderBase
 from ai_karen_engine.services.response import ResponseContract, ResponsePromptBuilder, ResponseSanitizer
@@ -1859,28 +1859,6 @@ class LLMRouter:
     def default(cls) -> "LLMRouter":
         """Create default LLM Router instance"""
         return cls()
-
-
-# Helper exceptions
-class ProviderProcessingError(RuntimeError):
-    """Raised when a provider fails after exhausting retry attempts."""
-
-    def __init__(self, provider_name: str, errors: Sequence[BaseException]):
-        self.provider_name = provider_name
-        self.errors = list(errors)
-        self.last_error: Optional[BaseException] = (
-            self.errors[-1] if self.errors else None
-        )
-
-        unique_messages: List[str] = []
-        for error in self.errors:
-            message = str(error)
-            if message and message not in unique_messages:
-                unique_messages.append(message)
-
-        attempts = len(self.errors) or 1
-        summary = "; ".join(unique_messages) if unique_messages else "unknown error"
-        super().__init__(f"{provider_name} failed after {attempts} attempts: {summary}")
 
 
 # Global router instance

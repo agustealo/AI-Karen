@@ -182,3 +182,50 @@ async def test_kcon769_non_streaming_provider_has_no_invented_first_delta(monkey
     result = await module.OpenAICompatibleEngine().generate(_task(sink))
     assert result.text == "Nonstream verified response."
     assert result.metadata["provider_first_delta_ms"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("deny_at", [1, 2, 3])
+async def test_private_stream_revocation_stops_delivery_and_closes_upstream(
+    monkeypatch, deny_at,
+):
+    from ai_karen_engine.core.expression.errors import PrivateEvidenceAuthorizationError
+
+    _patch_registry(monkeypatch)
+    delivered = []
+    closed = []
+    checks = 0
+
+    async def stream(*_args, **kwargs):
+        assert kwargs["local_only"] is True
+        try:
+            yield ProviderStreamEvent(kind="delta", delta="First ")
+            yield ProviderStreamEvent(kind="delta", delta="second")
+            yield ProviderStreamEvent(kind="complete", result=ProviderExecutionResult(
+                text="First second",
+                model="smollm2:135m",
+                provider_id="ollama-local",
+                runtime_engine="ollama",
+                usage={},
+                finish_reason="stop",
+            ))
+        finally:
+            closed.append(True)
+
+    async def sink(text):
+        delivered.append(text)
+
+    async def authorize():
+        nonlocal checks
+        checks += 1
+        # The initial dispatch check is allowed; deny at a delta or terminal receipt.
+        return checks <= deny_at
+
+    monkeypatch.setattr(module, "stream_provider_endpoint", stream)
+    task = _task(sink)
+    task.local_only = True
+    task.authorize_private_evidence_attempt = authorize
+    with pytest.raises(PrivateEvidenceAuthorizationError, match="attachment_session_denied"):
+        await module.OpenAICompatibleEngine().generate(task)
+    assert delivered == ["First ", "second"][:deny_at - 1]
+    assert closed == [True]

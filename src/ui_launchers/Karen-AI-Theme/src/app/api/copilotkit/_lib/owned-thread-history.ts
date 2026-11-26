@@ -152,6 +152,24 @@ async function readKarenGovernedHistory(
       (!textContinuation && data.continuation_authorized === true)) {
     return failure("Invalid governed conversation history", 502);
   }
+  // Governed history must carry an explicit recovery observation. Missing
+  // evidence from an older backend is not proof that no run is unresolved.
+  const recovery = data.recovery_run;
+  let recoveryRun: { runId: string; submissionId: string | null; status: string } | null = null;
+  if (recovery !== null) {
+    if (!recovery || typeof recovery !== "object" || Array.isArray(recovery)) {
+      return failure("Run recovery state unavailable", 503);
+    }
+    const run = recovery as Record<string, unknown>;
+    const validId = (value: unknown): value is string =>
+      typeof value === "string" && /^[A-Za-z0-9_-]{1,100}$/.test(value);
+    if (!validId(run.runId) || (run.submissionId !== null && !validId(run.submissionId)) ||
+        !["running", "cancelling", "interrupted", "orphaned"].includes(String(run.status)) ||
+        typeof run.status !== "string") {
+      return failure("Run recovery state unavailable", 503);
+    }
+    recoveryRun = { runId: run.runId, submissionId: run.submissionId as string | null, status: run.status };
+  }
   const allowedRoles = new Set(["user", "assistant"]);
   const messages: Array<{ id: string; role: "user" | "assistant"; content: string }> = [];
   const owners = new Map<string, string>();
@@ -190,13 +208,13 @@ async function readKarenGovernedHistory(
   return NextResponse.json(
     textContinuation
       ? {
-        threadId, messages, replayEvents: [],
+        threadId, messages, replayEvents: [], recovery_run: recoveryRun,
         text_only: true, continuation_authorized: true,
         omitted_rich_message_count: data.omitted_rich_message_count,
         history_window_has_older: data.history_window_has_older,
         history_window_message_limit: 500,
       }
-      : { threadId, messages, replayEvents },
+      : { threadId, messages, replayEvents, recovery_run: recoveryRun },
     { headers: { "Cache-Control": "private, no-store" } },
   );
 }

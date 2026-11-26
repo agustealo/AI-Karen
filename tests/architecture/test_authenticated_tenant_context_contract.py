@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import AsyncMock
+
+import pytest
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -74,7 +77,7 @@ def test_missing_tenant_cannot_reach_chat_runtime_through_shared_dependency() ->
     dependencies = DEPENDENCIES.read_text(encoding="utf-8")
     chat = CHAT_ROUTE.read_text(encoding="utf-8")
 
-    assert "return _require_identity_scope(UserData.from_dict(user_dict))" in dependencies
+    assert "return _require_identity_scope(UserData.ensure(user_dict))" in dependencies
     assert "Depends(bypass_user_context_func)" in chat
     assert "_require_execution_identity(user)" in chat
 
@@ -301,3 +304,100 @@ def test_conversation_routes_do_not_expose_legacy_cross_user_analytics_surface()
     assert '@router.get("/analytics"' not in source
     assert "async def get_analytics(" not in source
     assert "_require_admin_role" in source
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("typed", [False, True])
+@pytest.mark.parametrize("tenant", ["", "default", "dev-tenant", "tenant-123"])
+async def test_shared_dependency_preserves_typed_principal_and_enforces_scope(
+    monkeypatch, typed, tenant,
+):
+    from fastapi import HTTPException
+    from ai_karen_engine.auth import auth_middleware
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.security.auth_config import auth_config
+    from ai_karen_engine.core.services.dependencies import get_user_context
+
+    payload = {"user_id": "user-123", "tenant_id": tenant}
+    principal = UserData.from_dict(payload) if typed else payload
+    monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+    monkeypatch.setattr(auth_middleware, "get_current_user", AsyncMock(return_value=principal))
+    if tenant != "tenant-123":
+        with pytest.raises(HTTPException) as exc:
+            await get_user_context(None)
+        assert exc.value.status_code == 401
+        return
+    result = await get_user_context(None)
+    assert isinstance(result, UserData)
+    assert result.user_id == "user-123"
+    assert result.tenant_id == tenant
+    if typed:
+        assert result is principal
+
+
+def test_dictionary_conversion_does_not_import_private_session_attributes():
+    from ai_karen_engine.auth.models import UserData
+
+    principal = UserData.ensure({
+        "user_id": "user-123",
+        "tenant_id": "tenant-123",
+        "_session_witness": "forged",
+    })
+    assert "_session_witness" not in principal
+    assert "_session_witness" not in vars(principal)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("execution", [False, True])
+async def test_witness_activation_is_explicit_not_endpoint_name(monkeypatch, execution):
+    from types import SimpleNamespace
+
+    from ai_karen_engine.auth import auth_middleware
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.security.auth_config import auth_config
+    from ai_karen_engine.core.services.dependencies import (
+        get_chat_execution_context,
+        get_user_context,
+    )
+
+    principal = UserData.from_dict({"user_id": "user-123", "tenant_id": "tenant-123"})
+    authenticate = AsyncMock(return_value=principal)
+    monkeypatch.setattr(auth_config, "should_bypass_auth", lambda: False)
+    monkeypatch.setattr(auth_middleware, "get_current_user", authenticate)
+    endpoint_name = "renamed_chat_endpoint" if execution else "create_chat_response"
+    request = SimpleNamespace(
+        scope={"route": SimpleNamespace(endpoint=SimpleNamespace(__name__=endpoint_name))}
+    )
+    dependency = get_chat_execution_context if execution else get_user_context
+    assert await dependency(request) is principal
+    if execution:
+        authenticate.assert_awaited_once_with(request, issue_witness=True)
+    else:
+        authenticate.assert_awaited_once_with(request)
+
+
+def test_chat_execution_routes_declare_witness_dependency():
+    import ast
+
+    module = ast.parse(CHAT_ROUTE.read_text(encoding="utf-8"))
+    expected = {
+        "create_chat_response",
+        "stream_chat_response",
+        "stream_ag_ui_chat",
+        "resume_approved_chat",
+    }
+    actual = set()
+    for node in module.body:
+        if not isinstance(node, ast.AsyncFunctionDef):
+            continue
+        for default in (*node.args.defaults, *node.args.kw_defaults):
+            if (
+                isinstance(default, ast.Call)
+                and isinstance(default.func, ast.Name)
+                and default.func.id == "Depends"
+                and default.args
+                and isinstance(default.args[0], ast.Name)
+                and default.args[0].id == "get_chat_execution_context"
+            ):
+                actual.add(node.name)
+    assert actual == expected

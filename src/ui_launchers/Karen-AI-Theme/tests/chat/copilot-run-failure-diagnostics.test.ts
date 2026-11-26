@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getCopilotRunFailureMessage } from '@/components/chat/const/getDegradedResponseMessage';
+import { getCopilotRunFailureMessage, isCopilotRunFinalityUnverified } from '@/components/chat/const/getDegradedResponseMessage';
 
 describe('KCHAT safe CopilotKit runtime error diagnostics', () => {
   it('maps only known backend AG-UI error codes to actionable guidance', () => {
@@ -49,4 +49,13 @@ describe('KCHAT safe CopilotKit runtime error diagnostics', () => {
       expect(result).not.toContain('not saved');
     }
   });
+});
+
+
+it('recognizes only the canonical uncertainty code in SDK and HTTP envelopes', () => {
+  const failure = { response: { data: { error_code: 'CHAT_TRANSCRIPT_FINALITY_UNVERIFIED' } } };
+  expect(isCopilotRunFinalityUnverified(failure)).toBe(true);
+  expect(getCopilotRunFailureMessage(failure)).toContain('final outcome');
+  expect(isCopilotRunFinalityUnverified({ message: 'CHAT_TRANSCRIPT_FINALITY_UNVERIFIED' })).toBe(false);
+  expect(isCopilotRunFinalityUnverified({ status: 409 })).toBe(false);
 });

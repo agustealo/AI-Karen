@@ -728,3 +728,52 @@ async def test_projector_does_not_rewrite_idempotent_canonical_source():
     )
     assert result["persisted"] == 1
     assert projector.calls[0]["source_ref"] == "original-conversation"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["ordinary", "authorized", "revoked", "foreign", "forged", "vault_denied"])
+async def test_private_formation_mutation_boundary(mode, monkeypatch):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+    tenant = "00000000-0000-0000-0000-000000000001"
+    user = "00000000-0000-0000-0000-000000000002"
+    scope = dict(tenant_id=tenant, user_id=user, session_id="session-1",
+                 request_id="req-1", correlation_id="corr-1")
+    execution = ChatExecutionContext(**scope)
+    monkeypatch.setattr(ChatExecutionContext, "has_runtime_attachment_scope", lambda self: True)
+    validation = AsyncMock(side_effect=PermissionError("revoked") if mode == "revoked" else None)
+    monkeypatch.setattr(ChatExecutionContext, "revalidate_runtime_attachment_session", validation)
+    if mode == "foreign":
+        execution = ChatExecutionContext(**{**scope, "tenant_id": "foreign"})
+    if mode == "forged":
+        execution = SimpleNamespace(**scope)
+    signal = MemorySignal(text="Remember this durable fact", signal_type="fact", confidence=0.9)
+    vault = _RejectingVault() if mode == "vault_denied" else _Vault()
+    projector = _Projector()
+    service = _service(vault, projector, signal)
+    episode_store = SimpleNamespace(load=AsyncMock(return_value=None), save=AsyncMock(return_value=True))
+    service._episode_state_store = episode_store
+
+    result = await service.process_interaction(
+        text=signal.text, **scope,
+        policy_context={"memory_write_authorized": True},
+        **({} if mode == "ordinary" else {"private_execution": execution}),
+    )
+    if mode in {"revoked", "foreign", "forged", "vault_denied"}:
+        assert result["status"] == "rejected"
+        assert result["persisted"] == 0
+        assert not projector.calls
+    else:
+        assert result["persisted"] == 1
+        assert len(projector.calls) == 1
+        assert projector.calls[0].get("project_episode_state", False) is (mode == "authorized")
+        assert vault.calls[0][1].private_execution is (None if mode == "ordinary" else execution)
+    if mode == "ordinary":
+        episode_store.save.assert_awaited_once()
+    else:
+        episode_store.save.assert_not_awaited()
+    if mode in {"revoked", "foreign", "forged"}:
+        assert not vault.calls
+        episode_store.load.assert_not_awaited()

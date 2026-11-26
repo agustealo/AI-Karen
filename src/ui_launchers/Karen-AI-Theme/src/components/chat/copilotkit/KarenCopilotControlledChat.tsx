@@ -17,7 +17,7 @@ import { KarenComposerFileExplorer } from "../KarenComposerFileExplorer";
 import { KarenComposerAgentDiscovery } from "../KarenComposerAgentDiscovery";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
-import { getCopilotRunFailureMessage } from "../const/getDegradedResponseMessage";
+import { getCopilotRunFailureMessage, isCopilotRunFinalityUnverified } from "../const/getDegradedResponseMessage";
 
 import { useKarenScopedAgent } from "./KarenCopilotHistoryGate";
 import {
@@ -72,7 +72,7 @@ export function KarenCopilotControlledChat({
   onOpenAgents?: () => void;
   fileExplorerPluginId?: string;
 }) {
-  const { agent, isReady } = useKarenScopedAgent();
+  const { agent, isReady, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission } = useKarenScopedAgent();
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
   const [draftRecoveryFeedback, setDraftRecoveryFeedback] = useState<string | null>(null);
@@ -82,6 +82,26 @@ export function KarenCopilotControlledChat({
   const lastStopRunId = useRef<string | null>(null);
   const checkingStatusRef = useRef(false);
   const activeRunId = useRef<string | null>(null);
+  // Presentation-only hold: no inference or draft clearance while the
+  // canonical run outcome is unresolved. This is not a backend run grant.
+  type FinalityHold = { conversationId: string; runId: string | null };
+  const finalityHoldRef = useRef<FinalityHold | null>(null);
+  const [finalityHold, setFinalityHold] = useState<FinalityHold | null>(null);
+  const [finalityFeedback, setFinalityFeedback] = useState<string | null>(null);
+  const [checkingFinality, setCheckingFinality] = useState(false);
+  const checkingFinalityRef = useRef(false);
+  const observedRunId = useRef<string | null>(null);
+  const holdUnverifiedRun = useCallback((failure: unknown, runId: string | null) => {
+    if (!isCopilotRunFinalityUnverified(failure)) return false;
+    if (finalityHoldRef.current?.conversationId !== conversationId) {
+      const hold = { conversationId, runId };
+      finalityHoldRef.current = hold;
+      setFinalityHold(hold);
+      setFinalityFeedback(null);
+    }
+    setError(getCopilotRunFailureMessage(failure));
+    return true;
+  }, [conversationId]);
   // A run may finalize while its exact-stop HTTP request is in flight.
   // Increment only when identity changes, not when the SDK stream closes.
   const runGeneration = useRef(0);
@@ -93,8 +113,10 @@ export function KarenCopilotControlledChat({
     draft, setText: setDraftText, readText: readDraftText,
     attachments, updateAttachments,
     status: draftStatus, synced: draftSynced, failureStatus: draftFailureStatus, prepareSubmission,
+    prepareRevisionSubmission, refreshSubmittedDraft,
     retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
+  const rejectedAttachmentClear = useRef<object | null>(null);
   const onDraftChange = useCallback((value: string) => {
     if (typeof value !== "string" || value.length > MAX_INPUT_CHARS ||
         new TextEncoder().encode(value).length > 262144) {
@@ -106,8 +128,8 @@ export function KarenCopilotControlledChat({
     if (value === readDraftText()) return;
     // An optimistic empty clear dispatched by CopilotKit's input handler during
     // message send must not clobber the authoritative draft or mark it dirty.
-    if (submitPending.current && value === "") return;
-    setError(null);
+    if ((submitPending.current || rejectedAttachmentClear.current) && value === "") return;
+    if (!finalityHoldRef.current) setError(null);
     setDraftText(value);
   }, [readDraftText, setDraftText]);
   const draftPort: KarenVoiceDraftPort = {
@@ -206,14 +228,22 @@ export function KarenCopilotControlledChat({
         if (event.threadId !== conversationId || !RUN_ID.test(event.runId)) return;
         runGeneration.current += 1;
         activeRunId.current = event.runId;
+        observedRunId.current = event.runId;
         lastStopRunId.current = null;
         setStopStatus(null);
         setCheckableRunId(null);
-        setError(null);
+        if (!finalityHoldRef.current) setError(null);
       },
       onRunFinalized: () => { activeRunId.current = null; },
       onRunFailed: (failure: unknown) => {
-        const failedRunId = activeRunId.current;
+        // Finalized may precede failed. Recover the observed ID only while
+        // the explicit invocation or that exact stop remains in flight.
+        const observed = observedRunId.current;
+        const failedRunId = activeRunId.current ?? (
+          observed !== null && (sdkInvocationPending.current ||
+            pendingStopId.current === observed || lastStopRunId.current === observed)
+            ? observed : null
+        );
         const failedBeforeStart = failedRunId === null && sdkInvocationPending.current;
         activeRunId.current = null;
         // SDK may emit RUN_ERROR before RUN_STARTED, or resolve runAgent()
@@ -223,9 +253,14 @@ export function KarenCopilotControlledChat({
         const unconfirmedStop = failedRunId !== null &&
           (pendingStopId.current === failedRunId ||
            lastStopRunId.current === failedRunId);
-        if (mounted.current && !unconfirmedStop &&
-            (failedRunId !== null || failedBeforeStart)) {
-          setError(getCopilotRunFailureMessage(failure));
+        if (mounted.current && (failedRunId !== null || failedBeforeStart)) {
+          // A stop request never proves transcript finality. Suppress only
+          // ordinary transport failures caused by a stop, not explicit
+          // canonical uncertainty.
+          if (!holdUnverifiedRun(failure, failedRunId) &&
+              !unconfirmedStop && !finalityHoldRef.current) {
+            setError(getCopilotRunFailureMessage(failure));
+          }
         }
       },
     });
@@ -234,13 +269,27 @@ export function KarenCopilotControlledChat({
       activeRunId.current = null;
       pendingStopId.current = null;
       lastStopRunId.current = null;
+      observedRunId.current = null;
       sdkInvocationPending.current = false;
       subscription.unsubscribe();
     };
-  }, [agent, conversationId, isReady]);
+  }, [agent, conversationId, isReady, holdUnverifiedRun]);
 
   const onSubmitMessage = useCallback((value: string) => {
     const text = typeof value === "string" ? value.trim() : "";
+    if (attachments.length > 0) {
+      // The SDK synchronously emits onChange("") after onSubmitMessage even
+      // when admission is rejected. Fence only that turn, not later user edits.
+      const rejected = {};
+      rejectedAttachmentClear.current = rejected;
+      queueMicrotask(() => {
+        if (rejectedAttachmentClear.current === rejected) rejectedAttachmentClear.current = null;
+      });
+    }
+    if (recoveryRun || finalityHoldRef.current?.conversationId === conversationId) {
+      setError("The previous run is unverified. Check its status and saved history before sending another message.");
+      return;
+    }
     if (attachments.length > 0) {
       setError("Sending attached files is not supported yet. Remove the attachments before sending your message.");
       return;
@@ -260,29 +309,36 @@ export function KarenCopilotControlledChat({
     setSubmitting(true);
     reportBusy(true);
     setError(null);
-    // This is an explicit user gesture. Durable draft clearance is a
-    // separate canonical CAS write and must succeed before inference starts.
+    // This is an explicit user gesture. Governed runs retain the original
+    // verified draft revision until the backend atomically commits the turn.
+    // Only legacy non-governed history uses the existing pre-run clear.
     void (async () => {
       try {
-        if (!await prepareSubmission(text) || !mounted.current ||
-            agent.threadId !== conversationId) {
+        const submissionId = revisionBoundSubmission
+          ? await prepareRevisionSubmission(text)
+          : await prepareSubmission(text) ? crypto.randomUUID() : null;
+        if (!submissionId || !mounted.current || agent.threadId !== conversationId) {
           if (mounted.current) {
-            setError("The draft could not be safely saved and cleared. No message was sent.");
+            setError(revisionBoundSubmission
+              ? "The original draft revision could not be verified. No message was sent."
+              : "The draft could not be safely saved and cleared. No message was sent.");
           }
           return;
         }
         try {
           agent.addMessage({
-            id: crypto.randomUUID(),
+            id: submissionId,
             role: "user",
             content: text,
           });
         } catch {
           if (mounted.current) {
-            if (!readDraftText()) {
+            if (revisionBoundSubmission && readDraftText().trim() === text) {
+              // The original saved revision still exists; do not rewrite it.
+            } else if (!readDraftText()) {
               setDraftText(text);
             } else {
-              // Never clobber a newer edit while a durable clear is in flight.
+              // Never clobber a newer edit while a durable handoff is in flight.
               setCopyFeedback(null);
               setFailedSubmission(text);
             }
@@ -292,6 +348,7 @@ export function KarenCopilotControlledChat({
         }
         // This flag is only for observing a terminal SDK error before
         // RUN_STARTED. It is not used for cancel, persistence, or tool policy.
+        observedRunId.current = null;
         sdkInvocationPending.current = true;
         try {
           await copilotkit.runAgent({ agent });
@@ -303,10 +360,19 @@ export function KarenCopilotControlledChat({
             // duplicate submission. Only pre-queue failures restore drafts.
             // Newer edits remain untouched; the user must inspect canonical
             // history before choosing whether to send again.
-            setError(getCopilotRunFailureMessage(failure));
+            if (!holdUnverifiedRun(failure, observedRunId.current) &&
+                !finalityHoldRef.current) {
+              setError(getCopilotRunFailureMessage(failure));
+            }
           }
         } finally {
           sdkInvocationPending.current = false;
+          if (revisionBoundSubmission && mounted.current && agent.threadId === conversationId) {
+            // Neither SDK resolution nor RUN_ERROR is permission to clear a
+            // draft. Read the authenticated server state, including any
+            // retirement committed despite a lost transport receipt.
+            await refreshSubmittedDraft();
+          }
         }
       } finally {
         submitPending.current = false;
@@ -319,8 +385,54 @@ export function KarenCopilotControlledChat({
   }, [
     agent, conversationId, copilotkit, isReady, prepareSubmission,
     draftStatus, readDraftText, setDraftText, failedSubmission, attachments.length,
-    reportBusy,
+    reportBusy, holdUnverifiedRun, recoveryRun, revisionBoundSubmission,
+    prepareRevisionSubmission, refreshSubmittedDraft,
   ]);
+
+  const checkUnverifiedFinality = useCallback(() => {
+    const hold = finalityHoldRef.current;
+    if (!hold || hold.conversationId !== conversationId ||
+        !hold.runId || !RUN_ID.test(hold.runId) || checkingFinalityRef.current ||
+        submitPending.current || agent.isRunning || agent.threadId !== conversationId) return;
+    checkingFinalityRef.current = true;
+    setCheckingFinality(true);
+    setFinalityFeedback(null);
+    void (async () => {
+      try {
+        const result: unknown = await apiClient.get<RunStatus>(
+          "/api/copilotkit/agent/default/runs/" + conversationId +
+            "/" + hold.runId + "/status",
+        );
+        if (!mounted.current || finalityHoldRef.current !== hold) return;
+        if (!validRunStatus(result)) throw new Error("Invalid run status");
+        // Interrupted is an expired lease observation, not a durable
+        // terminal receipt. Orphaned work may still need operator recovery.
+        if (!["completed", "failed", "cancelled"].includes(result.status)) {
+          setFinalityFeedback("No verified completion or confirmed failure is available. Sending remains blocked.");
+          return;
+        }
+        if (!await refreshVerifiedHistory()) {
+          if (mounted.current && finalityHoldRef.current === hold) {
+            setFinalityFeedback("Run status was read, but saved history could not be verified. Sending remains blocked.");
+          }
+          return;
+        }
+        if (!mounted.current || finalityHoldRef.current !== hold ||
+            agent.threadId !== conversationId) return;
+        finalityHoldRef.current = null;
+        setFinalityHold(null);
+        setError(null);
+        setFinalityFeedback("Run status and saved history were checked. Review the restored conversation before sending a new message.");
+      } catch {
+        if (mounted.current && finalityHoldRef.current === hold) {
+          setFinalityFeedback("Run status or saved history is unavailable. Sending remains blocked.");
+        }
+      } finally {
+        checkingFinalityRef.current = false;
+        if (mounted.current) setCheckingFinality(false);
+      }
+    })();
+  }, [agent, conversationId, refreshVerifiedHistory]);
 
   const onStop = useCallback(() => {
     if (!isReady || !agent.isRunning) return;
@@ -483,6 +595,20 @@ export function KarenCopilotControlledChat({
       className="flex min-h-0 min-w-0 flex-1 flex-col">
       {recoveryPanel}
       {error && <p role="alert" className="border-b border-destructive/40 px-3 py-2 text-sm text-destructive">{error}</p>}
+      {finalityHold?.conversationId === conversationId && (
+        <section aria-label="Unverified run recovery" className="space-y-2 border-b border-border px-3 py-2">
+          <p role="status" className="text-sm">Sending is blocked until the previous run and saved history are checked.</p>
+          {finalityHold.runId ? (
+            <button type="button" disabled={checkingFinality || submitting || agent.isRunning}
+              onClick={checkUnverifiedFinality} className="rounded-md border border-input px-3 py-2 text-sm">
+              {checkingFinality ? "Checking…" : "Check run status and saved history"}
+            </button>
+          ) : <p className="text-xs text-muted-foreground">
+            No verified run identity was received. Review saved conversation history and contact support if the outcome remains unclear.
+          </p>}
+        </section>
+      )}
+      {finalityFeedback && <p role="status" className="px-3 py-2 text-sm">{finalityFeedback}</p>}
       {stopStatus && <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-3 py-2">
         <p role="status" data-testid="karen-copilot-stop-status"
           className="text-sm text-muted-foreground">{stopStatus}</p>

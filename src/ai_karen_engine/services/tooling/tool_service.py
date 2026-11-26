@@ -74,6 +74,9 @@ class ToolMetadata:
     rate_limit: Optional[int] = None  # requests per minute
     timeout: int = 30  # seconds
     status: ToolStatus = ToolStatus.AVAILABLE
+    # Explicit opt-in by an audited implementation: no external or filesystem
+    # effects, no credential access, no independent model dispatch.
+    workflow_local_compute: bool = False
 
 
 class ToolInput(BaseModel):
@@ -85,6 +88,7 @@ class ToolInput(BaseModel):
     session_id: Optional[str] = None
     request_id: str = Field(default_factory=lambda: str(uuid.uuid4()))
     governed_execution: bool = False
+    workflow_local_compute: bool = False
 
 
 class ToolOutput(BaseModel):
@@ -655,13 +659,14 @@ class ToolService:
     def _bootstrap_builtin_tools(self) -> None:
         """Register built-in production tools so the registry is not empty on startup."""
         try:
-            from ai_karen_engine.tools import get_production_tools
+            from ai_karen_engine.tools import register_production_tools
 
-            for tool in get_production_tools():
-                if self.registry.get_tool(tool.metadata.name) is None:
-                    self.registry.register_tool(tool)
-        except Exception as e:
-            logger.warning(f"Failed to register production tools: {e}")
+            register_production_tools(self.registry)
+        except Exception as exc:
+            logger.warning(
+                "tool.production_bootstrap_failed",
+                extra={"error_type": type(exc).__name__},
+            )
 
     async def execute_tool(self, tool_input: ToolInput) -> ToolOutput:
         """
@@ -692,6 +697,14 @@ class ToolService:
                     request_id=tool_input.request_id
                 )
             
+            # Check the actual resolved implementation, not a graph alias.
+            if tool_input.workflow_local_compute and (
+                not tool_input.governed_execution
+                or tool.metadata.workflow_local_compute is not True
+                or tool.metadata.name != tool_input.tool_name
+            ):
+                raise PermissionError("workflow_tool_not_local_compute")
+
             # Check tool status
             if tool.metadata.status != ToolStatus.AVAILABLE:
                 return ToolOutput(

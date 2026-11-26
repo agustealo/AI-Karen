@@ -226,15 +226,21 @@ describe("canonical CopilotKit chat ownership", () => {
 
   it("registers a scoped SDK agent from one canonical owner only", () => {
     expect(history).toContain("const registration = useAgent({");
-    expect(history).toContain("ScopedAgentContext.Provider value={registration}");
+    expect(history).toContain("ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission }}");
+    expect(history.match(/\buseAgent\(/g)).toHaveLength(1);
+    expect(history).toContain("restoreHistoryRef.current = restore;");
     expect(history).toContain("export function useKarenScopedAgent()");
-    expect(controller).toContain("const { agent, isReady } = useKarenScopedAgent()");
+    expect(controller).toContain("const { agent, isReady, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission } = useKarenScopedAgent()");
+    expect(controller).toContain("await refreshVerifiedHistory()");
     expect(controller).not.toContain("useAgent(");
     expect(controller).not.toContain("registerProxiedAgent");
   });
 
-  it("requires explicit submission, backend stop receipts and durable draft clearance", () => {
+  it("requires explicit submission, backend stop receipts and revision-bound governed handoff", () => {
     expect(controller).toContain("prepareSubmission(text)");
+    expect(controller).toContain("await prepareRevisionSubmission(text)");
+    expect(controller).toContain("await refreshSubmittedDraft()");
+    expect(draftHook).toContain('return "draft-v1-" + revision;');
     expect(draftHook).toContain("return clearBeforeSubmit(submittedText)");
     expect(draftHook).toContain("await startSave()");
     expect(controller).toContain("copilotkit.runAgent({ agent })");
