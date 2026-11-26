@@ -1,6 +1,7 @@
 """KCOMM-02A review candidate proof; never run against an application database."""
 from __future__ import annotations
 
+import asyncio
 import os
 import uuid
 from pathlib import Path
@@ -14,7 +15,10 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 async def test_communications_candidate_real_postgres() -> None:
-    if os.environ.get("KAREN_TEST_DISPOSABLE_DATABASE") != "1":
+    if (
+        os.environ.get("KAREN_TEST_COMMUNICATIONS_POSTGRES") != "1"
+        or os.environ.get("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
+    ):
         pytest.skip("Explicit disposable PostgreSQL opt-in required")
     dsn = os.environ.get("KAREN_TEST_COMMUNICATIONS_DATABASE_URL")
     if not dsn or urlparse(dsn).path != "/karen_communications_test":
@@ -183,10 +187,21 @@ async def test_communications_candidate_real_postgres() -> None:
             assert await raw.fetchval(
                 f"SELECT revision FROM {table} WHERE entry_id=$1", entry_id
             ) == 2
-        archived = (await query(
-            f"UPDATE {table} SET archived_at=now(), revision=revision+1 "
-            "WHERE entry_id=$1 AND revision=2 RETURNING *", entry_id,
-        ))[0]
+        async def archive_once(conn: asyncpg.Connection) -> list[asyncpg.Record]:
+            async with conn.transaction():
+                await scope(conn, tenant, owner)
+                return await conn.fetch(
+                    f"UPDATE {table} SET archived_at=now(), revision=revision+1 "
+                    "WHERE entry_id=$1 AND revision=2 RETURNING *", entry_id,
+                )
+
+        peer = await asyncpg.connect(dsn)
+        try:
+            outcomes = await asyncio.gather(archive_once(raw), archive_once(peer))
+        finally:
+            await peer.close()
+        assert sorted(len(result) for result in outcomes) == [0, 1]
+        archived = next(result[0] for result in outcomes if result)
         assert archived["revision"] == 3
         assert archived["acknowledged_at"] == ack["acknowledged_at"]
         assert not await query(f"DELETE FROM {table} RETURNING entry_id")
@@ -198,7 +213,13 @@ async def test_communications_candidate_real_postgres() -> None:
             "UPDATE runtime_chat_runs SET status='orphaned', terminal_at=now(), "
             "lease_token=NULL, lease_expires_at=NULL WHERE execution_id=$1", active_run,
         )
-        await query(insert, tenant, owner, conversation, active_run)
+        orphan = (await query(insert, tenant, owner, conversation, active_run))[0]
+        archive_only = (await query(
+            f"UPDATE {table} SET archived_at=now(), revision=revision+1 "
+            "WHERE entry_id=$1 AND revision=1 RETURNING *", orphan["entry_id"],
+        ))[0]
+        assert archive_only["read_at"] is None
+        assert archive_only["acknowledged_at"] is None
         await raw.execute("DELETE FROM conversations WHERE conversation_id=$1", conversation)
         assert not await query(f"SELECT * FROM {table}")
         assert await raw.fetchval(
@@ -216,9 +237,10 @@ async def test_communications_candidate_real_postgres() -> None:
                         public.auth_users, public.tenants CASCADE;
                     DROP FUNCTION IF EXISTS public.communications_inbox_lifecycle_guard();
                 """)
-                await raw.execute(f'DROP OWNED BY "{backend}"') if await raw.fetchval(
+                if await raw.fetchval(
                     "SELECT 1 FROM pg_roles WHERE rolname=$1", backend
-                ) else None
-                await raw.execute(f'DROP ROLE IF EXISTS "{backend}"')
+                ):
+                    await raw.execute(f'DROP OWNED BY "{backend}"')
+                    await raw.execute(f'DROP ROLE "{backend}"')
         finally:
             await raw.close()
