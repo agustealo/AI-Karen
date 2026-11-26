@@ -140,20 +140,29 @@ export function isRunTransitionsResponse(value: unknown): value is RunTransition
   return true;
 }
 
-function ExecutionTimeline({ runId, revision }: { runId: string; revision: number }) {
-  const [result, setResult] = useState<{ revision: number; receipt: RunTransitionsResponse | null } | null>(null);
+function useRecordedRunEvidence<T extends { run_id: string }>(
+  runId: string,
+  revision: number,
+  resource: "transitions" | "participation",
+  validate: (value: unknown) => value is T,
+) {
+  const [result, setResult] = useState<{ runId: string; revision: number; receipt: T | null } | null>(null);
   useEffect(() => {
     let active = true;
-    apiClient.get<unknown>(`/api/agent-runtime/my-runs/${encodeURIComponent(runId)}/transitions`)
+    apiClient.get<unknown>(`/api/agent-runtime/my-runs/${encodeURIComponent(runId)}/${resource}`)
       .then((receipt) => {
-        if (!isRunTransitionsResponse(receipt) || receipt.run_id !== runId) throw new Error("Invalid transition history");
-        if (active) setResult({ revision, receipt });
+        if (!validate(receipt) || receipt.run_id !== runId) throw new Error("Invalid recorded execution evidence");
+        if (active) setResult({ runId, revision, receipt });
       })
-      .catch(() => { if (active) setResult({ revision, receipt: null }); });
+      .catch(() => { if (active) setResult({ runId, revision, receipt: null }); });
     return () => { active = false; };
-  }, [runId, revision]);
-  const receipt = result?.revision === revision ? result.receipt : null;
-  const loading = result?.revision !== revision;
+  }, [runId, revision, resource, validate]);
+  const current = result?.runId === runId && result.revision === revision;
+  return { receipt: current ? result.receipt : null, loading: !current };
+}
+
+function ExecutionTimeline({ runId, revision }: { runId: string; revision: number }) {
+  const { receipt, loading } = useRecordedRunEvidence(runId, revision, "transitions", isRunTransitionsResponse);
   return (
     <section aria-label="Recorded execution timeline" className="mt-4 space-y-2">
       <h5 className="text-sm font-medium">Recorded execution timeline</h5>
@@ -169,6 +178,91 @@ function ExecutionTimeline({ runId, revision }: { runId: string; revision: numbe
                 <p className="break-words font-medium">{event.from_status ? event.from_status.replaceAll("_", " ") + " → " : ""}{event.to_status.replaceAll("_", " ")}</p>
                 <p className="text-xs text-muted-foreground"><time dateTime={event.event_at}>{formatTimestamp(event.event_at)}</time></p>
                 <p className="text-xs text-muted-foreground">{transitionSources[event.source]}</p>
+              </li>
+            ))}
+          </ol>
+        </>}
+    </section>
+  );
+}
+
+const participationPhases = {
+  started: "Method entered",
+  completed: "Invocation returned",
+  failed: "Invocation failed",
+  interrupted: "Invocation interrupted",
+  skipped: "Invocation skipped",
+} as const;
+
+interface ParticipationReceipt {
+  receipt_id: string;
+  step_id: string;
+  specialist_id: string;
+  phase: keyof typeof participationPhases;
+  observed_at: string;
+}
+
+interface RunParticipationResponse {
+  run_id: string;
+  evidence_status: "recorded" | "empty";
+  receipts: ParticipationReceipt[];
+  truncated: boolean;
+  response_source: "postgres_outcome_records";
+}
+
+function boundedEvidenceId(value: unknown, max = 256): value is string {
+  return typeof value === "string" && value.length > 0 && value.length <= max
+    && value.trim() === value && !/[\u0000-\u001f\u007f]/.test(value);
+}
+
+export function isRunParticipationResponse(value: unknown): value is RunParticipationResponse {
+  if (!isObject(value) || !boundedEvidenceId(value.run_id, 128)
+      || value.response_source !== "postgres_outcome_records"
+      || typeof value.truncated !== "boolean"
+      || !Array.isArray(value.receipts) || value.receipts.length > 100
+      || value.evidence_status !== (value.receipts.length > 0 ? "recorded" : "empty")
+      || (value.truncated && value.receipts.length === 0)) return false;
+  const receiptIds = new Set<string>();
+  const steps = new Map<string, { specialist: string; phases: Set<string> }>();
+  for (const row of value.receipts) {
+    if (!isObject(row) || typeof row.receipt_id !== "string"
+        || !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.receipt_id)
+        || receiptIds.has(row.receipt_id)
+        || !boundedEvidenceId(row.step_id) || !boundedEvidenceId(row.specialist_id)
+        || typeof row.phase !== "string" || !Object.prototype.hasOwnProperty.call(participationPhases, row.phase)
+        || typeof row.observed_at !== "string" || row.observed_at.length > 64
+        || !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?(?:Z|[+-]\d{2}:\d{2})$/.test(row.observed_at)
+        || !Number.isFinite(Date.parse(row.observed_at))) return false;
+    const step = steps.get(row.step_id) ?? { specialist: row.specialist_id, phases: new Set<string>() };
+    if (step.specialist !== row.specialist_id || step.phases.has(row.phase)
+        || (row.phase !== "started" && [...step.phases].some((phase) => phase !== "started"))
+        || (row.phase === "skipped" && step.phases.has("started"))
+        || (row.phase === "started" && step.phases.has("skipped"))) return false;
+    step.phases.add(row.phase);
+    steps.set(row.step_id, step);
+    receiptIds.add(row.receipt_id);
+  }
+  return true;
+}
+
+function SpecialistParticipation({ runId, revision }: { runId: string; revision: number }) {
+  const { receipt, loading } = useRecordedRunEvidence(runId, revision, "participation", isRunParticipationResponse);
+  return (
+    <section aria-label="Recorded specialist participation" className="mt-4 space-y-2">
+      <h5 className="text-sm font-medium">Recorded specialist participation</h5>
+      <p className="text-xs text-muted-foreground">PostgreSQL outcome evidence. Method entry and invocation return do not prove inference, external actions, or overall task success.</p>
+      {loading ? <p role="status" className="text-sm text-muted-foreground">Loading recorded participation…</p>
+        : !receipt ? <p role="status" className="text-sm text-muted-foreground">Specialist participation evidence is unavailable. Refresh runtime to retry.</p>
+        : receipt.evidence_status === "empty" ? <p className="text-sm text-muted-foreground">No durable specialist participation was recorded. Execution status alone does not establish participation.</p>
+        : <>
+          {receipt.truncated && <p className="text-xs text-muted-foreground">Only the most recent participation receipts are shown; earlier receipts are omitted.</p>}
+          <p className="text-xs text-muted-foreground">A method-entry receipt without a recorded terminal observation does not establish current activity or completion.</p>
+          <ol className="space-y-3 border-l border-border pl-3 text-sm">
+            {receipt.receipts.map((event) => (
+              <li key={event.receipt_id} className="space-y-1">
+                <p className="break-words font-medium">{event.specialist_id} · {participationPhases[event.phase]}</p>
+                <p className="break-all text-xs text-muted-foreground">Step: {event.step_id}</p>
+                <p className="text-xs text-muted-foreground"><time dateTime={event.observed_at}>{formatTimestamp(event.observed_at)}</time></p>
               </li>
             ))}
           </ol>
@@ -740,7 +834,10 @@ function AgentRuntimeWorkspace({ onAskKaren, onOpenConversation, onDiscussRun, t
                         <p className="mt-1 text-sm font-medium">{formatRunElapsed(selectedRun)}</p>
                       </div>
                     </div>
-                    {!isAdmin && <ExecutionTimeline key={selectedRun.run_id} runId={selectedRun.run_id} revision={runListRevision} />}
+                    {!isAdmin && <>
+                      <ExecutionTimeline key={selectedRun.run_id} runId={selectedRun.run_id} revision={runListRevision} />
+                      <SpecialistParticipation key={`participation:${selectedRun.run_id}`} runId={selectedRun.run_id} revision={runListRevision} />
+                    </>}
                     <section aria-label="Recorded lifecycle timestamps" className="mt-4 space-y-2">
                       <h5 className="text-sm font-medium">Recorded lifecycle timestamps</h5>
                       <p className="text-xs text-muted-foreground">Snapshot evidence only; not a complete transition history.</p>

@@ -116,6 +116,7 @@ jobs:
             tests/integration/test_kcm_curated_oracle_postgres.py
           pytest tests/integration/test_verification_review_postgres.py -q --timeout=300 --tb=short
           DATABASE_URL="$KAREN_TEST_ORACLE_DATABASE_URL" pytest tests/integration/test_kcm_curated_oracle_postgres.py -q --timeout=300 --tb=short
+          pytest tests/core/runtime/outcome/test_specialist_participation_receipt.py tests/api_routes/test_agent_runtime_my_runs.py tests/agent_medusa/test_personal_run_history_scope_contract.py -q --timeout=300 --tb=short
           pytest tests/core/intelligence/ml/test_verification_review_receipts.py -q --timeout=300 --tb=short
           pytest tests/core/intelligence/ml/test_verification_review_workflow.py -q --timeout=300 --tb=short
           pytest tests/api_routes/test_verification_review_api.py -q --timeout=300 --tb=short
@@ -132,4 +133,5 @@ jobs:
         run: |
           echo "### Real review-receipt database acceptance" >> "$GITHUB_STEP_SUMMARY"
           echo "Dedicated disposable databases: karen_review_test and karen_kcm_oracle_test. Both apply canonical outcome-ledger migrations; independent reviewer receipt, tenant/FORCE RLS and atomic assertions must execute, not skip." >> "$GITHUB_STEP_SUMMARY"
+          echo "Specialist receipt append/read, same-tenant owner isolation, exact run/correlation filtering, truncation, malformed evidence rejection and FORCE RLS are exercised in the disposable review database." >> "$GITHUB_STEP_SUMMARY"
           echo "A successful test proves persistence and scoping, not independent reviewer accuracy or causal policy benefit." >> "$GITHUB_STEP_SUMMARY"

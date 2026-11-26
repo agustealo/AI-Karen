@@ -29,6 +29,13 @@ import {
 } from "@/components/chat/copilotkit/KarenCopilotVerifiedHistory";
 import { KarenCopilotVerifiedRail } from "@/components/chat/copilotkit/KarenCopilotVerifiedRail";
 
+function openDesktopContext() {
+  const button = screen.getByRole("button", { name: "Show response context" });
+  expect(button.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(button);
+  expect(screen.getByRole("button", { name: "Hide response context" }).getAttribute("aria-expanded")).toBe("true");
+}
+
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
@@ -46,6 +53,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.getAllByTestId("karen-copilot-rail-unverified")).toHaveLength(2);
     expect(screen.getByTestId("karen-copilot-mobile-intelligence")).toBeTruthy();
     expect(screen.queryByTestId("canonical-conversation-rail")).toBeNull();
@@ -71,6 +79,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(2);
     expect(screen.getAllByText("verified-runtime-model")).toHaveLength(2);
     expect(screen.getAllByTestId("observed-steps").every(node => node.textContent === "0")).toBe(true);
@@ -107,6 +116,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.getAllByTestId("karen-date-presentation")).toHaveLength(2);
     expect(document.querySelectorAll('[data-presentation-id="card-new"]')).toHaveLength(2);
     expect(document.querySelectorAll('[data-presentation-id="card-old"]')).toHaveLength(0);
@@ -176,6 +186,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.getAllByText("newest-model")).toHaveLength(2);
     expect(screen.queryByText("stale-model")).toBeNull();
   });
@@ -202,6 +213,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.getAllByText("latest-verified-model")).toHaveLength(2);
     expect(screen.queryByText("older-verified-model")).toBeNull();
     const selectors = screen.getAllByLabelText("Inspect saved response");
@@ -209,7 +221,12 @@ describe("CopilotKit canonical intelligence rail", () => {
     fireEvent.change(selectors[0], { target: { value: "assistant-old" } });
     expect(screen.getAllByText("older-verified-model")).toHaveLength(2);
     expect(screen.queryByText("latest-verified-model")).toBeNull();
-    fireEvent.change(selectors[1], { target: { value: "assistant-new" } });
+    fireEvent.click(screen.getByRole("button", { name: "Hide response context" }));
+    expect(screen.getAllByText("older-verified-model")).toHaveLength(1);
+    expect(screen.getAllByLabelText("Inspect saved response")).toHaveLength(1);
+    openDesktopContext();
+    expect(screen.getAllByText("older-verified-model")).toHaveLength(2);
+    fireEvent.change(screen.getAllByLabelText("Inspect saved response")[1], { target: { value: "assistant-new" } });
     expect(screen.getAllByText("latest-verified-model")).toHaveLength(2);
     expect(screen.queryByText("older-verified-model")).toBeNull();
   });
@@ -272,6 +289,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.getAllByTestId("observed-steps").every(
       node => node.textContent === "1",
     )).toBe(true);
@@ -320,6 +338,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.getAllByTestId("observed-steps").every(
       node => node.textContent === "0",
     )).toBe(true);
@@ -347,6 +366,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.queryByText("older-model")).toBeNull();
     expect(screen.queryByTestId("canonical-conversation-rail")).toBeNull();
     expect(screen.getAllByTestId("karen-copilot-rail-unverified")).toHaveLength(2);
@@ -415,6 +435,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.getAllByTestId("observed-steps").every(
       node => node.textContent === "2",
     )).toBe(true);
@@ -438,6 +459,7 @@ describe("CopilotKit canonical intelligence rail", () => {
         <KarenCopilotVerifiedRail />
       </KarenVerifiedHistoryProvider>,
     );
+    openDesktopContext();
     expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(2);
     expect(screen.getAllByText("verified-runtime-model")).toHaveLength(2);
   });
@@ -489,6 +511,8 @@ describe("CopilotKit canonical intelligence rail", () => {
       </KarenVerifiedHistoryProvider>,
     );
     const disclosure = screen.getByTestId("karen-copilot-mobile-intelligence");
+    expect(screen.getByRole("button", { name: "Show response context" }).getAttribute("aria-expanded")).toBe("false");
+    expect(screen.getAllByTestId("canonical-conversation-rail")).toHaveLength(1);
     expect(disclosure.tagName).toBe("DETAILS");
     expect(disclosure.hasAttribute("open")).toBe(false);
     expect(disclosure.querySelector("summary")?.textContent).toContain("Response context");
