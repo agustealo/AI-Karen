@@ -1,3 +1,5 @@
+import { isRunToolReceiptsResponse } from "../../src/lib/governed-tool-receipts";
+
 export const phases = {
   started: "Method entered",
   completed: "Invocation returned",
@@ -182,26 +184,17 @@ export function verifyFreshSpecialistEvidence(
       Date.parse(entered[0].observed_at) > Date.parse(returned[0].observed_at)) {
     throw new Error("Exact completed specialist invocation unavailable");
   }
-  if (!hasExactKeys(tools, ["run_id", "evidence_status", "receipts", "window_limit_reached", "response_source"]) ||
-      tools.run_id !== runId || tools.evidence_status !== "recorded" ||
-      tools.window_limit_reached !== false || tools.response_source !== "postgres_outcome_records" ||
-      !Array.isArray(tools.receipts) || tools.receipts.length !== 1) {
+  // Share the production wire validator. This trial adds stronger
+  // scenario-specific requirements; it does not create another receipt schema.
+  if (!isRunToolReceiptsResponse(tools) || tools.run_id !== runId ||
+      tools.evidence_status !== "recorded" || tools.window_limit_reached ||
+      tools.receipts.length !== 1) {
     throw new Error("Exactly one bounded governed tool acknowledgment required");
   }
   const row = tools.receipts[0];
-  if (!hasExactKeys(row, ["receipt_id", "tool_call_id", "tool_name", "tool_version", "agent_id",
-      "step_id", "policy_decision_id", "success", "error_type", "result_sha256", "recorded_at",
-      "execution_scope", "independently_verified"]) ||
-      typeof row.tool_call_id !== "string" || row.tool_call_id.length !== 36 ||
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.tool_call_id) ||
-      row.receipt_id !== "out_tool_" + row.tool_call_id.replace(/-/g, "") ||
-      row.tool_name !== approved.tool || row.agent_id !== approved.agent ||
+  if (row.tool_name !== approved.tool || row.agent_id !== approved.agent ||
       row.step_id !== entered[0].step_id || row.policy_decision_id !== run.policy_decision_id ||
-      row.success !== true || row.error_type !== null ||
-      row.execution_scope !== "tool_runtime_acknowledgment" || row.independently_verified !== false ||
-      !(row.tool_version === null || bounded(row.tool_version)) ||
-      typeof row.result_sha256 !== "string" || row.result_sha256.length !== 64 || /[^0-9a-f]/.test(row.result_sha256) ||
-      typeof row.recorded_at !== "string" || !Number.isFinite(Date.parse(row.recorded_at)) ||
+      row.success !== true || row.result_sha256 === null ||
       Date.parse(row.recorded_at) < Date.parse(entered[0].observed_at) ||
       Date.parse(row.recorded_at) > Date.parse(returned[0].observed_at)) {
     throw new Error("Invalid or unlinked governed tool acknowledgment");
