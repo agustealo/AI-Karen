@@ -23,6 +23,7 @@ from ai_karen_engine.core.logging import get_logger
 from .distributed_run_store import (
     DistributedRunNotCancellable,
     DistributedRunNotFound,
+    DistributedRunOwnershipLost,
     DistributedRunStore,
     DistributedRunStoreUnavailable,
     DistributedRunTenantMismatch,
@@ -79,6 +80,9 @@ class ExecutionRun:
     shared_registered: bool = False
     durable_registered: bool = False
     heartbeat_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    cancel_admission_pending: bool = field(default=False, repr=False)
+    cancel_signal_sent: bool = field(default=False, repr=False)
+    shared_ownership_lost: bool = field(default=False, repr=False)
 
     def snapshot(self) -> dict[str, Any]:
         return {
@@ -96,7 +100,10 @@ class ExecutionRun:
             ),
             "error_type": self.error_type,
             "outcome_status": self.outcome_status,
-            "cancellable": self.status is ExecutionRunStatus.RUNNING,
+            "cancellable": (
+                self.status is ExecutionRunStatus.RUNNING
+                and not self.cancel_admission_pending
+            ),
             "durable": self.durable_registered,
             "response_source": "worker_local_execution",
         }
@@ -294,16 +301,20 @@ class MedusaRunManager:
             outcome_status="success",
         )
 
-    async def mark_failed(self, run_id: str, exc: BaseException) -> None:
-        await self._mark_terminal(
+    async def mark_failed(
+        self, run_id: str, exc: BaseException
+    ) -> ExecutionRunStatus | None:
+        return await self._mark_terminal(
             run_id,
             ExecutionRunStatus.FAILED,
             error_type=type(exc).__name__,
             outcome_status="error",
         )
 
-    async def mark_cancelled(self, run_id: str) -> None:
-        await self._mark_terminal(
+    async def mark_cancelled(
+        self, run_id: str
+    ) -> ExecutionRunStatus | None:
+        return await self._mark_terminal(
             run_id,
             ExecutionRunStatus.CANCELLED,
             outcome_status="cancelled",
@@ -336,6 +347,16 @@ class MedusaRunManager:
             run = self._runs.get(run_id)
             if run is None:
                 return None
+            if run.shared_ownership_lost:
+                # The worker has no authority to publish any terminal outcome.
+                # Retain the active task identity until its finalizer observes
+                # local retirement; never infer native cessation from this.
+                if (
+                    run.task.done() or run.task is asyncio.current_task()
+                ) and run_id not in self._terminal_order:
+                    self._terminal_order.append(run_id)
+                    self._prune_locked()
+                return ExecutionRunStatus.ORPHANED
             if (
                 run.status is ExecutionRunStatus.CANCELLING
                 and status is not ExecutionRunStatus.ORPHANED
@@ -413,6 +434,104 @@ class MedusaRunManager:
                         )
         return status
 
+    async def _admit_local_cancellation(
+        self,
+        run: ExecutionRun,
+        *,
+        audit_event_ref: str | None = None,
+        allow_existing: bool = False,
+    ) -> bool:
+        """Reserve one admission; publish cancellation only after durable acceptance.
+
+        A terminal transition may win while storage is pending. In that case
+        the late admission cannot change its outcome or signal the retired task.
+        """
+        async with self._lock:
+            if self._runs.get(run.run_id) is not run:
+                return False
+            if run.status is ExecutionRunStatus.CANCELLING:
+                return allow_existing
+            if (
+                run.status is not ExecutionRunStatus.RUNNING
+                or run.cancel_admission_pending
+            ):
+                return False
+            run.cancel_admission_pending = True
+
+        accepted = False
+        try:
+            if run.durable_registered:
+                try:
+                    await self._durable_ledger.mark_cancelling(
+                        run_id=run.run_id,
+                        tenant_id=run.tenant_id,
+                        requested_at=datetime.now(timezone.utc),
+                        audit_event_ref=audit_event_ref,
+                        source="admin_cancel" if audit_event_ref else "runtime",
+                    )
+                except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
+                    logger.exception(
+                        "Medusa durable cancellation transition failed",
+                        extra={"run_id": run.run_id, "tenant_id": run.tenant_id},
+                    )
+                    if self._settings.durable_run_ledger_required:
+                        raise
+            accepted = True
+        finally:
+            async with self._lock:
+                run.cancel_admission_pending = False
+                if (
+                    accepted
+                    and self._runs.get(run.run_id) is run
+                    and run.status is ExecutionRunStatus.RUNNING
+                ):
+                    run.status = ExecutionRunStatus.CANCELLING
+                else:
+                    accepted = False
+        return accepted
+
+    async def _signal_local_cancellation(self, run: ExecutionRun) -> None:
+        """Signal only the still-owned, admitted task, never a retired run."""
+        async with self._lock:
+            if (
+                self._runs.get(run.run_id) is run
+                and run.status is ExecutionRunStatus.CANCELLING
+            ):
+                self._signal_task_once_locked(run)
+
+    @staticmethod
+    def _signal_task_once_locked(run: ExecutionRun) -> None:
+        # Cleanup may consume CancelledError and call uncancel().
+        # Do not interrupt it with a second runtime-owned signal.
+        if not run.task.done() and not run.cancel_signal_sent:
+            run.cancel_signal_sent = True
+            if not run.task.cancelling():
+                run.task.cancel()
+
+    async def _record_shared_ownership_loss(self, run: ExecutionRun) -> None:
+        """Fence a definitively rejected lease without writing as its owner."""
+        async with self._lock:
+            if self._runs.get(run.run_id) is not run or run.status not in {
+                ExecutionRunStatus.RUNNING,
+                ExecutionRunStatus.CANCELLING,
+            }:
+                return
+            run.shared_ownership_lost = True
+            run.status = ExecutionRunStatus.ORPHANED
+            run.completed_at = None
+            run.error_type = "WorkerLeaseExpired"
+            run.outcome_status = None
+            run.heartbeat_task = None
+            # Stop cooperatively, not a user cancellation acknowledgement.
+            self._signal_task_once_locked(run)
+            if run.task.done() and run.run_id not in self._terminal_order:
+                self._terminal_order.append(run.run_id)
+                self._prune_locked()
+        logger.warning(
+            "Medusa run live ownership lost",
+            extra={"run_id": run.run_id, "tenant_id": run.tenant_id},
+        )
+
     async def cancel(
         self,
         *,
@@ -420,57 +539,36 @@ class MedusaRunManager:
         tenant_id: str,
         audit_event_ref: str | None = None,
     ) -> dict[str, Any]:
-        local_task: asyncio.Task[Any] | None = None
-        local_run: ExecutionRun | None = None
         async with self._lock:
-            run = self._runs.get(run_id)
-            if run is not None:
-                if run.tenant_id != tenant_id:
-                    raise RunTenantMismatchError(run_id)
-                if run.status is not ExecutionRunStatus.RUNNING:
-                    raise RunNotCancellableError(
-                        f"Run {run_id} is {run.status.value}, not cancellable"
-                    )
-                run.status = ExecutionRunStatus.CANCELLING
-                local_task = run.task
-                local_run = run
+            local_run = self._runs.get(run_id)
+            if local_run is not None and local_run.tenant_id != tenant_id:
+                raise RunTenantMismatchError(run_id)
 
-        if local_task is not None and local_run is not None:
-            requested_at = datetime.now(timezone.utc)
-            if local_run.durable_registered:
-                try:
-                    await self._durable_ledger.mark_cancelling(
-                        run_id=run_id,
-                        tenant_id=tenant_id,
-                        requested_at=requested_at,
-                        audit_event_ref=audit_event_ref,
-                        source="admin_cancel" if audit_event_ref else "runtime",
-                    )
-                except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
-                    logger.exception(
-                        "Medusa durable cancellation transition failed",
-                        extra={"run_id": run_id, "tenant_id": tenant_id},
-                    )
-                    if self._settings.durable_run_ledger_required:
-                        async with self._lock:
-                            current = self._runs.get(run_id)
-                            if current is local_run:
-                                current.status = ExecutionRunStatus.RUNNING
-                        raise
-            if local_run.shared_registered:
-                try:
-                    await self._distributed_store.request_cancel(
-                        run_id=run_id,
-                        tenant_id=tenant_id,
-                    )
-                except DistributedRunStoreUnavailable:
-                    logger.warning(
-                        "Shared cancel state unavailable; cancelling local owner task directly",
-                        extra={"run_id": run_id},
-                    )
-                except DistributedRunNotCancellable:
-                    pass
-            local_task.cancel()
+        if local_run is not None:
+            if not await self._admit_local_cancellation(
+                local_run, audit_event_ref=audit_event_ref
+            ):
+                raise RunNotCancellableError(f"Run {run_id} is not cancellable")
+            try:
+                if local_run.shared_registered:
+                    try:
+                        await self._distributed_store.request_cancel(
+                            run_id=run_id,
+                            tenant_id=tenant_id,
+                        )
+                    except DistributedRunStoreUnavailable:
+                        logger.warning(
+                            "Shared cancel state unavailable; cancelling local owner task directly",
+                            extra={"run_id": run_id},
+                        )
+                    except DistributedRunNotCancellable:
+                        pass
+                await self._signal_local_cancellation(local_run)
+            except asyncio.CancelledError:
+                # Requester disconnect does not revoke already admitted intent.
+                # Preserve the caller's cancellation, but signal the owned task.
+                await self._signal_local_cancellation(local_run)
+                raise
             return await self.get(run_id=run_id, tenant_id=tenant_id)
 
         if await self._distributed_available():
@@ -744,8 +842,18 @@ class MedusaRunManager:
         try:
             while True:
                 await asyncio.sleep(self._settings.run_heartbeat_interval_seconds)
-                if not run.shared_registered:
-                    return
+                async with self._lock:
+                    if (
+                        not run.shared_registered
+                        or self._runs.get(run.run_id) is not run
+                        or run.task.done()
+                        or run.status
+                        not in {
+                            ExecutionRunStatus.RUNNING,
+                            ExecutionRunStatus.CANCELLING,
+                        }
+                    ):
+                        return
                 try:
                     cancel_requested = await self._distributed_store.heartbeat(
                         run_id=run.run_id,
@@ -757,6 +865,9 @@ class MedusaRunManager:
                         extra={"run_id": run.run_id},
                     )
                     continue
+                except (DistributedRunOwnershipLost, DistributedRunNotFound):
+                    await self._record_shared_ownership_loss(run)
+                    return
                 if not cancel_requested and run.durable_registered:
                     # A remote cancellation may have committed in PostgreSQL
                     # before its Redis signal failed. Only the live Redis
@@ -817,39 +928,26 @@ class MedusaRunManager:
                             continue
                         cancel_requested = True
                 if cancel_requested:
-                    now = datetime.now(timezone.utc)
-                    async with self._lock:
-                        current = self._runs.get(run.run_id)
-                        if current is not run:
-                            return
-                        if current.status is ExecutionRunStatus.RUNNING:
-                            current.status = ExecutionRunStatus.CANCELLING
-                        task = current.task
-                    if run.durable_registered:
-                        try:
-                            await self._durable_ledger.mark_cancelling(
-                                run_id=run.run_id,
-                                tenant_id=run.tenant_id,
-                                requested_at=now,
-                                source="runtime",
-                            )
-                        except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
-                            logger.exception(
-                                "Medusa remote cancellation could not reach durable ledger",
-                                extra={"run_id": run.run_id},
-                            )
-                            if self._settings.durable_run_ledger_required:
-                                async with self._lock:
-                                    current = self._runs.get(run.run_id)
-                                    if (
-                                        current is run
-                                        and current.status
-                                        is ExecutionRunStatus.CANCELLING
-                                    ):
-                                        current.status = ExecutionRunStatus.RUNNING
-                                continue
-                    task.cancel()
-                    return
+                    try:
+                        admitted = await self._admit_local_cancellation(
+                            run, allow_existing=True
+                        )
+                    except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
+                        continue
+                    if not admitted:
+                        # A local caller may be admitting the same request.
+                        # Keep renewing the lease until it resolves.
+                        async with self._lock:
+                            if (
+                                self._runs.get(run.run_id) is not run
+                                or run.status is not ExecutionRunStatus.RUNNING
+                            ):
+                                return
+                        continue
+                    await self._signal_local_cancellation(run)
+                    # Cancellation is intent, not retirement. Keep the claim
+                    # alive while the owned task is still performing cleanup.
+                    # The terminal transition owns heartbeat shutdown.
         except asyncio.CancelledError:
             raise
         except Exception as exc:
@@ -936,7 +1034,7 @@ class MedusaRunManager:
             local_run_ids = {
                 run_id
                 for run_id, run in self._runs.items()
-                if run.tenant_id == tenant_id
+                if run.tenant_id == tenant_id and not run.shared_ownership_lost
             }
 
         reconciled = 0
