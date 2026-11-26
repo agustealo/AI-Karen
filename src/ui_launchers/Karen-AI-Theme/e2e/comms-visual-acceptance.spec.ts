@@ -519,34 +519,29 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
   await signInApprovedKaren(page, accountB, passwordB, { allowLocalLoopback: true });
   await openCommunications(page);
   mark("initial_projection");
-  const initialRead = page.waitForResponse(res => inboxRequest(res.request()), { timeout: 30_000 });
-  const browserWait = page.waitForRequest(waitRequest, { timeout: 30_000 });
-  await root.getByRole("tab", { name: "Inbox", exact: true }).click();
-  const initial = await initialRead;
-  expect(initial.status()).toBe(200);
-  const raw = await initial.json();
-  // Deliberately read the backend capability, not a browser configuration flag.
-  expect(raw?.capabilities?.invalidation_wait_enabled).toBe(true);
-  const projection = readPage(raw, "active", null);
-  const entry = projection.entries.find(e => e.execution_id === runB);
-  if (!entry || entry.read_at || entry.acknowledged_at || entry.archived_at) {
-    throw new Error("Fresh unread owner B fixture required");
-  }
-  await expect(inbox.getByTestId("personal-inbox-unread")).toHaveText(projection.active_unread_count + " unread active");
-  const ownerRequest = await browserWait;
+  let ownerRequest: BrowserRequest | undefined;
   const sequence: string[] = [];
-  const recordRequest = (req: BrowserRequest) => { if (inboxRequest(req)) sequence.push("read"); };
+  const recordRequest = (req: BrowserRequest) => {
+    if (!ownerRequest && waitRequest(req)) ownerRequest = req;
+    if (ownerRequest && inboxRequest(req)) sequence.push("read");
+  };
   const recordResponse = (res: import("@playwright/test").Response) => {
     if (res.request() === ownerRequest) sequence.push("hint");
   };
   const recordFailure = (req: BrowserRequest) => {
     if (req === ownerRequest) test.info().annotations.push({ type: "kcomm-hint-request-failed", description: "yes" });
   };
+  // Observe the first exact wait before triggering Inbox. Request.response()
+  // retains its response even if it has already arrived when awaited.
   page.on("request", recordRequest);
   page.on("response", recordResponse);
   page.on("requestfailed", recordFailure);
   try {
-    const hintPending = page.waitForResponse(res => res.request() === ownerRequest, { timeout: 20_000 }).then(async hint => {
+    const initialRead = page.waitForResponse(res => inboxRequest(res.request()), { timeout: 30_000 });
+    const browserWait = page.waitForRequest(waitRequest, { timeout: 30_000 });
+    const hintPending = browserWait.then(async req => {
+      const hint = await req.response();
+      if (!hint) throw new Error("Observed browser wait ended without an HTTP response");
       // Capture the exact response immediately, before an unrelated navigation
       // or fetch cancellation can make its body inaccessible to Chromium.
       test.info().annotations.push({ type: "kcomm-hint-http", description: String(hint.status()) });
@@ -569,6 +564,20 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
       test.info().annotations.push({ type: "kcomm-hint-body-state", description: bodyState });
       return { hint, hintBody };
     });
+    for (const pending of [initialRead, browserWait, hintPending]) void pending.catch(() => {});
+    await root.getByRole("tab", { name: "Inbox", exact: true }).click();
+    const initial = await initialRead;
+    expect(initial.status()).toBe(200);
+    const raw = await initial.json();
+    // Deliberately read the backend capability, not a browser configuration flag.
+    expect(raw?.capabilities?.invalidation_wait_enabled).toBe(true);
+    const projection = readPage(raw, "active", null);
+    const entry = projection.entries.find(e => e.execution_id === runB);
+    if (!entry || entry.read_at || entry.acknowledged_at || entry.archived_at) {
+      throw new Error("Fresh unread owner B fixture required");
+    }
+    await expect(inbox.getByTestId("personal-inbox-unread")).toHaveText(projection.active_unread_count + " unread active");
+    expect(await browserWait).toBe(ownerRequest);
     const readPending = page.waitForResponse(res => inboxRequest(res.request()), { timeout: 20_000 });
     const foreignPending = request.get(origin + waitPath, { headers: aHeaders, timeout: 25_000, maxRedirects: 0 });
     // Attach rejection observers immediately, even if an earlier assertion

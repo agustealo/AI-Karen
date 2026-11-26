@@ -386,3 +386,59 @@ def test_communications_failure_diagnostics_do_not_disclose_private_report(capsy
     assert module.safe_correlation("private-secret") is None
     assert module.safe_correlation(correlation.upper()) == correlation
 
+    import hashlib
+
+    trace_tag = hashlib.sha256(correlation.encode("ascii")).hexdigest()
+    foreign_tag = hashlib.sha256(foreign.encode("ascii")).hexdigest()
+    module.report_backend_failure_summary("\n".join([
+        "2026-01-01 - ai_karen_engine.core.realtime.inbox_invalidation - WARNING - communications.invalidation.wait_unavailable reason=duplicate_owner trace=" + trace_tag,
+        "2026-01-01 - ai_karen_engine.core.realtime.inbox_invalidation - INFO - communications.invalidation.wait_admitted trace=" + foreign_tag,
+        "2026-01-01 - untrusted - WARNING - communications.invalidation.wait_unavailable reason=duplicate_owner trace=" + trace_tag,
+    ]), correlations={correlation})
+    output = capsys.readouterr().out
+    assert "kind=wait_unavailable error_type=unknown count=1 reason=duplicate_owner" in output
+    assert output.count("KCOMM_CORRELATED_BACKEND_EVENT ") == 1
+    assert trace_tag not in output and foreign_tag not in output and correlation not in output
+
+
+def test_logging_configuration_keeps_correlated_records_in_both_sinks(tmp_path):
+    """Exercise real dictConfig handlers in a separate process, not mocks."""
+    import os
+    import subprocess
+    import sys
+
+    script = """
+import logging
+from ai_karen_engine.server.logging_setup import configure_logging
+
+configure_logging()
+logger = logging.getLogger("kcomm.logging.integration")
+for value in ("fe95b316-10ac-42ee-92ce-0cdbe4c5a7a6", "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a7"):
+    logger.warning("KCOMM_CORRELATED_SINK_TEST", extra={"correlation_id": value})
+logging.shutdown()
+"""
+    env = {
+        **os.environ,
+        "ENVIRONMENT": "test",
+        "PYTHONPATH": os.pathsep.join((str(ROOT / "src"), str(ROOT))),
+    }
+    result = subprocess.run(
+        [sys.executable, "-c", script], cwd=tmp_path, env=env,
+        capture_output=True, text=True, timeout=60, check=False,
+    )
+    assert result.returncode == 0, "Isolated logging configuration failed"
+    marker = "KCOMM_CORRELATED_SINK_TEST"
+    assert result.stdout.count(marker) == 2
+    stored = (tmp_path / "logs" / "kari.log").read_text(encoding="utf-8")
+    assert stored.count(marker) == 2
+    # The optional JSON formatter preserves the actual structured correlation.
+    import json
+
+    records = [line for line in stored.splitlines() if marker in line]
+    if all(line.lstrip().startswith("{") for line in records):
+        assert {json.loads(line)["correlation_id"] for line in records} == {
+            "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a6",
+            "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a7",
+        }
+
+

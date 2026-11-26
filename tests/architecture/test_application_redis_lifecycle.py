@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 
 import pytest
 
+from ai_karen_engine.config import runtime as runtime_config
 from ai_karen_engine.core.runtime.operational_health import OperationalHealthService
 from ai_karen_engine.server import application_runtime
 
@@ -22,6 +23,7 @@ def _redis_module(monkeypatch: pytest.MonkeyPatch, manager: object):
 
 
 def _required(monkeypatch: pytest.MonkeyPatch, enabled: bool) -> None:
+    monkeypatch.setattr(runtime_config, "get_runtime_settings", lambda: runtime_config.RuntimeSettings())
     monkeypatch.setattr(
         OperationalHealthService, "redis_required",
         classmethod(lambda cls: enabled),
@@ -170,3 +172,79 @@ def test_redis_policy_matches_readiness_and_lifespan(monkeypatch: pytest.MonkeyP
     assert OperationalHealthService.redis_required() is True
     monkeypatch.delenv("KARI_ENABLE_MEMORY_SERVICE", raising=False)
     assert OperationalHealthService.redis_required() is True
+
+
+@pytest.mark.parametrize("producer,wait,healthy", [
+    (False, False, True),
+    (True, False, True),
+    (True, True, True),
+    (True, True, False),
+])
+@pytest.mark.asyncio
+async def test_optional_invalidation_owns_redis_without_promoting_readiness(
+    monkeypatch: pytest.MonkeyPatch, producer: bool, wait: bool, healthy: bool,
+) -> None:
+    for name in ("KARI_ENABLE_MEMORY_SERVICE", "ENABLE_RATE_LIMITING", "AUTH_ENABLE_RATE_LIMITING"):
+        monkeypatch.setenv(name, "false")
+    settings = runtime_config.RuntimeSettings()
+    settings.features.enable_communications_invalidation = producer
+    settings.features.enable_communications_invalidation_wait = wait
+    monkeypatch.setattr(runtime_config, "get_runtime_settings", lambda: settings)
+    assert OperationalHealthService.redis_required() is False
+    assert OperationalHealthService.redis_lifecycle_enabled() is producer
+
+    manager = SimpleNamespace(
+        is_healthy=AsyncMock(return_value=False),
+        initialize=AsyncMock(return_value=healthy),
+    )
+    module = _redis_module(monkeypatch, manager)
+    app = SimpleNamespace(state=SimpleNamespace())
+    await application_runtime.initialize_application_redis(app)
+    await application_runtime.initialize_application_redis(app)
+    if producer:
+        assert app.state.redis_connection_manager is manager
+        assert app.state._canonical_redis_lifespan_owned is True
+        manager.is_healthy.assert_awaited_once()
+        manager.initialize.assert_awaited_once()
+    else:
+        manager.is_healthy.assert_not_awaited()
+        manager.initialize.assert_not_awaited()
+
+    # Exercise the real readiness composition, not just the policy predicate.
+    # Database is independently healthy; optional Redis must not gate it.
+    health = OperationalHealthService()
+    monkeypatch.setattr(health, "_database_check", AsyncMock(return_value={"ready": True}))
+    result = await health.readiness(environment="development")
+    assert result.ready is True
+    assert result.checks["redis"] == {"ready": True, "status": "not_required"}
+    if producer:
+        manager.is_healthy.assert_awaited_once()
+    else:
+        manager.is_healthy.assert_not_awaited()
+    await application_runtime.shutdown_application_redis(app)
+    await application_runtime.shutdown_application_redis(app)
+    if producer:
+        module.shutdown_redis_manager.assert_awaited_once()
+        assert app.state.redis_connection_manager is None
+    else:
+        module.shutdown_redis_manager.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_required_redis_still_gates_readiness_with_invalidation_enabled(monkeypatch):
+    monkeypatch.setenv("KARI_ENABLE_MEMORY_SERVICE", "false")
+    monkeypatch.setenv("ENABLE_RATE_LIMITING", "false")
+    monkeypatch.setenv("AUTH_ENABLE_RATE_LIMITING", "true")
+    settings = runtime_config.RuntimeSettings()
+    settings.features.enable_communications_invalidation = True
+    monkeypatch.setattr(runtime_config, "get_runtime_settings", lambda: settings)
+    manager = SimpleNamespace(is_healthy=AsyncMock(return_value=False))
+    _redis_module(monkeypatch, manager)
+    health = OperationalHealthService()
+    monkeypatch.setattr(health, "_database_check", AsyncMock(return_value={"ready": True}))
+    assert OperationalHealthService.redis_required() is True
+    assert OperationalHealthService.redis_lifecycle_enabled() is True
+    result = await health.readiness(environment="development")
+    assert result.ready is False
+    assert result.checks["redis"] == {"ready": False, "status": "degraded"}
+    manager.is_healthy.assert_awaited_once()

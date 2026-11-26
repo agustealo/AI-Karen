@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import http.cookiejar
 import json
 import os
@@ -145,13 +146,18 @@ def report_failure_summary(report):
     return correlations
 
 
-def report_backend_failure_summary(logs, correlations=None):
+def report_backend_failure_summary(logs, correlations=None, *, structured=False):
     """Emit only known backend event labels; never copy raw logs or identities.
 
     Without a correlation filter this is an aggregate, not a per-request trace.
     With a filter, accept only exact structured correlation matches.
     """
     counts = {}
+    trace_tags = {
+        hashlib.sha256(value.encode("ascii")).hexdigest()
+        for value in (correlations or ())
+        if safe_correlation(value) == value
+    }
     for line in logs.splitlines():
         name = message = error_type = reason = correlation = None
         try:
@@ -172,15 +178,22 @@ def report_backend_failure_summary(logs, correlations=None):
                     continue
         if not isinstance(name, str) or not isinstance(message, str):
             continue
-        if correlations is not None and correlation not in correlations:
-            continue
+        trace_tag = None
         if name == "ai_karen_engine.core.realtime.inbox_invalidation":
+            match = re.fullmatch(
+                r"(communications\.invalidation\.wait_[a-z_]+(?: reason=[a-z_]+)?) trace=([0-9a-f]{64})",
+                message,
+            )
+            if match:
+                message, trace_tag = match.groups()
             prefix = "communications.invalidation.wait_unavailable reason="
             if message.startswith(prefix):
                 candidate = message[len(prefix):]
                 if candidate in _WAIT_REASONS:
                     reason = candidate
                     message = "communications.invalidation.wait_unavailable"
+        if correlations is not None and correlation not in correlations and trace_tag not in trace_tags:
+            continue
         kind = _BACKEND_EVENTS.get((name, message))
         if name == "ai_karen_engine.middleware.rate_limit":
             prefix = "Rate limit enforcement unavailable: "
@@ -197,7 +210,11 @@ def report_backend_failure_summary(logs, correlations=None):
         safe_reason = reason if isinstance(reason, str) and reason in _WAIT_REASONS else "unknown"
         key = (kind, safe_type, safe_reason)
         counts[key] = counts.get(key, 0) + 1
-    label = "KCOMM_CORRELATED_BACKEND_EVENT" if correlations is not None else "KCOMM_BACKEND_EVENT"
+    label = (
+        "KCOMM_STRUCTURED_BACKEND_EVENT" if structured
+        else "KCOMM_CORRELATED_BACKEND_EVENT" if correlations is not None
+        else "KCOMM_BACKEND_EVENT"
+    )
     if not counts:
         print(label + "S status=none_observed")
     for (kind, error_type, reason), count in sorted(counts.items()):
@@ -221,19 +238,22 @@ def collect_backend_failure_summary(container, started, correlations=()):
     if not correlations:
         print("KCOMM_CORRELATED_BACKEND_EVENTS status=missing_browser_correlation")
         return
-    # Existing production structured log sink; never print raw records or IDs.
+    # The real API console is the observed sink in first-boot. Match its
+    # fixed event tags or JSON correlation fields before consulting the file.
+    report_backend_failure_summary(result.stdout + "\n" + result.stderr, correlations=set(correlations))
+    # Existing structured log sink; never print raw records or IDs.
     try:
         structured = subprocess.run(
             ["docker", "exec", container, "tail", "-n", "4000", "logs/kari.log"],
             capture_output=True, text=True, errors="replace", timeout=15, check=False,
         )
     except (OSError, subprocess.TimeoutExpired):
-        print("KCOMM_CORRELATED_BACKEND_EVENTS status=unavailable")
+        print("KCOMM_STRUCTURED_BACKEND_EVENTS status=unavailable")
         return
     if structured.returncode:
-        print("KCOMM_CORRELATED_BACKEND_EVENTS status=unavailable")
+        print("KCOMM_STRUCTURED_BACKEND_EVENTS status=unavailable")
         return
-    report_backend_failure_summary(structured.stdout, correlations=set(correlations))
+    report_backend_failure_summary(structured.stdout, correlations=set(correlations), structured=True)
 
 
 class NoRedirect(HTTPRedirectHandler):

@@ -7,6 +7,7 @@ This is not a browser event envelope or a durable queue.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import re
 from collections.abc import Awaitable, Callable
@@ -106,6 +107,20 @@ async def wait_for_inbox_invalidation(
     except (TypeError, ValueError, AttributeError):
         trace_id = None
     trace = {"correlation_id": trace_id} if trace_id else {}
+    # Text sinks may omit structured extras. Match the existing correlation
+    # privately using a one-way tag, not a new identifier or authority.
+    trace_tag = hashlib.sha256(trace_id.encode("ascii")).hexdigest() if trace_id else None
+
+    def log_wait(event: str, *, failure: Exception | None = None) -> None:
+        message = event
+        fields: dict[str, str] = dict(trace)
+        if failure is not None:
+            message += " reason=" + reason
+            fields.update(reason=reason, error_type=type(failure).__name__)
+        if trace_tag:
+            message += " trace=" + trace_tag
+        logger.log(logging.WARNING if failure is not None else logging.INFO, message, extra=fields)
+
     try:
         settings = get_runtime_settings()
         if (
@@ -164,7 +179,7 @@ async def wait_for_inbox_invalidation(
                     and ack["data"] == 1
                 ):
                     raise InboxInvalidationUnavailable("Communications invalidation unavailable")
-            logger.info("communications.invalidation.wait_admitted", extra=trace)
+            log_wait("communications.invalidation.wait_admitted")
             deadline = loop.time() + wait
             async with asyncio.timeout(wait + budget / 1000):
                 while True:
@@ -178,7 +193,7 @@ async def wait_for_inbox_invalidation(
                     remaining = deadline - loop.time()
                     if remaining <= 0:
                         reason = "subscription_cleanup"
-                        logger.info("communications.invalidation.wait_idle", extra=trace)
+                        log_wait("communications.invalidation.wait_idle")
                         return False
                     reason = "broker_receive"
                     message = await subscription.get_message(timeout=min(remaining, 0.25))
@@ -190,17 +205,15 @@ async def wait_for_inbox_invalidation(
                         and message.get("data") == INBOX_INVALIDATION_SIGNAL
                     ):
                         reason = "subscription_cleanup"
-                        logger.info("communications.invalidation.wait_signal_observed", extra=trace)
+                        log_wait("communications.invalidation.wait_signal_observed")
                         return True
                     reason = "unexpected_frame"
                     raise InboxInvalidationUnavailable("Communications invalidation unavailable")
     except asyncio.CancelledError:
-        logger.info("communications.invalidation.wait_cancelled", extra=trace)
+        log_wait("communications.invalidation.wait_cancelled")
         raise
     except Exception as exc:
-        logger.warning("communications.invalidation.wait_unavailable reason=%s", reason, extra={
-            **trace, "reason": reason, "error_type": type(exc).__name__,
-        })
+        log_wait("communications.invalidation.wait_unavailable", failure=exc)
         raise InboxInvalidationUnavailable("Communications invalidation unavailable") from None
     finally:
         if reserved:
