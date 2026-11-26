@@ -449,7 +449,8 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
     assert '--grep="$title"' in shell
     assert "--retries=0" in shell and "--workers=1" in shell
     assert 'type(stats.get(key)) is not int or stats[key] != expected' in shell
-    assert '"unexpected", "skipped", "flaky"' in shell
+    for stat, expected in (("expected", 1), ("unexpected", 0), ("skipped", 0), ("flaky", 0)):
+        assert f'("{stat}", {expected})' in shell
     assert '"expected", "passed", "chromium", ["passed"]' in shell
     assert "umask 077" in shell and "mktemp -d" in shell
     assert "trap 'rm -rf --" in shell
