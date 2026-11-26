@@ -367,7 +367,7 @@ if (approvedSpecialist && (foreignSpecialistAccounts.some(account => !account.em
       .map(email => email?.trim().toLowerCase())).size !== 3)) {
   throw new Error("Fresh isolation requires three distinct sanitized account credentials");
 }
-const localSpecialistMode = localMode && !releaseMode &&
+const localSpecialistMode = ordinarySpecialistAcceptance && localMode && !releaseMode &&
   process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM === "local" &&
   process.env.KAREN_LOCAL_SEARCH_ACCEPTANCE === "1" &&
   process.env.KAREN_SANITIZED_ACCOUNT === "true" &&
@@ -414,8 +414,8 @@ if (enabled) {
 }
 
 async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
-  // Local dev builds may not expose an attested deployment revision. Release
-  // acceptance always requires the exact reviewed SHA and cannot skip it.
+  // Generic local dev builds may omit the revision endpoint. Signed release
+  // and explicit local specialist acceptance both require the reviewed SHA.
   if (!releaseMode && !localSpecialistMode) return;
   const response = await page.context().request.get(
     new URL("/api/deployment-revision", target).toString(),

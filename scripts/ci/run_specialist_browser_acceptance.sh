@@ -51,8 +51,10 @@ case "$mode" in
          "${KAREN_BASE_URL:-}" == http://127.0.0.1:8010 &&
          -z "${KAREN_E2E_AUTH_STATE:-}" ]] ||
         { echo "::error::Local specialist acceptance requires explicit sanitized loopback mode"; exit 1; }
-      [[ "$(git rev-parse HEAD)" == "$KAREN_CHAT_BOOT_REVISION" &&
-         -z "$(git status --porcelain)" ]] ||
+      actual_revision="$(git rev-parse HEAD)"
+      worktree_status="$(git status --porcelain)"
+      [[ "$actual_revision" == "$KAREN_CHAT_BOOT_REVISION" &&
+         -z "$worktree_status" ]] ||
         { echo "::error::Local specialist acceptance requires a clean exact checkout"; exit 1; }
       export KAREN_LOCAL_SEARCH_ACCEPTANCE=1
       export CI=1
