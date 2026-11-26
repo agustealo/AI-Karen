@@ -166,10 +166,16 @@ class DatabaseIntegrationManager:
         slug: str,
         admin_email: str,
         subscription_tier: str = "basic",
-        settings: Optional[Dict[str, Any]] = None
+        settings: Optional[Dict[str, Any]] = None,
+        *,
+        admin_password: str,
+        admin_full_name: str,
+        operator_id: str,
     ) -> Dict[str, Any]:
-        if not self._initialized:
+        if not self._initialized or self.tenant_manager is None:
             raise RuntimeError("Database integration manager not initialized")
+        if not operator_id:
+            raise ValueError("Authenticated operator is required")
         
         config = TenantConfig(
             name=name,
@@ -178,7 +184,17 @@ class DatabaseIntegrationManager:
             settings=settings or {}
         )
         
-        tenant = await self.tenant_manager.create_tenant(config, admin_email)
+        # Reuse the administrative audit owner; never create accounts independently.
+        from ai_karen_engine.services.admin.admin_tenant_service import AdminTenantService
+
+        service = AdminTenantService(tenant_manager=self.tenant_manager)
+        tenant = await service.create_tenant(
+            config=config,
+            admin_email=admin_email,
+            admin_password=admin_password,
+            admin_full_name=admin_full_name,
+            operator_id=operator_id,
+        )
         return {
             "tenant_id": str(tenant.id),
             "name": tenant.name,
