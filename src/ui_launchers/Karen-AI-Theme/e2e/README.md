@@ -822,6 +822,23 @@ Supply KAREN_UX_EMAIL, KAREN_UX_PASSWORD, KAREN_UX_ACCOUNT_B_EMAIL, KAREN_UX_ACC
 
 KCOMM-03A uses bounded authenticated **read** refresh while the inbox is open (30 seconds, focus, online and visibility return). This is not WebSocket/Supabase push delivery. Refresh does not POST reconciliation or replay mutations, cannot bypass an uncertain outcome, and stops on hidden/inactive or unmounted views. The existing simulated realtime client and tenant-wide notification topic are not authorized personal-inbox transports.
 
+
+### Disposable signed-session Communications acceptance (KCOMM-02E)
+
+Run the existing **Production First-Boot Smoke** workflow on an approved source
+revision with its explicit `communications_browser` dispatch input enabled.
+The default remains false; ordinary PR and mainline boot checks do not claim
+browser acceptance. No hosted deployment credentials or live model endpoint
+are used. The proof uses disposable production images, isolated PostgreSQL,
+loopback HTTP ingress, distinct signed user accounts and the existing runtime
+ledger/reconciliation owners. It rejects skipped or retried browser tests.
+
+Historical execution: [run 45852298782](https://github.com/agustealo/AI-Karen/actions/runs/45852298782),
+source `1dffc88011bff58852b1fe8b353b5242cdafb019`, one passing Chromium
+scenario with zero skips/retries. The controlled terminal repository fixture
+does not establish real model inference failure, multiworker push delivery or
+hosted production acceptance. A new source revision needs a fresh opt-in run.
+
 ### ARM-08: fresh ordinary-chat specialist execution
 
 The existing consumer first-send test has an explicit ordinary-specialist mode. Use only the approved disposable non-admin tenant/account with a preconfigured local model and policy restricted to the single approved read-only tool. Set `KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE=true`, `KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED=true`, `KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID`, `KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID`, `KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT`, and `KAREN_SPECIALIST_EXPECTED_PROVIDER`, `MODEL`, `ENGINE`, `AGENT`, `TOOL` (each with the same prefix). The prompt must naturally request one registered specialist and one permitted read-only action, not ask for fabricated proof. It creates one new conversation through the UI, uses the approved signed Docker origin, and compares the attested runtime identity, actual model attribution, terminal lifecycle, participation and tool acknowledgment before and after reload. Neither tool success nor model attribution independently proves external state or installed model inventory; operator preflight and signed host attestation remain required. Depends on #1344/#1346 merged contracts. Protected execution remains NOT_RUN.
