@@ -68,10 +68,10 @@ def redact_revocable_code_metadata(metadata: Mapping[str, Any]) -> dict[str, Any
 PRESENTATION_COMPONENT_TYPES = frozenset({
     "weather.observation", "weather.comparison", "planner.task_list",
     "time.observation", "date.observation", "surface.composition",
-    "search.results", "data.table", "chart.bar", "code.artifact",
+    "search.results", "data.table", "chart.bar", "code.artifact", "document.artifact",
 })
 CARD_TEMPLATE_COMPONENT_TYPES = frozenset(
-    PRESENTATION_COMPONENT_TYPES - {"surface.composition", "code.artifact"}
+    PRESENTATION_COMPONENT_TYPES - {"surface.composition", "code.artifact", "document.artifact"}
 )
 
 
@@ -240,6 +240,36 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
         except (TypeError, ValueError, OverflowError):
             return None
         return safe if len(encoded.encode("utf-8")) <= 32768 else None
+    if component_type == "document.artifact":
+        # A historical creation receipt, NOT permission to read the file.
+        # No content, URL, storage key, principal or action is admissible.
+        import re
+        from uuid import UUID
+
+        if not isinstance(data, dict) or set(data) != {
+            "artifact_id", "filename", "mime_type", "size_bytes", "sha256",
+        }:
+            return None
+        artifact_id = data["artifact_id"]
+        if not isinstance(artifact_id, str) or len(artifact_id) != 36:
+            return None
+        try:
+            if str(UUID(artifact_id)) != artifact_id:
+                return None
+        except ValueError:
+            return None
+        if (
+            raw["evidence_ref"] != artifact_id
+            or raw["presentation_id"] != f"generated-text:{artifact_id}"
+            or data["filename"] != "generated.txt"
+            or data["mime_type"] != "text/plain"
+            or type(data["size_bytes"]) is not int
+            or not 1 <= data["size_bytes"] <= 65536
+            or not isinstance(data["sha256"], str)
+            or not re.fullmatch(r"[0-9a-f]{64}", data["sha256"])
+        ):
+            return None
+        return {**raw, "data": dict(data)}
     if component_type == "code.artifact":
         # This is display-only source text, never executable code.
         import re

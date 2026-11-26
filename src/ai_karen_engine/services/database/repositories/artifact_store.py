@@ -71,6 +71,17 @@ class ArtifactStore(Repository):
     async def upload(self, request: ArtifactUploadRequest) -> RepositoryResult[Artifact]:
         """Store an artifact and return its metadata."""
 
+    async def upload_reserved_text(
+        self, request: ArtifactUploadRequest, *, session_id: str, lease_token: str,
+    ) -> RepositoryResult[Artifact]:
+        """Internal governed writer. Unsupported backends must fail closed.
+
+        A real implementation spends the owner-scoped durable claim before
+        writing, creates without overwrite, and verifies readback before
+        success. These arguments are not a client-facing upload contract.
+        """
+        return RepositoryResult(success=False, error="reserved_upload_unavailable")
+
     @abstractmethod
     async def download(self, artifact_id: str, tenant_id: str) -> RepositoryResult[BinaryIO]:
         """Retrieve artifact bytes."""

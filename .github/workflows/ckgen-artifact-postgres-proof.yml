@@ -7,6 +7,9 @@ on:
       - "src/ai_karen_engine/config/artifact_storage.py"
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
       - "src/ai_karen_engine/services/database/repositories/upload_session.py"
+      - "src/ai_karen_engine/services/database/repositories/artifact_store.py"
+      - "tests/services/test_upload_session_repository.py"
+      - "tests/services/test_artifact_upload_compensation.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "supabase/migrations/*artifact_upload*.sql"
       - "tests/services/test_artifact_storage_platform_client.py"
@@ -20,6 +23,9 @@ on:
       - "src/ai_karen_engine/config/artifact_storage.py"
       - "src/ai_karen_engine/services/database/repositories/supabase_artifact_store.py"
       - "src/ai_karen_engine/services/database/repositories/upload_session.py"
+      - "src/ai_karen_engine/services/database/repositories/artifact_store.py"
+      - "tests/services/test_upload_session_repository.py"
+      - "tests/services/test_artifact_upload_compensation.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "supabase/migrations/*artifact_upload*.sql"
       - "tests/services/test_artifact_storage_platform_client.py"
@@ -251,6 +257,8 @@ jobs:
             tests/integration/test_artifact_rls_actor_postgres.py \
             tests/integration/test_upload_session_rls_postgres.py
           pytest tests/services/test_artifact_storage_platform_client.py \
+            tests/services/test_upload_session_repository.py \
+            tests/services/test_artifact_upload_compensation.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
             tests/integration/test_artifact_rls_actor_postgres.py \
             tests/integration/test_upload_session_rls_postgres.py \
