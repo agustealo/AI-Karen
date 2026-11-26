@@ -1,7 +1,7 @@
 """Regression proof for the existing legacy work queue, not private push."""
 
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import Mock
+from unittest.mock import MagicMock, Mock
 
 import fakeredis
 import pytest
@@ -94,6 +94,7 @@ def test_redis_outage_does_not_switch_to_memory():
 
 def test_watch_conflict_is_bounded_and_not_reported_as_success():
     client = Mock()
+    client.pipeline.return_value = MagicMock()
     pipe = client.pipeline.return_value.__enter__.return_value
     pipe.watch.side_effect = WatchError()
     bus = RedisEventBus(redis_client=client)
