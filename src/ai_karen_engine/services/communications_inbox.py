@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 from uuid import UUID
 
 from ai_karen_engine.config.runtime import get_runtime_settings
@@ -32,6 +33,21 @@ class CommunicationsAuthorizationError(PermissionError):
 
 class CommunicationsProducerUnavailable(RuntimeError):
     """Terminal projection has not been activated."""
+
+
+@dataclass(frozen=True, slots=True)
+class InboxCapabilities:
+    """Server-authoritative entitlements and configuration, not health proof."""
+
+    can_mutate: bool
+    producer_enabled: bool
+    can_reconcile: bool
+
+
+@dataclass(frozen=True, slots=True)
+class OwnedInboxPage:
+    page: InboxPage
+    capabilities: InboxCapabilities
 
 
 class CommunicationsInboxService:
@@ -71,12 +87,20 @@ class CommunicationsInboxService:
     async def list_owned(
         self, *, user: UserData, correlation_id: str, limit: int,
         inbox_filter: InboxFilter, cursor: InboxCursor | None,
-    ) -> InboxPage:
+    ) -> OwnedInboxPage:
         tenant_id, user_id = self._authorize(user, Permission.COMMUNICATIONS_READ, correlation_id)
-        return await self._repository.list_entries(
+        page = await self._repository.list_entries(
             tenant_id=tenant_id, user_id=user_id, limit=limit,
             inbox_filter=inbox_filter, cursor=cursor,
         )
+        # These are UI affordances only. Every mutation reauthorizes the
+        # current principal; a previously returned capability is not a grant.
+        can_mutate = get_rbac_manager().has_permission(user, Permission.COMMUNICATIONS_WRITE)
+        producer_enabled = get_runtime_settings().features.enable_communications_terminal_producer
+        return OwnedInboxPage(page, InboxCapabilities(
+            can_mutate=can_mutate, producer_enabled=producer_enabled,
+            can_reconcile=can_mutate and producer_enabled,
+        ))
 
     async def mutate_owned(
         self, *, user: UserData, correlation_id: str, entry_id: UUID,

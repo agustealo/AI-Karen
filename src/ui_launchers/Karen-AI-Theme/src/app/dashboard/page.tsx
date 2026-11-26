@@ -39,6 +39,7 @@ import { useVerifiedConversationHandoff } from "@/components/chat/useVerifiedCon
 import { RuntimeApprovalProvider } from "@/components/approvals/RuntimeApprovalProvider";
 import { CardStudioWorkspace } from "@/components/card-studio/CardStudioWorkspace";
 import CommsCenterPage from "@/components/comms/CommsCenterPage";
+import { PersonalCommunicationsInboxProvider } from "@/components/comms/PersonalCommunicationsInbox";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -74,7 +75,9 @@ function PrincipalScopedSessionProvider({ children }: { children: React.ReactNod
       tenant_id: user.tenant_id,
       user_id: user.user_id,
     }}>
-      <RuntimeApprovalProvider>{children}</RuntimeApprovalProvider>
+      <PersonalCommunicationsInboxProvider tenantId={user.tenant_id} userId={user.user_id}>
+        <RuntimeApprovalProvider>{children}</RuntimeApprovalProvider>
+      </PersonalCommunicationsInboxProvider>
     </SessionProvider>
   );
 }
