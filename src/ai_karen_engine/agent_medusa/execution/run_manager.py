@@ -948,7 +948,9 @@ class MedusaRunManager:
                 "completed",
                 "failed",
                 "cancelled",
-            } and snapshot["distributed_control"].get("supported"):
+            } and snapshot[
+                "distributed_control"
+            ].get("supported"):
                 snapshot["distributed_control"]["lease_alive"] = False
             merged[snapshot["run_id"]] = snapshot
 
