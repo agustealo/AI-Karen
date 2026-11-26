@@ -65,3 +65,30 @@ A missing artifact or unavailable host is a **release HOLD** for this gate, not 
 ## Metric/version caution
 
 Prometheus metrics have version-dependent availability. Relevant native series include vllm:num_requests_running, vllm:num_requests_waiting, vllm:generation_tokens_total, vllm:kv_cache_usage_perc and vllm:request_success_total with finished_reason=abort. An incremented abort counter is not required because some versions omit that signal despite terminating work. Instead, the isolated request must produce native scheduler drain, a stable generation counter and no change to its normal completion counter. The separately marked per-request abort trace remains uncertified. Model residency can legitimately persist as warm weights or prefix cache even when no request is running.
+
+
+## In-process Transformers retirement boundary (KUI-004B4.48C7Z8E7)
+
+The governed single-device Transformers path fences observed CUDA devices with
+`torch.cuda.synchronize(device)` before the native generation lock is released.
+The same scope covers governed specialist borrows, including marker mutation,
+reference inference, guided generation and verifier operations. The explicit
+CPU path does not issue a CUDA synchronization. Unknown device identity denies
+governed dispatch. Cancellation does not bypass the retirement fence.
+
+A synchronization failure places the canonical Transformers runtime in a
+process-wide native execution hold; replacing the cached model or provider
+runtime is not evidence of recovery. No automated reset is supplied. Operators
+must investigate the device/driver failure and establish host quiescence before
+a controlled restart. No model attempt may be replayed automatically as orphan
+recovery. Already-running work on other instances is not certified terminated by
+the hold, and the hold is not durable across process death.
+
+The source regression exercises explicit device selection, lock ordering,
+cancelled borrow retirement and failed-fence replacement denial using test
+doubles. **Actual CUDA host acceptance remains NOT_RUN.** These checks do not
+establish multi-device/remote execution, GPU weight release, process-death
+recovery, or successful cancellation of a hung driver. Partial failure during
+pipeline construction before a device can be observed is a separate acceptance
+gap. Do not promote this source contract into a consumer-ready or GPU release
+receipt.

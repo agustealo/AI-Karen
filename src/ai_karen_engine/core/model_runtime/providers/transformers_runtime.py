@@ -6,7 +6,7 @@ import hashlib
 import logging
 import os
 import threading
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Union
 
@@ -80,6 +80,53 @@ class TransformersRuntime(LLMProviderBase):
     """
 
     _instance: Optional["TransformersRuntime"] = None
+    # Device retirement failure is process-scoped, not cache-instance scoped.
+    # No automated reset: rebuilding a runtime does not prove device quiescence.
+    _native_retirement_hold = threading.Event()
+
+    @staticmethod
+    def _require_native_retirement_ready() -> None:
+        if TransformersRuntime._native_retirement_hold.is_set():
+            raise ProviderNotAvailable("native_device_retirement_hold")
+
+    @staticmethod
+    def _synchronize_native_device(device: Any) -> None:
+        kind = getattr(device, "type", None)
+        if kind == "cpu":
+            return
+        if kind != "cuda" or getattr(device, "index", None) is None:
+            raise ProviderNotAvailable("native_device_retirement_unverified")
+        import torch
+
+        # The canonical loader places its pipeline on a single explicit
+        # device. Synchronize that device, not the thread's current device.
+        torch.cuda.synchronize(device)
+
+    @contextmanager
+    def _native_device_scope(self, active: Any) -> Iterator[None]:
+        """Fence device work before releasing the caller's generation lock.
+
+        This is local process/device synchronization, not a GPU memory
+        release receipt or proof of remote scheduler cancellation.
+        """
+        self._require_native_retirement_ready()
+        device = getattr(active, "device", None)
+        kind = getattr(device, "type", None)
+        if kind not in {"cpu", "cuda"} or (
+            kind == "cuda" and getattr(device, "index", None) is None
+        ):
+            raise ProviderNotAvailable("native_device_retirement_unverified")
+        try:
+            yield
+        finally:
+            # Cancellation must not skip this fence. An unverified device
+            # cannot be made healthy by replacing the cached runtime.
+            try:
+                self._synchronize_native_device(device)
+            except BaseException as exc:
+                TransformersRuntime._native_retirement_hold.set()
+                logger.error("native_device_retirement_failed")
+                raise ProviderNotAvailable("native_device_retirement_unverified") from exc
 
     def __init__(
         self,
@@ -118,6 +165,7 @@ class TransformersRuntime(LLMProviderBase):
         self, model_path: Optional[str] = None, *, exact_only: bool = False,
         checkpoint: Callable[[], None] | None = None,
     ) -> bool:
+        self._require_native_retirement_ready()
         if not self._transformers_available:
             return False
 
@@ -132,6 +180,7 @@ class TransformersRuntime(LLMProviderBase):
                 return False
 
         with _checkpointed_lock(self._lock, checkpoint):
+            self._require_native_retirement_ready()
             if self._pipeline:
                 if exact_only:
                     if self.model_path and os.path.realpath(target_path) == os.path.realpath(self.model_path):
@@ -206,7 +255,13 @@ class TransformersRuntime(LLMProviderBase):
                     )
                     # Publish pipeline and loaded-model identity together,
                     # excluding concurrent generations while switching.
+                    # Loading can enqueue device work as well. Fence it
+                    # before publishing, even if the request has been stopped.
+                    if checkpoint is not None:
+                        with self._native_device_scope(prepared_pipeline):
+                            checkpoint()
                     with _checkpointed_lock(self._generation_lock, checkpoint):
+                        self._require_native_retirement_ready()
                         self._pipeline = prepared_pipeline
                         self.model_path = resolved_path
                         self._model_name = self._resolve_model_name(resolved_path)
@@ -214,6 +269,7 @@ class TransformersRuntime(LLMProviderBase):
                     return True
                 except Exception as exc:
                     # Cancellation is terminal, not a failed load candidate.
+                    self._require_native_retirement_ready()
                     if checkpoint is not None:
                         checkpoint()
                     last_error = exc
@@ -236,6 +292,7 @@ class TransformersRuntime(LLMProviderBase):
         model-forward hooks with ordinary generation.
         """
 
+        self._require_native_retirement_ready()
         if not self._pipeline and self._transformers_available:
             self.warm(self.model_path)
         if not self._pipeline:
@@ -243,6 +300,7 @@ class TransformersRuntime(LLMProviderBase):
                 raise ProviderNotAvailable("Transformers runtime is not available")
             raise ProviderNotAvailable("Transformers model is not warmed")
         with self._generation_lock:
+            self._require_native_retirement_ready()
             active = self._pipeline
             if active is None:
                 raise ProviderNotAvailable("Transformers model is not warmed")
@@ -261,6 +319,7 @@ class TransformersRuntime(LLMProviderBase):
         while holding this lock.
         """
         with _checkpointed_lock(self._generation_lock, checkpoint):
+            self._require_native_retirement_ready()
             active = self._pipeline
             if (
                 active is None or not self.model_path
@@ -270,7 +329,9 @@ class TransformersRuntime(LLMProviderBase):
                 ))
             ):
                 raise ProviderNotAvailable("native_authorized_model_identity_drift")
-            yield active.model, active.tokenizer
+            retirement = self._native_device_scope(active) if checkpoint is not None else nullcontext()
+            with retirement:
+                yield active.model, active.tokenizer
 
     def quarantine_generation_components(self, expected: tuple[Any, Any]) -> bool:
         """Detach only the failed model/tokenizer pair from future dispatch.
@@ -300,6 +361,7 @@ class TransformersRuntime(LLMProviderBase):
         Loading that model never downloads or tries a different candidate.
         Legacy callers without the host-selected identity keep their contract.
         """
+        self._require_native_retirement_ready()
         if required_model is not None:
             if not required_model.strip() or required_model.strip().lower() == "auto":
                 raise ProviderNotAvailable("native_execution_model_unobserved")
@@ -313,6 +375,7 @@ class TransformersRuntime(LLMProviderBase):
                 max_new_tokens = kwargs.get("max_new_tokens") or kwargs.get("max_tokens") or 128
                 temperature = float(kwargs.get("temperature", 0.7))
                 with _checkpointed_lock(self._generation_lock, before_generate):
+                    self._require_native_retirement_ready()
                     active_pipeline = self._pipeline
                     active_model = str(self.model_path or "").strip()
                     if active_pipeline is None or not active_model or active_model == "auto":
@@ -322,14 +385,19 @@ class TransformersRuntime(LLMProviderBase):
                     ):
                         raise ProviderNotAvailable("native_authorized_model_identity_drift")
                     generation_options = generation_checkpoint_options(before_generate)
-                    result = active_pipeline(
-                        prompt,
-                        max_new_tokens=max_new_tokens,
-                        temperature=temperature,
-                        do_sample=temperature > 0,
-                        pad_token_id=active_pipeline.tokenizer.eos_token_id,
-                        **generation_options,
+                    retirement = (
+                        self._native_device_scope(active_pipeline)
+                        if before_generate is not None else nullcontext()
                     )
+                    with retirement:
+                        result = active_pipeline(
+                            prompt,
+                            max_new_tokens=max_new_tokens,
+                            temperature=temperature,
+                            do_sample=temperature > 0,
+                            pad_token_id=active_pipeline.tokenizer.eos_token_id,
+                            **generation_options,
+                        )
                     if before_generate is not None:
                         before_generate()
                 if result and isinstance(result, list) and "generated_text" in result[0]:

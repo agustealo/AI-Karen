@@ -404,3 +404,93 @@ async def test_live_preparation_is_owned_across_repeated_cancellation(monkeypatc
         await task
     assert retired.is_set()
     assert meter.model_calls == 0
+
+
+@pytest.mark.parametrize("cancelled", [False, True])
+def test_governed_borrow_fences_observed_device_under_lock(monkeypatch, cancelled):
+    import sys
+    import threading
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
+
+    events = []
+    device = SimpleNamespace(type="cuda", index=2)
+    monkeypatch.setattr(TransformersRuntime, "_native_retirement_hold", threading.Event())
+    runtime = object.__new__(TransformersRuntime)
+    runtime.model_path = "/local/model-a"
+    runtime._generation_lock = threading.RLock()
+    runtime._pipeline = SimpleNamespace(model=object(), tokenizer=object(), device=device)
+
+    def synchronize(observed):
+        assert observed is device
+        assert runtime._generation_lock._is_owned()
+        events.append("synchronize")
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(synchronize=synchronize),
+    ))
+
+    def borrow():
+        with runtime.borrow_generation_components("/local/model-a", checkpoint=lambda: None):
+            events.append("dispatch")
+            if cancelled:
+                raise ProviderNotAvailable("cancelled")
+
+    if cancelled:
+        with pytest.raises(ProviderNotAvailable, match="cancelled"):
+            borrow()
+    else:
+        borrow()
+    assert events == ["dispatch", "synchronize"]
+    assert not runtime._generation_lock._is_owned()
+
+
+def test_failed_device_fence_blocks_replacement_runtime(monkeypatch):
+    import sys
+    import threading
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
+
+    monkeypatch.setattr(TransformersRuntime, "_native_retirement_hold", threading.Event())
+    runtime = object.__new__(TransformersRuntime)
+    runtime.model_path = "/local/model-a"
+    runtime._generation_lock = threading.RLock()
+    runtime._pipeline = SimpleNamespace(
+        model=object(), tokenizer=object(), device=SimpleNamespace(type="cuda", index=1),
+    )
+
+    def fail(device):
+        raise RuntimeError("driver failure")
+
+    monkeypatch.setitem(sys.modules, "torch", SimpleNamespace(
+        cuda=SimpleNamespace(synchronize=fail),
+    ))
+    with pytest.raises(ProviderNotAvailable, match="retirement_unverified"):
+        with runtime.borrow_generation_components("/local/model-a", checkpoint=lambda: None):
+            pass
+    replacement = object.__new__(TransformersRuntime)
+    with pytest.raises(ProviderNotAvailable, match="retirement_hold"):
+        replacement.warm("/local/model-a", exact_only=True)
+    with pytest.raises(ProviderNotAvailable, match="retirement_hold"):
+        replacement.generate_text_with_model("prompt", required_model="/local/model-a")
+
+
+def test_unknown_governed_device_denies_before_dispatch(monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
+
+    monkeypatch.setattr(TransformersRuntime, "_native_retirement_hold", threading.Event())
+    runtime = object.__new__(TransformersRuntime)
+    runtime.model_path = "/local/model-a"
+    runtime._generation_lock = threading.RLock()
+    runtime._pipeline = SimpleNamespace(model=object(), tokenizer=object(), device=None)
+    with pytest.raises(ProviderNotAvailable, match="retirement_unverified"):
+        with runtime.borrow_generation_components("/local/model-a", checkpoint=lambda: None):
+            pytest.fail("unobserved device admitted")
