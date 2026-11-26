@@ -9,7 +9,7 @@ not discover providers, models, prompts, or policy on their own.
 """
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Sequence
+from typing import TYPE_CHECKING, Any, Callable, Sequence
 
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
 from ai_karen_engine.core.reasoning.executor import ReasoningExecutor
@@ -55,6 +55,8 @@ class ReasoningActivation:
     reasoning_modes: tuple[str, ...]
     request_metadata: dict[str, Any] = field(default_factory=dict)
     runtime_metadata: dict[str, Any] = field(default_factory=dict)
+    # Host-owned accounting, never request or strategy diagnostic metadata.
+    reserved_model_calls: Callable[[], int] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -269,6 +271,7 @@ class RuntimeReasoningBridge:
             )
 
         optional_strategies = []
+        reserved_model_calls = None
         request_metadata: dict[str, Any] = {}
         runtime_metadata: dict[str, Any] = {
             "reasoning_modes": list(requested_modes),
@@ -293,6 +296,12 @@ class RuntimeReasoningBridge:
                 execution_admission=admission,
             )
             self._validate_soft_budget(composed.maximum_total_model_calls, admission)
+            reserved_model_calls = composed.reserved_model_calls
+            if not callable(reserved_model_calls):
+                raise ReasoningActivationError(
+                    "soft_reasoning_accounting_unavailable",
+                    "Soft Reasoning requires host-owned attempt accounting",
+                )
             optional_strategies.append(composed.strategy)
             request_metadata.update(
                 {
@@ -319,11 +328,18 @@ class RuntimeReasoningBridge:
             get_default_strategies,
         )
         strategies = get_default_strategies(optional_strategies=optional_strategies)
+        if reserved_model_calls is not None and any(
+            item.supports_model_calls and item not in optional_strategies for item in strategies
+        ):
+            raise ReasoningActivationError(
+                "reasoning_model_accounting_conflict", "Mixed model accounting is not authorized",
+            )
         return ReasoningActivation(
             executor=ReasoningExecutor(strategies=strategies),
             reasoning_modes=requested_modes,
             request_metadata=request_metadata,
             runtime_metadata=runtime_metadata,
+            reserved_model_calls=reserved_model_calls,
         )
 
     @staticmethod

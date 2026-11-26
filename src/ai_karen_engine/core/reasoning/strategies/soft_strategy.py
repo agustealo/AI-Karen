@@ -8,7 +8,7 @@ plugins, or memory stores.
 from __future__ import annotations
 
 import asyncio
-from typing import Any, List
+from typing import Any, Awaitable, Callable, List
 
 from ai_karen_engine.core.reasoning.contracts import (
     ReasoningAssessment,
@@ -20,6 +20,7 @@ from ai_karen_engine.core.reasoning.contracts import (
     ReasoningResult,
     ReasoningStatus,
 )
+from ai_karen_engine.core.reasoning.soft_reasoning.contracts import SoftExplorationTrace
 from ai_karen_engine.core.reasoning.soft_reasoning.exploration import (
     SoftExplorationEngine,
     SoftReasoningBudgetError,
@@ -50,8 +51,12 @@ class SoftReasoner(ReasoningStrategyEngine):
     }
     determinism = "seeded_stochastic"
 
-    def __init__(self, engine: SoftExplorationEngine) -> None:
+    def __init__(
+        self, engine: SoftExplorationEngine, *,
+        run_exploration: Callable[..., Awaitable[SoftExplorationTrace]] | None = None,
+    ) -> None:
         self._engine = engine
+        self._run_exploration = run_exploration
 
     async def execute(
         self,
@@ -93,9 +98,7 @@ class SoftReasoner(ReasoningStrategyEngine):
             attempts += 1
 
         try:
-            trace = await asyncio.to_thread(
-                self._engine.explore,
-                prompt,
+            kwargs = dict(
                 objective=objective,
                 evidence=evidence_text,
                 max_model_calls=budget.max_model_calls,
@@ -103,6 +106,11 @@ class SoftReasoner(ReasoningStrategyEngine):
                 correlation_id=context.correlation_id,
                 on_model_attempt=observe_attempt,
             )
+            if self._run_exploration is not None:
+                trace = await self._run_exploration(prompt, **kwargs)
+            else:
+                # Explicit research-only composition retains compatibility.
+                trace = await asyncio.to_thread(self._engine.explore, prompt, **kwargs)
         except SoftReasoningUnavailable as exc:
             return self._failed(
                 str(exc),
@@ -125,6 +133,10 @@ class SoftReasoner(ReasoningStrategyEngine):
                 ReasoningErrorCode.STRATEGY_FAILURE,
                 evidence=evidence,
                 model_attempts=attempts,
+                status=(
+                    ReasoningStatus.ABSTAINED if self._run_exploration is not None
+                    else ReasoningStatus.FAILED
+                ),
             )
 
         best = trace.best_candidate

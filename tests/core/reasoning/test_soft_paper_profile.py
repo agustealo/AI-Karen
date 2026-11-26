@@ -307,3 +307,65 @@ def test_paper_budget_denies_incomplete_initial_batch_before_reference(monkeypat
             "PROMPT-V1: solve", objective="solve", max_model_calls=6, max_output_tokens=16,
         )
     assert verifier.calls == 0
+
+
+def test_model_scope_follows_reservation_for_every_native_operation():
+    from contextlib import contextmanager
+
+    events = []
+    held = False
+
+    @contextmanager
+    def scope():
+        nonlocal held
+        assert not held
+        held = True
+        events.append("enter")
+        try:
+            yield
+        finally:
+            held = False
+            events.append("exit")
+
+    def reserve():
+        assert not held
+        events.append("reserve")
+
+    class ScopedGeneration(PaperGenerationRuntime):
+        def capabilities(self):
+            assert held
+            return super().capabilities()
+
+        def first_token_embedding(self, prompt):
+            assert held
+            events.append("reference")
+            return super().first_token_embedding(prompt)
+
+        def generate_with_first_token_embedding(self, *args, **kwargs):
+            assert held
+            events.append("candidate")
+            return super().generate_with_first_token_embedding(*args, **kwargs)
+
+    class ScopedVerifier(MultiGenerateVerifier):
+        def verify_batch(self, *args, **kwargs):
+            assert held
+            events.append("verify")
+            return super().verify_batch(*args, **kwargs)
+
+    engine = SoftExplorationEngine(
+        generation=ScopedGeneration(), verifier=PassingVerifier(),
+        batch_verifier=ScopedVerifier(),
+        config=replace(SoftExplorationConfig.paper_2025(), max_iterations=0),
+        model_scope=scope,
+    )
+    trace = engine.explore(
+        "prepared", objective="solve", max_model_calls=7,
+        max_output_tokens=16, on_model_attempt=reserve,
+    )
+    assert trace.model_calls == 5
+    assert trace.verifier_calls == 1
+    assert events == ["enter", "exit"] + [
+        event for stage in ["reference", *(["candidate"] * 5), "verify"]
+        for event in ["reserve", "enter", stage, "exit"]
+    ]
+    assert not held

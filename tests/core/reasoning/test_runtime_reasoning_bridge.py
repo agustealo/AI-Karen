@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from uuid import uuid4
 
 import pytest
@@ -40,6 +40,7 @@ class DummyComposed:
     marker_token_id: int = 42
     profile: str = "paper_2025"
     maximum_total_model_calls: int = 31
+    reserved_model_calls: object = field(default_factory=lambda: lambda: 0)
 
 
 class DummyComposer:
@@ -127,6 +128,7 @@ def test_soft_reasoning_activation_injects_runtime_composed_strategy(monkeypatch
     )
 
     assert activation.reasoning_modes == ("soft_exploration",)
+    assert activation.reserved_model_calls() == 0
     assert activation.request_metadata["soft_reasoning_profile"] == "paper_2025"
     assert activation.request_metadata["soft_reasoning_prompt_version"] == "v1.0.0"
     assert activation.runtime_metadata["reasoning_activation"] == "runtime_composed"
@@ -318,3 +320,28 @@ async def test_soft_activation_cannot_reuse_spent_model_budget(monkeypatch):
         )
     assert exc_info.value.code == "soft_reasoning_model_budget_insufficient"
     assert meter.model_calls == 1
+
+
+@pytest.mark.parametrize("replacement", ["model", "tokenizer", "path"])
+def test_native_borrow_rejects_replacement_without_loading(monkeypatch, replacement):
+    from threading import RLock
+    from types import SimpleNamespace
+
+    from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
+
+    runtime = object.__new__(TransformersRuntime)
+    runtime._generation_lock = RLock()
+    runtime.model_path = "/local/model-a"
+    runtime._pipeline = SimpleNamespace(model=object(), tokenizer=object())
+    monkeypatch.setattr(runtime, "warm", lambda *args, **kwargs: pytest.fail("unexpected load"))
+    with runtime.borrow_generation_components("/local/model-a") as original:
+        assert original[0] is runtime._pipeline.model
+        assert original[1] is runtime._pipeline.tokenizer
+    if replacement == "path":
+        runtime.model_path = "/local/model-b"
+    else:
+        setattr(runtime._pipeline, replacement, object())
+    with pytest.raises(ProviderNotAvailable, match="identity_drift"):
+        with runtime.borrow_generation_components("/local/model-a", expected=original):
+            pytest.fail("replaced identity admitted")

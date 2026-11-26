@@ -21,8 +21,9 @@ from __future__ import annotations
 import hashlib
 import math
 import random
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass, replace
-from typing import Callable, Sequence
+from typing import Callable, ContextManager, Iterator, Sequence
 
 from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
     SoftBatchVerifierPort,
@@ -138,11 +139,13 @@ class SoftExplorationEngine:
         verifier: SoftVerifierPort,
         batch_verifier: SoftBatchVerifierPort | None = None,
         config: SoftExplorationConfig | None = None,
+        model_scope: Callable[[], ContextManager[object]] | None = None,
     ) -> None:
         self._generation = generation
         self._verifier = verifier
         self._batch_verifier = batch_verifier
         self._config = config or SoftExplorationConfig()
+        self._model_scope = model_scope or nullcontext
         self._paper_reward = PaperRewardComposer(
             PaperRewardConfig(
                 coherence_mode=CoherenceMode.PAPER_SEQUENCE_LOG_PROBABILITY
@@ -180,23 +183,30 @@ class SoftExplorationEngine:
 
         attempts = 0
 
-        def reserve_attempt() -> None:
+        @contextmanager
+        def reserve_attempt() -> Iterator[None]:
             nonlocal attempts
             if attempts >= max_model_calls:
                 raise SoftReasoningBudgetError("soft exploration total model-call budget exhausted")
             if on_model_attempt is not None:
                 on_model_attempt()
             attempts += 1
-        capabilities = self._generation.capabilities()
+            # Admission runs before borrowing the native lock; never wait on
+            # the event-loop meter while holding model lifecycle locks.
+            with self._model_scope():
+                yield
+
+        with self._model_scope():
+            capabilities = self._generation.capabilities()
         if not capabilities.supports_first_token_embedding_control:
             raise SoftReasoningUnavailable(
                 f"runtime {capabilities.runtime_engine!r} does not expose first-token embedding control"
             )
 
-        reserve_attempt()
-        base_embedding = tuple(
-            float(value) for value in self._generation.first_token_embedding(prompt)
-        )
+        with reserve_attempt():
+            base_embedding = tuple(
+                float(value) for value in self._generation.first_token_embedding(prompt)
+            )
         if len(base_embedding) != capabilities.hidden_size or not base_embedding:
             raise SoftReasoningUnavailable(
                 "runtime first-token embedding does not match declared hidden_size"
@@ -251,7 +261,7 @@ class SoftExplorationEngine:
         objective: str,
         evidence: Sequence[str],
         max_model_calls: int,
-        reserve_attempt: Callable[[], None],
+        reserve_attempt: Callable[[], ContextManager[None]],
         max_output_tokens: int,
         correlation_id: str,
         seed: int,
@@ -310,23 +320,23 @@ class SoftExplorationEngine:
                     projection=projection,
                     scale=self._config.embedding_scale,
                 )
-                reserve_attempt()
-                output = self._generation.generate_with_first_token_embedding(
-                    prompt,
-                    guided_embedding,
-                    max_tokens=max_output_tokens,
-                    seed=seed + model_calls,
-                )
+                with reserve_attempt():
+                    output = self._generation.generate_with_first_token_embedding(
+                        prompt,
+                        guided_embedding,
+                        max_tokens=max_output_tokens,
+                        seed=seed + model_calls,
+                    )
                 model_calls += 1
                 outputs.append(output)
                 guided_embeddings.append(guided_embedding)
 
-            reserve_attempt()
-            verification_batch = batch_verifier.verify_batch(
-                objective,
-                [output.text for output in outputs],
-                evidence=evidence,
-            )
+            with reserve_attempt():
+                verification_batch = batch_verifier.verify_batch(
+                    objective,
+                    [output.text for output in outputs],
+                    evidence=evidence,
+                )
             verifier_calls += 1
             batches += 1
             if len(verification_batch.candidate_scores) != len(outputs):
@@ -421,7 +431,7 @@ class SoftExplorationEngine:
         objective: str,
         evidence: Sequence[str],
         max_model_calls: int,
-        reserve_attempt: Callable[[], None],
+        reserve_attempt: Callable[[], ContextManager[None]],
         max_output_tokens: int,
         correlation_id: str,
         seed: int,
@@ -469,20 +479,20 @@ class SoftExplorationEngine:
                 projection=projection,
                 scale=self._config.embedding_scale,
             )
-            reserve_attempt()
-            output = self._generation.generate_with_first_token_embedding(
-                prompt,
-                guided_embedding,
-                max_tokens=max_output_tokens,
-                seed=seed + model_calls,
-            )
+            with reserve_attempt():
+                output = self._generation.generate_with_first_token_embedding(
+                    prompt,
+                    guided_embedding,
+                    max_tokens=max_output_tokens,
+                    seed=seed + model_calls,
+                )
             model_calls += 1
-            reserve_attempt()
-            verification = self._verifier.score(
-                objective,
-                output.text,
-                evidence=evidence,
-            )
+            with reserve_attempt():
+                verification = self._verifier.score(
+                    objective,
+                    output.text,
+                    evidence=evidence,
+                )
             verifier_calls += 1
             search_score = float(verification.score)
             candidate = SoftCandidate(

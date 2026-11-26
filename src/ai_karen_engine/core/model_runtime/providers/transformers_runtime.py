@@ -230,6 +230,30 @@ class TransformersRuntime(LLMProviderBase):
                 raise ProviderNotAvailable("Transformers model is not warmed")
             return active.model, active.tokenizer, self._generation_lock
 
+    @contextmanager
+    def borrow_generation_components(
+        self, required_model: str, *,
+        expected: tuple[Any, Any] | None = None,
+        checkpoint: Callable[[], None] | None = None,
+    ) -> Iterator[tuple[Any, Any]]:
+        """Borrow only the exact loaded model/tokenizer under the canonical lock.
+
+        Never warm or select a fallback. A replacement even at the same path
+        invalidates the earlier borrow. Callers must not await event-loop work
+        while holding this lock.
+        """
+        with _checkpointed_lock(self._generation_lock, checkpoint):
+            active = self._pipeline
+            if (
+                active is None or not self.model_path
+                or os.path.realpath(required_model) != os.path.realpath(self.model_path)
+                or (expected is not None and (
+                    active.model is not expected[0] or active.tokenizer is not expected[1]
+                ))
+            ):
+                raise ProviderNotAvailable("native_authorized_model_identity_drift")
+            yield active.model, active.tokenizer
+
     def generate_text_with_model(
         self, prompt: str, *, required_model: str | None = None,
         before_generate: Callable[[], None] | None = None, **kwargs: Any,

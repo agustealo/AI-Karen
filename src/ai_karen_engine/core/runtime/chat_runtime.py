@@ -5790,10 +5790,18 @@ class ChatRuntime:
         result = await activation.executor.execute(canonical_request, plan, context)
         reasoning_duration_ms = (time.perf_counter() - reasoning_started) * 1000.0
 
-        consumed_model_calls = int(result.diagnostics.get("model_calls", 0) or 0)
-        for _ in range(consumed_model_calls):
-            if not await meter.consume_model_call():
-                raise RuntimeError("Execution budget exhausted: max_model_calls")
+        reserved_model_calls = getattr(activation, "reserved_model_calls", None)
+        if reserved_model_calls is not None:
+            # The trusted Runtime composition already reserved every native
+            # attempt on this meter. Strategy diagnostics cannot waive charges.
+            consumed_model_calls = reserved_model_calls()
+            if type(consumed_model_calls) is not int or not 0 <= consumed_model_calls <= meter.model_calls:
+                raise RuntimeError("Invalid governed reasoning attempt accounting")
+        else:
+            consumed_model_calls = int(result.diagnostics.get("model_calls", 0) or 0)
+            for _ in range(consumed_model_calls):
+                if not await meter.consume_model_call():
+                    raise RuntimeError("Execution budget exhausted: max_model_calls")
         consumed_steps = int(result.diagnostics.get("steps", 0) or 0)
         for _ in range(consumed_steps):
             if not await meter.consume_reasoning_step():

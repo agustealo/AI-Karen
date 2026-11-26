@@ -9,8 +9,9 @@ provider or builds a shadow prompt registry.
 from __future__ import annotations
 
 import os
+from contextlib import nullcontext
 from dataclasses import dataclass
-from typing import Sequence
+from typing import Callable, Sequence
 
 from ai_karen_engine.core.model_runtime.governed_model_admission import GovernedToolModelAdmission
 from ai_karen_engine.core.model_runtime.model_manager import (
@@ -81,6 +82,7 @@ class ComposedSoftReasoning:
     marker_token_id: int
     profile: str
     maximum_total_model_calls: int
+    reserved_model_calls: Callable[[], int] | None = None
 
 
 class RuntimeSoftReasoningComposer:
@@ -111,6 +113,7 @@ class RuntimeSoftReasoningComposer:
     ) -> ComposedSoftReasoning:
         selection = self._select_transformers(preferred_provider)
         target = None
+        endpoint = None
         if execution_admission is not None:
             # Live Runtime composition must validate the concrete native
             # target before even resolving the cached model object.
@@ -142,12 +145,31 @@ class RuntimeSoftReasoningComposer:
                 "selected runtime does not expose Transformers generation internals"
             )
 
-        marker = self._tokens.ensure(runtime)
+        pinned = None
+        checkpoint: Callable[[], None] | None = None
+        reserved = 0
+        started = False
+        if execution_admission is not None:
+            if target is None or endpoint is None:
+                raise SoftReasoningCompositionUnavailable("native target unavailable")
+            with runtime.borrow_generation_components(target) as components:
+                pinned = components
+                marker = self._tokens.ensure(runtime)
+        else:
+            marker = self._tokens.ensure(runtime)
+
+        def model_scope():
+            if pinned is None:
+                return nullcontext()
+            return runtime.borrow_generation_components(
+                target, expected=pinned, checkpoint=checkpoint,
+            )
         generation = TransformersSoftGenerationAdapter(
             runtime,
             TransformersSoftReasoningConfig.paper_2025(marker.token_id),
         )
-        capabilities = generation.capabilities()
+        with model_scope():
+            capabilities = generation.capabilities()
         if execution_admission is None and preferred_model and preferred_model not in {"auto", capabilities.model_id}:
             raise SoftReasoningCompositionUnavailable(
                 "the selected canonical local model does not match preferred_model"
@@ -168,17 +190,54 @@ class RuntimeSoftReasoningComposer:
             verifier=_BatchVerifierSingleAdapter(batch_verifier),
             batch_verifier=batch_verifier,
             config=config,
+            model_scope=model_scope,
         )
         prepared_prompt = self._prepare_generation_prompt(
             objective=objective,
             evidence=evidence,
             marker_token=marker.token,
         )
-        generation.validate_prompt_contract(prepared_prompt)
+        with model_scope():
+            generation.validate_prompt_contract(prepared_prompt)
+
+        def record_reservation() -> None:
+            nonlocal reserved
+            reserved += 1
+
+        def reserved_model_calls() -> int:
+            return reserved
+
+        async def run_exploration(prompt, *, on_model_attempt, **kwargs):
+            nonlocal started
+            if started or execution_admission is None or endpoint is None or target is None:
+                raise SoftReasoningCompositionUnavailable("specialist execution scope unavailable")
+            started = True
+
+            def execute(worker_checkpoint, reserve):
+                nonlocal checkpoint
+                checkpoint = worker_checkpoint
+
+                def attempt():
+                    reserve()
+                    on_model_attempt()
+
+                try:
+                    worker_checkpoint()
+                    trace = engine.explore(prompt, on_model_attempt=attempt, **kwargs)
+                    worker_checkpoint()
+                    return trace
+                finally:
+                    checkpoint = None
+
+            return await execution_admission.run_native_attempt_sequence(
+                endpoint, model=target, function=execute, on_reserved=record_reservation,
+            )
 
         maximum_total_model_calls = config.maximum_total_model_calls
         return ComposedSoftReasoning(
-            strategy=SoftReasoner(engine),
+            strategy=SoftReasoner(
+                engine, run_exploration=run_exploration if execution_admission is not None else None,
+            ),
             prepared_prompt=prepared_prompt,
             prompt_version=SOFT_REASONING_GENERATION_PROMPT_VERSION,
             provider_id=selection.provider_id,
@@ -188,6 +247,7 @@ class RuntimeSoftReasoningComposer:
             marker_token_id=marker.token_id,
             profile=config.research_profile,
             maximum_total_model_calls=maximum_total_model_calls,
+            reserved_model_calls=reserved_model_calls if execution_admission is not None else None,
         )
 
     def _select_transformers(self, preferred_provider: str | None) -> RuntimeSelection:
