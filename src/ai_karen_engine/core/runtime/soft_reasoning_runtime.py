@@ -20,12 +20,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import Enum
-from typing import Any, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
 from ai_karen_engine.core.model_runtime.provider_contracts import (
     GenerationFailed,
     ModelRuntimeCapabilities,
     ProviderNotAvailable,
+)
+from ai_karen_engine.core.model_runtime.providers.transformers_runtime import (
+    generation_checkpoint_options,
 )
 from ai_karen_engine.core.reasoning.soft_reasoning.contracts import (
     SoftGenerationOutput,
@@ -78,9 +81,16 @@ class TransformersSoftGenerationAdapter:
         self,
         runtime: TransformersGenerationSession,
         config: TransformersSoftReasoningConfig,
+        *,
+        checkpoint: Callable[[], None] | None = None,
     ) -> None:
         self._runtime = runtime
         self._config = config
+        self._checkpoint = checkpoint
+
+    def _check(self) -> None:
+        if self._checkpoint is not None:
+            self._checkpoint()
 
     def capabilities(self) -> ModelRuntimeCapabilities:
         model, _tokenizer, _lock = self._runtime.generation_components()
@@ -109,6 +119,7 @@ class TransformersSoftGenerationAdapter:
         )
 
     def first_token_embedding(self, prompt: str) -> Sequence[float]:
+        self._check()
         if not prompt.strip():
             raise ValueError("prepared Soft Reasoning prompt must not be empty")
         if (
@@ -129,8 +140,10 @@ class TransformersSoftGenerationAdapter:
         input_ids = input_ids.to(device)
 
         with generation_lock, torch.no_grad():
+            self._check()
             embeddings = embedding_layer(input_ids)
             vector = embeddings[0, position, :].detach().float().cpu().tolist()
+            self._check()
         return tuple(float(value) for value in vector)
 
     def _greedy_first_answer_token_embedding(self, prompt: str) -> Sequence[float]:
@@ -168,7 +181,9 @@ class TransformersSoftGenerationAdapter:
         try:
             with generation_lock, torch.no_grad():
                 model.eval()
+                self._check()
                 outputs = model(**forward_kwargs)
+                self._check()
                 logits = outputs.logits[0, -1, :]
                 token_id = int(torch.argmax(logits, dim=-1).item())
                 token_tensor = torch.as_tensor(
@@ -183,11 +198,14 @@ class TransformersSoftGenerationAdapter:
                     .cpu()
                     .tolist()
                 )
+        except ProviderNotAvailable:
+            raise
         except Exception as exc:
             raise GenerationFailed(
                 f"Failed to derive greedy first answer-token embedding: {exc}"
             ) from exc
 
+        self._check()
         return tuple(float(value) for value in vector)
 
     def generate_with_first_token_embedding(
@@ -207,6 +225,7 @@ class TransformersSoftGenerationAdapter:
         # The hook must never be installed or removed outside this lock.
         # Keep the complete mutation and receipt lifecycle in one critical section.
         with generation_lock:
+            self._check()
             torch = self._torch()
             encoded = self._tokenize(tokenizer, prompt)
             input_ids = encoded["input_ids"]
@@ -274,7 +293,12 @@ class TransformersSoftGenerationAdapter:
                     if eos_token_id is not None:
                         generate_kwargs["eos_token_id"] = eos_token_id
 
+                    generate_kwargs.update(generation_checkpoint_options(self._checkpoint))
+                    self._check()
                     generated = model.generate(**generate_kwargs)
+                    self._check()
+            except ProviderNotAvailable:
+                raise
             except Exception as exc:
                 raise GenerationFailed(
                     f"Transformers Soft Reasoning generation failed: {exc}"
@@ -328,6 +352,7 @@ class TransformersSoftGenerationAdapter:
                 else None
             )
 
+            self._check()
             return SoftGenerationOutput(
                 text=text,
                 token_count=token_count,

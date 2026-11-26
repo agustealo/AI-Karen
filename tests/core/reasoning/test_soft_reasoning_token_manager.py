@@ -168,3 +168,39 @@ def test_existing_marker_requires_output_capacity():
     runtime.model.output_size = 2
     with pytest.raises(GenerationFailed, match="embedding_capacity_unverified"):
         SoftReasoningTokenManager().ensure(runtime)
+
+
+@pytest.mark.parametrize("partial", [False, True])
+def test_failed_marker_mutation_evicts_native_pair_before_ordinary_generation(monkeypatch, partial):
+    from threading import RLock
+
+    from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+    from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
+
+    model = FakeModel(2)
+    tokenizer = FakeTokenizer()
+    runtime = object.__new__(TransformersRuntime)
+    runtime.model_path = "/local/model-a"
+    runtime._generation_lock = RLock()
+    runtime._transformers_available = True
+    runtime._pipeline = SimpleNamespace(model=model, tokenizer=tokenizer)
+
+    def broken_resize(size):
+        if partial:
+            model.input_size = size
+        raise RuntimeError("partial mutation")
+
+    model.resize_token_embeddings = broken_resize
+    with pytest.raises(GenerationFailed, match="Failed to prepare"):
+        SoftReasoningTokenManager().ensure(runtime)
+    assert runtime._pipeline is None
+    monkeypatch.setattr(runtime, "warm", lambda *a, **kw: False)
+    with pytest.raises(ProviderNotAvailable, match="authorized_model_unavailable"):
+        runtime.generate_text_with_model("ordinary prompt", required_model="/local/model-a")
+    with pytest.raises(ProviderNotAvailable, match="identity_drift"):
+        with runtime.borrow_generation_components("/local/model-a", expected=(model, tokenizer)):
+            pytest.fail("quarantined pair borrowed")
+    replacement = SimpleNamespace(model=FakeModel(2), tokenizer=FakeTokenizer())
+    runtime._pipeline = replacement
+    assert not runtime.quarantine_generation_components((model, tokenizer))
+    assert runtime._pipeline is replacement

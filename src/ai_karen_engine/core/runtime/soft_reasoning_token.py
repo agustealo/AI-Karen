@@ -16,6 +16,8 @@ from ai_karen_engine.core.model_runtime.provider_contracts import (
     ProviderNotAvailable,
 )
 
+from ai_karen_engine.core.model_runtime.providers.transformers_runtime import TransformersRuntime
+
 DEFAULT_SOFT_REASONING_MARKER = "<|soft_reasoning|>"
 
 
@@ -50,60 +52,70 @@ class SoftReasoningTokenManager:
         # Lookup and mutation share one lock so a concurrent caller cannot
         # reuse the marker before model embedding resize has completed.
         with generation_lock:
-            convert = getattr(tokenizer, "convert_tokens_to_ids", None)
-            if not callable(convert):
-                raise ProviderNotAvailable(
-                    "Selected tokenizer cannot resolve Soft Reasoning special tokens"
-                )
-
-            existing_id = self._existing_token_id(tokenizer)
-            if existing_id is not None:
-                self._require_embedding_capacity(model, tokenizer, existing_id)
-                return SoftReasoningMarker(
-                    token=self._token,
-                    token_id=existing_id,
-                    vocabulary_resized=False,
-                )
-
-            add_special_tokens = getattr(tokenizer, "add_special_tokens", None)
-            resize = getattr(model, "resize_token_embeddings", None)
-            if not callable(add_special_tokens) or not callable(resize):
-                raise ProviderNotAvailable(
-                    "Selected local model cannot register the Soft Reasoning insertion token"
-                )
-
             try:
-                added = int(
-                    add_special_tokens(
-                        {"additional_special_tokens": [self._token]}
-                    )
-                    or 0
-                )
-                token_id = int(convert(self._token))
-                if token_id < 0:
-                    raise GenerationFailed(
-                        "Tokenizer returned an invalid Soft Reasoning marker id"
-                    )
-                if added > 0:
-                    resize(len(tokenizer))
-            except Exception as exc:
-                if isinstance(exc, (GenerationFailed, ProviderNotAvailable)):
-                    raise
-                raise GenerationFailed(
-                    f"Failed to prepare Soft Reasoning marker token: {exc}"
-                ) from exc
+                return self._ensure_locked(model, tokenizer)
+            except BaseException:
+                # Even a partially applied mutation must not become visible
+                # to ordinary chat after releasing the canonical lock.
+                if isinstance(runtime, TransformersRuntime):
+                    runtime.quarantine_generation_components((model, tokenizer))
+                raise
 
-            verified_id = self._existing_token_id(tokenizer)
-            if verified_id is None or verified_id != token_id:
-                raise GenerationFailed(
-                    "Soft Reasoning marker token registration could not be verified"
-                )
-            self._require_embedding_capacity(model, tokenizer, token_id)
+    def _ensure_locked(self, model: Any, tokenizer: Any) -> SoftReasoningMarker:
+        convert = getattr(tokenizer, "convert_tokens_to_ids", None)
+        if not callable(convert):
+            raise ProviderNotAvailable(
+                "Selected tokenizer cannot resolve Soft Reasoning special tokens"
+            )
+
+        existing_id = self._existing_token_id(tokenizer)
+        if existing_id is not None:
+            self._require_embedding_capacity(model, tokenizer, existing_id)
             return SoftReasoningMarker(
                 token=self._token,
-                token_id=token_id,
-                vocabulary_resized=added > 0,
+                token_id=existing_id,
+                vocabulary_resized=False,
             )
+
+        add_special_tokens = getattr(tokenizer, "add_special_tokens", None)
+        resize = getattr(model, "resize_token_embeddings", None)
+        if not callable(add_special_tokens) or not callable(resize):
+            raise ProviderNotAvailable(
+                "Selected local model cannot register the Soft Reasoning insertion token"
+            )
+
+        try:
+            added = int(
+                add_special_tokens(
+                    {"additional_special_tokens": [self._token]}
+                )
+                or 0
+            )
+            token_id = int(convert(self._token))
+            if token_id < 0:
+                raise GenerationFailed(
+                    "Tokenizer returned an invalid Soft Reasoning marker id"
+                )
+            if added > 0:
+                resize(len(tokenizer))
+        except Exception as exc:
+            if isinstance(exc, (GenerationFailed, ProviderNotAvailable)):
+                raise
+            raise GenerationFailed(
+                f"Failed to prepare Soft Reasoning marker token: {exc}"
+            ) from exc
+
+        verified_id = self._existing_token_id(tokenizer)
+        if verified_id is None or verified_id != token_id:
+            raise GenerationFailed(
+                "Soft Reasoning marker token registration could not be verified"
+            )
+        self._require_embedding_capacity(model, tokenizer, token_id)
+        return SoftReasoningMarker(
+            token=self._token,
+            token_id=token_id,
+            vocabulary_resized=added > 0,
+        )
 
     @staticmethod
     def _require_embedding_capacity(model: Any, tokenizer: Any, token_id: int) -> None:

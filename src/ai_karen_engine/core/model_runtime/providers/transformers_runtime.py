@@ -52,6 +52,24 @@ def _checkpointed_lock(
         lock.release()
 
 
+def generation_checkpoint_options(
+    checkpoint: Callable[[], None] | None,
+) -> Dict[str, Any]:
+    """Use the same abort contract for ordinary and guided generation."""
+    if checkpoint is None:
+        return {}
+    checkpoint()
+    from transformers import StoppingCriteria, StoppingCriteriaList
+
+    class _CancellationCriteria(StoppingCriteria):
+        def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
+            # Raise rather than return a partial answer as a successful stop.
+            checkpoint()
+            return False
+
+    return {"stopping_criteria": StoppingCriteriaList([_CancellationCriteria()])}
+
+
 class TransformersRuntime(LLMProviderBase):
     """Best-effort first-party local text runtime.
 
@@ -254,6 +272,24 @@ class TransformersRuntime(LLMProviderBase):
                 raise ProviderNotAvailable("native_authorized_model_identity_drift")
             yield active.model, active.tokenizer
 
+    def quarantine_generation_components(self, expected: tuple[Any, Any]) -> bool:
+        """Detach only the failed model/tokenizer pair from future dispatch.
+
+        This is logical eviction, not evidence that device work or memory has
+        retired. The normal model loader owns subsequent replacement.
+        """
+        with self._generation_lock:
+            active = self._pipeline
+            if (
+                active is None
+                or active.model is not expected[0]
+                or active.tokenizer is not expected[1]
+            ):
+                return False
+            self._pipeline = None
+            logger.warning("native_generation_components_quarantined")
+            return True
+
     def generate_text_with_model(
         self, prompt: str, *, required_model: str | None = None,
         before_generate: Callable[[], None] | None = None, **kwargs: Any,
@@ -285,21 +321,7 @@ class TransformersRuntime(LLMProviderBase):
                         os.path.realpath(required_model) != os.path.realpath(active_model)
                     ):
                         raise ProviderNotAvailable("native_authorized_model_identity_drift")
-                    generation_options: Dict[str, Any] = {}
-                    if before_generate is not None:
-                        before_generate()
-                        from transformers import StoppingCriteria, StoppingCriteriaList
-
-                        class _CancellationCriteria(StoppingCriteria):
-                            def __call__(self, input_ids: Any, scores: Any, **kwargs: Any) -> bool:
-                                # Abort rather than publish a partial answer as
-                                # a successful generation when stopped.
-                                before_generate()
-                                return False
-
-                        generation_options["stopping_criteria"] = StoppingCriteriaList(
-                            [_CancellationCriteria()]
-                        )
+                    generation_options = generation_checkpoint_options(before_generate)
                     result = active_pipeline(
                         prompt,
                         max_new_tokens=max_new_tokens,

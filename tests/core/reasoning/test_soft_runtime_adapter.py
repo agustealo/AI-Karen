@@ -159,11 +159,24 @@ def test_prompt_contract_rejects_invalid_occurrence() -> None:
         )
 
 
-@pytest.mark.parametrize("fails", [False, True])
+@pytest.mark.parametrize("fails", [False, True, "cancelled"])
 def test_guided_hook_install_and_cleanup_are_inside_generation_lock(monkeypatch, fails):
+    import sys
     from types import SimpleNamespace
 
+    from ai_karen_engine.core.model_runtime.provider_contracts import ProviderNotAvailable
+
     events = []
+    stopped = False
+
+    def checkpoint():
+        if stopped:
+            raise ProviderNotAvailable("governed_model_execution_cancelled")
+
+    if fails == "cancelled":
+        monkeypatch.setitem(sys.modules, "transformers", SimpleNamespace(
+            StoppingCriteria=object, StoppingCriteriaList=list,
+        ))
     held = False
 
     class GenerationLock:
@@ -204,6 +217,11 @@ def test_guided_hook_install_and_cleanup_are_inside_generation_lock(monkeypatch,
         def generate(self, **kwargs):
             assert held
             events.append("generate")
+            if fails == "cancelled":
+                nonlocal stopped
+                stopped = True
+                kwargs["stopping_criteria"][0](None, None)
+                pytest.fail("cancelled generation continued")
             if fails:
                 raise RuntimeError("injected generation failure")
             # This case deliberately omits the embedding forward call. The
@@ -223,15 +241,18 @@ def test_guided_hook_install_and_cleanup_are_inside_generation_lock(monkeypatch,
     monkeypatch.setattr(runtime, "generation_components", lambda: (model, runtime.tokenizer, lock))
     adapter = TransformersSoftGenerationAdapter(
         runtime, TransformersSoftReasoningConfig(insertion_token_id=25),
+        checkpoint=checkpoint if fails == "cancelled" else None,
     )
     monkeypatch.setattr(adapter, "_torch", lambda: SimpleNamespace(no_grad=nullcontext))
     monkeypatch.setattr(adapter, "_tokenize", lambda *a: {"input_ids": Input()})
     monkeypatch.setattr(adapter, "_find_insertion_position", lambda _: 1)
     monkeypatch.setattr(adapter, "_seed_scope", lambda *a: nullcontext())
 
-    with pytest.raises(GenerationFailed, match=(
+    error = ProviderNotAvailable if fails == "cancelled" else GenerationFailed
+    message = "cancelled" if fails == "cancelled" else (
         "injected generation failure" if fails else "never exposed"
-    )):
+    )
+    with pytest.raises(error, match=message):
         adapter.generate_with_first_token_embedding(
             "prepared prompt", [0.1] * 8, max_tokens=1, seed=1,
         )

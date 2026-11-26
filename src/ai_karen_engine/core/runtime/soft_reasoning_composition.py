@@ -172,9 +172,16 @@ class RuntimeSoftReasoningComposer:
             return runtime.borrow_generation_components(
                 target, expected=pinned, checkpoint=checkpoint,
             )
+        def check_native() -> None:
+            if checkpoint is None:
+                raise SoftReasoningCompositionUnavailable("native worker scope unavailable")
+            checkpoint()
+
+        native_checkpoint = check_native if execution_admission is not None else None
         generation = TransformersSoftGenerationAdapter(
             runtime,
             TransformersSoftReasoningConfig.paper_2025(marker.token_id),
+            checkpoint=native_checkpoint,
         )
         with model_scope():
             capabilities = generation.capabilities()
@@ -191,6 +198,7 @@ class RuntimeSoftReasoningComposer:
             runtime=runtime,
             prompt_registry=self._registry,
             prompt_service=self._prompts,
+            checkpoint=native_checkpoint,
         )
         config = SoftExplorationConfig.paper_2025()
         engine = SoftExplorationEngine(
