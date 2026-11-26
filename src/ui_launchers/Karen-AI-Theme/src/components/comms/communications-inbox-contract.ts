@@ -1,6 +1,9 @@
 /** Strict projection of the authenticated Communications inbox wire contract. */
 export const INBOX_PATH = "/api/communications-center/inbox";
 export const PAGE_SIZE = 25;
+// UI read cadence, not a delivery SLA or transport connection status.
+export const INBOX_REFRESH_INTERVAL_MS = 30_000;
+export const INBOX_REFRESH_MIN_GAP_MS = 1_000;
 export type InboxFilter = "active" | "archived" | "all";
 export type InboxOperation = "read" | "acknowledge" | "archive";
 export type InboxCursor = { created_at: string; entry_id: string };

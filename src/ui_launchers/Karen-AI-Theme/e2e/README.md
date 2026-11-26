@@ -815,3 +815,6 @@ npx playwright test comms-visual-acceptance.spec.ts --project=chromium --retries
 ```
 
 Supply KAREN_UX_EMAIL, KAREN_UX_PASSWORD, KAREN_UX_ACCOUNT_B_EMAIL, KAREN_UX_ACCOUNT_B_PASSWORD, KAREN_UX_ACCOUNT_A_PENDING_INBOX_EXECUTION_ID and KAREN_UX_ACCOUNT_B_INBOX_EXECUTION_ID securely in the environment, never in committed files. On approved HTTPS omit the loopback opt-in. The suite checks real recovery POST, server-derived count, exact revision and source receipts for read/ack/archive, readback after reload, signed-out denial, and A-to-B isolation in the same browser. It does not prove new runtime failure creation by itself, cross-tenant isolation unless fixtures have distinct tenants, or delivery over a push transport. No retries, trace, video, screenshot or persistent per-test output in this mode; treat console logs as sensitive. Source/CI typecheck is not execution of this authenticated suite.
+
+
+KCOMM-03A uses bounded authenticated **read** refresh while the inbox is open (30 seconds, focus, online and visibility return). This is not WebSocket/Supabase push delivery. Refresh does not POST reconciliation or replay mutations, cannot bypass an uncertain outcome, and stops on hidden/inactive or unmounted views. The existing simulated realtime client and tenant-wide notification topic are not authorized personal-inbox transports.

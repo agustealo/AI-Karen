@@ -683,6 +683,7 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat,
 
             <TabsContent value="inbox" forceMount hidden={activeTab !== "inbox"} className="mt-6 space-y-6 data-[state=inactive]:hidden">
                 {inboxVisited && principal && <PersonalCommunicationsInbox
+                    active={activeTab === "inbox"}
                     onOpenConversation={onOpenConversation}
                     refreshRevision={refreshRevision}
                 />}

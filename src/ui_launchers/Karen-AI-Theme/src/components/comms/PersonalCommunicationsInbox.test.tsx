@@ -2,7 +2,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PersonalCommunicationsInbox, PersonalCommunicationsInboxProvider } from "./PersonalCommunicationsInbox";
-import { INBOX_PATH, type InboxEntry } from "./communications-inbox-contract";
+import { INBOX_PATH, INBOX_REFRESH_INTERVAL_MS, type InboxEntry } from "./communications-inbox-contract";
 
 const stubs = vi.hoisted(() => ({ get: vi.fn(), patch: vi.fn(), post: vi.fn(), revision: 1, user: "owner" }));
 vi.mock("@/lib/api", () => ({
@@ -117,4 +117,65 @@ it("keeps a single pending mutation and uncertainty across complete workspace un
   expect(screen.getByText("Notification change could not be verified. Refresh before trying again.")).toBeTruthy();
   expect(stubs.patch).toHaveBeenCalledTimes(1);
   expect(stubs.get).toHaveBeenCalledTimes(1);
+});
+
+
+describe("bounded authenticated inbox refresh", () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
+  it("coalesces focus and online events into one read, never a recovery POST", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    mount();
+    await screen.findByText("Chat execution interrupted");
+    let release!: (value: unknown) => void;
+    stubs.get.mockReturnValueOnce(new Promise(done => { release = done; }));
+    act(() => { window.dispatchEvent(new Event("focus")); window.dispatchEvent(new Event("online")); });
+    expect(stubs.get).toHaveBeenCalledTimes(2);
+    expect((screen.getByRole("button", { name: "Archive" }) as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => release(page([], 0)));
+    expect(screen.getByTestId("personal-inbox-unread").textContent).toBe("0 unread active");
+    expect(stubs.post).not.toHaveBeenCalled();
+    expect(stubs.patch).not.toHaveBeenCalled();
+  });
+  it("does not auto-refresh hidden or offline views", async () => {
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    const online = vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    mount();
+    await screen.findByText("Chat execution interrupted");
+    act(() => window.dispatchEvent(new Event("focus")));
+    visibility.mockReturnValue("visible");
+    online.mockReturnValue(false);
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(stubs.get).toHaveBeenCalledTimes(1);
+  });
+  it("keeps ambiguous mutations locked through reconnect until explicit refresh", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    stubs.patch.mockRejectedValue(new Error("Lost receipt"));
+    mount();
+    fireEvent.click(await screen.findByRole("button", { name: "Archive" }));
+    await screen.findByText("Notification change could not be verified. Refresh before trying again.");
+    act(() => { window.dispatchEvent(new Event("online")); window.dispatchEvent(new Event("focus")); });
+    expect(stubs.get).toHaveBeenCalledTimes(1);
+    expect(stubs.patch).toHaveBeenCalledTimes(1);
+    expect(stubs.post).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Refresh inbox" }));
+    await screen.findByText("Chat execution interrupted");
+    expect(stubs.get).toHaveBeenCalledTimes(2);
+  });
+  it("polls only while mounted and visible at the bounded interval", async () => {
+    vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
+    vi.spyOn(navigator, "onLine", "get").mockReturnValue(true);
+    vi.useFakeTimers();
+    const view = mount();
+    await act(async () => { await Promise.resolve(); });
+    expect(stubs.get).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(INBOX_REFRESH_INTERVAL_MS - 1); });
+    expect(stubs.get).toHaveBeenCalledTimes(1);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(stubs.get).toHaveBeenCalledTimes(2);
+    view.rerender(workspace("owner", false));
+    await act(async () => { await vi.advanceTimersByTimeAsync(INBOX_REFRESH_INTERVAL_MS * 2); });
+    expect(stubs.get).toHaveBeenCalledTimes(2);
+  });
 });

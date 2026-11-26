@@ -6,11 +6,12 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import {
-  INBOX_PATH, inboxPagePath, operationRecorded, readPage, readReceipt,
+  INBOX_PATH, INBOX_REFRESH_INTERVAL_MS, INBOX_REFRESH_MIN_GAP_MS, inboxPagePath, operationRecorded, readPage, readReceipt,
   type InboxCursor, type InboxEntry, type InboxFilter, type InboxOperation, type InboxPage,
 } from "./communications-inbox-contract";
 
 type Props = {
+  active?: boolean;
   refreshRevision?: number;
   onOpenConversation?: (id: string) => Promise<void>;
 };
@@ -46,16 +47,25 @@ function useInboxController(initialScope: ApiPrincipalScope) {
   const live = useRef(false);
   const readEpoch = useRef(0);
   const writeLock = useRef(false);
+  const readLock = useRef(false);
+  const uncertainRef = useRef(false);
   const activated = useRef(false);
   const current = useCallback(() => live.current && isCurrentApiPrincipalScope(scope), [scope]);
   useLayoutEffect(() => {
     live.current = true;
-    return () => { live.current = false; readEpoch.current += 1; activated.current = false; };
+    return () => { live.current = false; readEpoch.current += 1; readLock.current = false; activated.current = false; };
   }, []);
-  const load = useCallback(async (nextFilter: InboxFilter, nextCursor: InboxCursor | null, afterWrite = false) => {
-    if (!current() || (writeLock.current && !afterWrite)) return;
+  const load = useCallback(async (
+    nextFilter: InboxFilter, nextCursor: InboxCursor | null,
+    afterWrite = false, automatic = false,
+  ) => {
+    if (!current() || readLock.current || (writeLock.current && !afterWrite)
+      || (automatic && uncertainRef.current)) return;
+    readLock.current = true;
     const epoch = ++readEpoch.current;
-    setPage(null);
+    // Background reads must not flash an empty list; errors still withdraw
+    // unverified data. No write is allowed during any in-flight read.
+    if (!automatic) setPage(null);
     setLoading(true);
     setError("");
     setFilter(nextFilter);
@@ -64,12 +74,17 @@ function useInboxController(initialScope: ApiPrincipalScope) {
       const raw = await apiClient.get<unknown>(inboxPagePath(nextFilter, nextCursor), scope);
       if (!current() || epoch !== readEpoch.current) return;
       setPage(readPage(raw, nextFilter, nextCursor));
+      uncertainRef.current = false;
       setUncertain(false);
     } catch {
       if (!current() || epoch !== readEpoch.current) return;
+      setPage(null);
       setError("Personal inbox unavailable. Refresh to retrieve verified records.");
     } finally {
-      if (current() && epoch === readEpoch.current) setLoading(false);
+      if (epoch === readEpoch.current) {
+        readLock.current = false;
+        if (current()) setLoading(false);
+      }
     }
   }, [current, scope]);
   const activate = useCallback(() => {
@@ -79,7 +94,7 @@ function useInboxController(initialScope: ApiPrincipalScope) {
   }, [load]);
 
   async function perform(entry: InboxEntry, operation: InboxOperation) {
-    if (!current() || writeLock.current || loading || uncertain || !page?.entries.includes(entry)
+    if (!current() || writeLock.current || readLock.current || uncertainRef.current || loading || uncertain || !page?.entries.includes(entry)
         || operationRecorded(entry, operation)) return;
     writeLock.current = true;
     readEpoch.current += 1;
@@ -96,6 +111,7 @@ function useInboxController(initialScope: ApiPrincipalScope) {
     } catch {
       if (!current()) return;
       setPage(null);
+      uncertainRef.current = true;
       setUncertain(true);
       setError("Notification change could not be verified. Refresh before trying again.");
     } finally {
@@ -105,7 +121,7 @@ function useInboxController(initialScope: ApiPrincipalScope) {
   }
 
   async function reconcile() {
-    if (!current() || writeLock.current || loading || uncertain || !page) return;
+    if (!current() || writeLock.current || readLock.current || uncertainRef.current || loading || uncertain || !page) return;
     writeLock.current = true;
     readEpoch.current += 1;
     setBusy(true);
@@ -121,6 +137,7 @@ function useInboxController(initialScope: ApiPrincipalScope) {
     } catch {
       if (!current()) return;
       setPage(null);
+      uncertainRef.current = true;
       setUncertain(true);
       setError("Notification recovery is unavailable or could not be verified. Refresh before trying again.");
     } finally {
@@ -132,29 +149,53 @@ function useInboxController(initialScope: ApiPrincipalScope) {
     setNotice, perform, reconcile };
 }
 
-export function PersonalCommunicationsInbox({ refreshRevision, onOpenConversation }: Props) {
+export function PersonalCommunicationsInbox({ active = true, refreshRevision, onOpenConversation }: Props) {
   const controller = useContext(InboxContext);
   if (!controller) return <p role="status">Sign in to view your personal inbox.</p>;
-  return <InboxView controller={controller} refreshRevision={refreshRevision} onOpenConversation={onOpenConversation} />;
+  return <InboxView controller={controller} active={active} refreshRevision={refreshRevision} onOpenConversation={onOpenConversation} />;
 }
 
-function InboxView({ controller, refreshRevision, onOpenConversation }: Pick<Props, "refreshRevision" | "onOpenConversation"> & { controller: InboxController }) {
+function InboxView({ controller, active, refreshRevision, onOpenConversation }: Props & { controller: InboxController }) {
   const { scope, current, activate, load, filter, page, cursor, loading, busy, error, notice, uncertain, setNotice, perform, reconcile } = controller;
   const handoffLock = useRef(false);
   const viewLive = useRef(false);
   const lastRefresh = useRef(refreshRevision);
+  const lastAutomaticRead = useRef<number | null>(null);
   const [handoffError, setHandoffError] = useState("");
   useLayoutEffect(() => {
     viewLive.current = true;
     return () => { viewLive.current = false; };
   }, []);
-  useEffect(() => { activate(); }, [activate]);
+  useEffect(() => { if (active) activate(); }, [activate, active]);
   useEffect(() => {
     if (lastRefresh.current === refreshRevision) return;
     lastRefresh.current = refreshRevision;
     setNotice("");
     void load(filter, null);
   }, [refreshRevision, filter, load, setNotice]);
+
+  // Authenticated read reconciliation only. Do not use the simulated
+  // realtime client or tenant-wide notification topic as delivery evidence.
+  useEffect(() => {
+    if (!active || busy || loading || uncertain) return;
+    const refreshVisible = () => {
+      if (!current() || document.visibilityState !== "visible" || !navigator.onLine) return;
+      const now = Date.now();
+      if (lastAutomaticRead.current !== null && now - lastAutomaticRead.current < INBOX_REFRESH_MIN_GAP_MS) return;
+      lastAutomaticRead.current = now;
+      void load(filter, cursor, false, true);
+    };
+    const timer = window.setInterval(refreshVisible, INBOX_REFRESH_INTERVAL_MS);
+    window.addEventListener("focus", refreshVisible);
+    window.addEventListener("online", refreshVisible);
+    document.addEventListener("visibilitychange", refreshVisible);
+    return () => {
+      window.clearInterval(timer);
+      window.removeEventListener("focus", refreshVisible);
+      window.removeEventListener("online", refreshVisible);
+      document.removeEventListener("visibilitychange", refreshVisible);
+    };
+  }, [active, busy, loading, uncertain, current, filter, cursor, load]);
 
   async function openConversation(entry: InboxEntry) {
     if (!current() || busy || loading || uncertain || handoffLock.current || !onOpenConversation || !page?.entries.includes(entry)) return;
@@ -172,7 +213,7 @@ function InboxView({ controller, refreshRevision, onOpenConversation }: Pick<Pro
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <CardTitle>Personal inbox</CardTitle>
-          <CardDescription>Durable attention records from eligible failed or interrupted chat executions. Acknowledgment does not restart work or approve an action.</CardDescription>
+          <CardDescription>Durable attention records from eligible failed or interrupted chat executions. Acknowledgment does not restart work or approve an action. The open inbox refreshes periodically and when the browser reconnects.</CardDescription>
         </div>
         <Badge variant="secondary" data-testid="personal-inbox-unread">{page === null ? "Unread unavailable" : page.active_unread_count + " unread active"}</Badge>
       </div>
@@ -187,7 +228,7 @@ function InboxView({ controller, refreshRevision, onOpenConversation }: Pick<Pro
       </div>
       {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
       {(error || handoffError) && <p role="alert" className="rounded-lg border p-3 text-sm text-destructive">{error || handoffError}</p>}
-      {loading && <p role="status" className="text-sm text-muted-foreground">Loading verified inbox…</p>}
+      {loading && <p role="status" className="text-sm text-muted-foreground">{page ? "Refreshing verified inbox…" : "Loading verified inbox…"}</p>}
       {page && page.entries.length === 0 && <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">No records returned in this view. This is not proof that all executions succeeded or that the producer is enabled.</p>}
       {page && page.entries.length > 0 && <ol className="divide-y" aria-label="Verified personal notifications">
         {page.entries.map(entry => <li key={entry.entry_id} className="space-y-3 py-4">
