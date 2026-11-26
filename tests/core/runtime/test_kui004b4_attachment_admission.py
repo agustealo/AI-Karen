@@ -31,6 +31,7 @@ from ai_karen_engine.core.runtime.contracts import (
     ExecutionBudgetMeter,
 )
 from ai_karen_engine.core.runtime.policy.runtime_policy import (
+    GENERATED_TEXT_ARTIFACT_CAPABILITY,
     PolicyEvaluationRequest,
     RuntimePolicyEnforcer,
 )
@@ -96,10 +97,16 @@ def controlled_session_witness_issuer(monkeypatch):
     return issuer
 
 
-async def authority(*, grant=True, bind=True, references=None):
+async def authority(*, grant=True, bind=True, references=None, generated=False):
     selected_refs = [selected()] if references is None else [
         dict(item) for item in references
     ]
+    if generated:
+        selected_refs = []
+    permissions = (
+        ["data:read", "data:write"] if generated and grant
+        else ["data:read"] if grant else []
+    )
     user_id, tenant_id = str(uuid.uuid4()), str(uuid.uuid4())
     context = ChatExecutionContext(
         user_id=user_id,
@@ -110,7 +117,7 @@ async def authority(*, grant=True, bind=True, references=None):
         authenticated_user=UserData(
             user_id=user_id, tenant_id=tenant_id,
             is_active=True, is_verified=True,
-            permissions=["data:read"] if grant else [],
+            permissions=permissions,
         ),
     )
     principal = context.authenticated_user
@@ -133,8 +140,12 @@ async def authority(*, grant=True, bind=True, references=None):
         tenant_id=context.tenant_id,
         session_id=context.session_id,
         correlation_id=context.correlation_id,
-        permissions=["data:read"] if grant else [],
-        requested_capabilities=["data:read"] if grant else [],
+        action=GENERATED_TEXT_ARTIFACT_CAPABILITY if generated else "general_assist",
+        permissions=permissions,
+        requested_capabilities=(
+            [GENERATED_TEXT_ARTIFACT_CAPABILITY] if generated
+            else ["data:read"] if grant else []
+        ),
         attachment_references=selected_refs if grant else [],
         max_model_calls=2,
     ))
@@ -934,3 +945,69 @@ async def test_revoked_private_execution_cannot_initiate_memory_formation(monkey
     assert receipt["persisted"] == 0
     assert meta["memory_persistence_status"] == "denied_by_policy"
     manager_factory.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("changes", [
+    {"permissions": ["data:read"]},
+    {"permissions": ["data:write"]},
+    {"action": "general_assist"},
+    {"requested_capabilities": []},
+    {"session_id": None},
+    {"max_model_calls": 0},
+    {"execution_topology": {"requires_human_gate": True}},
+    {"execution_topology": {"workflow_id": "untrusted-workflow"}},
+    {"requested_reasoning_modes": ["soft_reasoning"]},
+])
+async def test_generated_artifact_policy_denies_missing_entitlement_or_wrong_scope(changes):
+    params = dict(
+        user_id=str(uuid.uuid4()), tenant_id=str(uuid.uuid4()),
+        session_id="session", correlation_id="correlation",
+        action=GENERATED_TEXT_ARTIFACT_CAPABILITY,
+        requested_capabilities=[GENERATED_TEXT_ARTIFACT_CAPABILITY],
+        permissions=["data:read", "data:write"], max_model_calls=1,
+    )
+    decision = await RuntimePolicyEnforcer().evaluate(
+        PolicyEvaluationRequest(**{**params, **changes}),
+    )
+    assert not decision.allowed
+    assert GENERATED_TEXT_ARTIFACT_CAPABILITY in decision.denied_capabilities
+
+
+@pytest.mark.asyncio
+async def test_generated_artifact_requires_original_plan_meter_and_current_write_role(
+    controlled_session_witness_issuer,
+):
+    request, plan, meter = await authority(generated=True)
+    context = request.context
+    policy = vars(context)["_runtime_policy_issuance"][0]
+
+    async def authorize(candidate=plan, budget=meter):
+        await policy.authorize_generated_text_write(
+            context=context, plan=candidate, meter=budget,
+        )
+
+    await authorize()
+    with pytest.raises(PermissionError, match="generated_artifact_authority_denied"):
+        await authorize(candidate=replace(plan))
+    copied_meter = ExecutionBudgetMeter(plan.budget)
+    copied_meter.start()
+    with pytest.raises(PermissionError, match="generated_artifact_authority_denied"):
+        await authorize(budget=copied_meter)
+
+    # The original signed-in account now has read-only data access. A cached
+    # permission list and previously issued plan cannot authorize the write.
+    controlled_session_witness_issuer.revalidate_session_identity.return_value.roles = ["user"]
+    with pytest.raises(PermissionError, match="generated_artifact_write_permission_revoked"):
+        await authorize()
+
+
+@pytest.mark.asyncio
+async def test_generated_artifact_never_inherits_attachment_read_grant():
+    request, plan, meter = await authority()
+    context = request.context
+    policy = vars(context)["_runtime_policy_issuance"][0]
+    with pytest.raises(PermissionError, match="generated_artifact_authority_denied"):
+        await policy.authorize_generated_text_write(
+            context=context, plan=plan, meter=meter,
+        )

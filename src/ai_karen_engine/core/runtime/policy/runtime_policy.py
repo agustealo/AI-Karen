@@ -8,6 +8,7 @@ LangGraph remains a workflow executor and never owns global policy.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -39,6 +40,8 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
+
+GENERATED_TEXT_ARTIFACT_CAPABILITY = "artifact.text.create"
 
 
 class RuntimeLevel(str, Enum):
@@ -979,6 +982,42 @@ class RuntimePolicyEnforcer:
                 and 0 <= external_requests <= external_limit
             )
 
+    async def authorize_generated_text_write(
+        self, *, context: "ChatExecutionContext",
+        plan: AuthorizedExecutionPlan, meter: Any,
+    ) -> None:
+        """Authorize the exact direct-chat execution at its write boundary.
+
+        This is an admission check, not a storage receipt or new execution
+        grant. Reuse the issuer, original plan, meter and durable session
+        witness. No copied or specialist-derived plan may authorize creation.
+        """
+        from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+        def authorized() -> bool:
+            return (
+                isinstance(meter, ExecutionBudgetMeter)
+                and context.original_runtime_model_plan(meter) is plan
+                and self.verifies_chat_model_policy(context=context, plan=plan)
+                and GENERATED_TEXT_ARTIFACT_CAPABILITY in plan.allowed_capabilities
+                and plan.topology is ExecutionTopology.DIRECT
+                and not plan.approval_requirements
+                and not plan.allowed_tools
+                and not plan.allowed_plugins
+                and not plan.allowed_agents
+                and not plan.reasoning_modes
+            )
+
+        if not authorized():
+            raise PermissionError("generated_artifact_authority_denied")
+        remaining_ms = await meter.remaining_duration_ms()
+        if remaining_ms <= 0:
+            raise PermissionError("generated_artifact_deadline")
+        async with asyncio.timeout(remaining_ms / 1000):
+            await context.revalidate_runtime_artifact_write_session()
+        if not authorized() or not await meter.check_duration():
+            raise PermissionError("generated_artifact_authority_denied")
+
     async def _evaluate_policy_request(
         self, request: PolicyEvaluationRequest,
     ) -> PolicyDecision:
@@ -1205,6 +1244,53 @@ class RuntimePolicyEnforcer:
                 denied_reasoning_modes=list(request.requested_reasoning_modes),
                 evaluated_at=evaluated_at,
             )
+
+        # Generated artifacts are a dedicated direct-chat operation. Asking
+        # for a capability or possessing read access must not confer write
+        # authority. Actual principal/session verification at dispatch remains
+        # mandatory even after this issuer decision.
+        artifact_requested = (
+            request.action == GENERATED_TEXT_ARTIFACT_CAPABILITY
+            or GENERATED_TEXT_ARTIFACT_CAPABILITY in request.requested_capabilities
+        )
+        if artifact_requested:
+            from ai_karen_engine.auth.models import UserData
+            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+            principal = UserData(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                roles=list(request.roles),
+                permissions=list(request.permissions),
+            )
+            manager = get_rbac_manager()
+            topology = request.execution_topology
+            if (
+                request.action != GENERATED_TEXT_ARTIFACT_CAPABILITY
+                or GENERATED_TEXT_ARTIFACT_CAPABILITY not in request.requested_capabilities
+                or not request.session_id
+                or not request.correlation_id
+                or request.runtime_level is not RuntimeLevel.FULL
+                or type(request.max_model_calls) is not int
+                or request.max_model_calls < 1
+                or request.requested_reasoning_modes
+                or request.tool_id or request.plugin_id or request.extension_id
+                or any(topology.get(key) for key in (
+                    "tool_requirements", "plugin_candidates", "requested_agents",
+                    "workflow_id", "agent_delegation", "requires_human_gate",
+                ))
+                or not manager.has_permission(principal, Permission.DATA_READ)
+                or not manager.has_permission(principal, Permission.DATA_WRITE)
+            ):
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=[GENERATED_TEXT_ARTIFACT_CAPABILITY],
+                    denied_reasoning_modes=list(request.requested_reasoning_modes),
+                    evaluated_at=evaluated_at,
+                )
 
         # Personal planner mutations require their own explicit write
         # entitlement. A CORTEX capability request is not an RBAC grant.
