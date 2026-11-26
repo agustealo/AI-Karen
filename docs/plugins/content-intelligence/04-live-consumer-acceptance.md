@@ -242,3 +242,126 @@ attestation, protected browser scenario results, and reviewer approval.
 Never log content bytes, filenames, signing tokens, authentication headers,
 or private Storage URLs. File Explorer and Content Intelligence remain
 **Not shipped** until those separate proofs have actually passed.
+
+
+## KEXP-024: Independent local Content Intelligence acceptance
+
+The three existing Content Intelligence browser scenarios can be executed on the
+same exact-SHA disposable local stack as Explorer, without Vercel or a hosted
+provider. This is a distinct read-only invocation of the existing KUI runner,
+not a new workflow or a substitute for any hosted deployment attestation.
+
+Before provisioning, explicitly configure the local project's private
+`KCARD_LOCAL_STORAGE_URL=http://host.docker.internal:<local-api-port>` and
+`KCARD_LOCAL_STORAGE_SECRET_KEY` in the existing private local `.env`. Use only
+an independently approved local Supabase project credential (local service-role
+or secret key), never a cloud credential. The existing provisioner validates the
+configured gateway against the running local database project's Kong container
+and copies only this opt-in pair into the private generated acceptance env.
+No bucket or artifact is created by the runner. Confirm the local project and
+private artifacts bucket are dedicated to this trial; seed real matching
+metadata and Storage objects using the existing governed artifact owner. Confirm
+and record the retired fixture's former eligible state and subsequent revocation.
+
+Use the existing disposable stack and private env path, the exact reviewed SHA,
+loopback `http://127.0.0.1:8010`, two distinct sanitized accounts, and three distinct
+canonical fixture UUIDs. Set `KAREN_LOCAL_CHAT_ACCEPTANCE=1`,
+`KAREN_SANITIZED_ACCOUNT=true`, `KAREN_FILE_EXPLORER_ACCEPTANCE=true`,
+`KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED=true`, and the three existing
+Content Intelligence acceptance flags. Set
+`KAREN_CONTENT_INTELLIGENCE_LOCAL_STORAGE_CONFIRMED=true` and
+`KAREN_CONTENT_INTELLIGENCE_REVOKED_FIXTURE_ATTESTED=true` only after the
+independent fixture checks. Supply the active, isolation and retired source IDs
+and retired SHA-256 described above; keep credentials in the private shell.
+Unset hosted verification flags, Vercel bypass credentials and Explorer mutation
+flags. Run separately from Explorer and Card Studio:
+
+```bash
+RUN_CONTENT_INTELLIGENCE_LOCAL=1 bash scripts/ci/kui-local-acceptance.sh "$EXPECTED_SHA"
+```
+
+The runner verifies exact clean source, loopback web ingress, API database
+identity, running local Storage gateway and image/container/database continuity
+before and after the three scenarios. Discovery must identify exactly three
+Chromium tests; execution must pass each once without retries/skips/failures.
+Reports are private and outside the checkout. The explicit retired-fixture
+attestation remains required; a 403 alone is not a revocation proof. The two
+standalone Storage integration tests still require their separate approved real
+Storage fixtures. No consumer acceptance result is claimed by this source change.
+
+
+## KEXP-025: Standalone real Storage proofs without a hosted project
+
+The existing CK-GEN opt-in object-read and signed-range tests also accept a
+private disposable **local** Supabase project. The runtime repository's
+HTTPS/loopback origin, signed path, range, digest, budget and owner checks are
+unchanged. Both tests now accept the canonical immutable `/content` object
+key produced by the governed upload path, as well as the repository's
+explicitly supported historical filename key. They never guess an object key.
+
+Use a local Docker daemon and an explicitly disposable Supabase CLI project
+with its API gateway published **only** on `127.0.0.1`. Start it with an
+approved isolated network and verify the actual port/container names before
+setting the configuration. Do not link, reset or contact a hosted project.
+The local CLI version and stack configuration determine the port; do not
+assume the default. Keep the server credential private and unset proxy
+variables for this dedicated test invocation. No cloud project reference
+may be inherited. The standalone test process runs on the host, not inside
+the API container; its origin is loopback, not `host.docker.internal`.
+
+Retain the existing separately disposable, migrated PostgreSQL
+`karen_code_artifact_test` database on loopback port 5432. Use the canonical
+CK-GEN workflow's schema provisioning and seeded principals; do not reuse or
+modify the personal database. Seed independently approved nonsensitive
+object bytes and matching metadata for the existing live-object and range
+fixture IDs/digests. Verify the bucket is private. These tests are read-only
+and will not create fixtures. Provide all existing tenant/owner/other-owner,
+artifact and SHA-256 variables, with the additional local-only configuration:
+
+- `KAREN_TEST_DISPOSABLE_DATABASE=1` and `KAREN_TEST_SUPABASE_DISPOSABLE=1`
+- `KAREN_TEST_SUPABASE_LOCAL=1`
+- `KAREN_TEST_SUPABASE_LOCAL_PROJECT_ID` matching the running local project's
+  `supabase_db_<project-id>` and `supabase_kong_<project-id>` container names
+- `SUPABASE_PROJECT_URL=http://127.0.0.1:<verified-api-port>`
+- A private local `SUPABASE_SECRET_KEY` or `SUPABASE_SERVICE_ROLE_KEY`
+- Unset `KAREN_TEST_SUPABASE_PROJECT_REF`, remote Docker overrides and proxies.
+
+Then execute both existing trials, separately from hosted/browser acceptance:
+
+```bash
+KAREN_TEST_CODE_ARTIFACT_LIVE_STORAGE=1 KAREN_TEST_CODE_ARTIFACT_LIVE_RANGE=1 \\
+  PYTHONPATH=src python -m pytest -q -rs \\
+  tests/integration/test_live_code_artifact_revocation_postgres.py \\
+  -k 'live_supabase_object_read or live_signed_range_read_uses_real_storage'
+```
+
+Require exactly two executed successful trials with no skips. Local Storage
+must actually return HTTP 206 for the signed-range test; a 200 response is
+not sufficient. Record exact source SHA, sanitized pass/fail output and
+local gateway/private-bucket/fixture provenance. Local success is not a
+hosted deployment receipt or an automatic release authorization.
+
+### Local provisioning configuration convergence
+
+The shared local acceptance provisioner and provenance verifier now derive
+the database project's name and host port from the repository's existing
+`supabase/config.toml`. The generated private env exports `KCARD_DB_PORT`
+for Compose; API connection URLs and the effective container must match
+that exact configured port. Do not substitute the Supabase CLI default
+port or point the acceptance database at a different project. This repository's
+current checked-in database port is 54342. The standalone CK-GEN disposable
+PostgreSQL proof remains independently constrained to port 5432.
+
+### Local provisioning preflight
+
+The deployment provisioner requires a fresh private acceptance state directory
+outside the checkout. The default exact-SHA directory is suitable on the first
+run; use an explicitly fresh `KAREN_KCARD_STATE_DIR` for another attempt only
+after separately verifying the disposable database and Compose project are safe
+to reuse or remove. Existing state and databases are never overwritten or reset.
+Before creating a database, the provisioner validates the generated dotenv
+configuration and reads the complete canonical migration inventory. Missing or
+unreadable migrations and invalid configuration stop before database creation.
+The reserved state directory is mode 0700; credentials remain mode 0600.
+A failed migration or build may leave disposable state for diagnosis. Do not
+interpret it as deployment readiness or automatically delete it.

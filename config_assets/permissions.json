@@ -45,6 +45,8 @@
         "artifact:create_own",
         "communications:read",
         "communications:write",
+        "file_explorer:delete_empty_own",
+        "file_explorer:organize_own",
         "planner:read",
         "planner:write",
         "plugins:manage",
@@ -75,6 +77,8 @@
         "artifact:create_own",
         "communications:read",
         "communications:write",
+        "file_explorer:delete_empty_own",
+        "file_explorer:organize_own",
         "planner:read",
         "planner:write",
         "profile:manage_own"

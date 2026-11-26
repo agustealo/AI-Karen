@@ -10,6 +10,7 @@ import os
 from pathlib import Path
 from typing import Any, Dict
 
+from ai_karen_engine.core.logging.redaction import install_request_target_privacy_filter
 from ai_karen_engine.server.config import Settings
 
 _LOGGING_CONFIGURED = False
@@ -214,6 +215,7 @@ def configure_logging() -> None:
         }
     )
 
+    install_request_target_privacy_filter()
     _LOGGING_CONFIGURED = True
 
 

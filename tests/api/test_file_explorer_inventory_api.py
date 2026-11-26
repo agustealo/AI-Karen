@@ -97,6 +97,15 @@ async def test_owner_inventory_evaluates_runtime_policy_and_uses_one_kernel(monk
     from ai_karen_engine.services.database.repositories import repository_factory
 
     repository = Repository()
+    service, kernel, policy = _service()
+    list_page = repository.list_owner_artifacts_page
+
+    async def admitted_list(*args, **kwargs):
+        assert len(kernel.calls) == 1
+        assert kernel.calls[0].context.resource_scope["file_explorer_entries"] == []
+        return await list_page(*args, **kwargs)
+
+    repository.list_owner_artifacts_page = admitted_list
     monkeypatch.setattr(
         database_factory,
         "get_database_client",
@@ -107,10 +116,13 @@ async def test_owner_inventory_evaluates_runtime_policy_and_uses_one_kernel(monk
         "RepositoryFactory",
         lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository),
     )
-    service, kernel, policy = _service()
     page = await PluginService.list_file_explorer_owner_page(service, **_args())
     assert repository.calls == [(TENANT, OWNER, 25, None)]
-    assert len(kernel.calls) == 1
+    assert len(kernel.calls) == 2
+    assert kernel.calls[0].context.resource_scope["file_explorer_entries"] == []
+    assert kernel.calls[1].context.resource_scope["file_explorer_entries"] == page["items"]
+    assert kernel.calls[0].authorized_plan is kernel.calls[1].authorized_plan
+    assert policy.evaluate.await_count == 1
     assert page["items"][0]["source_id"] == FILE
     assert page["items"][0]["sha256"] == SHA
     assert page["next_cursor"] is None
@@ -223,3 +235,608 @@ async def test_route_rejects_synthetic_tenant_before_rbac(monkeypatch):
             plugin_service=SimpleNamespace(),
         )
     assert error.value.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_uses_existing_policy_and_kernel_before_capability(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+
+    repository = Repository()
+    service, kernel, policy = _service()
+    async def probe(tenant_id, user_id):
+        assert (tenant_id, user_id) == (TENANT, OWNER)
+        assert len(kernel.calls) == 1
+        assert policy.evaluate.await_count == 1
+        return SimpleNamespace(success=False, data=None)
+    repository.owner_hierarchy_available = probe
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    page = await service.list_file_explorer_owner_page(**_args(), hierarchy=True)
+    assert page["available"] is False
+    assert page["folders"] == page["breadcrumbs"] == []
+    assert repository.calls == []
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_route_denies_rbac_before_service(monkeypatch):
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: False,
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(list_file_explorer_owner_page=AsyncMock())
+    request = Request({"type": "http", "method": "GET",
+                       "path": "/api/plugins/file-explorer/hierarchy", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        await ingress.list_file_explorer_hierarchy(
+            request=request, limit=25,
+            current_user={"user_id": OWNER, "tenant_id": TENANT, "roles": ["user"]},
+            plugin_service=service,
+        )
+    assert error.value.status_code == 403
+    service.list_file_explorer_owner_page.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_folder_scoped_files_keep_content_and_organization_revisions_separate():
+    from ai_karen_engine.extensions.owner_inventory import ArtifactSourceAdapter
+
+    folder = "55555555-5555-4555-8555-555555555555"
+
+    class ScopedRepository(Repository):
+        async def list_owner_artifacts_page(self, tenant_id, user_id, **kwargs):
+            self.calls.append((tenant_id, user_id, kwargs))
+            return SimpleNamespace(success=True, data=[SimpleNamespace(
+                id=FILE, tenant_id=TENANT, user_id=OWNER, deleted_at=None,
+                filename="report.txt", sha256=SHA, size_bytes=11,
+                folder_id=folder, organization_revision=9223372036854775806,
+            )], metadata={"has_more": False, "next_cursor": None})
+
+    repository = ScopedRepository()
+    adapter = ArtifactSourceAdapter(repository)
+    page = await adapter.list_owner_sources_page(
+        tenant_id=TENANT, user_id=OWNER, limit=10, cursor="opaque-cursor",
+        folder_scoped=True, folder_id=folder,
+    )
+    assert repository.calls == [(TENANT, OWNER, {
+        "limit": 10, "cursor": "opaque-cursor", "folder_scoped": True, "folder_id": folder,
+    })]
+    assert page["items"][0]["revision"] == SHA
+    assert page["items"][0]["organization_revision"] == "9223372036854775806"
+    assert page["items"][0]["parent_id"] == folder
+    with pytest.raises(RuntimeError, match="organization_scope_invalid"):
+        await adapter.list_owner_sources_page(
+            tenant_id=TENANT, user_id=OWNER, folder_scoped=True, folder_id=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_governed_hierarchy_projects_root_files_after_kernel(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+
+    service, kernel, policy = _service()
+
+    class RootRepository(Repository):
+        async def owner_hierarchy_available(self, tenant_id, user_id):
+            assert len(kernel.calls) == 1 and policy.evaluate.await_count == 1
+            return SimpleNamespace(success=True, data=True)
+
+        async def list_owner_folders(self, tenant_id, user_id, **kwargs):
+            return SimpleNamespace(success=True, data=[],
+                                   metadata={"has_more": False, "next_folder_id": None})
+
+        async def list_owner_artifacts_page(self, tenant_id, user_id, **kwargs):
+            assert kwargs["folder_scoped"] is True and kwargs["folder_id"] is None
+            assert len(kernel.calls) == 1
+            return SimpleNamespace(success=True, data=[SimpleNamespace(
+                id=FILE, tenant_id=tenant_id, user_id=user_id, deleted_at=None,
+                filename="report.txt", sha256=SHA, size_bytes=11,
+                folder_id=None, organization_revision=1,
+            )], metadata={"has_more": False, "next_cursor": None})
+
+    repository = RootRepository()
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    page = await service.list_file_explorer_owner_page(**_args(), hierarchy=True)
+    response = ingress.FileExplorerHierarchyResponse.model_validate(page)
+    assert response.available is True and response.files[0].revision == SHA
+    assert response.files[0].organization_revision == "1"
+    assert response.files_has_more is False and response.next_file_cursor is None
+
+
+@pytest.mark.asyncio
+async def test_folder_creation_denies_read_only_before_discovery():
+    service, kernel, policy = _service()
+    args = _args()
+    args.pop("limit")
+    args.pop("cursor")
+    with pytest.raises(PermissionError):
+        await service.create_file_explorer_folder(**args, name="Reports")
+    service._ensure_initialized.assert_not_awaited()
+    policy.evaluate.assert_not_awaited()
+    assert kernel.calls == []
+
+
+@pytest.mark.asyncio
+async def test_folder_create_route_denies_write_before_service(monkeypatch):
+    seen = []
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda user, permission: seen.append(permission) or False,
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(create_file_explorer_folder=AsyncMock())
+    request = Request({"type": "http", "method": "POST",
+                       "path": "/api/plugins/file-explorer/folders", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        await ingress.create_file_explorer_folder(
+            payload=ingress.FileExplorerCreateFolderRequest(name="Reports"),
+            request=request, current_user={"user_id": OWNER, "tenant_id": TENANT},
+            plugin_service=service,
+        )
+    assert error.value.status_code == 403
+    assert seen == [ingress.Permission.FILE_EXPLORER_ORGANIZE]
+    service.create_file_explorer_folder.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_folder_creation_requires_bound_write_plan_and_kernel(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "file_explorer:organize_own"])
+    args.pop("limit")
+    args.pop("cursor")
+    scope = {"operation": "file_explorer.folder.create", "name": "Reports",
+             "parent_folder_id": None}
+    decision = PolicyDecision(
+        decision_id="write-verified", policy_version="v2", allowed=True,
+        allowed_capabilities=["file-explorer", "data:read", "file_explorer:organize_own",
+                              "file_explorer.folder.create"],
+        resource_scope=scope,
+        runtime_constraints={"authorized_user_id": OWNER,
+                             "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["file-explorer"]},
+    )
+    policy.evaluate.return_value = decision
+    repository = Repository()
+
+    async def create(tenant_id, user_id, *, name, parent_folder_id):
+        assert (tenant_id, user_id, name, parent_folder_id) == (TENANT, OWNER, "Reports", None)
+        assert len(kernel.calls) == 1
+        return SimpleNamespace(success=True, data=SimpleNamespace(
+            folder_id=FILE, parent_folder_id=None, name=name, revision=1,
+        ))
+
+    repository.create_owner_folder = create
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    result = await service.create_file_explorer_folder(**args, name="Reports")
+    assert result["folder"]["revision"] == "1"
+    assert policy.evaluate.call_args.args[0].resource_scope == scope
+    with pytest.raises(PermissionError):
+        await service.create_file_explorer_folder(**args, name="Different")
+    assert len(kernel.calls) == 1
+
+
+@pytest.mark.asyncio
+async def test_folder_rename_binds_source_name_and_revision(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "file_explorer:organize_own"])
+    args.pop("limit")
+    args.pop("cursor")
+    scope = {"operation": "file_explorer.folder.rename", "folder_id": FILE,
+             "name": "Renamed", "expected_revision": 7}
+    policy.evaluate.return_value = PolicyDecision(
+        decision_id="rename-verified", policy_version="v2", allowed=True,
+        allowed_capabilities=["file-explorer", "data:read", "file_explorer:organize_own",
+                              "file_explorer.folder.rename"],
+        resource_scope=scope,
+        runtime_constraints={"authorized_user_id": OWNER,
+                             "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["file-explorer"]},
+    )
+    repository = Repository()
+    calls = []
+
+    async def rename(tenant_id, user_id, folder_id, *, name, expected_revision):
+        calls.append((tenant_id, user_id, folder_id, name, expected_revision))
+        assert len(kernel.calls) == len(calls)
+        if len(calls) > 1:
+            return SimpleNamespace(success=False, error="artifact_folder_conflict_or_unavailable")
+        return SimpleNamespace(success=True, data=SimpleNamespace(
+            folder_id=FILE, parent_folder_id=None, name=name, revision=8,
+        ))
+
+    repository.rename_owner_folder = rename
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    result = await service.rename_file_explorer_folder(
+        **args, folder_id=FILE, name="Renamed", expected_revision=7,
+    )
+    assert result["folder"]["revision"] == "8"
+    assert calls == [(TENANT, OWNER, FILE, "Renamed", 7)]
+    with pytest.raises(PermissionError):
+        await service.rename_file_explorer_folder(
+            **args, folder_id=FILE, name="Renamed", expected_revision=8,
+        )
+    assert len(calls) == 1
+    with pytest.raises(FileExplorerFolderConflict):
+        await service.rename_file_explorer_folder(
+            **args, folder_id=FILE, name="Renamed", expected_revision=7,
+        )
+
+
+def test_rename_revision_requires_lossless_decimal_string():
+    from pydantic import ValidationError
+    assert ingress.FileExplorerRenameFolderRequest(
+        name="Renamed", expected_revision="9223372036854775806",
+    ).expected_revision == "9223372036854775806"
+    for invalid in (1, True, "0", "-1", "1.0", "01"):
+        with pytest.raises(ValidationError):
+            ingress.FileExplorerRenameFolderRequest(name="Renamed", expected_revision=invalid)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["folder", "artifact"])
+async def test_move_binds_kind_source_destination_and_revision(monkeypatch, kind):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "file_explorer:organize_own"])
+    args.pop("limit")
+    args.pop("cursor")
+    destination = "55555555-5555-4555-8555-555555555555"
+    operation = f"file_explorer.{kind}.move"
+    scope = {"operation": operation, "source_id": FILE,
+             "destination_id": destination, "expected_revision": 7}
+    policy.evaluate.return_value = PolicyDecision(
+        decision_id="move-verified", policy_version="v2", allowed=True,
+        allowed_capabilities=["file-explorer", "data:read", "file_explorer:organize_own", operation],
+        resource_scope=scope,
+        runtime_constraints={"authorized_user_id": OWNER,
+                             "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["file-explorer"]},
+    )
+    repository = Repository()
+    calls = []
+
+    async def move(tenant_id, user_id, source_id, **kwargs):
+        calls.append((tenant_id, user_id, source_id, kwargs))
+        assert len(kernel.calls) == len(calls)
+        if len(calls) > 1:
+            return SimpleNamespace(success=False, error="artifact_folder_conflict_or_unavailable")
+        return SimpleNamespace(success=True, data=8)
+
+    setattr(repository, f"move_owner_{kind}", move)
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    result = await service.move_file_explorer_item(
+        **args, kind=kind, source_id=FILE, destination_id=destination, expected_revision=7,
+    )
+    assert result["organization_revision"] == "8"
+    assert result["parent_folder_id"] == destination
+    key = "parent_folder_id" if kind == "folder" else "folder_id"
+    assert calls == [(TENANT, OWNER, FILE, {key: destination, "expected_revision": 7})]
+    with pytest.raises(PermissionError):
+        await service.move_file_explorer_item(
+            **args, kind=kind, source_id=FILE, destination_id=None, expected_revision=7,
+        )
+    assert len(calls) == 1
+    with pytest.raises(FileExplorerFolderConflict):
+        await service.move_file_explorer_item(
+            **args, kind=kind, source_id=FILE, destination_id=destination, expected_revision=7,
+        )
+
+
+def test_move_requires_explicit_destination_and_lossless_revision():
+    from pydantic import ValidationError
+
+    assert ingress.FileExplorerMoveRequest(
+        destination_id=None, expected_revision="7",
+    ).destination_id is None
+    with pytest.raises(ValidationError):
+        ingress.FileExplorerMoveRequest(expected_revision="7")
+    with pytest.raises(ValidationError):
+        ingress.FileExplorerMoveRequest(destination_id=None, expected_revision=7)
+
+
+@pytest.mark.asyncio
+async def test_empty_folder_delete_requires_delete_permission_and_exact_revision(monkeypatch):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+    from ai_karen_engine.extensions.owner_inventory import FileExplorerFolderConflict
+
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "file_explorer:organize_own"])
+    args.pop("limit")
+    args.pop("cursor")
+    with pytest.raises(PermissionError):
+        await service.delete_file_explorer_folder(**args, folder_id=FILE, expected_revision=7)
+    policy.evaluate.assert_not_awaited()
+    args["permissions"] = ["data:read", "file_explorer:delete_empty_own"]
+    scope = {"operation": "file_explorer.folder.delete", "folder_id": FILE,
+             "expected_revision": 7}
+    policy.evaluate.return_value = PolicyDecision(
+        decision_id="delete-verified", policy_version="v2", allowed=True,
+        allowed_capabilities=["file-explorer", "data:read",
+                              "file_explorer:delete_empty_own", "file_explorer.folder.delete"],
+        resource_scope=scope,
+        runtime_constraints={"authorized_user_id": OWNER, "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["file-explorer"]},
+    )
+    repository = Repository()
+    repository.delete_empty_owner_folder = AsyncMock(return_value=SimpleNamespace(
+        success=True, data=True,
+    ))
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    result = await service.delete_file_explorer_folder(**args, folder_id=FILE, expected_revision=7)
+    assert result["deleted"] is True
+    repository.delete_empty_owner_folder.assert_awaited_once_with(
+        TENANT, OWNER, FILE, expected_revision=7,
+    )
+    assert len(kernel.calls) == 1
+    with pytest.raises(PermissionError):
+        await service.delete_file_explorer_folder(**args, folder_id=FILE, expected_revision=8)
+    assert repository.delete_empty_owner_folder.await_count == 1
+    repository.delete_empty_owner_folder.return_value = SimpleNamespace(
+        success=False, error="artifact_folder_conflict_or_unavailable",
+    )
+    with pytest.raises(FileExplorerFolderConflict):
+        await service.delete_file_explorer_folder(**args, folder_id=FILE, expected_revision=7)
+
+
+@pytest.mark.asyncio
+async def test_folder_delete_route_denies_before_service(monkeypatch):
+    from uuid import UUID
+    seen = []
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda user, permission: seen.append(permission) or False,
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(delete_file_explorer_folder=AsyncMock())
+    request = Request({"type": "http", "method": "DELETE",
+                       "path": f"/api/plugins/file-explorer/folders/{FILE}", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        await ingress.delete_file_explorer_folder(
+            folder_id=UUID(FILE), payload=ingress.FileExplorerDeleteFolderRequest(expected_revision="7"),
+            request=request, current_user={"user_id": OWNER, "tenant_id": TENANT},
+            plugin_service=service,
+        )
+    assert error.value.status_code == 403
+    assert seen == [ingress.Permission.FILE_EXPLORER_DELETE_EMPTY]
+    service.delete_file_explorer_folder.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", [
+    "file_explorer.folder.create", "file_explorer.folder.rename",
+    "file_explorer.folder.move", "file_explorer.artifact.move",
+    "file_explorer.folder.delete",
+])
+async def test_real_runtime_policy_requires_owner_entitlement(operation):
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.auth.rbac_middleware import FILE_EXPLORER_MUTATION_PERMISSIONS
+
+    entitlement = FILE_EXPLORER_MUTATION_PERMISSIONS[operation].value
+    policy = RuntimePolicyEnforcer()
+    kwargs = dict(
+        user_id=OWNER, tenant_id=TENANT, action="plugin_execution",
+        plugin_id="file-explorer", requested_capabilities=["file-explorer", "data:read",
+                                                            entitlement, operation],
+        resource_scope={"operation": operation},
+    )
+    denied = await policy.evaluate(PolicyEvaluationRequest(
+        **kwargs, permissions=["data:read", "data:write", "data:delete"],
+    ))
+    assert not denied.allowed
+    granted = await policy.evaluate(PolicyEvaluationRequest(
+        **kwargs, permissions=["data:read", entitlement],
+    ))
+    assert granted.allowed and operation in granted.allowed_capabilities
+    plan = granted.to_authorized_plan()
+    assert plan.resource_scope == {"operation": operation}
+    assert plan.resource_scope is not granted.resource_scope
+    kwargs["resource_scope"] = {"operation": "file_explorer.unknown"}
+    assert not (await policy.evaluate(PolicyEvaluationRequest(
+        **kwargs, permissions=["data:read", entitlement],
+    ))).allowed
+
+
+@pytest.mark.asyncio
+async def test_broad_data_grant_cannot_create_owner_folder():
+    service, kernel, policy = _service()
+    args = _args(permissions=["data:read", "data:write", "data:delete"])
+    args.pop("limit")
+    args.pop("cursor")
+    with pytest.raises(PermissionError):
+        await service.create_file_explorer_folder(**args, name="Reports")
+    policy.evaluate.assert_not_awaited()
+    assert kernel.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delete_grant,delete_support", [(False, True), (True, False), (True, True)])
+async def test_capability_preflight_uses_real_policy_and_distinct_delete_proof(
+    monkeypatch, delete_grant, delete_support,
+):
+    from ai_karen_engine.database import factory as database_factory
+    from ai_karen_engine.services.database.repositories import repository_factory
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+
+    service, kernel, _ = _service()
+    service._policy_enforcer = RuntimePolicyEnforcer()
+    repository = Repository()
+    repository.owner_hierarchy_available = AsyncMock(return_value=SimpleNamespace(success=True, data=True))
+    repository.owner_folder_deletion_available = AsyncMock(
+        return_value=SimpleNamespace(success=delete_support, data=delete_support),
+    )
+    monkeypatch.setattr(database_factory, "get_database_client",
+                        lambda: SimpleNamespace(get_async_session=lambda: None))
+    monkeypatch.setattr(repository_factory, "RepositoryFactory",
+                        lambda **kwargs: SimpleNamespace(create_artifact_store=lambda: repository))
+    permissions = ["data:read", "file_explorer:organize_own"]
+    if delete_grant:
+        permissions.append("file_explorer:delete_empty_own")
+    args = _args(permissions=permissions)
+    args.pop("limit")
+    args.pop("cursor")
+    result = await service.get_file_explorer_capabilities(**args)
+    assert result["browse"] == "available"
+    assert result["semantics"] == "preflight_not_resource_authorization"
+    expected = "denied" if not delete_grant else ("available" if delete_support else "unavailable")
+    assert result["operations"]["file_explorer.folder.delete"] == expected
+    assert all(result["operations"][operation] == "available" for operation in (
+        "file_explorer.folder.create", "file_explorer.folder.rename",
+        "file_explorer.folder.move", "file_explorer.artifact.move",
+    ))
+    assert repository.owner_folder_deletion_available.await_count == int(delete_grant)
+    assert repository.calls == []
+    assert len(kernel.calls) == 5 + int(delete_grant)
+
+
+@pytest.mark.asyncio
+async def test_capability_route_denial_precedes_service(monkeypatch):
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: False,
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(get_file_explorer_capabilities=AsyncMock())
+    request = Request({"type": "http", "method": "GET",
+                       "path": "/api/plugins/file-explorer/capabilities", "headers": []})
+    with pytest.raises(HTTPException) as error:
+        await ingress.get_file_explorer_capabilities(
+            request=request, current_user={"user_id": OWNER, "tenant_id": TENANT},
+            plugin_service=service,
+        )
+    assert error.value.status_code == 403
+    service.get_file_explorer_capabilities.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_hierarchy_search_is_delegated_with_authenticated_folder_scope(monkeypatch):
+    from uuid import UUID
+
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: True,
+        get_user_permissions=lambda *_: [ingress.Permission.DATA_READ],
+        audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    service = SimpleNamespace(list_file_explorer_owner_page=AsyncMock(return_value={
+        "available": True, "folders": [], "breadcrumbs": [],
+        "has_more": False, "next_folder_id": None,
+        "files": [], "files_has_more": False, "next_file_cursor": None,
+        "request_id": "request", "correlation_id": "correlation",
+    }))
+    request = Request({"type": "http", "method": "GET",
+                       "path": "/api/plugins/file-explorer/hierarchy", "headers": []})
+    await ingress.list_file_explorer_hierarchy(
+        request=request, limit=10, parent_folder_id=UUID(FILE), file_cursor="bound",
+        search="report_%", current_user={"user_id": OWNER, "tenant_id": TENANT,
+                                         "roles": ["user"], "permissions": ["data:read"]},
+        plugin_service=service,
+    )
+    kwargs = service.list_file_explorer_owner_page.await_args.kwargs
+    assert kwargs["search"] == "report_%"
+    assert kwargs["parent_folder_id"] == FILE
+    assert kwargs["file_cursor"] == "bound"
+    assert kwargs["user_id"] == OWNER and kwargs["tenant_id"] == TENANT
+
+
+def test_inventory_selection_ceiling_matches_content_execution_contract():
+    from pydantic import ValidationError
+    from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
+
+    page = dict(items=[], has_more=False, next_cursor=None,
+                inventory_semantics="owner_metadata_page_not_live_acl",
+                request_id="request", correlation_id="correlation")
+    assert ingress.FileExplorerInventoryResponse.model_validate(page).max_selection == MAX_CONTENT_SOURCE_REFERENCES
+    with pytest.raises(ValidationError):
+        ingress.ContentInventoryResponse.model_validate(page)
+    for invalid in (None, True, 0, "12", MAX_CONTENT_SOURCE_REFERENCES + 1):
+        with pytest.raises(ValidationError):
+            ingress.FileExplorerInventoryResponse.model_validate({**page, "max_selection": invalid})
+        with pytest.raises(ValidationError):
+            ingress.ContentInventoryResponse.model_validate({**page, "max_selection": invalid})
+    assert ingress.ContentInventoryResponse.model_validate(
+        {**page, "max_selection": MAX_CONTENT_SOURCE_REFERENCES}
+    ).max_selection == MAX_CONTENT_SOURCE_REFERENCES
+    refs = [{"source_id": FILE, "revision": SHA}] * MAX_CONTENT_SOURCE_REFERENCES
+    assert len(ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs).references) == MAX_CONTENT_SOURCE_REFERENCES
+    with pytest.raises(ValidationError):
+        ingress.ContentOwnerSourcesRequest(operation="analyze", references=refs + refs[:1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("consumer", ["file-explorer", "content-intelligence"])
+@pytest.mark.parametrize("allowed", [True, False])
+async def test_inventory_route_forwards_search_only_after_rbac(monkeypatch, consumer, allowed):
+    from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
+
+    audit = []
+    monkeypatch.setattr(ingress, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *_: allowed,
+        get_user_permissions=lambda *_: [ingress.Permission.DATA_READ] if allowed else [],
+        audit_access_attempt=lambda *args, **kwargs: audit.append(kwargs),
+    ))
+    page = dict(items=[], has_more=False, next_cursor=None,
+                inventory_semantics="owner_metadata_page_not_live_acl",
+                request_id="request-1", correlation_id="corr-1")
+    if consumer == "content-intelligence":
+        page["max_selection"] = MAX_CONTENT_SOURCE_REFERENCES
+    method = AsyncMock(return_value=page)
+    service = SimpleNamespace(list_file_explorer_owner_page=method, list_content_owner_page=method)
+    route = ingress.list_file_explorer_inventory if consumer == "file-explorer" else ingress.list_content_inventory
+    request = Request({"type": "http", "method": "GET", "path": f"/api/plugins/{consumer}/inventory", "headers": []})
+    kwargs = dict(request=request, limit=10, cursor="bound-cursor", search="report_%",
+                  current_user={"user_id": OWNER, "tenant_id": TENANT, "roles": ["user"], "permissions": ["data:read"]},
+                  plugin_service=service)
+    if allowed:
+        await route(**kwargs)
+        assert method.await_args.kwargs["search"] == "report_%"
+        assert method.await_args.kwargs["cursor"] == "bound-cursor"
+        assert method.await_args.kwargs["tenant_id"] == TENANT
+        assert method.await_args.kwargs["user_id"] == OWNER
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await route(**kwargs)
+        assert exc.value.status_code == 403
+        method.assert_not_awaited()
+    assert audit and audit[0]["granted"] is allowed
+    assert "search" not in audit[0]["additional_context"]
+    assert "cursor" not in audit[0]["additional_context"]
+
+
+def test_policy_plan_rejects_operation_scope_outside_authorized_explorer():
+    decision = PolicyDecision(
+        decision_id="foreign-scope", policy_version="v2", allowed=True,
+        allowed_capabilities=["data:read"],
+        runtime_constraints={"authorized_user_id": OWNER,
+                             "authorized_tenant_id": TENANT,
+                             "allowed_plugins": ["content-intelligence"]},
+        resource_scope={"operation": "file_explorer.folder.create", "name": "Reports"},
+    )
+    with pytest.raises(ValueError, match="policy_operation_scope_invalid"):
+        decision.to_authorized_plan()
