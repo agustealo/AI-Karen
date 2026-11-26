@@ -30,3 +30,21 @@ def test_resolve_invalid_topic():
     factory = RealtimeTopicFactory(tenant_id=str(uuid.uuid4()))
     assert factory.resolve_topic("bad") is None
     assert factory.resolve_topic("tenant:bad:kind:id") is None
+
+
+def test_resolve_rejects_foreign_tenant_and_extra_segments():
+    factory = RealtimeTopicFactory(tenant_id=str(uuid.uuid4()))
+    foreign = RealtimeTopicFactory(tenant_id=str(uuid.uuid4()))
+    assert factory.resolve_topic(foreign.user_topic(str(uuid.uuid4()))) is None
+    assert factory.resolve_topic(foreign.admin_topic()) is None
+    assert factory.resolve_topic(factory.admin_topic() + ":extra") is None
+    assert factory.resolve_topic(factory.tenant_notifications_topic() + ":extra") is None
+
+
+def test_resolve_normalizes_uuid_case_and_rejects_newline():
+    factory = RealtimeTopicFactory(tenant_id=str(uuid.uuid4()))
+    topic = factory.user_topic(str(uuid.uuid4()))
+    parts = topic.split(":")
+    upper = ":".join((parts[0], parts[1].upper(), parts[2], parts[3].upper()))
+    assert factory.resolve_topic(upper) == topic
+    assert factory.resolve_topic(topic + "\n") is None
