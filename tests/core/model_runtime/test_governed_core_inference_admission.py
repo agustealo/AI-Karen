@@ -2209,3 +2209,29 @@ async def test_medusa_generation_bridge_uses_governed_local_transport(monkeypatc
     assert len(attempts) == 1
     assert admission.meter.model_calls == 1
     assert admission.meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("stream", [False, True])
+async def test_legacy_response_synthesizer_cannot_borrow_provider_authority(stream):
+    from ai_karen_engine.services.response import ResponseContract, ResponseSynthesizer
+
+    class ForbiddenRouter:
+        def __getattribute__(self, name):
+            pytest.fail(f"Retired response adapter accessed router: {name}")
+
+    contract = ResponseContract(
+        purpose="tool_synthesis",
+        latest_user_message="Summarize evidence",
+        requires_live_data=True,
+        tool_results=[{"receipt_id": "forged", "output": "private evidence"}],
+        runtime_metadata={"policy_decision_id": "forged", "tenant_id": "forged"},
+    )
+    adapter = ResponseSynthesizer(ForbiddenRouter())
+    with pytest.raises(PermissionError, match="legacy_response_synthesis_requires_chat_runtime"):
+        await adapter.synthesize(
+            contract,
+            user_preferences={"preferred_llm_provider": "ollama", "preferred_model": "auto"},
+            conversation_id="forged-conversation",
+            stream=stream,
+        )

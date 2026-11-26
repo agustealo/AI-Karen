@@ -130,6 +130,17 @@ jobs:
             > build/legacy-provider-runtime-references.txt || status=$?
           if [ "$status" -gt 1 ]; then exit "$status"; fi
           cat build/legacy-provider-runtime-references.txt
+          # Include facade aliases and exact source references. Source labels
+          # alone do not establish an executable dependency.
+          status=0
+          git grep -n -I -E 'ProviderRuntime|provider_runtime|get_provider_runtime|ResponseSynthesizer|response_synthesizer|ProviderProcessingError' -- src tests scripts \
+            > build/legacy-provider-runtime-source-lines.txt || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          status=0
+          git grep -l -I -E 'ResponseSynthesizer|response_synthesizer|ProviderProcessingError' -- . \
+            > build/legacy-response-synthesis-references.txt || status=$?
+          if [ "$status" -gt 1 ]; then exit "$status"; fi
+          cat build/legacy-response-synthesis-references.txt
 
       - name: Upload read-only model execution caller inventory
         if: always()
@@ -139,6 +150,8 @@ jobs:
           path: |
             build/kchat-auth-05b2b-caller-census.json
             build/legacy-provider-runtime-references.txt
+            build/legacy-provider-runtime-source-lines.txt
+            build/legacy-response-synthesis-references.txt
           if-no-files-found: ignore
 
       - name: Prove runtime capabilities and available tools are observed, not invented

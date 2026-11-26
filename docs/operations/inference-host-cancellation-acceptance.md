@@ -323,3 +323,29 @@ before transport for missing/copy/replaced scope, single actual model
 reservation and mixed attachment/tool authorization. No legacy file
 deletion, independent review or deployment is claimed. Fresh exact-head
 CI remains required.
+
+
+### Retired response synthesis facade and reference audit (KUI-004B4.48C7Z8E19)
+
+The E18 exact-head Chat System Burn model-runtime group completed
+successfully, including the graph evidence and specialist generation
+regressions, before the overall workflow completed. Source inspection
+found one additional direct legacy consumer: services/response/
+response_synthesizer.py constructed ProviderRuntime, routed and retried
+without a live authenticated plan or meter, and produced emergency
+text. The public ResponseSynthesizer constructor/import remains a
+retirement shim but its synthesis method denies execution. Content
+validation, prompt building and sanitization remain separate and
+unchanged. The new regression asserts no router access and denial of
+forged receipt/context metadata for both streaming and nonstreaming.
+
+The existing read-only CI inventory now includes ResponseSynthesizer
+aliases, ProviderProcessingError and exact source-line references in
+src/tests/scripts. This is candidate evidence, not proof of reachability.
+The ProviderRuntime protocol in model_runtime/provider_contracts.py
+and historical provider_runtime response-source strings are distinct
+from the retired concrete executor. Source-level architecture tests and
+legacy behavior tests still reference that concrete class; do not
+delete it until those contracts are migrated and the full inventory is
+reviewed. No local test execution, full exact-head CI, deployment or
+physical-host acceptance is claimed.
