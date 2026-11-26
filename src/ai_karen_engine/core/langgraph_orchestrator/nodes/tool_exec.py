@@ -5,6 +5,8 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.services.tooling.tool_service import ToolOutput, ToolService
+from ai_karen_engine.core.runtime.workflow_generation import execute_workflow_tools
+from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 
 from ..contracts.orchestration_state import LangGraphOrchestrationState
 
@@ -21,7 +23,7 @@ class ToolExecutionConfig:
 
 
 class ToolExecutionNode:
-    """Fail closed on graph tool calls until a governed receipt adapter is wired."""
+    """Project receipt-backed Runtime tool execution into graph state."""
 
     def __init__(
         self,
@@ -39,38 +41,26 @@ class ToolExecutionNode:
         logger.info("Tool execution processing")
         try:
             tool_calls = state.get("tool_calls") or []
-            if not tool_calls:
-                state["tool_results"] = []
-                state["tool_execution_metadata"] = {
-                    "executed_tools": 0,
-                    "successful_executions": 0,
-                    "failed_executions": 0,
-                }
-                return state
-
             state = await self.execute_tools(state, tool_calls)
             state["execution_summary"] = self._build_execution_summary(
                 state.get("tool_results") or []
             )
             logger.info("Tool execution completed")
-        except PermissionError:
+        except (PermissionError, NativeRetirementUnverified):
             raise
-        except Exception as e:
-            logger.error("Tool execution error: %s", e)
-            state.setdefault("errors", []).append(f"Tool execution error: {e}")
+        except Exception as exc:
+            logger.error("workflow_tool_execution_failed", extra={"error_type": type(exc).__name__})
+            raise PermissionError("workflow_tool_execution_failed") from exc
 
         return state
 
     async def execute_tools(
         self, state: LangGraphOrchestrationState, tool_calls: List[Dict[str, Any]]
     ) -> LangGraphOrchestrationState:
-        # Raw graph ToolService calls have neither the original shared
-        # budget nor a durable governed invocation receipt. No serialized
-        # plan, cached result, or tool name can substitute for that grant.
-        if tool_calls:
-            raise PermissionError("workflow_tool_execution_receipt_required")
-        state["tool_results"] = []
-        state["tool_execution_metadata"] = self._build_execution_summary([])
+        # The injected legacy ToolService is not execution authority.
+        results = await execute_workflow_tools(state, tool_calls)
+        state["tool_results"] = results
+        state["tool_execution_metadata"] = self._build_execution_summary(results)
         state["execution_summary"] = state["tool_execution_metadata"]
         return state
 

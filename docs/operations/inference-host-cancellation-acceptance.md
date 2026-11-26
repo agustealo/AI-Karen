@@ -251,3 +251,29 @@ reconciliation and safe model-visible evidence projection must be wired
 before restoring graph execution. Nested graph reasoning and the legacy
 specialist generation adapter remain open. This is a prerequisite repair,
 not a claim of completed graph functionality or production acceptance.
+
+
+### Local-compute graph tool restoration (KUI-004B4.48C7Z8E16)
+
+E15 DEV_FAST reported two missing SpecialistExecutionContext type
+references; the type-checking import is restored without weakening lint.
+E16 restores a narrow graph tool path through the existing ToolBridge and
+OutcomeRecorder. Only tool implementations explicitly marked as local
+computation in their registered metadata are eligible; the audited
+text-processing implementation is the first opt-in. The actual resolved
+ToolService implementation must retain that marker. The original CORTEX
+tool list and ingress parameter snapshot are compared with the graph
+request, the original live plan and meter are checked, the host trajectory
+is preserved, and the batch is claimed once before suspension. The audit
+actor records the actual graph adapter, not a fabricated specialist.
+
+The graph receives only receipt references. Successful output is retained
+in the live runtime scope, projected as data into the canonical prompt,
+checked for intact inclusion, and restricted to local model execution.
+Checkpoint-only, altered or omitted receipts cannot authorize synthesis.
+This is a controlled, local-only restoration, not a general action
+framework: network/filesystem/mutation tools, approval workflows,
+resumability and nested graph reasoning remain blocked from this adapter.
+The new tests exercise real text processing with the in-memory receipt
+store and controlled HTTP model transport, replay/parameter denial and
+network-tool denial. Live PostgreSQL and host acceptance remain required.

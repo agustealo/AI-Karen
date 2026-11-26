@@ -18,11 +18,14 @@ import hashlib
 import json
 import logging
 import uuid
-from typing import Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
 
 from ...core.runtime.contracts import AuthorizedExecutionPlan, ExecutionBudgetMeter, GenerationRequest
 from ai_karen_engine.core.runtime.outcome.recorder import OutcomeRecorder
 from ai_karen_engine.core.runtime.outcome.store import get_outcome_store
+
+if TYPE_CHECKING:
+    from ..contracts.specialist_execution import SpecialistExecutionContext
 
 logger = logging.getLogger(__name__)
 
@@ -139,6 +142,8 @@ class ToolBridge:
         agent_id: str,
         step_id: str,
         execution: Optional["SpecialistExecutionContext"] = None,
+        workflow_local_compute: bool = False,
+        workflow_authority_check: Optional[Callable[[], None]] = None,
     ) -> Dict[str, Any]:
         # Persisted receipts require a real tenant/user and current policy
         # context before any external side effect can take place.
@@ -192,6 +197,16 @@ class ToolBridge:
             )
             admission._require_scope()
 
+        if workflow_local_compute:
+            if (
+                admission is None
+                or workflow_authority_check is None
+                or tool_name not in authorized_plan.allowed_tools
+                or authorized_plan.approval_requirements
+            ):
+                raise PermissionError("workflow_tool_execution_receipt_required")
+            workflow_authority_check()
+
         # Denied eligibility is not an executed tool attempt.
         if not await self._authorize(tool_name, authorized_plan):
             raise PermissionError(
@@ -208,6 +223,11 @@ class ToolBridge:
 
         tools = get_tool_service()
         metadata = tools.get_tool_metadata(tool_name)
+        if workflow_local_compute and not (
+            getattr(metadata, "workflow_local_compute", False) is True
+            and getattr(metadata, "name", None) == tool_name
+        ):
+            raise PermissionError("workflow_tool_not_local_compute")
         tool_version = getattr(metadata, "version", None) if metadata else None
         tool_call_id = str(uuid.uuid4())
         correlation_id = (
@@ -233,6 +253,9 @@ class ToolBridge:
                 raise PermissionError("ExecutionBudget exhausted: duration")
             admission._require_scope()
 
+        if workflow_authority_check is not None:
+            workflow_authority_check()
+
         result = None
         error_type = None
         try:
@@ -247,6 +270,7 @@ class ToolBridge:
                     ),
                     request_id=tool_call_id,
                     governed_execution=True,
+                    workflow_local_compute=workflow_local_compute,
                     user_context={
                         "tenant_id": tenant_id,
                         "user_id": user_id,
@@ -339,6 +363,8 @@ class ToolBridge:
                 correlation_id=correlation_id,
                 metadata={"tool": tool_name, "step_id": step_id, "tool_call_id": tool_call_id, "success": success},
             ))
+        if workflow_authority_check is not None:
+            workflow_authority_check()
         return {
             "tool": tool_name,
             "success": success,

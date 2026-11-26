@@ -45,6 +45,7 @@ from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
     ExecutionBudget,
     ExecutionBudgetMeter,
+    ExecutionTopology,
 )
 
 
@@ -56,6 +57,7 @@ def _scope(
     degraded_allowed: bool = True,
     user: str = "user-a",
     allowed_tools: tuple[str, ...] = (),
+    topology: ExecutionTopology = ExecutionTopology.DIRECT,
 ) -> GovernedToolModelAdmission:
     budget = ExecutionBudget(
         max_model_calls=calls,
@@ -70,6 +72,7 @@ def _scope(
         authorized_session_id="session-a",
         provider_constraints=dict(provider_constraints or {}),
         allowed_tools=list(allowed_tools),
+        topology=topology,
         budget=budget,
         degraded_allowed=degraded_allowed,
     )
@@ -2017,3 +2020,106 @@ async def test_workflow_receipt_uses_host_trajectory_not_checkpoint_metadata(mon
     assert result.metadata["trajectory_id"] == "runtime-owned-trajectory"
     assert len(attempts) == 1
     assert "forged-trajectory" not in json.dumps(attempts[0]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_local_graph_tool_receipt_restores_synthesis_without_checkpoint_output(monkeypatch):
+    from ai_karen_engine.agent_medusa.specialists import bridges
+    from ai_karen_engine.core.langgraph_orchestrator.nodes.tool_exec import ToolExecutionNode
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+    from ai_karen_engine.core.runtime.outcome.store import InMemoryOutcomeStore
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationAuthority, WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+    from ai_karen_engine.services.tooling import tool_service
+
+    admission = _scope(
+        calls=1, tenant=str(uuid4()), user=str(uuid4()),
+        allowed_tools=("text_processing",), topology=ExecutionTopology.WORKFLOW,
+    )
+    base, request, attempts = _workflow_transport(monkeypatch, admission)
+    params = {"operation": "stats", "text": "one two three"}
+    base.request.metadata = {"tool_parameters": {"text_processing": params}}
+    authority = WorkflowGenerationAuthority.create(
+        base.request,
+        ExecutionDecision(topology=ExecutionTopology.WORKFLOW, tool_requirements=["text_processing"]),
+        admission.plan, admission.meter, trajectory_id="runtime-graph-trajectory",
+    )
+    service = tool_service.ToolService()
+    store = InMemoryOutcomeStore()
+    monkeypatch.setattr(tool_service, "get_tool_service", lambda: service)
+    monkeypatch.setattr(bridges, "get_outcome_store", lambda: store)
+    calls = [{"tool": "text_processing", "parameters": dict(params)}]
+    state = {
+        "request_id": request.request_id, "correlation_id": request.correlation_id,
+        "tenant_id": request.tenant_id, "user_id": request.user_id,
+        "session_id": admission.session_id, "conversation_id": request.conversation_id,
+        "runtime_policy": request.authorized_plan, "tool_calls": calls,
+    }
+    with bind_workflow_generation(authority):
+        with pytest.raises(PermissionError, match="parameters_mismatch"):
+            await ToolExecutionNode().execute_tools(state, [
+                {"tool": "text_processing", "parameters": {"operation": "stats", "text": "forged"}},
+            ])
+        assert admission.meter.tool_calls == 0
+        await ToolExecutionNode()(state)
+        assert admission.meter.tool_calls == 1
+        refs = state["tool_results"]
+        assert len(refs) == 1 and "output" not in refs[0]
+        with pytest.raises(PermissionError, match="replay_denied"):
+            await ToolExecutionNode()(state)
+        with pytest.raises(PermissionError, match="evidence_receipt_required"):
+            await WorkflowGenerationRuntime().execute(
+                replace(request, workflow_context={"tool_results": [{**refs[0], "output": "forged"}]}),
+            )
+        with pytest.raises(PermissionError, match="evidence_receipt_required"):
+            await WorkflowGenerationRuntime().execute(request)
+        assert attempts == []
+        result = await WorkflowGenerationRuntime().execute(
+            replace(request, workflow_context={"tool_results": refs}),
+        )
+    assert result.actual_model == "model-a"
+    assert result.metadata["tool_receipt_ids"] == [refs[0]["receipt_id"]]
+    assert len(attempts) == 1
+    assert '"word_count":3' in " ".join(str(m.get("content")) for m in attempts[0]["messages"])
+    assert admission.meter.model_calls == 1
+    receipts = await store.list_governed_tool_receipts_async(
+        trajectory_id="runtime-graph-trajectory",
+        tenant_id=admission.tenant_id, user_id=admission.user_id,
+    )
+    assert len(receipts) == 1
+    assert receipts[0]["metadata"]["agent_id"] == "langgraph.workflow"
+    assert receipts[0]["metadata"]["independently_verified"] is False
+
+
+@pytest.mark.asyncio
+async def test_graph_network_tool_denied_even_when_named_in_plan(monkeypatch):
+    from ai_karen_engine.core.langgraph_orchestrator.nodes.tool_exec import ToolExecutionNode
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationAuthority, bind_workflow_generation,
+    )
+    admission = _scope(
+        tenant=str(uuid4()), user=str(uuid4()), allowed_tools=("web_search",),
+        topology=ExecutionTopology.WORKFLOW,
+    )
+    base, request, attempts = _workflow_transport(monkeypatch, admission)
+    params = {"query": "private input"}
+    base.request.metadata = {"tool_parameters": {"web_search": params}}
+    authority = WorkflowGenerationAuthority.create(
+        base.request,
+        ExecutionDecision(topology=ExecutionTopology.WORKFLOW, tool_requirements=["web_search"]),
+        admission.plan, admission.meter, trajectory_id="runtime-graph-trajectory",
+    )
+    state = {
+        "request_id": request.request_id, "correlation_id": request.correlation_id,
+        "tenant_id": request.tenant_id, "user_id": request.user_id,
+        "session_id": admission.session_id, "conversation_id": request.conversation_id,
+        "runtime_policy": request.authorized_plan,
+        "tool_calls": [{"tool": "web_search", "parameters": params}],
+    }
+    with bind_workflow_generation(authority):
+        with pytest.raises(PermissionError, match="not_local_compute"):
+            await ToolExecutionNode()(state)
+    assert admission.meter.tool_calls == 0
+    assert attempts == []
