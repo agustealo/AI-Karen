@@ -993,7 +993,10 @@ async def test_bounded_signed_range_holds_real_postgres_archive_lock(monkeypatch
     or os.getenv("KAREN_TEST_CODE_ARTIFACT_POSTGRES") != "1",
     reason="Requires existing disposable PostgreSQL artifact acceptance database",
 )
-async def test_real_postgres_explorer_selection_to_content_revision_and_owner_races() -> None:
+@pytest.mark.parametrize("generated", [False, True], ids=["legacy", "generated"])
+async def test_real_postgres_explorer_selection_to_content_revision_and_owner_races(
+    monkeypatch, generated: bool,
+) -> None:
     """Prove live DB selection is never a transferable content-read permission.
 
     Uses real migrated PostgreSQL rows, ArtifactStore, File Explorer adapter,
@@ -1005,6 +1008,7 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
     from importlib import import_module
 
     from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.persistence.postgres import transactions
     from ai_karen_engine.extensions.content_intelligence_sources import ContentSourceHost
     from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
     from ai_karen_engine.extensions.file_explorer_inventory import FileExplorerInventoryHost
@@ -1028,8 +1032,9 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
     engine = create_async_engine(parsed, pool_pre_ping=True, pool_size=3)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     artifact = str(uuid4())
-    filename = "kplug_revision_proof.txt"
-    key = f"{tenant}/{artifact}/{filename}"
+    folder = str(uuid4()) if generated else None
+    filename = "generated.txt" if generated else "kplug_revision_proof.txt"
+    key = f"{tenant}/{artifact}/content" if generated else f"{tenant}/{artifact}/{filename}"
     versions = (
         b"Original bounded source proof.\n",
         b"Updated bounded source revision.\n",
@@ -1043,7 +1048,13 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
             from_=lambda name: bucket if name == "artifacts" else None
         ),
     )
-    store = SupabaseArtifactStore(sessions, platform)
+    monkeypatch.setattr(
+        transactions, "get_postgres_engine",
+        lambda: SimpleNamespace(async_session_factory=sessions),
+    )
+    store = SupabaseArtifactStore(
+        sessions, platform, hierarchy_transaction=transactions.async_transaction_scope,
+    )
     explorer_module = import_module(
         "ai_karen_engine.extensions.plugins.file-explorer.artifact_source"
     )
@@ -1142,17 +1153,25 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
             assert (await admin.execute(
                 text("SELECT current_database()")
             )).scalar_one() == "karen_code_artifact_test"
+            if folder is not None:
+                await admin.execute(text(
+                    "INSERT INTO public.artifact_folders "
+                    "(folder_id, tenant_id, owner_user_id, name) "
+                    "VALUES (CAST(:folder AS uuid), CAST(:tenant AS uuid), "
+                    "CAST(:owner AS uuid), 'Generated document lifecycle proof')"
+                ), {"folder": folder, "tenant": tenant, "owner": owner})
             await admin.execute(
                 text(
                     "INSERT INTO files (file_id, tenant_id, owner_user_id, name, "
                     "mime_type, bytes, storage_uri, sha256, metadata, created_at) "
                     "VALUES (:id, CAST(:tenant AS uuid), CAST(:owner AS uuid), "
-                    ":name, 'text/plain', :size, :uri, :digest, '{}'::jsonb, NOW())"
+                    ":name, 'text/plain', :size, :uri, :digest, CAST(:metadata AS jsonb), NOW())"
                 ),
                 {
                     "id": artifact, "tenant": tenant, "owner": owner,
                     "name": filename, "size": len(versions[0]),
                     "uri": f"supabase://artifacts/{key}", "digest": digests[0],
+                    "metadata": '{"kind":"generated_text"}' if generated else "{}",
                 },
             )
             await admin.commit()
@@ -1166,6 +1185,44 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
             "size_bytes": len(versions[0]), "sha256": digests[0],
         }]
         assert "storage_uri" not in page["items"][0]
+        if folder is not None:
+            # SQL fixture has the canonical generated filename, kind and object
+            # key; no real model or Storage write is claimed by this test.
+            root = await store.list_owner_artifacts_page(
+                tenant, owner, folder_scoped=True, folder_id=None, search=filename,
+            )
+            assert root.success and [item.id for item in root.data] == [artifact]
+            assert root.data[0].kind == "generated_text"
+            assert root.data[0].organization_revision == 1
+            moved = await store.move_owner_artifact(
+                tenant, owner, artifact, folder_id=folder, expected_revision=1,
+            )
+            assert moved.success and moved.data == 2
+            stale = await store.move_owner_artifact(
+                tenant, owner, artifact, folder_id=None, expected_revision=1,
+            )
+            assert not stale.success
+            root_after = await store.list_owner_artifacts_page(
+                tenant, owner, folder_scoped=True, folder_id=None, search=filename,
+            )
+            assert root_after.success and not root_after.data
+            inside = await source.list_owner_sources_page(
+                tenant_id=tenant, user_id=owner, folder_scoped=True,
+                folder_id=folder, search=filename,
+            )
+            assert inside["items"] == [{
+                **page["items"][0], "parent_id": folder, "organization_revision": "2",
+            }]
+            current = await store.get_metadata(artifact, tenant)
+            assert current.success and current.data.storage_key == key
+            assert current.data.sha256 == digests[0]
+            reference = await explorer.revalidate_owner_selection(
+                context=context, plan=plan, source_id=artifact,
+                expected_revision=digests[0],
+            )
+            assert reference["revision"] == digests[0]
+            assert reference["owner_scope_verified"] is True
+
         initial = await analyze(digests[0])
         assert initial["persisted"] is False
         assert initial["documents"][0]["sha256"] == digests[0]
@@ -1240,10 +1297,17 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
         assert accepted["documents"][0]["sha256"] == digests[2]
         assert len(kernel.analysis_executions) == 3
 
-        # Real owner transfer removes this source from the old principal's
-        # inventory and prevents both revalidation and content execution.
+        # Both owner transfer and archive revoke previously selected content.
         calls_before_revocation = bucket.download.call_count
-        await change(new_owner=other_owner)
+        if generated:
+            archived = await store.archive(artifact, tenant)
+            assert archived.success and archived.data is True
+            denied_move = await store.move_owner_artifact(
+                tenant, owner, artifact, folder_id=None, expected_revision=2,
+            )
+            assert not denied_move.success
+        else:
+            await change(new_owner=other_owner)
         assert (await inventory())["items"] == []
         with pytest.raises(PermissionError, match="file_explorer_source_unavailable"):
             await explorer.revalidate_owner_selection(
@@ -1270,6 +1334,12 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
                          "tenant_id=CAST(:tenant AS uuid)"),
                     {"id": artifact, "tenant": tenant},
                 )
+                if folder is not None:
+                    await admin.execute(
+                        text("DELETE FROM public.artifact_folders WHERE folder_id=CAST(:folder AS uuid) "
+                             "AND tenant_id=CAST(:tenant AS uuid) AND owner_user_id=CAST(:owner AS uuid)"),
+                        {"folder": folder, "tenant": tenant, "owner": owner},
+                    )
                 await admin.commit()
         await engine.dispose()
 

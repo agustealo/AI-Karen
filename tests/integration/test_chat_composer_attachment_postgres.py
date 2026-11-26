@@ -165,6 +165,9 @@ async def test_attachment_draft_atomic_cas_and_owner_scope():
                 for revision, submitted_text, expected in (
                     (1, "draft", False),
                     (2, current.data["text"], False),
+                    # Matching current text isolates the stale revision fence.
+                    (1, "cleared", False),
+                    (2, "cleared", False),
                     (3, "different text", False),
                     (3, "cleared", True),
                 ):
