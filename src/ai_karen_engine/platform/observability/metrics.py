@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import math
 import threading
+from bisect import bisect_left
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from enum import Enum
 from typing import Any
 
@@ -106,6 +109,22 @@ class _BoundGauge:
         self._gauge._inc(self._label_values, -amount)
 
 
+@dataclass(frozen=True, slots=True)
+class HistogramSnapshot:
+    """Immutable cumulative bucket totals for one metric series."""
+
+    count: int
+    total: float
+    bucket_counts: tuple[int, ...]
+
+
+@dataclass(slots=True)
+class _HistogramAggregate:
+    count: int
+    total: float
+    bucket_counts: list[int]
+
+
 class _Histogram(_LabeledMetric):
     def __init__(
         self,
@@ -115,17 +134,49 @@ class _Histogram(_LabeledMetric):
         buckets: tuple[float, ...] | None = None,
     ) -> None:
         super().__init__(name, description, label_names)
-        self.buckets = buckets or (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
-        self._values: dict[tuple[str, ...], list[float]] = {}
+        self.buckets = tuple(
+            float(bucket)
+            for bucket in (buckets or (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0))
+        )
+        if any(not math.isfinite(bucket) for bucket in self.buckets) or any(
+            left >= right for left, right in zip(self.buckets, self.buckets[1:])
+        ):
+            raise ValueError("Histogram buckets must be finite and strictly increasing")
+        self._values: dict[tuple[str, ...], _HistogramAggregate] = {}
+        self._lock = threading.Lock()
 
     def labels(self, **kwargs: str) -> _BoundHistogram:
         return _BoundHistogram(self, self._label_key(kwargs))
 
     def _observe(self, key: tuple[str, ...], value: float) -> None:
-        self._values.setdefault(key, []).append(value)
+        value = float(value)
+        if not math.isfinite(value):
+            raise ValueError("Histogram observation must be finite")
+        first_bucket = bisect_left(self.buckets, value)
+        with self._lock:
+            aggregate = self._values.get(key)
+            if aggregate is None:
+                aggregate = _HistogramAggregate(
+                    count=0, total=0.0, bucket_counts=[0] * len(self.buckets),
+                )
+                self._values[key] = aggregate
+            aggregate.count += 1
+            aggregate.total += value
+            for index in range(first_bucket, len(self.buckets)):
+                aggregate.bucket_counts[index] += 1
 
-    def collect(self) -> dict[tuple[str, ...], list[float]]:
-        return {key: list(values) for key, values in self._values.items()}
+    def collect(self) -> dict[tuple[str, ...], HistogramSnapshot]:
+        # Snapshot count, sum and cumulative buckets under one lock so a
+        # scrape cannot combine observations from different instants.
+        with self._lock:
+            return {
+                key: HistogramSnapshot(
+                    count=value.count,
+                    total=value.total,
+                    bucket_counts=tuple(value.bucket_counts),
+                )
+                for key, value in self._values.items()
+            }
 
 
 class _BoundHistogram:
