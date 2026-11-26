@@ -27,6 +27,7 @@ class UploadSession:
     expected_bytes: int
     received_bytes: int
     artifact_id: str | None
+    expected_sha256: str | None = None
 
 
 class UploadSessionConflict(ValueError):
@@ -65,6 +66,7 @@ class UploadSessionRepository:
             expected_bytes=data["expected_bytes"],
             received_bytes=data["received_bytes"],
             artifact_id=data["artifact_id"],
+            expected_sha256=data["expected_sha256"],
         )
 
     async def create_or_get(
@@ -78,6 +80,7 @@ class UploadSessionRepository:
         manifest_sha256: str,
         expected_bytes: int,
         expires_at: datetime,
+        expected_sha256: str | None = None,
     ) -> UploadSession:
         identity = self._identity(tenant_id, owner_user_id)
         if not destination_id or not recipe or expected_bytes < 0:
@@ -85,6 +88,12 @@ class UploadSessionRepository:
         for digest in (idempotency_key_hash, manifest_sha256):
             if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
                 raise ValueError("Expected lowercase SHA-256 digest")
+        if expected_sha256 is not None and (
+            not isinstance(expected_sha256, str)
+            or len(expected_sha256) != 64
+            or any(c not in "0123456789abcdef" for c in expected_sha256)
+        ):
+            raise ValueError("Expected lowercase content SHA-256 digest")
         if expires_at <= datetime.utcnow():
             raise ValueError("Upload session must expire in the future")
         params = {
@@ -94,6 +103,7 @@ class UploadSessionRepository:
             "idempotency_key_hash": idempotency_key_hash,
             "manifest_sha256": manifest_sha256,
             "expected_bytes": expected_bytes,
+            "expected_sha256": expected_sha256,
             "expires_at": expires_at,
         }
         async with self._session_factory() as session:
@@ -102,17 +112,19 @@ class UploadSessionRepository:
             await session.execute(text("""
                 INSERT INTO public.artifact_upload_sessions
                     (tenant_id, owner_user_id, destination_id, recipe,
-                     idempotency_key_hash, manifest_sha256, expected_bytes, expires_at)
+                     idempotency_key_hash, manifest_sha256, expected_bytes,
+                     expected_sha256, expires_at)
                 VALUES
                     (:tenant_id, :owner_user_id, :destination_id, :recipe,
-                     :idempotency_key_hash, :manifest_sha256, :expected_bytes, :expires_at)
+                     :idempotency_key_hash, :manifest_sha256, :expected_bytes,
+                     :expected_sha256, :expires_at)
                 ON CONFLICT (tenant_id, owner_user_id, idempotency_key_hash)
                 DO NOTHING
             """), params)
             result = await session.execute(text("""
                 SELECT session_id, tenant_id, owner_user_id, destination_id,
                        recipe, state, manifest_sha256, expected_bytes,
-                       received_bytes, artifact_id
+                       received_bytes, artifact_id, expected_sha256
                 FROM public.artifact_upload_sessions
                 WHERE tenant_id = :tenant_id AND owner_user_id = :owner_user_id
                   AND idempotency_key_hash = :idempotency_key_hash
@@ -128,6 +140,7 @@ class UploadSessionRepository:
                 or record.destination_id != destination_id
                 or record.recipe != recipe
                 or record.expected_bytes != expected_bytes
+                or record.expected_sha256 != expected_sha256
             ):
                 raise UploadSessionConflict("Upload idempotency conflict")
             await session.commit()
@@ -180,6 +193,7 @@ class UploadSessionRepository:
                       :next_state <> 'committed'
                       OR (
                           received_bytes = expected_bytes
+                          AND expected_sha256 IS NOT NULL
                           AND EXISTS (
                               SELECT 1 FROM public.files AS artifact
                               WHERE artifact.file_id = :artifact_id
@@ -187,16 +201,13 @@ class UploadSessionRepository:
                                 AND artifact.owner_user_id = :owner_user_id
                                 AND artifact.deleted_at IS NULL
                                 AND artifact.bytes = expected_bytes
-                                AND (
-                                    expected_sha256 IS NULL
-                                    OR artifact.sha256 = expected_sha256
-                                )
+                                AND artifact.sha256 = expected_sha256
                           )
                       )
                   )
                 RETURNING session_id, tenant_id, owner_user_id, destination_id,
                           recipe, state, manifest_sha256, expected_bytes,
-                          received_bytes, artifact_id
+                          received_bytes, artifact_id, expected_sha256
             """), params)
             row = result.first()
             if row is None:

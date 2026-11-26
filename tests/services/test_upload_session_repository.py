@@ -71,6 +71,7 @@ def record():
         "expected_bytes": 42,
         "received_bytes": 0,
         "artifact_id": None,
+        "expected_sha256": None,
     }
 
 
@@ -153,6 +154,8 @@ async def test_committed_transition_requires_active_owner_matched_artifact():
     assert "artifact.deleted_at IS NULL" in statement
     assert "artifact.bytes = expected_bytes" in statement
     assert "artifact.sha256 = expected_sha256" in statement
+    assert "expected_sha256 IS NOT NULL" in statement
+    assert "expected_sha256 IS NULL" not in statement
 
 
 @pytest.mark.asyncio
@@ -191,3 +194,24 @@ async def test_create_or_get_requires_unexpired_existing_session():
     select_sql = db.statements[1][0]
     assert "expires_at > now()" in select_sql
     assert "FOR UPDATE" in select_sql
+
+
+
+@pytest.mark.asyncio
+async def test_creation_pins_content_digest_to_idempotency_manifest():
+    db = FakeSession({**record(), "expected_sha256": DIGEST})
+    repo = UploadSessionRepository(lambda: db)
+    params = dict(
+        tenant_id=TENANT, owner_user_id=OWNER,
+        destination_id="explorer", recipe="store_only",
+        idempotency_key_hash=KEY, manifest_sha256=DIGEST,
+        expected_bytes=42, expires_at=datetime.utcnow() + timedelta(hours=1),
+    )
+    result = await repo.create_or_get(**params, expected_sha256=DIGEST)
+    assert result.expected_sha256 == DIGEST
+    assert db.statements[0][1]["expected_sha256"] == DIGEST
+    for changed in (None, "c" * 64):
+        with pytest.raises(UploadSessionConflict):
+            await repo.create_or_get(**params, expected_sha256=changed)
+    with pytest.raises(ValueError, match="content SHA-256"):
+        await repo.create_or_get(**params, expected_sha256="not-a-digest")
