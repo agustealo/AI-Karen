@@ -9,6 +9,11 @@ const source = readFileSync(
   "utf8",
 );
 
+const approvalController = readFileSync(
+  fileURLToPath(new URL("../approvals/useRuntimeApprovals.ts", import.meta.url)),
+  "utf8",
+);
+
 describe("AgentsPage canonical Medusa boundary", () => {
   it("uses the canonical Medusa catalog instead of the legacy agent registry", () => {
     expect(source).toContain('"/api/agent-runtime/catalog"');
@@ -57,13 +62,15 @@ describe("Agent Runtime task-first UI contract", () => {
 
 describe("Agent Runtime governed approvals", () => {
   it("uses backend-owned approval records and decisions without auto-execution", () => {
-    expect(source).toContain('"/api/approvals/"');
-    expect(source).toContain("/api/approvals/\u0024{encodeURIComponent(approvalId)}/decision");
+    expect(approvalController).toContain('"/api/approvals/"');
+    expect(approvalController).toContain("/api/approvals/\u0024{encodeURIComponent(approvalId)}/decision");
+    expect(source).toContain("useRuntimeApprovals(isAuthenticated, setActionMessage)");
+    expect(source).not.toContain('"/api/approvals/"');
     expect(source).toContain('data-testid="agent-runtime-approvals"');
     expect(source).toContain("Review approval");
     expect(source).toContain("Review rejection");
     expect(source).toContain("A decision alone does not execute an action.");
-    expect(source).toContain("Karen must still revalidate and resume the original request.");
+    expect(approvalController).toContain("Karen must still revalidate and resume the original request.");
   });
 });
 
@@ -116,7 +123,7 @@ describe("Agent Runtime truthful availability states", () => {
   });
 
   it("does not present unavailable metrics as zero or an unverified approval inbox as empty", () => {
-    expect(source).toContain("const [isLoadingApprovals, setIsLoadingApprovals] = useState(true)");
+    expect(approvalController).toContain("const [isLoadingApprovals, setIsLoadingApprovals] = useState(true)");
     expect(source).toContain("Loading approval requests…");
     expect(source).toContain("Approval requests are unavailable. Refresh runtime to try again.");
     expect(source).not.toContain("catalog?.total ?? 0");
