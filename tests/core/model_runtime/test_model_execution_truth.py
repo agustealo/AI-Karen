@@ -952,3 +952,60 @@ def test_governed_pipeline_placement_fences_even_before_publication(monkeypatch,
     assert module.TransformersRuntime._native_retirement_hold.is_set() == (
         failure in {"wrong_device", "fence"}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("outcome", ["returned", "empty", "raised"])
+async def test_compatibility_call_cannot_change_canonical_provider_health(monkeypatch, caplog, outcome):
+    from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+        HealthStatus, ProviderHealthMonitor,
+    )
+    from ai_karen_engine.core.runtime.resilience.circuit_breaker import CircuitBreaker
+
+    manager = object.__new__(ModelManager)
+    monitor = ProviderHealthMonitor()
+    manager.health_monitor = monitor
+    selection = RuntimeSelection(
+        provider_id="local", display_name="Local",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        model="registered-model", runtime_engine="ollama",
+    )
+    def generate(_prompt):
+        if outcome == "raised":
+            raise RuntimeError("private upstream exception body")
+        return "" if outcome == "empty" else "plain compatibility response"
+
+    monkeypatch.setattr(manager, "select_provider", lambda *a, **kw: selection)
+    monkeypatch.setattr(manager, "resolve_runtime", lambda _: SimpleNamespace(generate_text=generate))
+    monkeypatch.setattr(manager, "_provider_is_healthy", lambda _: True)
+    compatibility = CircuitBreaker("compatibility.local", failure_threshold=1)
+    canonical = CircuitBreaker("local", failure_threshold=1)
+    keys = []
+    def get_breaker(key):
+        keys.append(key)
+        return compatibility if key == "compatibility.local" else canonical
+
+    monkeypatch.setattr(manager, "_get_breaker", get_breaker)
+    if outcome == "raised":
+        with pytest.raises(RuntimeError, match="private upstream exception body"):
+            await manager.generate_chat([{"role": "user", "content": "hello"}])
+    else:
+        response = await manager.generate_chat([{"role": "user", "content": "hello"}])
+        assert response == ("" if outcome == "empty" else "plain compatibility response")
+    assert keys == ["compatibility.local"]
+    assert canonical.failures == 0
+    assert monitor.get_provider_health("local").health_status is HealthStatus.UNKNOWN
+    assert "private upstream exception body" not in caplog.text
+
+
+def test_compatibility_diagnostic_never_stores_raw_error(monkeypatch, caplog):
+    from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+        HealthStatus, ProviderHealthMonitor,
+    )
+    manager = object.__new__(ModelManager)
+    manager.health_monitor = ProviderHealthMonitor()
+    manager._record_provider_result(
+        "local", False, 0.0, error_message="private upstream exception body",
+    )
+    assert manager.health_monitor.get_provider_health("local").health_status is HealthStatus.UNKNOWN
+    assert "private upstream exception body" not in caplog.text

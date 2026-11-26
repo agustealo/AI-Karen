@@ -47,6 +47,7 @@ class TestEventTypeTaxonomyIsComplete:
         "provider.execution.failed",
         "provider.fallback",
         "provider.health.changed",
+        "runtime.circuit.changed",
         "workflow.started",
         "workflow.completed",
         "workflow.failed",
@@ -357,3 +358,25 @@ class TestBoundedBufferEvictsOldest:
         recent = buffer.recent()
         ids = [e["event_id"] for e in recent]
         assert ids == ["evt_2", "evt_3", "evt_4"]
+
+
+def test_circuit_transitions_are_not_provider_execution_receipts(monkeypatch):
+    from ai_karen_engine.platform.observability import events
+    from ai_karen_engine.core.runtime.resilience.circuit_breaker import CircuitBreaker
+
+    sink = InMemorySink()
+    monkeypatch.setattr(events, "_emitter", ObservabilityEmitter([sink]))
+    breaker = CircuitBreaker("test-stage", failure_threshold=1, recovery_timeout=0)
+    breaker.record_failure()
+    assert breaker.allow_request()
+    breaker.record_failure()
+    assert breaker.allow_request()
+    breaker.record_success()
+    breaker.record_success()
+    assert [(event.metadata["previous_state"], event.status) for event in sink.events] == [
+        ("CLOSED", "OPEN"), ("OPEN", "HALF_OPEN"), ("HALF_OPEN", "OPEN"),
+        ("OPEN", "HALF_OPEN"), ("HALF_OPEN", "CLOSED"),
+    ]
+    assert all(event.event_type is EventType.CIRCUIT_STATE_CHANGED for event in sink.events)
+    assert all(event.provider is None for event in sink.events)
+    assert all(event.metadata["circuit_breaker"] == "test-stage" for event in sink.events)

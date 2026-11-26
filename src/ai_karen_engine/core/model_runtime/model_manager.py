@@ -308,7 +308,13 @@ class ModelManager:
         if not self._provider_is_healthy(selection.provider_id):
             raise ProviderNotAvailable(f"Provider unhealthy: {selection.provider_id}")
 
-        breaker = self._get_breaker(selection.provider_id)
+        # Compatibility calls do not own canonical transport evidence. Keep
+        # their resilience penalties separate from admitted provider calls.
+        breaker_key = (
+            selection.provider_id if execution_admission is not None
+            else f"compatibility.{selection.provider_id}"
+        )
+        breaker = self._get_breaker(breaker_key)
         if not breaker.allow_request():
             raise ProviderNotAvailable(f"Circuit breaker open: {selection.provider_id}")
 
@@ -379,7 +385,9 @@ class ModelManager:
                     selection, execution_admission, endpoint=endpoint, prompt=prompt, target=target,
                     return_receipt=return_receipt, breaker=breaker, options=kwargs,
                 )
-            await execution_admission.reserve_transport(endpoint, model=selection.model)
+            # No other endpoint has an owned, admitted executor here. Never
+            # fall through to a compatibility runtime after charging quota.
+            raise ProviderNotAvailable("governed_model_execution_protocol_unsupported")
         provider = self.resolve_runtime(selection)
 
         start = time.perf_counter()
@@ -448,10 +456,13 @@ class ModelManager:
                 selection.provider_id,
                 False,
                 start,
-                error_message=str(exc),
+                error_message=type(exc).__name__,
             )
             breaker.record_failure()
-            logger.exception("Primary provider %s failed", selection.provider_id)
+            logger.warning(
+                "compatibility_model_call_failed",
+                extra={"provider_id": selection.provider_id, "error_type": type(exc).__name__},
+            )
             raise
 
     async def _execute_admitted_http(
@@ -763,13 +774,24 @@ class ModelManager:
         *,
         error_message: Optional[str] = None,
     ) -> None:
+        """Compatibility-call diagnostic; never a shared health observation.
+
+        A returned value or raised exception from an ungoverned adapter does
+        not establish actual transport or native execution. Retain the
+        existing private helper contract until the compatibility caller audit.
+        Do not persist its legacy error_message argument: callers may supply
+        raw upstream text.
+        """
         elapsed = time.perf_counter() - start_time
         try:
-            self.health_monitor.record_provider_interaction(
-                provider_name=provider_id,
-                success=success,
-                response_time=elapsed,
-                error_message=error_message,
+            logger.info(
+                "compatibility_model_call_resolved",
+                extra={
+                    "provider_id": provider_id,
+                    "outcome": "returned" if success else "raised",
+                    "duration_ms": elapsed * 1000.0,
+                    "execution_layer": "compatibility",
+                },
             )
         except Exception:
             pass

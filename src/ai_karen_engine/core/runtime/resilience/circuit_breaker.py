@@ -9,14 +9,31 @@ import time
 from enum import Enum
 from typing import Dict, Optional
 from ai_karen_engine.core.logging import get_logger
-from ai_karen_engine.core.logging.events import ProviderEvents
+from ai_karen_engine.platform.observability.contracts import EventType
+from ai_karen_engine.platform.observability.events import emit_event
 
 logger = get_logger(__name__)
 
 
-def _emit_provider_event(event_name: str, **kwargs):
-    """Emit a provider observability event using structured logging."""
-    logger.event(event_name, **kwargs)
+def _emit_circuit_transition(
+    name: str, previous: "BreakerState", current: "BreakerState", reason: str,
+) -> None:
+    """A stage circuit transition is not a provider execution receipt."""
+    try:
+        emit_event(
+            EventType.CIRCUIT_STATE_CHANGED,
+            status=current.value,
+            execution_layer="resilience",
+            metadata={
+                "circuit_breaker": name,
+                "previous_state": previous.value,
+                "new_state": current.value,
+                "reason": reason,
+            },
+        )
+    except Exception:
+        # The resilience decision is independent of telemetry availability.
+        pass
 
 
 class BreakerState(Enum):
@@ -39,13 +56,10 @@ class CircuitBreaker:
         """Record a successful execution."""
         if self.state == BreakerState.HALF_OPEN:
             logger.info(f"Circuit Breaker '{self.name}' recovered. Setting to CLOSED.")
-            _emit_provider_event(
-                ProviderEvents.ATTEMPT_COMPLETED,
-                circuit_breaker=self.name,
-                state=BreakerState.CLOSED.value,
-                event="recovery"
-            )
             self.state = BreakerState.CLOSED
+            _emit_circuit_transition(
+                self.name, BreakerState.HALF_OPEN, self.state, "recovery",
+            )
         self.failures = 0
 
     def record_failure(self):
@@ -57,27 +71,18 @@ class CircuitBreaker:
             logger.warning(
                 f"Circuit Breaker '{self.name}' failed during recovery. Setting to OPEN."
             )
-            _emit_provider_event(
-                ProviderEvents.ATTEMPT_FAILED,
-                circuit_breaker=self.name,
-                state=BreakerState.OPEN.value,
-                event="recovery_failure",
-                failures=self.failures
-            )
             self.state = BreakerState.OPEN
+            _emit_circuit_transition(
+                self.name, BreakerState.HALF_OPEN, self.state, "recovery_failure",
+            )
             return
 
         if self.state == BreakerState.CLOSED and self.failures >= self.failure_threshold:
             logger.warning(f"Circuit Breaker '{self.name}' tripped. Setting to OPEN.")
-            _emit_provider_event(
-                ProviderEvents.CIRCUIT_OPEN,
-                circuit_breaker=self.name,
-                state=BreakerState.OPEN.value,
-                event="tripped",
-                failures=self.failures,
-                threshold=self.failure_threshold
-            )
             self.state = BreakerState.OPEN
+            _emit_circuit_transition(
+                self.name, BreakerState.CLOSED, self.state, "tripped",
+            )
 
     def allow_request(self) -> bool:
         """Check if a request is allowed to proceed."""
@@ -88,6 +93,9 @@ class CircuitBreaker:
             if time.time() - self.last_failure_time >= self.recovery_timeout:
                 logger.info(f"Circuit Breaker '{self.name}' attempting recovery. Setting to HALF_OPEN.")
                 self.state = BreakerState.HALF_OPEN
+                _emit_circuit_transition(
+                    self.name, BreakerState.OPEN, self.state, "recovery_probe_allowed",
+                )
                 return True
             return False
 

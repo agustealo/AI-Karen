@@ -56,6 +56,7 @@ class EventType(str, Enum):
     PROVIDER_FALLBACK = "provider.fallback"
     # Observed health state is not a model execution receipt.
     PROVIDER_HEALTH_CHANGED = "provider.health.changed"
+    CIRCUIT_STATE_CHANGED = "runtime.circuit.changed"
 
     # Workflow
     WORKFLOW_STARTED = "workflow.started"
