@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+from contextlib import asynccontextmanager
 from pathlib import Path
 from urllib.parse import urlparse
 from uuid import uuid4
@@ -11,13 +12,17 @@ import pytest
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from ai_karen_engine.persistence.repositories import chat_run_repository
+from ai_karen_engine.services.database.repositories.conversation_repository import (
+    draft_attachment_selection_digest,
+)
 from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
     PostgresConversationRepository,
 )
 
 
 @pytest.mark.asyncio
-async def test_attachment_draft_atomic_cas_and_owner_scope():
+async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
     if os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1":
         pytest.skip("Requires explicit disposable PostgreSQL opt-in")
     dsn = os.environ["CHAT_TEST_DATABASE_URL"]
@@ -65,6 +70,10 @@ async def test_attachment_draft_atomic_cas_and_owner_scope():
             for name in (
                 "20261026010000_47_conversation_composer_drafts.sql",
                 "20261124010000_73_composer_draft_attachment_references.sql",
+                "20261025020000_43_runtime_chat_run_ledger.sql",
+                "20261125010000_74_runtime_chat_single_active_run.sql",
+                "20261125020000_75_runtime_chat_submission_identity.sql",
+                "20261125030000_76_runtime_chat_unresolved_run.sql",
             ):
                 await raw.driver_connection.execute(
                     (migrations / name).read_text(encoding="utf-8")
@@ -91,7 +100,44 @@ async def test_attachment_draft_atomic_cas_and_owner_scope():
                     "INSERT INTO files VALUES (:s, :t, CAST(:u AS uuid), :d, NULL)"
                 ), {"s": sid, "t": tid, "u": uid, "d": digest})
             await conn.execute(text("UPDATE files SET deleted_at = NOW() WHERE file_id = :s"), {"s": archived})
-        repo = PostgresConversationRepository(async_sessionmaker(engine, expire_on_commit=False))
+        factory = async_sessionmaker(engine, expire_on_commit=False)
+        repo = PostgresConversationRepository(factory)
+
+        @asynccontextmanager
+        async def real_scope(tenant_id, *, user_id):
+            async with factory() as session:
+                async with session.begin():
+                    await session.execute(
+                        text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                        {"tenant": tenant_id},
+                    )
+                    await session.execute(
+                        text("SELECT set_config('app.current_user_id', :owner, true)"),
+                        {"owner": user_id},
+                    )
+                    yield session
+
+        monkeypatch.setattr(chat_run_repository, "async_transaction_scope", real_scope)
+        monkeypatch.setattr(
+            chat_run_repository.SqlChatRunRepository, "_attention_enabled",
+            staticmethod(lambda: False),
+        )
+        runs = chat_run_repository.SqlChatRunRepository()
+
+        async def admit(run_id, revision, refs, content="draft", *, principal=owner):
+            return await runs.admit(
+                tenant_id=tenant, user_id=principal, conversation_id=conversation,
+                transport_run_id=run_id, request_id=run_id, correlation_id=run_id,
+                submission_id=f"draft-v2-{revision}-" + draft_attachment_selection_digest(refs),
+                submitted_text=content, submitted_attachment_references=refs,
+            )
+
+        async def count_runs(run_id, *, principal=owner):
+            async with real_scope(tenant, user_id=principal) as session:
+                return (await session.execute(
+                    text("SELECT count(*) FROM public.runtime_chat_runs WHERE transport_run_id = :run"),
+                    {"run": run_id},
+                )).scalar_one()
 
         async def write(revision, refs, content="draft"):
             return await repo.put_composer_draft_with_attachments(
@@ -108,6 +154,46 @@ async def test_attachment_draft_atomic_cas_and_owner_scope():
         assert not (await write(0, [ref, ref])).success
         saved = await write(0, [ref])
         assert saved.success and saved.data == {"text": "draft", "revision": 1, "attachment_references": [ref]}
+        # A persisted selection is not an admitted chat run. Until the
+        # attachment-aware execution contract is wired, even the exact
+        # submitted revision and text must fail the text-only run fence.
+        async with async_sessionmaker(engine)() as session:
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": tenant},
+                )
+                await session.execute(
+                    text("SELECT set_config('app.current_user_id', :owner, true)"),
+                    {"owner": owner},
+                )
+                assert not await repo.lock_matching_submission_draft(
+                    session, tenant_id=tenant, user_id=owner,
+                    conversation_id=conversation, revision=1, submitted_text="draft",
+                )
+        # Use a digest that matches the submitted hints but not the persisted
+        # selection, so the actual SQL lock (not the hash check) rejects it.
+        for run_id, revision, refs, content, principal in (
+            ("substitution", 1, [{**ref, "revision": "b" * 64}], "draft", owner),
+            ("stale", 2, [ref], "draft", owner),
+            ("wrong-text", 1, [ref], "different", owner),
+            ("foreign-owner", 1, [ref], "draft", other_owner),
+        ):
+            with pytest.raises(chat_run_repository.DraftSubmissionConflict):
+                await admit(run_id, revision, refs, content, principal=principal)
+            assert await count_runs(run_id, principal=principal) == 0
+
+        lease = await admit("first", 1, [ref])
+        assert lease is not None
+        assert await count_runs("first") == 1
+        assert await admit("duplicate", 1, [ref]) is None
+        assert await runs.finish(lease, status="failed", error_code="CHAT_TEST_TERMINAL")
+        assert await admit("failed-replay", 1, [ref]) is None
+        assert await count_runs("failed-replay") == 0
+        retained = await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )
+        assert retained.success and retained.data == saved.data
         assert not (await repo.get_composer_draft(conversation, tenant, user_id=owner)).success
         assert not (await repo.put_composer_draft(
             conversation, tenant, user_id=owner, content="legacy", expected_revision=1,
@@ -121,13 +207,48 @@ async def test_attachment_draft_atomic_cas_and_owner_scope():
         assert current.success and current.data["revision"] == 2
         assert current.data["attachment_references"] == [ref]
         assert current.data["text"] in {"left", "right"}
+        in_flight = await admit("second", 2, [ref], current.data["text"])
+        assert in_flight is not None
         async with engine.begin() as conn:
             await conn.execute(text("UPDATE files SET deleted_at = NOW() WHERE file_id = :s"), {"s": source})
         assert not (await write(2, [ref])).success
         cleared = await write(2, [], "cleared")
         assert cleared.success and cleared.data["revision"] == 3
+        # A newer CAS edit while the admitted run is live must survive stop.
+        assert await runs.finish(in_flight, status="cancelled")
+        assert await admit("cancelled-replay", 2, [ref], current.data["text"]) is None
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == cleared.data
         legacy = await repo.get_composer_draft(conversation, tenant, user_id=owner)
         assert legacy.success and legacy.data == {"text": "cleared", "revision": 3}
+        # Removing the selection through the canonical CAS makes only the
+        # new text-only revision eligible; the previously attached revision
+        # cannot be replayed as an ordinary chat submission.
+        async with async_sessionmaker(engine)() as session:
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": tenant},
+                )
+                await session.execute(
+                    text("SELECT set_config('app.current_user_id', :owner, true)"),
+                    {"owner": owner},
+                )
+                for revision, submitted_text, expected in (
+                    (1, "draft", False),
+                    (2, current.data["text"], False),
+                    # Matching current text isolates the stale revision fence.
+                    (1, "cleared", False),
+                    (2, "cleared", False),
+                    (3, "different text", False),
+                    (3, "cleared", True),
+                ):
+                    assert await repo.lock_matching_submission_draft(
+                        session, tenant_id=tenant, user_id=owner,
+                        conversation_id=conversation, revision=revision,
+                        submitted_text=submitted_text,
+                    ) is expected
     finally:
         if engine is not None:
             await engine.dispose()
