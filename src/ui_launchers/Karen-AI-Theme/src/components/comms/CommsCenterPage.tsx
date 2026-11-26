@@ -11,6 +11,8 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Bell, Clock, FileText, Info, Server, AlertCircle, Workflow, Activity, ShieldAlert, BrainCircuit, RefreshCw, Radio } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { ApprovalReviewPanel } from "@/components/approvals/ApprovalReviewPanel";
+import { useRuntimeApprovalContext } from "@/components/approvals/RuntimeApprovalProvider";
 import { format } from 'date-fns';
 
 type SystemAlert = {
@@ -216,10 +218,11 @@ function OwnedRunFeed({ runs, loading, error }: {
  * @file CommsCenterPage.tsx
  * @description Communications Center backed by live API data only.
  */
-export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat }: {
+export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat, onOpenConversation }: {
     onOpenAgents?: () => void;
     onOpenTasks?: () => void;
     onOpenChat?: () => void;
+    onOpenConversation?: (conversationId: string) => Promise<void>;
 } = {}) {
     const { isAuthenticated, isLoading: isAuthLoading, user } = useAuth();
     const principal = isAuthenticated && !isAuthLoading && user?.tenant_id && user?.user_id
@@ -234,6 +237,8 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat 
     const [observabilityAccessDenied, setObservabilityAccessDenied] = useState(false);
     const [observabilityLoading, setObservabilityLoading] = useState(true);
     const [refreshRevision, setRefreshRevision] = useState(0);
+    const [activeTab, setActiveTab] = useState("overview");
+    const { approvals, approvalsError, isLoadingApprovals, loadApprovals } = useRuntimeApprovalContext();
     const [ownedRunSnapshot, setOwnedRunSnapshot] = useState<{ principal: string; value: OwnedRunResponse } | null>(null);
     const [ownedRunsLoading, setOwnedRunsLoading] = useState(true);
     const [ownedRunsError, setOwnedRunsError] = useState<string | null>(null);
@@ -366,6 +371,8 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat 
     const activeRuns = ownedRuns?.filter((run) => ["queued", "running", "cancelling"].includes(run.status)) ?? null;
     const warningAlerts = observability ? liveAlerts.filter((alert) => alert.type === "warning") : null;
     const canNavigate = !!principal;
+    const pendingDecisions = canNavigate && !isLoadingApprovals && !approvalsError
+        ? approvals.filter((approval) => approval.status === "pending" && Date.parse(approval.expires_at) > Date.now()).length : null;
     const liveStatus = observabilityLoading || isAuthLoading
         ? "Connecting"
         : observability
@@ -400,7 +407,7 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat 
                     <span className="karen-metric">
                         {observability ? "Updated " + formatEventTime(observability.generated_at) : "No verified snapshot"}
                     </span>
-                    <Button type="button" size="sm" variant="outline" className="gap-2 bg-card/80" disabled={!isAuthenticated || isAuthLoading || observabilityLoading} onClick={() => setRefreshRevision((value) => value + 1)}>
+                    <Button type="button" size="sm" variant="outline" className="gap-2 bg-card/80" disabled={!isAuthenticated || isAuthLoading || observabilityLoading} onClick={() => { setRefreshRevision((value) => value + 1); void loadApprovals(); }}>
                         <RefreshCw aria-hidden="true" className="h-4 w-4" />
                         Refresh
                     </Button>
@@ -408,11 +415,14 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat 
             </div>
         </header>
 
-        <Tabs defaultValue="overview" className="w-full">
+        <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
             <div className="overflow-x-auto pb-1" aria-label="Communications Center sections">
                 <TabsList className="flex h-auto w-max min-w-full items-center justify-start gap-1 border-border/70 bg-muted/50 p-1.5">
                     <TabsTrigger value="overview" className="min-h-10 gap-2 px-3 sm:px-4">
                         <Bell aria-hidden="true" className="h-4 w-4 shrink-0" /> Overview
+                    </TabsTrigger>
+                    <TabsTrigger value="decisions" className="min-h-10 gap-2 px-3 sm:px-4">
+                        <ShieldAlert aria-hidden="true" className="h-4 w-4 shrink-0" /> Decisions
                     </TabsTrigger>
                     <TabsTrigger value="observability" className="min-h-10 gap-2 px-3 sm:px-4">
                         <Activity aria-hidden="true" className="h-4 w-4 shrink-0" /> Observability
@@ -502,9 +512,11 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat 
                         <CardContent className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
                             <div className="space-y-1">
                                 <h4 className="font-semibold">Human decisions &amp; conversations</h4>
-                                <p className="text-sm text-muted-foreground">Review authorized requests in the agent workspace, or return to Karen. Pending approval counts and generated briefings are not included in this snapshot.</p>
+                                <p className="text-sm text-muted-foreground">Review authorized requests here or in Mission Control. Generated briefings are not included in this snapshot.</p>
+                                <p className="text-sm font-medium" data-testid="comms-pending-decisions">{pendingDecisions === null ? "Pending decisions unavailable" : `${pendingDecisions} pending in returned approval records`}</p>
                             </div>
                             <div className="flex flex-wrap gap-2">
+                                <Button type="button" size="sm" disabled={!canNavigate} onClick={() => setActiveTab("decisions")}>Review decisions</Button>
                                 {onOpenAgents && <Button type="button" size="sm" variant="outline" disabled={!canNavigate} onClick={onOpenAgents}>Open approval workspace</Button>}
                                 {onOpenChat && <Button type="button" size="sm" disabled={!canNavigate} onClick={onOpenChat}>Return to Karen</Button>}
                             </div>
@@ -662,6 +674,11 @@ export default function CommsCenterPage({ onOpenAgents, onOpenTasks, onOpenChat 
                     <Info aria-hidden="true" className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                     <p>Agent execution history comes from the owner-verified Medusa run endpoint. Generated notes still require a separate governed backend source and are never manufactured from audit events.</p>
                 </div>
+            </TabsContent>
+
+            <TabsContent value="decisions" className="mt-6 space-y-6">
+                <ApprovalReviewPanel id="comms-decisions" testId="comms-decisions-inbox" isAuthenticated={canNavigate}
+                    showRefresh onAskKaren={onOpenChat} onOpenConversation={onOpenConversation} />
             </TabsContent>
 
             <TabsContent value="observability" className="mt-6 space-y-6">

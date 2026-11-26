@@ -117,6 +117,18 @@ function AgentWorkspaceView({ openChat }: { openChat: () => void }) {
   );
 }
 
+function CommsWorkspaceView({ onOpenChat, onOpenAgents, onOpenTasks }: {
+  onOpenChat: () => void;
+  onOpenAgents: () => void;
+  onOpenTasks: () => void;
+}) {
+  const { openConversation, handoffError } = useVerifiedConversationHandoff(onOpenChat);
+  return <>
+    {handoffError && <p role="alert" className="mb-3 text-sm text-destructive">{handoffError}</p>}
+    <CommsCenterPage onOpenChat={onOpenChat} onOpenAgents={onOpenAgents} onOpenTasks={onOpenTasks} onOpenConversation={openConversation} />
+  </>;
+}
+
 const MAX_BACKEND_RETRIES = 10;
 const BACKOFF_BASE_MS = 1000;
 const BACKOFF_MAX_MS = 30000;
@@ -334,7 +346,7 @@ function DashboardWorkspace() {
       tasks: <TasksPage />,
       jobs: <JobsPage />,
       cronJobs: <CronJobsPage />,
-      commsCenter: <CommsCenterPage
+      commsCenter: <CommsWorkspaceView
         onOpenAgents={() => setActiveMainView("agents")}
         onOpenTasks={() => setActiveMainView("tasks")}
         onOpenChat={() => setActiveMainView("chat")}

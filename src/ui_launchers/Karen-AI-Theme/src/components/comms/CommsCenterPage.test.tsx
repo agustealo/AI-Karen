@@ -1,15 +1,18 @@
 // @vitest-environment jsdom
 import React from "react";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render as renderWithTestingLibrary, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const stubs = vi.hoisted(() => ({
   get: vi.fn(),
+  approvalGet: vi.fn(),
+  approvalPost: vi.fn(),
   useAuth: vi.fn(),
 }));
 
 vi.mock("@/lib/api", () => ({
   default: { get: stubs.get },
+  apiClient: { get: stubs.approvalGet, post: stubs.approvalPost },
   ApiError: class ApiError extends Error {
     status: number;
     constructor(status: number, message: string) {
@@ -19,9 +22,13 @@ vi.mock("@/lib/api", () => ({
     }
   },
 }));
-vi.mock("@/lib/useAuth", () => ({ useAuth: stubs.useAuth }));
+vi.mock("@/lib/useAuth", () => ({ useAuth: stubs.useAuth, default: stubs.useAuth }));
 
 import CommsCenterPage from "./CommsCenterPage";
+import { RuntimeApprovalProvider } from "@/components/approvals/RuntimeApprovalProvider";
+import { ApprovalReviewPanel } from "@/components/approvals/ApprovalReviewPanel";
+
+const render = (ui: React.ReactElement) => renderWithTestingLibrary(ui, { wrapper: RuntimeApprovalProvider });
 
 const FIRST_PRINCIPAL = { tenant_id: "tenant-one", user_id: "user-one" };
 
@@ -48,6 +55,8 @@ const LIVE_SNAPSHOT = {
 
 beforeEach(() => {
   stubs.get.mockReset();
+  stubs.approvalGet.mockReset().mockResolvedValue([]);
+  stubs.approvalPost.mockReset();
   stubs.useAuth.mockReset();
   stubs.useAuth.mockReturnValue({
     isLoading: false,
@@ -72,7 +81,7 @@ describe("Communications Center's canonical visual and authority contract", () =
     expect(container.querySelector('[data-testid="comms-center"] .kari-display')).toBeTruthy();
     const nav = container.querySelector('[aria-label="Communications Center sections"]');
     expect(nav?.className).toContain("overflow-x-auto");
-    expect(nav?.querySelectorAll('svg[aria-hidden="true"]').length).toBe(5);
+    expect(nav?.querySelectorAll('svg[aria-hidden="true"]').length).toBe(6);
     expect(screen.queryByText("svgOverview")).toBeNull();
 
     await waitFor(() => {
@@ -287,6 +296,66 @@ describe("Communications Center's canonical visual and authority contract", () =
     expect(screen.getByTestId("comms-attention-runs").textContent?.trim()).toBe("—");
     expect((screen.getByRole("button", { name: "Open approval workspace" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.queryByText("Verified backend audit receipt")).toBeNull();
+  });
+
+  it("reviews and records a decision inside Communications through the canonical provider", async () => {
+    const approval = { approval_id: "approval-1", workflow_kind: "runtime_approval", intent: "Review verified operation", risk_level: "high", status: "pending", reason_codes: [], expires_at: "2099-01-01T00:00:00Z", conversation_id: "conversation-1" };
+    stubs.get.mockResolvedValue(LIVE_SNAPSHOT);
+    stubs.approvalGet.mockResolvedValueOnce([approval]).mockResolvedValue([{ ...approval, status: "approved" }]);
+    stubs.approvalPost.mockResolvedValue({ ...approval, status: "approved" });
+    const onOpenConversation = vi.fn().mockResolvedValue(undefined);
+    render(<CommsCenterPage onOpenConversation={onOpenConversation} />);
+    await waitFor(() => expect(screen.getByTestId("comms-pending-decisions").textContent).toContain("1 pending"));
+    fireEvent.click(screen.getByRole("button", { name: "Review decisions" }));
+    const inbox = screen.getByTestId("comms-decisions-inbox");
+    fireEvent.click(within(inbox).getByRole("button", { name: "Open original conversation" }));
+    expect(onOpenConversation).toHaveBeenCalledExactlyOnceWith("conversation-1");
+    fireEvent.click(within(inbox).getByRole("button", { name: "Review approval" }));
+    expect(stubs.approvalPost).not.toHaveBeenCalled();
+    fireEvent.click(within(inbox).getByRole("button", { name: "Confirm approval" }));
+    await within(inbox).findByText(/Decision recorded: approved/);
+    expect(stubs.approvalPost).toHaveBeenCalledExactlyOnceWith("/api/approvals/approval-1/decision", { decision: "approved" });
+    await waitFor(() => expect(within(inbox).queryByRole("button", { name: "Review approval" })).toBeNull());
+    expect(within(inbox).getByText("Decision recorded. Execution is not implied.")).toBeTruthy();
+  });
+
+  it("keeps one decision lock and reconciles an uncertain outcome across review surfaces", async () => {
+    const approval = { approval_id: "approval-1", workflow_kind: "runtime_approval", intent: "Review verified operation", risk_level: "high", status: "pending", reason_codes: [], expires_at: "2099-01-01T00:00:00Z" };
+    stubs.get.mockResolvedValue(LIVE_SNAPSHOT);
+    stubs.approvalGet.mockResolvedValue([approval]);
+    let rejectDecision!: (error: Error) => void;
+    stubs.approvalPost.mockReturnValue(new Promise((_resolve, reject) => { rejectDecision = reject; }));
+    const view = render(<CommsCenterPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Review decisions" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Review approval" }));
+    fireEvent.click(screen.getByRole("button", { name: "Confirm approval" }));
+    view.rerender(<ApprovalReviewPanel id="mission-approvals" testId="agent-runtime-approvals" isAuthenticated showRefresh />);
+    const review = await screen.findByRole("button", { name: "Review approval" }) as HTMLButtonElement;
+    expect(review.disabled).toBe(true);
+    fireEvent.click(review);
+    expect(stubs.approvalPost).toHaveBeenCalledTimes(1);
+    expect(stubs.approvalGet).toHaveBeenCalledTimes(1);
+    await act(async () => { rejectDecision(new Error("Lost response")); });
+    expect(screen.getByText(/Decision outcome could not be verified/)).toBeTruthy();
+    view.rerender(<CommsCenterPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Review decisions" }));
+    const inbox = screen.getByTestId("comms-decisions-inbox");
+    expect((within(inbox).getByRole("button", { name: "Review approval" }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(within(inbox).getByRole("button", { name: "Refresh decisions" }));
+    await waitFor(() => expect((within(inbox).getByRole("button", { name: "Review approval" }) as HTMLButtonElement).disabled).toBe(false));
+    expect(stubs.approvalGet).toHaveBeenCalledTimes(2);
+    expect(stubs.approvalPost).toHaveBeenCalledTimes(1);
+  });
+
+  it("fails closed on an unverified approval list", async () => {
+    stubs.get.mockResolvedValue(LIVE_SNAPSHOT);
+    stubs.approvalGet.mockResolvedValue([{ approval_id: "private", intent: "Unverified operation" }]);
+    render(<CommsCenterPage />);
+    fireEvent.click(screen.getByRole("button", { name: "Review decisions" }));
+    await screen.findByText("Could not load approval requests.");
+    expect(screen.queryByText("Unverified operation")).toBeNull();
+    expect(screen.queryByText(/No actionable approval requests/)).toBeNull();
+    expect(screen.queryByRole("button", { name: "Review approval" })).toBeNull();
   });
 
   it("fetches a fresh snapshot after an explicit Refresh click", async () => {
