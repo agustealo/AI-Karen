@@ -145,10 +145,13 @@ async def test_service_reloads_durable_outcomes_on_each_execution(monkeypatch):
     reads = []
 
     class ExistingOutcomeStore:
-        def list_for_tenant(self, tenant, *, limit, user_id, source=None):
-            reads.append((tenant, limit, user_id, source))
-            assert source == "runtime.execution"
-            return [row for row in stored if row["source"] == source]
+        def list_scoped_model_operational_outcomes(self, tenant, *, limit, user_id, task_type):
+            reads.append((tenant, limit, user_id, task_type))
+            return [
+                row for row in stored
+                if row["source"] == "runtime.execution"
+                and row["metadata"]["task_type"] == task_type
+            ][:limit]
 
     monkeypatch.setattr(signals_module, "get_outcome_store", ExistingOutcomeStore)
     monkeypatch.setattr(
@@ -178,8 +181,8 @@ async def test_service_reloads_durable_outcomes_on_each_execution(monkeypatch):
     assert first.profile("ollama-local", "model-b") is None
     assert second.profile("ollama-local", "model-b").samples == 12
     assert reads == [
-        (TENANT, 500, USER, "runtime.execution"),
-        (TENANT, 500, USER, "runtime.execution"),
+        (TENANT, 500, USER, "research"),
+        (TENANT, 500, USER, "research"),
     ]
 
 
@@ -188,7 +191,7 @@ async def test_service_failure_preserves_cold_start_and_exact_scope(monkeypatch)
     from ai_karen_engine.core.intelligence.ml import model_outcome_signals as module
 
     class Offline:
-        def list_for_tenant(self, *args, **kwargs):
+        def list_scoped_model_operational_outcomes(self, *args, **kwargs):
             raise RuntimeError("PostgreSQL unavailable")
 
     monkeypatch.setattr(module, "get_outcome_store", Offline)
@@ -210,3 +213,42 @@ async def test_service_failure_preserves_cold_start_and_exact_scope(monkeypatch)
         await ModelOutcomeSignalService().for_execution(
             tenant_id="", user_id=USER, task_type="research"
         )
+
+
+@pytest.mark.parametrize(
+    ("marker", "value"),
+    [
+        ("event_type", "agent.specialist.participation"),
+        ("receipt_version", "specialist-participation.v1"),
+    ],
+)
+def test_participation_cannot_be_projected_as_model_success(marker, value):
+    forged = outcome(2)
+    forged["metadata"][marker] = value
+    signals = derive_model_signals(
+        [outcome(1, status="failure"), forged],
+        tenant_id=TENANT, user_id=USER, task_type="research", now=NOW,
+    )
+    profile = signals.profile("ollama-local", "model-a")
+    assert profile.samples == 1
+    assert profile.completed == 0
+
+
+def test_scoped_history_filters_before_limit():
+    from ai_karen_engine.core.runtime.outcome.store import InMemoryOutcomeStore
+
+    store = InMemoryOutcomeStore()
+    genuine = outcome(1)
+    store.save_outcome(genuine)
+    for i in range(2, 6):
+        store.save_outcome(outcome(i, task="coding"))
+        store.save_outcome(outcome(i, tenant="other"))
+        store.save_outcome(outcome(i, user="other"))
+    # Seed legacy/corrupt storage directly to exercise read-side defense.
+    # Normal in-memory writes intentionally reject participation receipts.
+    unrelated = outcome(6)
+    unrelated["metadata"]["event_type"] = "agent.specialist.participation"
+    store._records.append(unrelated)
+    assert store.list_scoped_model_operational_outcomes(
+        TENANT, user_id=USER, task_type="research", limit=1,
+    ) == [genuine]

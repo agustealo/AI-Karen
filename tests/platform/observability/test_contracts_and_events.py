@@ -254,11 +254,13 @@ class TestMetricsCollectorIncrements:
         histogram.labels(provider="qwen").observe(12.0)
         histogram.labels(provider="qwen").observe(31.0)
         snapshot = self.collector.snapshot()
-        assert len(snapshot["histograms"]["t_latency_ms"][()]) == 2
+        aggregate = snapshot["histograms"]["t_latency_ms"]["values"][("qwen",)]
+        assert aggregate.count == 2
+        assert aggregate.total == 43.0
 
     def test_gauge_set(self) -> None:
         gauge = self.collector.gauge("t_in_flight", "in flight")
-        gauge.set(5.0)
+        gauge.labels().set(5.0)
         assert gauge.value() == 5.0
 
 

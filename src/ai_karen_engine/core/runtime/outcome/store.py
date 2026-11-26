@@ -9,6 +9,11 @@ from typing import Any
 
 from sqlalchemy import text
 
+from ai_karen_engine.core.runtime.outcome.contracts import (
+    SpecialistParticipationPhase,
+    SpecialistParticipationReceipt,
+)
+
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope, transaction_scope
 
 logger = logging.getLogger(__name__)
@@ -81,6 +86,12 @@ class OutcomeStore(ABC):
         """Read exact receipts for one principal. No unscoped fallback."""
         raise OutcomeStoreError("Scoped receipt lookup is not available")
 
+    def list_scoped_model_operational_outcomes(
+        self, tenant_id: str, *, user_id: str, task_type: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        """Read model-attributed execution evidence before applying the bound."""
+        raise OutcomeStoreError("Scoped model operational evidence unavailable")
+
     def list_scoped_ml_predictor_outcomes(
         self, tenant_id: str, *, user_id: str, limit: int,
     ) -> list[dict[str, Any]]:
@@ -121,6 +132,8 @@ class InMemoryOutcomeStore(OutcomeStore):
         self._tenant_index: dict[str, list[int]] = {}
 
     def save_outcome(self, payload: dict[str, Any]) -> None:
+        if PostgresOutcomeStore._is_specialist_participation(payload):
+            raise OutcomeStoreError("Specialist participation requires durable persistence")
         idx = len(self._records)
         record = dict(payload)
         self._records.append(record)
@@ -252,6 +265,32 @@ class InMemoryOutcomeStore(OutcomeStore):
             and row.get("source") == source
             and row.get("outcome_id") in wanted
         ]
+
+    def list_scoped_model_operational_outcomes(
+        self, tenant_id: str, *, user_id: str, task_type: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        PostgresOutcomeStore._validate_model_operational_scope(
+            tenant_id, user_id, task_type, limit,
+        )
+        from copy import deepcopy
+
+        rows = [
+            row for row in self._records
+            if row.get("tenant_id") == tenant_id
+            and row.get("user_id") == user_id
+            and row.get("source") == "runtime.execution"
+            and not PostgresOutcomeStore._is_specialist_participation(row)
+            and isinstance(row.get("metadata"), dict)
+            and row["metadata"].get("task_type") == task_type
+            and row["metadata"].get("model_attribution") == "single_provider_model"
+        ]
+        rows.sort(
+            key=lambda row: (
+                str(row.get("recorded_at") or ""), str(row.get("outcome_id") or ""),
+            ),
+            reverse=True,
+        )
+        return deepcopy(rows[:limit])
 
     def list_scoped_ml_predictor_outcomes(
         self, tenant_id: str, *, user_id: str, limit: int,
@@ -595,6 +634,49 @@ class PostgresOutcomeStore(OutcomeStore):
             raise OutcomeStoreError("KCM withdrawal timestamps disagree")
 
     @staticmethod
+    def _is_specialist_participation(payload: dict[str, Any]) -> bool:
+        metadata = payload.get("metadata")
+        return isinstance(metadata, dict) and (
+            metadata.get("event_type") == "agent.specialist.participation"
+            or metadata.get("receipt_version") == "specialist-participation.v1"
+        )
+
+    @staticmethod
+    def _validate_specialist_participation(payload: dict[str, Any]) -> None:
+        """Validate the exact observation envelope; never infer task success."""
+        metadata = payload.get("metadata")
+        if (
+            set(payload) != {
+                "outcome_id", "source", "tenant_id", "user_id", "trajectory_id",
+                "correlation_id", "recorded_at", "metadata",
+            }
+            or payload.get("source") != "runtime.execution"
+            or not isinstance(metadata, dict)
+            or set(metadata) != {
+                "event_type", "receipt_version", "step_id", "specialist_id", "phase",
+            }
+            or metadata.get("event_type") != "agent.specialist.participation"
+            or metadata.get("receipt_version") != "specialist-participation.v1"
+            or not isinstance(payload.get("recorded_at"), str)
+        ):
+            raise OutcomeStoreError("Invalid specialist participation envelope")
+        try:
+            receipt = SpecialistParticipationReceipt(
+                tenant_id=payload["tenant_id"],
+                user_id=payload["user_id"],
+                trajectory_id=payload["trajectory_id"],
+                correlation_id=payload["correlation_id"],
+                step_id=metadata["step_id"],
+                specialist_id=metadata["specialist_id"],
+                phase=SpecialistParticipationPhase(metadata["phase"]),
+                observed_at=datetime.fromisoformat(payload["recorded_at"]),
+            )
+        except (TypeError, ValueError) as exc:
+            raise OutcomeStoreError("Invalid specialist participation fields") from exc
+        if payload != receipt.to_evidence_payload():
+            raise OutcomeStoreError("Specialist participation identity or encoding mismatch")
+
+    @staticmethod
     def _validated_identity(payload: dict[str, Any]) -> tuple[str, str]:
         tenant_id = PostgresOutcomeStore._require_tenant(payload.get("tenant_id"))
         source = str(payload.get("source") or "").strip()
@@ -602,6 +684,8 @@ class PostgresOutcomeStore(OutcomeStore):
             "runtime.execution", "user.feedback", "intelligence.ml",
         }:
             raise OutcomeStoreError(f"Unsupported outcome source: {source or 'missing'}")
+        if PostgresOutcomeStore._is_specialist_participation(payload):
+            PostgresOutcomeStore._validate_specialist_participation(payload)
         if source == "intelligence.ml":
             metadata = payload.get("metadata")
             if (
@@ -682,6 +766,8 @@ class PostgresOutcomeStore(OutcomeStore):
 
     def save_outcome(self, payload: dict[str, Any]) -> None:
         tenant_id, source = self._validated_identity(payload)
+        if self._is_specialist_participation(payload):
+            raise OutcomeStoreError("Specialist participation requires strict append")
         try:
             with transaction_scope(tenant_id) as session:
                 session.execute(
@@ -882,6 +968,8 @@ class PostgresOutcomeStore(OutcomeStore):
     async def save_outcome_async(self, payload: dict[str, Any]) -> None:
         """Persist through SQLAlchemy's async engine on async runtime paths."""
         tenant_id, source = self._validated_identity(payload)
+        if self._is_specialist_participation(payload):
+            raise OutcomeStoreError("Specialist participation requires strict append")
         try:
             async with async_transaction_scope(tenant_id) as session:
                 await session.execute(
@@ -975,6 +1063,56 @@ class PostgresOutcomeStore(OutcomeStore):
                        "error_type": type(exc).__name__},
             )
             raise OutcomeStoreError("Scoped outcome receipts unavailable") from exc
+
+    @staticmethod
+    def _validate_model_operational_scope(
+        tenant_id: str, user_id: str, task_type: str, limit: int,
+    ) -> None:
+        if (
+            any(not isinstance(value, str) or not value.strip()
+                or value != value.strip()
+                for value in (tenant_id, user_id, task_type))
+            or tenant_id == "default"
+            or type(limit) is not int or not 1 <= limit <= 1000
+        ):
+            raise OutcomeStoreError("Exact scoped model operational query required")
+
+    def list_scoped_model_operational_outcomes(
+        self, tenant_id: str, *, user_id: str, task_type: str, limit: int,
+    ) -> list[dict[str, Any]]:
+        self._validate_model_operational_scope(tenant_id, user_id, task_type, limit)
+        try:
+            with transaction_scope(tenant_id) as session:
+                rows = session.execute(
+                    text(
+                        """
+                        SELECT payload FROM public.outcome_records
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND user_id = CAST(:user_id AS uuid)
+                          AND source = 'runtime.execution'
+                          AND payload->'metadata'->>'task_type' = :task_type
+                          AND payload->'metadata'->>'model_attribution'
+                              = 'single_provider_model'
+                          AND payload->'metadata'->>'event_type'
+                              IS DISTINCT FROM 'agent.specialist.participation'
+                          AND payload->'metadata'->>'receipt_version'
+                              IS DISTINCT FROM 'specialist-participation.v1'
+                        ORDER BY recorded_at DESC, outcome_id DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {"tenant_id": tenant_id, "user_id": user_id,
+                     "task_type": task_type, "limit": limit},
+                ).mappings().all()
+            return [self._payload_from_row(row["payload"]) for row in rows]
+        except OutcomeStoreError:
+            raise
+        except Exception as exc:
+            logger.exception(
+                "outcome.store.scoped_model_operational_read_failed",
+                extra={"tenant_id": tenant_id, "error_type": type(exc).__name__},
+            )
+            raise OutcomeStoreError("Scoped model operational evidence unavailable") from exc
 
     def list_scoped_ml_predictor_outcomes(
         self, tenant_id: str, *, user_id: str, limit: int,
