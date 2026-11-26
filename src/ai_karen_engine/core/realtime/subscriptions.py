@@ -6,14 +6,18 @@ No Supabase SDK imports here.
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, Callable, Dict, List, Optional
 
-from ai_karen_engine.core.realtime.events import EventValidationResult, RealtimeEvent, validate_event
+from ai_karen_engine.core.realtime.events import RealtimeEvent, validate_event
 from ai_karen_engine.core.realtime.topics import RealtimeTopicFactory
 from ai_karen_engine.core.realtime.connection_state import ConnectionState
+
+
+logger = logging.getLogger(__name__)
 
 
 class SubscriptionError(Exception):
@@ -33,6 +37,9 @@ class Subscription:
 EventHandler = Callable[[RealtimeEvent], None]
 ErrorHandler = Callable[[Exception], None]
 StateChangeHandler = Callable[[ConnectionState, ConnectionState], None]
+# None is admission; an event is a fresh delivery authorization request.
+# The trusted runtime supplies the policy, not the topic or event payload.
+SubscriptionAuthorizer = Callable[[str, Optional[RealtimeEvent]], bool]
 
 
 class RealtimeSubscriber:
@@ -42,11 +49,17 @@ class RealtimeSubscriber:
     Frontend implementation will consume via hooks.
     """
 
-    def __init__(self, topic_factory: RealtimeTopicFactory) -> None:
+    def __init__(
+        self,
+        topic_factory: RealtimeTopicFactory,
+        *,
+        authorize: Optional[SubscriptionAuthorizer] = None,
+    ) -> None:
         self._topic_factory = topic_factory
+        self._authorize = authorize
         self._subscriptions: Dict[str, Subscription] = {}
         self._event_handlers: Dict[str, List[EventHandler]] = {}
-        self._error_handlers: List[ErrorHandler] = []
+        self._error_handlers: Dict[str, ErrorHandler] = {}
         self._state_handlers: List[StateChangeHandler] = []
 
     def subscribe(
@@ -57,35 +70,56 @@ class RealtimeSubscriber:
     ) -> Subscription:
         validated = self._topic_factory.resolve_topic(topic)
         if validated is None:
-            raise SubscriptionError(f"Invalid topic: {topic!r}")
+            raise SubscriptionError("Invalid realtime topic")
+        if not self._is_authorized(validated, None):
+            raise SubscriptionError("Realtime subscription not authorized")
 
         sub_id = f"sub-{uuid.uuid4()}"
         subscription = Subscription(subscription_id=sub_id, topic=validated)
         self._subscriptions[sub_id] = subscription
         self._event_handlers.setdefault(sub_id, []).append(on_event)
         if on_error:
-            self._error_handlers.append(on_error)
+            self._error_handlers[sub_id] = on_error
         return subscription
 
     def unsubscribe(self, subscription_id: str) -> None:
         self._subscriptions.pop(subscription_id, None)
         self._event_handlers.pop(subscription_id, None)
+        self._error_handlers.pop(subscription_id, None)
 
     def handle_message(self, sub_id: str, raw: Dict[str, Any]) -> None:
+        subscription = self._subscriptions.get(sub_id)
+        if subscription is None:
+            return
         result = validate_event(raw)
         if not result.valid or result.event is None:
-            self._notify_error(SubscriptionError(f"Invalid event: {result.reason}"))
+            self._notify_error(sub_id, SubscriptionError("Invalid realtime event"))
             return
-        if not self._is_authorized(result.event):
+        event = result.event
+        # Canonical topic syntax and tenant membership are necessary, not sufficient.
+        if event.tenant_id != uuid.UUID(self._topic_factory.tenant_id):
+            return
+        if not self._is_authorized(subscription.topic, event):
+            return
+        # Authorization may revoke/unsubscribe during the policy call.
+        if self._subscriptions.get(sub_id) is not subscription:
             return
         for handler in self._event_handlers.get(sub_id, []):
-            handler(result.event)
+            handler(event)
 
-    def _is_authorized(self, event: RealtimeEvent) -> bool:
-        return True
+    def _is_authorized(self, topic: str, event: Optional[RealtimeEvent]) -> bool:
+        if self._authorize is None:
+            return False
+        try:
+            # Do not accept truthy non-boolean results or accidental async policies.
+            return self._authorize(topic, event) is True
+        except Exception:
+            logger.warning("Realtime authorization failed; access denied")
+            return False
 
-    def _notify_error(self, exc: Exception) -> None:
-        for handler in self._error_handlers:
+    def _notify_error(self, sub_id: str, exc: Exception) -> None:
+        handler = self._error_handlers.get(sub_id)
+        if handler is not None:
             handler(exc)
 
     @property
