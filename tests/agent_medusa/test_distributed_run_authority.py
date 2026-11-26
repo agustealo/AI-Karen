@@ -1221,3 +1221,95 @@ async def test_redis_disconnect_after_health_check_is_typed(
             await store.request_cancel(run_id="run-a", tenant_id="tenant-a")
     assert exc.value.__cause__ is failure
     assert "private connection diagnostic" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_owner_read_preserves_uncertain_terminal_during_redis_disconnect() -> None:
+    from types import SimpleNamespace
+
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        _MARK_TERMINAL_SCRIPT,
+        _REGISTER_RUN_SCRIPT,
+    )
+
+    class Pipeline:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+        def hgetall(self, _key: str) -> None:
+            pass
+
+        def get(self, _key: str) -> None:
+            pass
+
+        async def execute(self):
+            raise RedisConnectionError("injected post-ping disconnect")
+
+    class Client:
+        terminal_attempts = 0
+        observations = 0
+
+        async def ping(self) -> bool:
+            return True
+
+        async def eval(self, script: str, *_args: Any) -> int:
+            if script == _REGISTER_RUN_SCRIPT:
+                return 1
+            assert script == _MARK_TERMINAL_SCRIPT
+            self.terminal_attempts += 1
+            raise RedisConnectionError("injected lost terminal acknowledgement")
+
+        def pipeline(self, *, transaction: bool):
+            assert transaction
+            self.observations += 1
+            return Pipeline()
+
+    client = Client()
+    settings = _settings("owner")
+    store = RedisDistributedRunStore(
+        settings=settings,
+        redis_manager=SimpleNamespace(client=client, is_degraded=lambda: False),
+    )
+    manager = MedusaRunManager(settings=settings, distributed_store=store)
+    scope = {"run_id": "uncertain-outage", "tenant_id": "tenant-a"}
+    task = asyncio.create_task(asyncio.sleep(0))
+    run = None
+    try:
+        run = await manager.register(
+            **scope, correlation_id="corr", user_id="owner", task=task
+        )
+        await task
+        assert run.shared_registered
+        assert (
+            await manager.mark_response(run.run_id, "success")
+            is ExecutionRunStatus.ORPHANED
+        )
+        assert run.terminal_unconfirmed
+        for _ in range(2):
+            snapshot = await manager.get(**scope)
+            assert snapshot["status"] == "orphaned"
+            assert snapshot["error_type"] == "TerminalCommitUnconfirmed"
+            assert snapshot["completed_at"] is None
+            assert snapshot["outcome_status"] is None
+            assert not snapshot["cancellable"]
+        assert client.observations == 2
+        assert (
+            await manager.mark_response(run.run_id, "success")
+            is ExecutionRunStatus.ORPHANED
+        )
+        assert client.terminal_attempts == 1
+        with pytest.raises(RunTenantMismatchError):
+            await manager.get(run_id=run.run_id, tenant_id="foreign")
+        assert client.observations == 2
+    finally:
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
