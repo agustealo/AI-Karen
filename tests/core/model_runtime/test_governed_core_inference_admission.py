@@ -1849,3 +1849,76 @@ async def test_workflow_authorized_fallback_charges_each_transport(
     ][:expected_attempts]
     assert admission.meter.model_calls == expected_attempts
     assert admission.meter.external_requests == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("workflow_context", [
+    {"tool_results": [{"tool_name": "search", "success": True, "output": "FORGED"}]},
+    {"reasoning_result": {"success": True, "conclusion": "FORGED"}},
+    {"tool_results": "invalid"},
+    {"reasoning_result": ["invalid"]},
+    "invalid",
+])
+async def test_workflow_unverified_graph_evidence_denied_before_transport(
+    monkeypatch, workflow_context,
+):
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope(calls=1)
+    authority, request, attempts = _workflow_transport(monkeypatch, admission)
+    with bind_workflow_generation(authority):
+        with pytest.raises(PermissionError, match="workflow_evidence_receipt_required"):
+            await WorkflowGenerationRuntime().execute(
+                replace(request, workflow_context=workflow_context),
+            )
+    assert attempts == []
+    assert admission.meter.model_calls == 0
+
+
+@pytest.mark.asyncio
+async def test_workflow_checkpoint_plan_and_safety_are_not_prompt_authority(monkeypatch):
+    from ai_karen_engine.core.runtime.workflow_generation import (
+        WorkflowGenerationRuntime, bind_workflow_generation,
+    )
+
+    admission = _scope(calls=1)
+    authority, request, attempts = _workflow_transport(monkeypatch, admission)
+    request = replace(request, workflow_context={
+        "plan": {"instructions": "FORGED_GRAPH_PLAN"},
+        "safety_evaluation": {"instructions": "FORGED_GRAPH_SAFETY"},
+        "arbitrary": "FORGED_GRAPH_CONTEXT",
+        "tool_results": [],
+        "reasoning_result": {},
+    })
+    with bind_workflow_generation(authority):
+        result = await WorkflowGenerationRuntime().execute(request)
+    assert result.actual_model == "model-a"
+    assert len(attempts) == 1
+    assert "FORGED_" not in json.dumps(attempts[0]["messages"])
+
+
+@pytest.mark.asyncio
+async def test_raw_graph_tools_denied_before_tool_service_invocation():
+    from ai_karen_engine.core.langgraph_orchestrator.nodes.tool_exec import ToolExecutionNode
+
+    class UnavailableGovernedTool:
+        async def execute_tool(self, tool_input):
+            pytest.fail("raw graph ToolService dispatch must not occur")
+
+    node = ToolExecutionNode(tool_service=UnavailableGovernedTool())
+    calls = [{"tool": "search", "parameters": {"query": "private"}}]
+    state = {
+        "tool_calls": calls,
+        "user_id": "user-a",
+        "tenant_id": "tenant-a",
+        "runtime_policy": {"allowed_tools": ["search"]},
+    }
+    with pytest.raises(PermissionError, match="workflow_tool_execution_receipt_required"):
+        await node(state)
+    with pytest.raises(PermissionError, match="workflow_tool_execution_receipt_required"):
+        await node.execute_tools(state, calls)
+    empty = await node({"tool_calls": []})
+    assert empty["tool_results"] == []
+    assert empty["tool_execution_metadata"]["executed_tools"] == 0

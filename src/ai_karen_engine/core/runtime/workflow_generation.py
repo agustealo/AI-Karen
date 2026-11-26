@@ -126,6 +126,16 @@ class WorkflowGenerationRuntime:
         ):
             raise PermissionError("workflow_generation_scope_mismatch")
 
+        # A graph checkpoint is not an execution receipt. Until the existing
+        # governed tool/reasoning owners can supply verified evidence here,
+        # fail before prompt construction or model reservation.
+        if (
+            not isinstance(request.workflow_context, dict)
+            or request.workflow_context.get("tool_results")
+            or request.workflow_context.get("reasoning_result")
+        ):
+            raise PermissionError("workflow_evidence_receipt_required")
+
         from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
         from ai_karen_engine.core.runtime.composition import get_expression_gateway
         from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
@@ -144,7 +154,11 @@ class WorkflowGenerationRuntime:
             integrated_context={
                 "memories": ChatRuntime._selected_memory_for_generation(original, decision),
             },
-            workflow_context=dict(request.workflow_context),
+            workflow_context={
+                "workflow_id": decision.workflow_id,
+                "workflow_version": decision.workflow_version,
+                "topology": plan.topology.value,
+            },
             cortex_intent={"primary_intent": decision.intent},
             token_budget=token_budget,
         )

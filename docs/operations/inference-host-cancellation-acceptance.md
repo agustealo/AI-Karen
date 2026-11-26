@@ -199,3 +199,27 @@ the existing census. Review each candidate, migrate any active execution
 consumer and preserve security coverage before deleting the executor or
 retiring tests. The new candidate requires fresh exact-head CI, independent
 review and actual host/consumer acceptance; no merge is implied.
+
+
+### Graph evidence and raw tool containment (KUI-004B4.48C7Z8E14)
+
+The active LangGraph tool node previously invoked ToolService directly,
+without the original execution meter, governed cache boundary or durable
+invocation receipt. The existing Medusa ToolBridge is the receipt-backed
+execution path, but cannot be borrowed by a graph using fabricated
+specialist or trajectory identities. Until the common receipt owner is
+wired to the original graph execution, the raw graph tool node rejects
+nonempty calls before invocation, including direct calls to its adapter.
+No-tool graph execution remains available. Existing direct-capability
+and Medusa tool execution paths are unchanged.
+
+Workflow synthesis now excludes checkpoint plans, safety evaluations and
+arbitrary graph context from the prompt. Nonempty graph tool or reasoning
+results are explicitly denied before model execution pending verified
+evidence admission; empty graph context uses original runtime workflow
+identifiers. This is containment, not completed feature migration.
+Nested graph reasoning execution still needs original-meter and evidence
+binding before it may be certified. No claim of authorized graph tool
+success, safe executor deletion or consumer readiness is made. Restore
+graph tool and reasoning capability through canonical receipt-backed
+execution and test both positive and denied paths.

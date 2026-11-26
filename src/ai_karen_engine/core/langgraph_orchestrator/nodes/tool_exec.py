@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-from ai_karen_engine.services.tooling.tool_service import ToolInput, ToolOutput, ToolService
+from ai_karen_engine.services.tooling.tool_service import ToolOutput, ToolService
 
 from ..contracts.orchestration_state import LangGraphOrchestrationState
 
@@ -21,16 +21,17 @@ class ToolExecutionConfig:
 
 
 class ToolExecutionNode:
-    """Direct tool execution through the shared tool service."""
+    """Fail closed on graph tool calls until a governed receipt adapter is wired."""
 
     def __init__(
         self,
         config: Optional[ToolExecutionConfig] = None,
         tool_service: Optional[ToolService] = None,
     ):
-        from ai_karen_engine.services.tooling.tool_service import get_tool_service
         self.config = config or ToolExecutionConfig()
-        self._tool_service = tool_service or get_tool_service()
+        # Retain the constructor contract while the shared governed tool
+        # receipt owner is migrated. Do not initialize or invoke raw tooling.
+        self._tool_service = tool_service
 
     async def __call__(
         self, state: LangGraphOrchestrationState
@@ -52,6 +53,8 @@ class ToolExecutionNode:
                 state.get("tool_results") or []
             )
             logger.info("Tool execution completed")
+        except PermissionError:
+            raise
         except Exception as e:
             logger.error("Tool execution error: %s", e)
             state.setdefault("errors", []).append(f"Tool execution error: {e}")
@@ -61,52 +64,14 @@ class ToolExecutionNode:
     async def execute_tools(
         self, state: LangGraphOrchestrationState, tool_calls: List[Dict[str, Any]]
     ) -> LangGraphOrchestrationState:
-        logger.info("Executing %s tools", len(tool_calls))
-        execution_results: List[Dict[str, Any]] = []
-
-        for tool_call in tool_calls:
-            tool_name = str(tool_call.get("tool") or "").strip()
-            parameters = tool_call.get("parameters") or {}
-
-            if not tool_name:
-                execution_results.append(
-                    self._result_to_dict(
-                        ToolOutput(
-                            success=False,
-                            result=None,
-                            error="Missing tool name",
-                            execution_time=0.0,
-                            request_id=str(tool_call.get("request_id") or ""),
-                        )
-                    )
-                )
-                continue
-
-            tool_input = ToolInput(
-                tool_name=tool_name,
-                parameters=parameters,
-                user_context=self._build_user_context(state),
-                user_id=state.get("user_id"),
-                session_id=state.get("session_id"),
-            )
-
-            result = await self._tool_service.execute_tool(tool_input)
-            execution_results.append(self._result_to_dict(result))
-
-        state["tool_results"] = execution_results
-        state["tool_execution_metadata"] = self._build_execution_summary(
-            execution_results
-        )
+        # Raw graph ToolService calls have neither the original shared
+        # budget nor a durable governed invocation receipt. No serialized
+        # plan, cached result, or tool name can substitute for that grant.
+        if tool_calls:
+            raise PermissionError("workflow_tool_execution_receipt_required")
+        state["tool_results"] = []
+        state["tool_execution_metadata"] = self._build_execution_summary([])
         state["execution_summary"] = state["tool_execution_metadata"]
-
-        failed_messages = [
-            f"Tool '{result.get('tool_name', 'unknown')}' failed: {result.get('error')}"
-            for result in execution_results
-            if not result.get("success", False)
-        ]
-        if failed_messages:
-            state.setdefault("errors", []).extend(failed_messages)
-
         return state
 
     def _build_user_context(self, state: LangGraphOrchestrationState) -> Dict[str, Any]:
