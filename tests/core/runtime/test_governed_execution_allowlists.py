@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
+
+from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
 
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -100,3 +104,38 @@ async def test_policy_allowlists_survive_decision_and_chat_plan_boundary():
     assert plan.authorized_user_id == "user-a"
     assert plan.authorized_tenant_id == "tenant-a"
     assert plan.authorized_session_id == "task:task-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delegation_requested", [False, True])
+async def test_cortex_delegation_topology_remains_unauthorized(
+    delegation_requested: bool,
+) -> None:
+    # Supply deterministic Intelligence analysis at the existing CORTEX seam;
+    # execute the real cognitive decision, not a preconstructed decision.
+    decider = CortexExecutionDecider.__new__(CortexExecutionDecider)
+    decider._force_graph = False
+    analysis = decider._default_analysis()
+    analysis["agent_delegation"] = delegation_requested
+    decider._analyze_request = AsyncMock(return_value=analysis)
+    request = ChatExecutionRequest(
+        messages=[{"role": "user", "content": "Help me plan a project."}],
+        context=_request().context,
+    )
+
+    decision = await decider.decide(request)
+
+    decider._analyze_request.assert_awaited_once()
+    assert decision.topology == (
+        ExecutionTopology.MULTI_AGENT if delegation_requested else ExecutionTopology.DIRECT
+    )
+    assert decision.execution_mode == (
+        RuntimeExecutionMode.GRAPH if delegation_requested else RuntimeExecutionMode.DIRECT
+    )
+    assert decision.is_graph_required is delegation_requested
+    assert decision.requires_agent_delegation is delegation_requested
+    assert ("agent_delegation_required" in decision.reason_codes) is delegation_requested
+    assert decision.policy_decision_id is None
+    assert decision.policy_version == ""
+    assert decision.policy_reason_codes == []
+    assert decision.memory_write_allowed is False

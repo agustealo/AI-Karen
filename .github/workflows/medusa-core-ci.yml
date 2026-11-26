@@ -276,35 +276,19 @@ jobs:
           pip install -r requirements.txt
           pip install pytest pytest-asyncio
       
-      - name: Test CORTEX decides multi_agent
+      - name: Prove CORTEX selects multi-agent only when requested
         run: |
-          python -c "
-          import asyncio
-          from ai_karen_engine.core.runtime.contracts import ExecutionRequirements
-          req = ExecutionRequirements(
-              request_id='test-1',
-              correlation_id='test-1',
-              intent='agent.multi_agent',
-              requires_agent_delegation=True,
-              topology_signals={'preferred': 'multi_agent'}
-          )
-          print('✓ CORTEX can decide multi_agent topology')
-          "
-      
-      - name: Test RuntimePolicy authorizes independently
+          python -m pytest \
+            tests/core/runtime/test_governed_execution_allowlists.py::test_cortex_delegation_topology_remains_unauthorized \
+            -v --tb=short
+
+      - name: Prove RuntimePolicy authorizes independently
         run: |
-          python -c "
-          from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
-          plan = AuthorizedExecutionPlan(
-              execution_id='test-exec',
-              policy_decision_id='policy-123',
-              allowed_agents=['analyst'],
-              allowed_tools=['web_search'],
-              allowed_plugins=[]
-          )
-          print('✓ RuntimePolicy can authorize independently of Medusa')
-          "
-      
+          python -m pytest \
+            tests/core/runtime/test_governed_execution_allowlists.py::test_runtime_policy_authorizes_requested_agents_as_typed_constraints \
+            tests/core/runtime/test_governed_execution_allowlists.py::test_policy_allowlists_survive_decision_and_chat_plan_boundary \
+            -v --tb=short
+
       - name: Test Medusa cannot widen authorization
         run: |
           python -c "
