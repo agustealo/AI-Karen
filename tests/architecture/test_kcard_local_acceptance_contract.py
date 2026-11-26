@@ -100,16 +100,17 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     code = compile(body, str(DEPLOY), "exec")
     sha = "a" * 40
     database = "kcard_" + sha[:12]
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
     output = tmp_path / "output"
-    output.mkdir()
     env_file = output / ".env.production"
-    (tmp_path / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=fixture-secret\n")
-    (tmp_path / "supabase" / "migrations").mkdir(parents=True)
-    (tmp_path / "supabase" / "config.toml").write_text(
+    (checkout / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=fixture-secret\n")
+    (checkout / "supabase" / "migrations").mkdir(parents=True)
+    (checkout / "supabase" / "config.toml").write_text(
         f'project_id = "fixture"\n[db]\nport = {port}\n'
     )
-    (tmp_path / "supabase" / "migrations" / "001.sql").write_text("SELECT 1;")
-    monkeypatch.chdir(tmp_path)
+    (checkout / "supabase" / "migrations" / "001.sql").write_text("SELECT 1;")
+    monkeypatch.chdir(checkout)
     monkeypatch.setattr(sys, "argv", ["-", str(env_file), sha, database, str(output)])
     monkeypatch.delenv("DOCKER_HOST", raising=False)
     monkeypatch.delenv("DOCKER_CONTEXT", raising=False)
@@ -146,13 +147,42 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     assert all(len(values[key]) == 64 for key in keys)
     assert sum("createdb" in args for args in calls) == 1
     assert sum(args[:3] == ["docker", "exec", "-i"] for args in calls) == 1
+    assert output.stat().st_mode & 0o777 == 0o700
 
     calls.clear()
-    (tmp_path / ".env").write_text("DB_HOST=localhost\nDB_PORT=54322\nDB_PASSWORD=fixture-secret\n")
+    with pytest.raises(SystemExit, match="state directory already exists"):
+        exec(code, {})
+    assert calls == []
+    for path in output.iterdir():
+        path.unlink()
+    output.rmdir()
+
+    inside = checkout / "private-state"
+    monkeypatch.setattr(sys, "argv", ["-", str(inside / ".env.production"), sha, database, str(inside)])
+    with pytest.raises(SystemExit, match="outside the checkout"):
+        exec(code, {})
+    assert not inside.exists() and calls == []
+    monkeypatch.setattr(sys, "argv", ["-", str(env_file), sha, database, str(output)])
+
+    (checkout / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=invalid\x00secret\n")
+    with pytest.raises(SystemExit, match="invalid acceptance configuration"):
+        exec(code, {})
+    assert not output.exists() and not any("createdb" in args for args in calls)
+    calls.clear()
+    (checkout / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=fixture-secret\n")
+    migration = checkout / "supabase" / "migrations" / "001.sql"
+    migration.unlink()
+    with pytest.raises(SystemExit, match="migration inventory is empty"):
+        exec(code, {})
+    assert not output.exists() and not any("createdb" in args for args in calls)
+    migration.write_text("SELECT 1;")
+
+    calls.clear()
+    (checkout / ".env").write_text("DB_HOST=localhost\nDB_PORT=54322\nDB_PASSWORD=fixture-secret\n")
     with pytest.raises(SystemExit, match="canonical configured"):
         exec(code, {})
     assert calls == []
-    (tmp_path / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=fixture-secret\n")
+    (checkout / ".env").write_text(f"DB_HOST=localhost\nDB_PORT={port}\nDB_PASSWORD=fixture-secret\n")
     calls.clear()
     existing = True
     with pytest.raises(SystemExit, match="already exists"):

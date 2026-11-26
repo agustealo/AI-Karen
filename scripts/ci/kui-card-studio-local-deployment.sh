@@ -21,7 +21,6 @@ if [[ "${GITHUB_ACTIONS:-false}" == 'true' || -v VERCEL_AUTOMATION_BYPASS_SECRET
 fi
 
 OUT="${KAREN_KCARD_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/ai-karen/kcard-local/$ACTUAL_SHA}"
-mkdir -p "$OUT"
 PROJECT="kcard-${ACTUAL_SHA:0:12}"
 DB_NAME="kcard_${ACTUAL_SHA:0:12}"
 ENV_FILE="$OUT/.env.production"
@@ -38,11 +37,17 @@ from scripts.ci.verify_local_card_studio_acceptance import (
     require_local_docker, local_storage_origin, verify_local_storage_gateway,
 )
 
-env_file = Path(sys.argv[1])
 sha = sys.argv[2]
 db_name = sys.argv[3]
-out = Path(sys.argv[4])
-root = Path.cwd()
+out_path = Path(sys.argv[4])
+root = Path.cwd().resolve()
+out = out_path.resolve()
+env_file = Path(sys.argv[1]).resolve()
+if (out.is_relative_to(root) or out_path.is_symlink()
+        or env_file != out / '.env.production'):
+    raise SystemExit('Private acceptance state must be outside the checkout')
+if out.exists():
+    raise SystemExit('Acceptance state directory already exists; use a fresh private directory')
 
 base = {}
 for line in (root / '.env').read_text(encoding='utf-8').splitlines():
@@ -80,32 +85,6 @@ if local_storage_url or local_storage_key:
         verify_local_storage_gateway(container, local_storage_url)
     except GuardError:
         raise SystemExit("Local Storage fixture target is not the running local Supabase gateway") from None
-
-exists = subprocess.run(
-    ['docker', 'exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-tAc',
-     f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"],
-    check=False, capture_output=True, text=True,
-)
-if exists.returncode != 0:
-    raise SystemExit('Could not inspect local Supabase PostgreSQL')
-if exists.stdout.strip() != '':
-    raise SystemExit('Disposable database already exists or returned unexpected evidence; refusing to replay migrations')
-created = subprocess.run(
-    ['docker', 'exec', container, 'createdb', '-U', 'postgres', db_name],
-    check=False, capture_output=True, text=True,
-)
-if created.returncode != 0:
-    raise SystemExit('Could not create disposable local Supabase database')
-
-for migration in sorted((root / 'supabase/migrations').glob('*.sql')):
-    applied = subprocess.run(
-        ['docker', 'exec', '-i', container, 'psql', '-U', 'postgres', '-d', db_name,
-         '-v', 'ON_ERROR_STOP=1'],
-        input=migration.read_text(encoding='utf-8'),
-        check=False, capture_output=True, text=True,
-    )
-    if applied.returncode != 0:
-        raise SystemExit(f'Canonical migration failed: {migration.name}')
 
 def secret() -> str:
     return secrets.token_hex(32)
@@ -162,10 +141,46 @@ def dotenv_value(value: str) -> str:
     return "'" + value.replace("'", "\\'") + "'"
 
 
-env_file.write_text(
-    ''.join(f'{key}={dotenv_value(value)}\n' for key, value in values.items()),
-    encoding='utf-8',
+env_content = ''.join(f'{key}={dotenv_value(value)}\n' for key, value in values.items())
+try:
+    migrations = [(path.name, path.read_text(encoding='utf-8'))
+                  for path in sorted((root / 'supabase/migrations').glob('*.sql'))]
+except (OSError, UnicodeError):
+    raise SystemExit('Canonical migrations could not be read') from None
+if not migrations:
+    raise SystemExit('Canonical migration inventory is empty')
+
+exists = subprocess.run(
+    ['docker', 'exec', container, 'psql', '-U', 'postgres', '-d', 'postgres', '-tAc',
+     f"SELECT 1 FROM pg_database WHERE datname='{db_name}'"],
+    check=False, capture_output=True, text=True,
 )
+if exists.returncode != 0:
+    raise SystemExit('Could not inspect local Supabase PostgreSQL')
+if exists.stdout.strip() != '':
+    raise SystemExit('Disposable database already exists or returned unexpected evidence; refusing to replay migrations')
+try:
+    out.mkdir(mode=0o700, parents=True, exist_ok=False)
+except OSError:
+    raise SystemExit('Could not reserve fresh private acceptance state') from None
+created = subprocess.run(
+    ['docker', 'exec', container, 'createdb', '-U', 'postgres', db_name],
+    check=False, capture_output=True, text=True,
+)
+if created.returncode != 0:
+    raise SystemExit('Could not create disposable local Supabase database')
+
+for migration_name, migration_sql in migrations:
+    applied = subprocess.run(
+        ['docker', 'exec', '-i', container, 'psql', '-U', 'postgres', '-d', db_name,
+         '-v', 'ON_ERROR_STOP=1'],
+        input=migration_sql,
+        check=False, capture_output=True, text=True,
+    )
+    if applied.returncode != 0:
+        raise SystemExit(f'Canonical migration failed: {migration_name}')
+
+env_file.write_text(env_content, encoding='utf-8')
 (out / 'supabase-container.txt').write_text(container + '\n', encoding='utf-8')
 (out / 'supabase-database.txt').write_text(db_name + '\n', encoding='utf-8')
 PY

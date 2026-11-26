@@ -351,3 +351,17 @@ that exact configured port. Do not substitute the Supabase CLI default
 port or point the acceptance database at a different project. This repository's
 current checked-in database port is 54342. The standalone CK-GEN disposable
 PostgreSQL proof remains independently constrained to port 5432.
+
+### Local provisioning preflight
+
+The deployment provisioner requires a fresh private acceptance state directory
+outside the checkout. The default exact-SHA directory is suitable on the first
+run; use an explicitly fresh `KAREN_KCARD_STATE_DIR` for another attempt only
+after separately verifying the disposable database and Compose project are safe
+to reuse or remove. Existing state and databases are never overwritten or reset.
+Before creating a database, the provisioner validates the generated dotenv
+configuration and reads the complete canonical migration inventory. Missing or
+unreadable migrations and invalid configuration stop before database creation.
+The reserved state directory is mode 0700; credentials remain mode 0600.
+A failed migration or build may leave disposable state for diagnosis. Do not
+interpret it as deployment readiness or automatically delete it.
