@@ -64,7 +64,10 @@ describe("Agent Runtime governed approvals", () => {
   it("uses backend-owned approval records and decisions without auto-execution", () => {
     expect(approvalController).toContain('"/api/approvals/"');
     expect(approvalController).toContain("/api/approvals/\u0024{encodeURIComponent(approvalId)}/decision");
-    expect(source).toContain("useRuntimeApprovals(isAuthenticated, setActionMessage)");
+    expect(source).toContain("useRuntimeApprovalContext()");
+    expect(source).not.toContain("useRuntimeApprovals(");
+    expect(approvalController).toContain('approval.workflow_kind === "runtime_approval"');
+    expect(source).toContain("canDecideRuntimeApproval(approval)");
     expect(source).not.toContain('"/api/approvals/"');
     expect(source).toContain('data-testid="agent-runtime-approvals"');
     expect(source).toContain("Review approval");
