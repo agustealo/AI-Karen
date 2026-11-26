@@ -153,3 +153,83 @@ def test_simulated_stream_processor_is_quarantined_from_production_chat_routes()
         source = _read(path)
         assert "services.streaming.stream_processor" not in source
         assert "from ai_karen_engine.services.streaming.stream_processor" not in source
+
+
+def test_legacy_collaboration_ingress_has_no_fabricated_gateway_owner() -> None:
+    source = _read(WEBSOCKET)
+    assert "WebSocketGateway(" not in source
+    assert "Depends(get_websocket_gateway)" not in source
+    assert "gateway.message_queue" not in source
+    assert source.index('@router.get("/presence/online")') < source.index(
+        '@router.get("/presence/{user_id}")'
+    )
+
+
+@pytest.mark.parametrize(
+    "method,path,roles",
+    [
+        ("GET", "/stats", ["admin"]),
+        ("GET", "/presence/online", ["admin"]),
+        ("GET", "/presence/user-1", ["user"]),
+        ("GET", "/typing/foreign-conversation", ["user"]),
+        ("GET", "/queue/user-1", ["user"]),
+        ("DELETE", "/queue/user-1", ["user"]),
+        ("GET", "/connections/user-1", ["user"]),
+        ("GET", "/connections/conversation/foreign-conversation", ["admin"]),
+        ("GET", "/health", ["user"]),
+    ],
+)
+def test_unowned_collaboration_routes_report_unavailable(method, path, roles):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from ai_karen_engine.api_routes.chat import websocket
+
+    app = FastAPI()
+    app.include_router(websocket.router)
+    app.dependency_overrides[websocket.bypass_user_context_func] = lambda: {
+        "user_id": "user-1", "tenant_id": "tenant-1", "roles": roles,
+    }
+    with TestClient(app) as client:
+        response = client.request(method, path)
+    assert response.status_code == 503
+    assert response.headers["cache-control"] == "no-store"
+    assert response.json() == {
+        "detail": "Legacy collaboration transport state is unavailable",
+        "error_code": "COLLABORATION_TRANSPORT_UNAVAILABLE",
+        "runtime_authority": "ChatRuntime",
+    }
+
+
+@pytest.mark.parametrize("method,path", [
+    ("GET", "/stats"), ("GET", "/presence/online"),
+    ("GET", "/presence/user-2"), ("GET", "/queue/user-2"),
+    ("DELETE", "/queue/user-2"), ("GET", "/connections/user-2"),
+    ("GET", "/connections/conversation/foreign-conversation"),
+])
+def test_collaboration_quarantine_preserves_access_denials(method, path):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from ai_karen_engine.api_routes.chat import websocket
+
+    app = FastAPI()
+    app.include_router(websocket.router)
+    app.dependency_overrides[websocket.bypass_user_context_func] = lambda: {
+        "user_id": "user-1", "tenant_id": "tenant-1", "roles": ["user"],
+    }
+    with TestClient(app) as client:
+        assert client.request(method, path).status_code == 403
+
+
+def test_collaboration_quarantine_rejects_missing_tenant():
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from ai_karen_engine.api_routes.chat import websocket
+
+    app = FastAPI()
+    app.include_router(websocket.router)
+    app.dependency_overrides[websocket.bypass_user_context_func] = lambda: {
+        "user_id": "user-1", "roles": ["admin"],
+    }
+    with TestClient(app) as client:
+        assert client.get("/typing/conversation-1").status_code == 401
+        assert client.get("/health").status_code == 401
