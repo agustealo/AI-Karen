@@ -4,15 +4,14 @@ import logging
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, SecretStr
 
 from ai_karen_engine.auth.rbac_middleware import (
     Permission,
-    require_permission,
+    require_platform_tenant_permission,
 )
-from ai_karen_engine.core.services.dependencies import get_current_user
 from ai_karen_engine.services.admin.admin_tenant_service import AdminTenantService
-from ai_karen_engine.database.tenant_manager import TenantConfig
+from ai_karen_engine.database.tenant_manager import TenantConfig, TenantManager
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +30,8 @@ class AdminTenantCreateRequest(BaseModel):
     slug: str
     subscription_tier: str = "basic"
     admin_email: str
+    admin_password: SecretStr
+    admin_full_name: str
     settings: Dict[str, Any] = {}
     features: List[str] = []
     limits: Dict[str, int] = {}
@@ -47,16 +48,14 @@ class AdminTenantUpdateRequest(BaseModel):
 
 def get_admin_tenant_service() -> AdminTenantService:
     from ai_karen_engine.database.client import MultiTenantPostgresClient
-    from ai_karen_engine.core.model_runtime.embedding_manager import get_embedding_manager
     db_client = MultiTenantPostgresClient()
-    embedding_manager = get_embedding_manager()
-    tenant_manager = TenantManager(db_client=db_client, embedding_manager=embedding_manager)
+    tenant_manager = TenantManager(db_client=db_client)
     return AdminTenantService(tenant_manager=tenant_manager)
 
 
 @router.get("/", response_model=AdminTenantListResponse)
 async def list_admin_tenants(
-    current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_TENANTS_READ)),
+    current_user: Dict[str, Any] = Depends(require_platform_tenant_permission(Permission.ADMIN_TENANTS_READ)),
     subscription_tier: Optional[str] = Query(None),
     active_only: bool = Query(True),
     limit: int = Query(100, ge=1, le=1000),
@@ -100,7 +99,7 @@ async def list_admin_tenants(
 @router.post("/", status_code=201)
 async def create_admin_tenant(
     request: AdminTenantCreateRequest,
-    current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_TENANTS_MANAGE)),
+    current_user: Dict[str, Any] = Depends(require_platform_tenant_permission(Permission.ADMIN_TENANTS_MANAGE)),
 ):
     """Create a new tenant with admin audit logging."""
     service = get_admin_tenant_service()
@@ -112,11 +111,19 @@ async def create_admin_tenant(
         features=request.features,
         limits=request.limits,
     )
-    tenant = await service.create_tenant(
-        config=config,
-        admin_email=request.admin_email,
-        operator_id=current_user.get("user_id"),
-    )
+    try:
+        tenant = await service.create_tenant(
+            config=config,
+            admin_email=request.admin_email,
+            admin_password=request.admin_password.get_secret_value(),
+            admin_full_name=request.admin_full_name,
+            operator_id=current_user["user_id"],
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Tenant or administrator creation rejected") from None
+    except Exception:
+        logger.warning("Tenant creation failed")
+        raise HTTPException(status_code=500, detail="Tenant creation failed") from None
     if not tenant:
         raise HTTPException(status_code=400, detail="Failed to create tenant")
     return {
@@ -130,7 +137,7 @@ async def create_admin_tenant(
 @router.get("/{tenant_id}")
 async def get_admin_tenant(
     tenant_id: str,
-    current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_TENANTS_READ)),
+    current_user: Dict[str, Any] = Depends(require_platform_tenant_permission(Permission.ADMIN_TENANTS_READ)),
 ):
     """Get tenant details (admin only)."""
     service = get_admin_tenant_service()
@@ -155,7 +162,7 @@ async def get_admin_tenant(
 @router.get("/{tenant_id}/stats")
 async def get_admin_tenant_stats(
     tenant_id: str,
-    current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_TENANTS_READ)),
+    current_user: Dict[str, Any] = Depends(require_platform_tenant_permission(Permission.ADMIN_TENANTS_READ)),
 ):
     """Get tenant statistics (admin only)."""
     service = get_admin_tenant_service()
@@ -172,7 +179,7 @@ async def get_admin_tenant_stats(
 async def update_admin_tenant(
     tenant_id: str,
     request: AdminTenantUpdateRequest,
-    current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_TENANTS_MANAGE)),
+    current_user: Dict[str, Any] = Depends(require_platform_tenant_permission(Permission.ADMIN_TENANTS_MANAGE)),
 ):
     """Update tenant details (admin only)."""
     service = get_admin_tenant_service()
@@ -190,7 +197,7 @@ async def update_admin_tenant(
 @router.delete("/{tenant_id}", status_code=204)
 async def delete_admin_tenant(
     tenant_id: str,
-    current_user: Dict[str, Any] = Depends(require_permission(Permission.ADMIN_TENANTS_MANAGE)),
+    current_user: Dict[str, Any] = Depends(require_platform_tenant_permission(Permission.ADMIN_TENANTS_MANAGE)),
 ):
     """Delete a tenant (admin only)."""
     service = get_admin_tenant_service()

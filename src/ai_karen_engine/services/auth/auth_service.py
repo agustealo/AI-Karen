@@ -44,6 +44,10 @@ _db_session_ctx: ContextVar[Optional[AsyncSession]] = ContextVar(
 _FIRST_ADMIN_BOOTSTRAP_LOCK_KEY = 1262571077
 
 
+class AccountCreationError(ValueError):
+    """Safe, expected account creation rejection."""
+
+
 class UserRole(str, Enum):
     """User role enumeration."""
 
@@ -442,6 +446,69 @@ class AuthService(BaseService):
             logger.error("Error authenticating user: %s", e)
             return None, None, "Authentication failed"
 
+    async def create_user_in_transaction(
+        self,
+        session: AsyncSession,
+        email: str,
+        password: str,
+        full_name: str,
+        *,
+        username: Optional[str] = None,
+        tenant_id: Optional[str] = None,
+        roles: Optional[List[UserRole]] = None,
+        is_verified: bool = False,
+    ) -> UserAccount:
+        """Stage a validated account in the caller's transaction.
+
+        The trusted server-side transaction owner must authorize the operation,
+        commit or roll back, and publish any success receipt. This method never
+        commits, logs success, or publishes an uncommitted account to a cache.
+        """
+        if not self._initialized:
+            await self.initialize()
+
+        if not self._validate_email(email):
+            raise AccountCreationError("Invalid email address")
+
+        password_error = self._validate_password(password)
+        if password_error:
+            raise AccountCreationError(password_error)
+
+        existing_user = await session.execute(
+            select(AuthUser).where(AuthUser.email == email)
+        )
+        if existing_user.scalar_one_or_none():
+            raise AccountCreationError("User with this email already exists")
+
+        password_hash = self._hash_password(password)
+        resolved_tenant_id = await self._resolve_tenant_id(session, tenant_id)
+        if tenant_id and resolved_tenant_id is None:
+            raise AccountCreationError("Tenant not found")
+
+        roles_payload = [
+            role.value if isinstance(role, UserRole) else str(role)
+            for role in (roles or [UserRole.USER])
+        ]
+        auth_user = AuthUser(
+            user_id=uuid.uuid4(),
+            email=email,
+            username=username or email.split("@")[0],
+            full_name=full_name,
+            password_hash=password_hash,
+            tenant_id=resolved_tenant_id,
+            roles=roles_payload,
+            preferences={},
+            is_verified=is_verified,
+            is_active=True,
+        )
+        session.add(auth_user)
+        await session.flush()
+
+        user = self._build_user_account(auth_user)
+        if not is_verified:
+            user.status = UserStatus.PENDING_VERIFICATION
+        return user
+
     async def create_user(
         self,
         email: str,
@@ -458,57 +525,26 @@ class AuthService(BaseService):
             await self.initialize()
 
         try:
-            if not self._validate_email(email):
-                return None, "Invalid email address"
-
-            password_error = self._validate_password(password)
-            if password_error:
-                return None, password_error
-
+            owns_transaction = _db_session_ctx.get() is None
             async with self._session_scope() as session:
-                existing_user = await session.execute(
-                    select(AuthUser).where(AuthUser.email == email)
-                )
-                if existing_user.scalar_one_or_none():
-                    return None, "User with this email already exists"
-
-                password_hash = self._hash_password(password)
-                resolved_tenant_id = await self._resolve_tenant_id(session, tenant_id)
-                if tenant_id and resolved_tenant_id is None:
-                    return None, "Tenant not found"
-
-                roles_payload = [
-                    role.value if isinstance(role, UserRole) else str(role)
-                    for role in (roles or [UserRole.USER])
-                ]
-
-                auth_user = AuthUser(
-                    user_id=uuid.uuid4(),
+                user = await self.create_user_in_transaction(
+                    session,
                     email=email,
-                    username=username or email.split("@")[0],
+                    password=password,
                     full_name=full_name,
-                    password_hash=password_hash,
-                    tenant_id=resolved_tenant_id,
-                    roles=roles_payload,
-                    preferences={},
+                    username=username,
+                    tenant_id=tenant_id,
+                    roles=roles,
                     is_verified=is_verified,
-                    is_active=True,
                 )
-                session.add(auth_user)
-                await session.flush()
-
-                user = self._build_user_account(auth_user)
-                if not is_verified:
-                    user.status = UserStatus.PENDING_VERIFICATION
-
-                self._user_cache[user.id] = user
-
-            logger.info("User created successfully - %s", email)
+            if owns_transaction:
+                logger.info("User created successfully", extra={"user_id": user.id})
             return user, None
-
-        except Exception as e:
-            logger.error("Error creating user: %s", e)
-            return None, str(e)
+        except AccountCreationError as exc:
+            return None, str(exc)
+        except Exception as exc:
+            logger.error("User creation failed", extra={"error_type": type(exc).__name__})
+            return None, "User creation failed"
 
     async def validate_token(self, token: str) -> Optional[UserAccount]:
         """Use the canonical active-session authority for access validation."""
