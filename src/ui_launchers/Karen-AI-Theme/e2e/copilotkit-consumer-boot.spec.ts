@@ -248,6 +248,7 @@ async function expectFreshSpecialistIsolation(
   await signOut();
   const seen = new Set([approved.userId]);
   for (const [index, account] of foreignSpecialistAccounts.entries()) {
+    await requireLiveCanonicalBackend(page, target);
     await signInApprovedKaren(page, account.email!, account.password!, { allowLocalLoopback: localMode });
     sameOrigin();
     const session = await readAuthorizedSameOriginJson(page, "/api/auth/validate-session");
