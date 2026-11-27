@@ -682,9 +682,11 @@ class ApiClient {
     // the existing refresh/reconciliation behavior.
     if (boundedWait) {
       assertScope();
-      if (!response.ok) throw new ApiError(response.status, 'Inbox invalidation unavailable');
+      // Settle the bounded transport only after the complete response has
+      // been consumed. Never parse or expose denial details to the caller.
       const text = await response.text();
       assertScope();
+      if (!response.ok) throw new ApiError(response.status, 'Inbox invalidation unavailable');
       return (text ? JSON.parse(text) : undefined) as T;
     }
 

@@ -184,7 +184,7 @@ async def test_wait_requires_real_ack_and_exact_owner_signal(configured):
 
 
 @pytest.mark.asyncio
-async def test_wait_cancellation_releases_owner_and_pool_reservation(configured):
+async def test_wait_cancellation_releases_owner_and_pool_reservation(configured, caplog):
     settings, client, manager, _ = configured
     settings.features.enable_communications_invalidation_wait = True
     manager.max_connections = 10
@@ -206,10 +206,15 @@ async def test_wait_cancellation_releases_owner_and_pool_reservation(configured)
         tenant_id=TENANT, user_id=OWNER, disconnected=connected,
     ))
     await entered.wait()
+    trace = "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a6"
     with pytest.raises(invalidation.InboxInvalidationUnavailable):
         await invalidation.wait_for_inbox_invalidation(
-            tenant_id=TENANT, user_id=OWNER, disconnected=connected,
+            tenant_id=TENANT, user_id=OWNER, disconnected=connected, correlation_id=trace,
         )
+    failures = [r for r in caplog.records if getattr(r, "reason", None) == "duplicate_owner"]
+    assert len(failures) == 1
+    assert failures[0].correlation_id == trace
+    assert failures[0].error_type == "InboxInvalidationUnavailable"
     task.cancel()
     with pytest.raises(asyncio.CancelledError):
         await task
