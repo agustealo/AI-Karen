@@ -29,7 +29,13 @@ class _DedupFilter(logging.Filter):
         try:
             import time as _time
 
-            key = (record.name, record.levelno, record.getMessage())
+            key = (
+                record.name,
+                record.levelno,
+                record.getMessage(),
+                getattr(record, "correlation_id", None),
+                getattr(record, "request_id", None),
+            )
             now = _time.time()
             if self._last_key == key and (now - self._last_ts) <= self.window:
                 return False
@@ -92,10 +98,14 @@ def configure_logging() -> None:
                 "suppress_invalid_http": {
                     "()": "ai_karen_engine.server.logging_filters.SuppressInvalidHTTPFilter",
                 },
-                # Drop immediate duplicate log records in a short window
-                "dedup": {
-                    "()": _DedupFilter,
-                    "window_seconds": 0.75,
+                # Each sink owns its deduplication state. One handler must
+                # never suppress a record before another handler can emit it.
+                **{
+                    f"dedup_{sink}": {
+                        "()": _DedupFilter,
+                        "window_seconds": 0.75,
+                    }
+                    for sink in ("console", "file")
                 },
             },
             "formatters": {
@@ -113,7 +123,7 @@ def configure_logging() -> None:
                     "class": "logging.StreamHandler",
                     "formatter": "standard",
                     "stream": "ext://sys.stdout",
-                    "filters": ["suppress_invalid_http", "dedup"],
+                    "filters": ["suppress_invalid_http", "dedup_console"],
                 },
                 "file": {
                     "class": "logging.handlers.RotatingFileHandler",
@@ -121,7 +131,7 @@ def configure_logging() -> None:
                     "maxBytes": 10485760,
                     "backupCount": 5,
                     "formatter": "json",
-                    "filters": ["suppress_invalid_http", "dedup"],
+                    "filters": ["suppress_invalid_http", "dedup_file"],
                 },
                 "access": {
                     "class": "logging.handlers.RotatingFileHandler",

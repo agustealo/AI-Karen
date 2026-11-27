@@ -6,8 +6,11 @@ provider identity, tenant identity, persistence success, or deployment routing.
 
 from __future__ import annotations
 
+import asyncio
 import os
 import time
+from collections.abc import AsyncIterator, Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any, Optional
 
 from fastapi import FastAPI, Request
@@ -146,6 +149,53 @@ class RequestSizeLimitMiddleware:
                 declared_size=declared_size,
                 observed_size=exc.observed_size,
             )
+
+
+@asynccontextmanager
+async def observe_bodyless_request_disconnect(
+    request: Request,
+) -> AsyncIterator[Callable[[], Awaitable[bool]]]:
+    """Own one ASGI receiver during a bounded bodyless HTTP operation.
+
+    Request.is_disconnected() cancels its receive scope immediately. Under
+    layered BaseHTTPMiddleware, receive must cross asynchronous checkpoints
+    before it can see a queued disconnect. Keep one receiver alive instead.
+    This helper is for operations that never consume a request body elsewhere.
+    """
+
+    async def observe() -> None:
+        try:
+            while True:
+                message = await request.receive()
+                if message["type"] == "http.disconnect":
+                    return
+                # An unexpected body or frame is not a verified connection
+                # for this bodyless operation. Fail closed without reading it
+                # into memory or logging its contents.
+                if (
+                    message["type"] != "http.request"
+                    or message.get("body")
+                    or message.get("more_body", False)
+                ):
+                    return
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "http.disconnect_observation_unavailable",
+                extra={"error_type": type(exc).__name__},
+            )
+
+    observer = asyncio.create_task(observe(), name="http-disconnect-observer")
+
+    async def disconnected() -> bool:
+        return observer.done()
+
+    try:
+        yield disconnected
+    finally:
+        observer.cancel()
+        await asyncio.gather(observer, return_exceptions=True)
 
 
 def _env_flag(name: str, default: bool = False) -> bool:
