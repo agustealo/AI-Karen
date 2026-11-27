@@ -88,6 +88,7 @@ async function readKarenGovernedHistory(
   principal: KarenVerifiedPrincipal,
   threadId: string,
   textContinuation = false,
+  attachmentDraftSubmission?: boolean,
 ): Promise<Response> {
   let response: Response;
   try {
@@ -205,16 +206,21 @@ async function readKarenGovernedHistory(
     }
     replayEvents.push({ type: "CUSTOM", name: e.name, value: e.value, messageId: e.messageId });
   }
+  // Only the authenticated capability response supplied by the route is
+  // authoritative for protocol support, never arbitrary history metadata.
+  const attachmentCapability = typeof attachmentDraftSubmission === "boolean"
+    ? { attachment_draft_submission: attachmentDraftSubmission } : {};
   return NextResponse.json(
     textContinuation
       ? {
         threadId, messages, replayEvents: [], recovery_run: recoveryRun,
+        ...attachmentCapability,
         text_only: true, continuation_authorized: true,
         omitted_rich_message_count: data.omitted_rich_message_count,
         history_window_has_older: data.history_window_has_older,
         history_window_message_limit: 500,
       }
-      : { threadId, messages, replayEvents, recovery_run: recoveryRun },
+      : { threadId, messages, replayEvents, recovery_run: recoveryRun, ...attachmentCapability },
     { headers: { "Cache-Control": "private, no-store" } },
   );
 }
@@ -234,13 +240,14 @@ export async function readKarenOwnedThreadMessages(
   readOnlyTranscript = false,
   transcriptOffset = 0,
   textContinuation = false,
+  attachmentDraftSubmission?: boolean,
 ): Promise<Response> {
   if (textContinuation && !governedHistory) {
     return failure("Attested text continuation unavailable", 404);
   }
   if (governedHistory && !readOnlyTranscript) {
     return readKarenGovernedHistory(
-      request, baseUrl, headers, principal, threadId, textContinuation,
+      request, baseUrl, headers, principal, threadId, textContinuation, attachmentDraftSubmission,
     );
   }
   let response: Response;

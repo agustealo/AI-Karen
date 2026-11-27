@@ -256,7 +256,7 @@ describe("canonical CopilotKit chat ownership", () => {
 
   it("registers a scoped SDK agent from one canonical owner only", () => {
     expect(history).toContain("const registration = useAgent({");
-    expect(history).toContain("ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission }}");
+    expect(history).toContain("ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission, attachmentDraftSubmission }}");
     expect(history.match(/\buseAgent\(/g)).toHaveLength(1);
     expect(history).toContain("restoreHistoryRef.current = restore;");
     expect(history).toContain("export function useKarenScopedAgent()");

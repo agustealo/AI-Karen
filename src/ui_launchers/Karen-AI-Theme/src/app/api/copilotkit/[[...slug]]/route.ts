@@ -109,7 +109,9 @@ async function readKarenAgUiCapabilities(
   request: NextRequest,
   backendBaseUrl: string,
   headers: Record<string, string>,
-): Promise<{ governedHistory: boolean; observedEvents: boolean } | NextResponse> {
+): Promise<{
+  governedHistory: boolean; observedEvents: boolean; attachmentDraftSubmission?: boolean;
+} | NextResponse> {
   let response: Response;
   try {
     response = await fetch(`${backendBaseUrl}/api/chat/ag-ui/capabilities`, {
@@ -142,7 +144,15 @@ async function readKarenAgUiCapabilities(
     if (observed !== undefined && typeof observed !== "boolean") {
       return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
     }
-    return { governedHistory: governed === true, observedEvents: observed === true };
+    const attached = (flags as Record<string, unknown>).attachment_draft_submission;
+    if (attached !== undefined && (typeof attached !== "boolean" ||
+        (attached === true && governed !== true))) {
+      return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
+    }
+    return {
+      governedHistory: governed === true, observedEvents: observed === true,
+      ...(typeof attached === "boolean" ? { attachmentDraftSubmission: attached } : {}),
+    };
   } catch {
     return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
   }
@@ -248,6 +258,7 @@ async function handle(request: NextRequest): Promise<Response> {
     return readKarenOwnedThreadMessages(
       request, backendBaseUrl, auth.headers, auth.principal, requestedHistoryId,
       capabilities.governedHistory, false, 0, continuationRequested,
+      capabilities.attachmentDraftSubmission,
     );
   }
   const scopedStop = request.method === "POST"

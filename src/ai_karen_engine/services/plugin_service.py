@@ -1823,6 +1823,31 @@ class PluginService:
                 )
                 if bool(getattr(capabilities, flag, False))
             ]
+            # Describe closed, required operation enums from the canonical
+            # invocation contract. These labels are metadata, never input
+            # defaults, task matches, or permission to invoke an operation.
+            invocation = getattr(manifest, "execution_input_schema", None)
+            properties = getattr(invocation, "properties", None)
+            required = getattr(invocation, "required", None)
+            operation = properties.get("operation") if isinstance(properties, dict) else None
+            operations = operation.get("enum") if isinstance(operation, dict) else None
+            if (
+                validated and role_eligible and not blocked
+                and getattr(invocation, "type", None) == "object"
+                and getattr(invocation, "additional_properties", None) is False
+                and isinstance(required, list) and "operation" in required
+                and isinstance(operation, dict) and operation.get("type") == "string"
+                and isinstance(operations, list) and 1 <= len(operations) <= 12
+                and all(
+                    isinstance(name, str)
+                    and re.fullmatch(r"[a-z][a-z0-9_.-]{0,47}", name)
+                    for name in operations
+                )
+                and len(set(operations)) == len(operations)
+            ):
+                declared_generic_features.extend(
+                    f"plugin.operation.{name}" for name in operations
+                )
             voice = getattr(capabilities, "voice_modality", None)
             if voice is not None:
                 declared_generic_features.extend(
