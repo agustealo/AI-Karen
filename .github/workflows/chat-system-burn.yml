@@ -27,6 +27,8 @@ on:
       - "tests/core/logging/test_redaction.py"
       - "src/ai_karen_engine/auth/**"
       - "src/ai_karen_engine/services/auth/**"
+      - "src/ai_karen_engine/services/response/**"
+      - "tests/services/test_runtime_search_citation_validator.py"
       - "src/ai_karen_engine/api_routes/auth/**"
       - "src/ui_launchers/Karen-AI-Theme/src/components/chat/**"
       - "src/ui_launchers/Karen-AI-Theme/src/lib/chat-response.ts"

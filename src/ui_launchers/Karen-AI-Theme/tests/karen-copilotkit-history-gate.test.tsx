@@ -70,6 +70,29 @@ function SharedAgentConsumer() {
 }
 
 describe("CopilotKit canonical conversation hydration", () => {
+  it("restores only bounded safe citation URLs bound to an assistant message", () => {
+    const messages = [{ id: "answer-1", role: "assistant" }, { id: "user-1", role: "user" }];
+    const event = {
+      type: "CUSTOM", name: "karen.verified_citations.v1", messageId: "answer-1",
+      value: { urls: ["https://example.org/history"] },
+    };
+    expect(parseKarenVerifiedHistory([event], messages).get("answer-1"))
+      .toEqual([{ type: "citations", value: event.value }]);
+    for (const value of [
+      { urls: [] }, { urls: ["http://127.0.0.1/private"] },
+      { urls: ["javascript:alert(1)"] }, { urls: ["https://user:secret@example.org/"] },
+      { urls: Array(2).fill("https://example.org/history") },
+      { urls: ["https://example.org/history"], private: "secret" },
+    ]) {
+      expect(() => parseKarenVerifiedHistory([{ ...event, value }], messages))
+        .toThrow("Unsupported verified citations");
+    }
+    expect(() => parseKarenVerifiedHistory([event, event], messages))
+      .toThrow("Unsupported verified citations");
+    expect(() => parseKarenVerifiedHistory([{ ...event, messageId: "user-1" }], messages))
+      .toThrow("Unsupported verified conversation event");
+  });
+
   it("restores healthy and degraded execution receipts without falsifying their boolean status", () => {
     const messages = [{ id: "answer-1", role: "assistant" }];
     const baseReceipt = {
@@ -1040,6 +1063,45 @@ describe("CopilotKit canonical conversation hydration", () => {
       { id: "u-first", role: "user", content: "time" },
       { id: firstMessage, role: "assistant", content: "It is 5:42 PM." },
     ]);
+  });
+
+  it("uses the same committed citation links after first completion and reopen", async () => {
+    const firstMessage = "a-citations";
+    const urls = ["https://example.org/history", "https://example.org/archive"];
+    const committed = {
+      threadId: CONVERSATION_A,
+      messages: [
+        { id: "u-citations", role: "user", content: "Research history" },
+        { id: firstMessage, role: "assistant", content: "Saved research answer" },
+      ],
+      replayEvents: [{
+        type: "CUSTOM", name: "karen.verified_citations.v1",
+        messageId: firstMessage, value: { urls },
+      }],
+    };
+    const component = () => (
+      <KarenCopilotHistoryGate conversationId={CONVERSATION_A}>
+        <KarenCopilotAssistantMessage message={{
+          id: firstMessage, role: "assistant", content: "Saved research answer",
+        } as never} />
+      </KarenCopilotHistoryGate>
+    );
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A, messages: [], replayEvents: [],
+    }).mockResolvedValueOnce(committed).mockResolvedValueOnce(committed);
+    const first = render(component());
+    await waitFor(() => expect(backend.agent.subscribe).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("region", { name: "Previously verified citations" })).toBeNull();
+    act(() => backend.callbacks?.onRunFinalized());
+    await waitFor(() => expect(screen.getByRole("region", { name: "Previously verified citations" })).toBeTruthy());
+    const links = () => screen.getAllByRole("link").map(link => link.getAttribute("href"));
+    expect(links()).toEqual(urls);
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+    first.unmount();
+    render(component());
+    await waitFor(() => expect(screen.getByRole("region", { name: "Previously verified citations" })).toBeTruthy());
+    expect(links()).toEqual(urls);
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(3);
   });
 
   it("coalesces a second SDK completion during a pending canonical refresh", async () => {

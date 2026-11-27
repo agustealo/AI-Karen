@@ -10,4 +10,4 @@ class ExecutionDeadlineExceeded(EngineUnavailableError):
 
 
 class ExecutionAdmissionRejected(EngineUnavailableError):
-    """Terminal local model admission failure; never a provider health failure."""
+    """Terminal execution admission failure; never a provider health failure."""

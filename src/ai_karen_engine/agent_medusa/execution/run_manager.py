@@ -21,6 +21,8 @@ from ai_karen_engine.config.agent_medusa import (
 from ai_karen_engine.core.logging import get_logger
 
 from .distributed_run_store import (
+    DistributedRunAdmissionCancelled,
+    DistributedRunAdmissionRejected,
     DistributedRunNotCancellable,
     DistributedRunNotFound,
     DistributedRunOwnershipLost,
@@ -212,22 +214,72 @@ class MedusaRunManager:
                 extra={"run_id": run_id, "correlation_id": correlation_id},
             )
 
-        if await self._distributed_available():
-            try:
-                await self._distributed_store.register(
-                    run_id=run_id,
-                    correlation_id=correlation_id,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    worker_id=self._settings.worker_id,
-                    started_at=started_at,
-                )
-            except DistributedRunStoreUnavailable:
+        guarded = (
+            self._settings.distributed_run_control_enabled
+            and self._settings.run_redis_admission_reserve_bytes > 0
+        )
+        # A guarded admission must reach the shared registration boundary.
+        # A failed PING cannot silently bypass the reserve via durable-only mode.
+        registration_attempted = False
+        try:
+            if guarded or await self._distributed_available():
+                try:
+                    registration_attempted = True
+                    await self._distributed_store.register(
+                        run_id=run_id,
+                        correlation_id=correlation_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        worker_id=self._settings.worker_id,
+                        started_at=started_at,
+                    )
+                except DistributedRunStoreUnavailable:
+                    if guarded:
+                        raise DistributedRunAdmissionRejected(
+                            "redis_capacity_unverified",
+                        ) from None
+                    logger.warning(
+                        "Medusa distributed coordination unavailable during registration",
+                        extra={"run_id": run_id, "correlation_id": correlation_id},
+                    )
+                else:
+                    run.shared_registered = True
+        except asyncio.CancelledError as exc:
+            # Only the store's pre-write cancellation proves no shared mutation.
+            # An unclassified cancellation during register is also uncertain.
+            uncertain = registration_attempted and not isinstance(
+                exc, DistributedRunAdmissionCancelled
+            )
+            cleanup = asyncio.create_task(
+                self._retire_rejected_registration(
+                    run,
+                    error_type=(
+                        "AdmissionCancelledRegistrationUnconfirmed"
+                        if uncertain
+                        else "AdmissionCancelledBeforeRegistration"
+                    ),
+                ),
+            )
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            cleanup.result()
+            raise
+        except Exception as exc:
+            if isinstance(exc, DistributedRunAdmissionRejected):
                 logger.warning(
-                    "Medusa distributed coordination unavailable during registration",
-                    extra={"run_id": run_id, "correlation_id": correlation_id},
+                    "medusa_run_admission_rejected",
+                    extra={
+                        "run_id": run_id,
+                        "correlation_id": correlation_id,
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "reason_code": exc.reason_code,
+                    },
                 )
-            except Exception as exc:
+            try:
                 if run.durable_registered:
                     await self._safe_mark_durable_terminal(
                         run=run,
@@ -235,12 +287,25 @@ class MedusaRunManager:
                         completed_at=datetime.now(timezone.utc),
                         error_type=type(exc).__name__,
                     )
+            except Exception as cleanup_error:
+                if not isinstance(exc, DistributedRunAdmissionRejected):
+                    raise
+                # A ledger outage must not replace a terminal admission
+                # denial with a generic error eligible for model fallback.
+                logger.error(
+                    "medusa_admission_failure_persistence_unconfirmed",
+                    extra={
+                        "run_id": run_id,
+                        "correlation_id": correlation_id,
+                        "tenant_id": tenant_id,
+                        "error_type": type(cleanup_error).__name__,
+                    },
+                )
+            finally:
                 async with self._lock:
                     if self._runs.get(run_id) is run:
                         self._runs.pop(run_id, None)
-                raise
-            else:
-                run.shared_registered = True
+            raise
 
         if run.durable_registered:
             try:
@@ -283,6 +348,37 @@ class MedusaRunManager:
                 name=f"medusa-run-heartbeat:{run_id}",
             )
         return run
+
+    async def _retire_rejected_registration(
+        self,
+        run: ExecutionRun,
+        *,
+        error_type: str,
+    ) -> None:
+        """Close an unstarted task without asserting shared registration rollback."""
+        try:
+            if run.durable_registered:
+                await self._safe_mark_durable_terminal(
+                    run=run,
+                    status=ExecutionRunStatus.FAILED,
+                    completed_at=datetime.now(timezone.utc),
+                    error_type=error_type,
+                )
+        except Exception as exc:
+            # Preserve cancellation; durable closure is explicitly unconfirmed.
+            logger.error(
+                "medusa_admission_cancellation_persistence_unconfirmed",
+                extra={
+                    "run_id": run.run_id,
+                    "correlation_id": run.correlation_id,
+                    "tenant_id": run.tenant_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+        finally:
+            async with self._lock:
+                if self._runs.get(run.run_id) is run:
+                    self._runs.pop(run.run_id, None)
 
     async def mark_response(
         self, run_id: str, outcome_status: str

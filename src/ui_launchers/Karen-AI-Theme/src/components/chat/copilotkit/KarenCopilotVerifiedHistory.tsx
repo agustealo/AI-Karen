@@ -17,6 +17,7 @@ import type { AgentStepEvent } from "@/lib/types";
 
 import {
   parseKarenPresentation,
+  isPublicSourceUrl,
   type KarenPresentationEnvelope,
 } from "@/components/chat/KarenPresentationRegistry";
 import { KarenSafePresentation } from "@/components/chat/KarenSafePresentation";
@@ -31,6 +32,7 @@ import {
 
 type VerifiedPart =
   | { type: "presentation"; value: KarenPresentationEnvelope }
+  | { type: "citations"; value: { urls: string[] } }
   | { type: "receipt"; value: Record<string, unknown> }
   | { type: "integrity"; value: Record<string, unknown> }
   | { type: "plugin_management"; value: Record<string, unknown> }
@@ -151,7 +153,7 @@ function parseSavedAgentStep(value: Record<string, unknown>): {
 export function parseKarenVerifiedHistory(
   value: unknown, messages: ReadonlyArray<{ id: string; role: string }>,
 ): VerifiedHistoryParts {
-  if (!Array.isArray(value) || value.length > 500 * 108) {
+  if (!Array.isArray(value) || value.length > 500 * 109) {
     throw new Error("Unsupported verified conversation events");
   }
   // The public parser must protect its own identity boundary, rather than
@@ -172,7 +174,7 @@ export function parseKarenVerifiedHistory(
   const assistantIds = new Set(messages.filter(m => m.role === "assistant").map(m => m.id));
   const parts = new Map<string, VerifiedPart[]>();
   const counters = new Map<string, {
-    presentation: number; receipt: number; integrity: number; pluginManagement: number;
+    presentation: number; receipt: number; integrity: number; pluginManagement: number; citations: number;
     steps: number; lastStepSequence: number; stepRunId: string | null;
     presentationIds: Set<string>;
   }>();
@@ -186,7 +188,7 @@ export function parseKarenVerifiedHistory(
     const name = candidate.name;
     const id = candidate.messageId;
     const seen = counters.get(id) || {
-      presentation: 0, receipt: 0, integrity: 0, pluginManagement: 0,
+      presentation: 0, receipt: 0, integrity: 0, pluginManagement: 0, citations: 0,
       steps: 0, lastStepSequence: 0, stepRunId: null,
       presentationIds: new Set<string>(),
     };
@@ -199,6 +201,14 @@ export function parseKarenVerifiedHistory(
       }
       seen.presentationIds.add(envelope.presentation_id);
       part = { type: "presentation", value: envelope };
+    } else if (name === "karen.verified_citations.v1") {
+      const urls = candidate.value.urls;
+      if (Object.keys(candidate.value).length !== 1 || !Array.isArray(urls) ||
+          urls.length < 1 || urls.length > 50 || !urls.every(isPublicSourceUrl) ||
+          new Set(urls).size !== urls.length || ++seen.citations > 1) {
+        throw new Error("Unsupported verified citations");
+      }
+      part = { type: "citations", value: { urls: [...urls] } };
     } else if (name === "karen.execution_receipt.v1") {
       if (!validReceipt(candidate.value) || ++seen.receipt > 1) {
         throw new Error("Unsupported verified execution receipt");
@@ -371,6 +381,17 @@ export function KarenCopilotAssistantMessage(
         <div key={index} data-testid="karen-copilot-verified-part">
           {part.type === "presentation" &&
             <KarenSafePresentation data={part.value} />}
+          {part.type === "citations" &&
+            <section aria-label="Previously verified citations" className="my-3 rounded-xl border border-border/70 p-3">
+              <h3 className="font-semibold text-sm">Previously verified citations</h3>
+              <p className="text-xs text-muted-foreground">Historical fetched sources. Current availability is not verified.</p>
+              <ul className="space-y-1 mt-2">
+                {part.value.urls.map(url => <li key={url}>
+                  <a href={url} target="_blank" rel="noopener noreferrer"
+                    className="break-all underline text-sm">{url}</a>
+                </li>)}
+              </ul>
+            </section>}
           {part.type === "receipt" &&
             <KarenRestoredExecutionReceipt data={part.value} />}
           {part.type === "integrity" &&

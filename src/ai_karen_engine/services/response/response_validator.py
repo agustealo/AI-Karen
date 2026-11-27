@@ -13,6 +13,9 @@ class ValidationResult:
     valid: bool
     reason: Optional[str] = None
     message: Optional[str] = None
+    # Ordered, deduplicated fetched URL identities from an entirely valid
+    # grounded answer; no claim-level entailment or current-access grant.
+    verified_citation_urls: tuple[str, ...] = ()
 
 # Generic menu detection
 MENU_LIKE_PATTERNS = [
@@ -25,6 +28,39 @@ DEBUG_PREFIX_PATTERNS = [
     re.compile(r"^\s*\[[a-z0-9_.:-]+\]\s*", re.IGNORECASE),
     re.compile(r"^\s*\([a-z0-9_.:-]+\s+provider\)\s*", re.IGNORECASE),
 ]
+
+# Match schemes case-insensitively: browsers accept uppercase HTTPS, so a
+# lowercase-only scanner could miss a second, unauthorized link.
+_HTTP_CITATION = re.compile(r"https?://[^\s)\]>]+", re.IGNORECASE)
+
+
+def _citation_url_identity(value: str) -> Optional[str]:
+    """Return exact fetched URL identity, normalizing only scheme case.
+
+    Do not collapse path slashes, query strings or fragments; those may
+    identify different evidence. Reject ambiguous parser inputs rather than
+    letting malformed tool data throw or silently change the destination.
+    """
+    if (
+        not value or len(value) > 2000
+        or any(ch.isspace() or ord(ch) < 32 or ord(ch) == 127 or ch == chr(92)
+               for ch in value)
+    ):
+        return None
+    try:
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme not in {"http", "https"} or not parsed.hostname
+            or parsed.username is not None or parsed.password is not None
+            or parsed.port == 0
+        ):
+            return None
+    except ValueError:
+        return None
+    # Preserve every byte after the scheme, including an empty query or
+    # fragment delimiter. Re-serializing the URL can discard delimiters.
+    return parsed.scheme + value[value.index(":"):]
+
 
 class ResponseValidator:
     """Validates LLM responses against generic quality and format contracts."""
@@ -39,6 +75,7 @@ class ResponseValidator:
         if not text or not text.strip():
             return ValidationResult(valid=False, reason="empty_response")
 
+        verified_citations: dict[str, None] = {}
         # Citation URLs must be backed by authorized tool evidence.
         if getattr(contract, "purpose", None) == "tool_synthesis" and getattr(contract, "requires_live_data", False):
             allowed: set[str] = set()
@@ -55,9 +92,9 @@ class ResponseValidator:
                         return
                     for key, item in value.items():
                         if key in {"url", "canonical_url", "final_url"} and isinstance(item, str):
-                            parsed = urlsplit(item)
-                            if parsed.scheme in {"http", "https"} and parsed.netloc:
-                                allowed.add(item.rstrip("/"))
+                            identity = _citation_url_identity(item)
+                            if identity is not None:
+                                allowed.add(identity)
                         else:
                             collect(item)
                 elif isinstance(value, list):
@@ -66,11 +103,20 @@ class ResponseValidator:
             collect(getattr(contract, "tool_results", []))
             if not allowed:
                 return ValidationResult(valid=False, reason="missing_authorized_source_evidence")
-            cited = re.findall(r"https?://[^\s)\]>]+", text)
+            cited = _HTTP_CITATION.findall(text)
             if not cited:
                 return ValidationResult(valid=False, reason="missing_evidence_citation")
-            if any(url.rstrip("/").rstrip(".,;") not in allowed for url in cited):
-                return ValidationResult(valid=False, reason="unverified_citation_url")
+            for url in cited:
+                # Prefer the exact URL. Only sentence punctuation may be
+                # removed, and only when the resulting URL is authorized.
+                identity = _citation_url_identity(url)
+                if identity is None or identity not in allowed:
+                    identity = _citation_url_identity(url.rstrip(".,;"))
+                if identity is None or identity not in allowed:
+                    return ValidationResult(valid=False, reason="unverified_citation_url")
+                verified_citations[identity] = None
+                if len(verified_citations) > 50:
+                    return ValidationResult(valid=False, reason="citation_limit_exceeded")
 
         # 1. Check for debug/provider prefixes
         if getattr(contract, "disallow_debug_prefixes", True):
@@ -89,7 +135,8 @@ class ResponseValidator:
             if self._looks_like_prompt_echo(text, contract):
                 return ValidationResult(valid=False, reason="prompt_echo_detected")
 
-        return ValidationResult(valid=True)
+        # No partial result escapes if any later response check fails.
+        return ValidationResult(valid=True, verified_citation_urls=tuple(verified_citations))
 
     def validate_observation(self, text: str, intent: str, evidence: dict[str, Any]) -> ValidationResult:
         """Conservative second gate for model-authored live observations.
