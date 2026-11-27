@@ -72,6 +72,7 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.core.expression.contracts import ExpressionResult, ExpressionTask
 from ai_karen_engine.core.runtime.policy.runtime_policy import (
     GENERATED_TEXT_ARTIFACT_CAPABILITY,
+    chat_tool_call_limit,
 )
 from ai_karen_engine.services.approvals import (
     ApprovalError,
@@ -3861,7 +3862,9 @@ class ChatRuntime:
         budget = ExecutionBudget(
             max_duration_ms=decision.time_budget_ms,
             max_model_calls=decision.max_model_calls,
-            max_tool_calls=len(decision.tool_requirements) + 5,
+            max_tool_calls=(decision.policy_constraints or {}).get(
+                "max_tool_calls", chat_tool_call_limit(decision.tool_requirements),
+            ),
             max_reasoning_steps=decision.max_steps,
             max_output_tokens=request.max_tokens or 4096,
         )
