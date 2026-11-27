@@ -109,3 +109,28 @@ def test_continuation_flag_does_not_convert_unrelated_request_to_search():
     assert resolve_capability_decision(
         "Tell me a joke", research_continuation=True,
     ).intent != "search.general"
+
+
+@pytest.mark.parametrize(("prompt", "intent"), [
+    ("What the time?", "time.current"),
+    ("Whats the date?", "time.current"),
+    ("Whats the weather?", "search.weather"),
+    ("Latest news?", "search.general"),
+    ("Tell me the recent news of Jamaica", "search.general"),
+    ("Show me the latest headlines of Jamaica", "search.general"),
+])
+def test_local_chat_transcript_requires_live_capabilities(prompt, intent):
+    decision = resolve_capability_decision(prompt)
+    assert decision.intent == intent
+    assert decision.requires_tool and decision.requires_live_data
+    assert not decision.allow_llm_only
+
+
+@pytest.mark.parametrize("prompt", [
+    "What the time complexity of this algorithm?",
+    "Tell me the recent news of my account",
+    "Tell me the recent news of our private project",
+    "Show me the latest headlines of this internal workspace",
+])
+def test_local_chat_variants_do_not_overreach(prompt):
+    assert resolve_capability_decision(prompt).intent == "general.chat"

@@ -223,6 +223,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             # Keep it exact so "time complexity" or "time in physics" remain
             # ordinary model conversations instead of clock lookups.
             r"^time[?!.]*$",
+            # Common elliptical clock question, not a general time-topic rule.
+            r"^what\s+the\s+time[?!.]*$",
             # Short contextual calendar requests must not become model guesses.
             r"^(?:the\s+)?date[?!.]*$",
             r"^what\s+time\s+is\s+it(?:\s+right\s+now)?(?:\s+(?:in|for)\s+.+)?[?!.]*$",
@@ -264,6 +266,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\blook\s+online\s+(?:for|at)\b",
             r"^(?:what(?:'s| is)|tell me|show me)\s+(?:the\s+)?(?:latest|current|recent|breaking)\s+(?:in|from|about|on|for)\s+[\w .'-]+\s+(?:news|headlines|updates?)[?!.]*$",
             r"^(?:what(?:'s| is)|tell me|show me)\s+(?:the\s+)?(?:latest|current|recent|breaking)\s+(?:news|headlines|updates?)\s+(?:in|from|about|on|for)\s+[\w .'-]+[?!.]*$",
+            # Public news phrased with "of"; never export private resource targets.
+            r"^(?:what(?:'s| is)|tell me|show me)\s+(?:the\s+)?(?:latest|current|recent|breaking)\s+(?:news|headlines)\s+of\s+(?!.*\b(?:my|our|your|his|her|their|its|mine|ours|yours|hers|theirs|private|internal|confidential|this)\b)[\w .'-]+[?!.]*$",
             r"^(?:what(?:'s| is)\s+)?happening\s+(?:right\s+now\s+)?(?:in|across|around)\s+[\w .'-]+[?!.]*$",
             r"^(?:any|what(?:'s| is)\s+the)\s+(?:breaking|latest|recent)\s+(?:news|headlines|updates?)\s+(?:from|in|about|on)\s+[\w .'-]+[?!.]*$",
             r"^(?:(?:please\s+)?(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|results?|score|price|release|version|information)[?!.]*$",
