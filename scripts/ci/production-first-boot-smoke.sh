@@ -132,6 +132,7 @@ api_env=(
   -e REDIS_URL="redis://:${REDIS_PASSWORD}@${REDIS_CONTAINER}:6379/0"
   -e REDIS_HOST="${REDIS_CONTAINER}"
   -e REDIS_PORT=6379
+  -e KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED=true
 )
 
 if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then
@@ -231,7 +232,8 @@ docker run -d \
   --name "${REDIS_CONTAINER}" \
   --network "${NETWORK}" \
   "${REDIS_IMAGE}" \
-  redis-server --requirepass "${REDIS_PASSWORD}" >/dev/null
+  redis-server --requirepass "${REDIS_PASSWORD}" \
+    --maxmemory-policy noeviction --appendonly yes --appendfsync always >/dev/null
 
 if ! wait_for_command "Redis" 30 docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" ping; then
   docker logs "${REDIS_CONTAINER}" >&2 || true
@@ -282,6 +284,57 @@ fi
 
 echo "[smoke] booting production API image"
 start_api
+
+echo "[smoke] proving production distributed Redis readiness and recovery"
+assert_redis_ready() {
+  local payload
+  payload="$(curl -fsS --max-time 10 "${BASE_URL}/ready")"
+  "${PYTHON_BIN}" - "${payload}" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+assert payload["ready"] is True, payload
+assert payload["status"] == "ready", payload
+assert payload["components"]["redis"] == "ready", payload
+redis = payload["checks"]["redis"]
+assert redis == {
+    "ready": True,
+    "status": "healthy",
+    "durability_status": "configuration_verified",
+}, redis
+PY
+}
+
+if ! wait_for_command "production operational readiness" 30 curl -fsS "${BASE_URL}/ready"; then
+  fail_with_api_logs
+fi
+assert_redis_ready
+# Mutate only the disposable, isolated smoke Redis. PING must still succeed.
+[[ "$(docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" --raw \
+  CONFIG SET maxmemory-policy allkeys-lru)" == "OK" ]]
+[[ "$(docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" --raw ping)" == "PONG" ]]
+blocked_redis_readiness="$(curl -sS --max-time 10 -w '\n%{http_code}' "${BASE_URL}/ready")"
+curl -fsS --max-time 10 "${BASE_URL}/health/live" >/dev/null
+[[ "$(docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" --raw \
+  CONFIG SET maxmemory-policy noeviction)" == "OK" ]]
+"${PYTHON_BIN}" - "${blocked_redis_readiness}" <<'PY'
+import json
+import sys
+
+body, code = sys.argv[1].rsplit("\n", 1)
+assert code == "503", code
+payload = json.loads(body)["detail"]
+assert payload["ready"] is False, payload
+assert payload["components"]["redis"] == "not_ready", payload
+assert payload["checks"]["redis"] == {
+    "ready": False,
+    "status": "durability_unsafe",
+    "reason": "redis_eviction_policy_unsafe",
+}, payload
+PY
+assert_redis_ready
+echo "PRODUCTION REDIS DURABILITY READINESS PROOF PASSED"
 
 echo "[smoke] rejecting known first-boot startup wiring faults"
 startup_logs="$(docker logs "${API_CONTAINER}" 2>&1 || true)"
