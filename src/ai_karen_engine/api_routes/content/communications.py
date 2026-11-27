@@ -13,13 +13,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from ai_karen_engine.auth.models import UserData
+from ai_karen_engine.auth.auth_middleware import AuthenticationError
+from ai_karen_engine.core.realtime.inbox_invalidation import InboxInvalidationUnavailable
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.core.services.dependencies import get_user_context
 from ai_karen_engine.middleware.correlation_middleware import get_request_correlation_id
+from ai_karen_engine.server.middleware import observe_bodyless_request_disconnect
 from ai_karen_engine.persistence.repositories.communications_inbox_repository import (
     InboxConflict, InboxCursor, InboxEntry, InboxFilter, InboxNotFound, InboxOperation,
 )
@@ -229,10 +232,18 @@ class InboxCursorResponse(BaseModel):
     entry_id: UUID
 
 
+class InboxCapabilitiesResponse(BaseModel):
+    can_mutate: bool
+    producer_enabled: bool
+    can_reconcile: bool
+    invalidation_wait_enabled: bool = False
+
+
 class InboxPageResponse(BaseModel):
     entries: list[InboxEntryResponse]
     next_cursor: InboxCursorResponse | None
     active_unread_count: int
+    capabilities: InboxCapabilitiesResponse
 
 
 class InboxMutationRequest(BaseModel):
@@ -274,6 +285,7 @@ def _inbox_error(exc: Exception, correlation_id: str) -> HTTPException:
 @router.get("/inbox", response_model=InboxPageResponse)
 async def list_communications_inbox(
     request: Request,
+    response: Response,
     limit: int = Query(default=50, ge=1, le=100),
     inbox_filter: InboxFilter = Query(default=InboxFilter.ACTIVE),
     cursor_at: datetime | None = Query(default=None),
@@ -290,18 +302,65 @@ async def list_communications_inbox(
             raise HTTPException(status_code=422, detail="Timezone-aware inbox cursor required")
         cursor = InboxCursor(cursor_at, str(cursor_id))
     try:
-        page = await service.list_owned(
+        owned = await service.list_owned(
             user=user, correlation_id=correlation_id, limit=limit,
             inbox_filter=inbox_filter, cursor=cursor,
         )
+        page = owned.page
+        response.headers["Cache-Control"] = "no-store"
         return InboxPageResponse(
             entries=[_inbox_entry_response(entry) for entry in page.entries],
             next_cursor=InboxCursorResponse.model_validate(asdict(page.next_cursor))
             if page.next_cursor else None,
             active_unread_count=page.active_unread_count,
+            capabilities=InboxCapabilitiesResponse.model_validate(asdict(owned.capabilities)),
         )
     except Exception as exc:
         raise _inbox_error(exc, correlation_id) from None
+
+
+class InboxInvalidationResponse(BaseModel):
+    changed: bool
+
+
+@router.get("/inbox/wait", response_model=InboxInvalidationResponse)
+async def wait_communications_inbox(
+    request: Request,
+    response: Response,
+    user: UserData = Depends(get_current_user),
+    service: CommunicationsInboxService = Depends(get_communications_inbox_service),
+) -> InboxInvalidationResponse:
+    """Bounded change hint, never a notification read or execution request."""
+    headers = {"Cache-Control": "no-store"}
+    if request.query_params:
+        raise HTTPException(status_code=422, detail="Inbox wait accepts no parameters", headers=headers)
+    correlation_id = get_request_correlation_id(request)
+
+    async def reauthenticate() -> UserData:
+        # Canonical session helper authenticates the original request again;
+        # it does not trust request.state.user or the initial dependency result.
+        return await get_current_user(request, credentials=None)
+
+    try:
+        async with observe_bodyless_request_disconnect(request) as disconnected:
+            changed = await service.wait_owned(
+                user=user, correlation_id=correlation_id,
+                reauthenticate=reauthenticate, disconnected=disconnected,
+            )
+        response.headers.update(headers)
+        return InboxInvalidationResponse(changed=changed)
+    except AuthenticationError as exc:
+        code = exc.status_code if exc.status_code in (401, 403, 429, 503) else 503
+        raise HTTPException(status_code=code, detail="Active session unavailable", headers=headers) from None
+    except HTTPException as exc:
+        code = exc.status_code if exc.status_code in (401, 403, 429, 503) else 503
+        raise HTTPException(status_code=code, detail="Active session unavailable", headers=headers) from None
+    except InboxInvalidationUnavailable:
+        raise HTTPException(status_code=503, detail="Inbox invalidation unavailable", headers=headers) from None
+    except Exception as exc:
+        error = _inbox_error(exc, correlation_id)
+        error.headers = headers
+        raise error from None
 
 
 @router.patch("/inbox/{entry_id}", response_model=InboxMutationResponse)

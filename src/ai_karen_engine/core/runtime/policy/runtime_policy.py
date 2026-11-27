@@ -8,6 +8,7 @@ LangGraph remains a workflow executor and never owns global policy.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import threading
 import time
@@ -15,10 +16,11 @@ from copy import deepcopy
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from enum import Enum
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, NotRequired, Optional, TypedDict
 from weakref import WeakValueDictionary, finalize
 
 from ai_karen_engine.core.runtime.contracts import (
+    GENERATED_TEXT_ARTIFACT_CAPABILITY,
     AuthorizedExecutionPlan,
     DegradationState,
     ExecutionBudget,
@@ -39,7 +41,6 @@ if TYPE_CHECKING:
     )
 
 logger = logging.getLogger(__name__)
-
 
 class RuntimeLevel(str, Enum):
     FULL = "FULL"
@@ -69,6 +70,19 @@ class PolicyResourceScope:
     max_file_size_mb: int = 10
     allowed_networks: List[str] = field(default_factory=lambda: ["internal"])
     forbidden_networks: List[str] = field(default_factory=list)
+
+
+class FileExplorerOperationScope(TypedDict):
+    """Exact owner-organization operation arguments, not filesystem paths."""
+
+    operation: str
+    availability_only: NotRequired[bool]
+    name: NotRequired[str]
+    folder_id: NotRequired[str]
+    parent_folder_id: NotRequired[str | None]
+    source_id: NotRequired[str]
+    destination_id: NotRequired[str | None]
+    expected_revision: NotRequired[int]
 
 
 @dataclass
@@ -121,7 +135,7 @@ class PolicyEvaluationRequest:
     tool_id: Optional[str] = None
     provider_constraints: Optional[ProviderConstraints] = None
     environment: str = "production"
-    resource_scope: Optional[PolicyResourceScope] = None
+    resource_scope: PolicyResourceScope | FileExplorerOperationScope | None = None
     execution_topology: Dict[str, Any] = field(default_factory=dict)
 
 
@@ -140,7 +154,7 @@ class PolicyDecision:
     reasoning_denial_reasons: Dict[str, List[str]] = field(default_factory=dict)
     requires_human_gate: bool = False
     runtime_constraints: Dict[str, Any] = field(default_factory=dict)
-    resource_scope: Optional[PolicyResourceScope] = None
+    resource_scope: PolicyResourceScope | FileExplorerOperationScope | None = None
     provider_constraints: Optional[ProviderConstraints] = None
     resource_constraints: Optional[ResourceConstraints] = None
     risk_level: Optional[str] = None
@@ -168,6 +182,36 @@ class PolicyDecision:
             topology = ExecutionTopology.WORKFLOW
 
         resource = self.resource_constraints
+        scope = self.resource_scope
+        plan_scope: Dict[str, Any] = {}
+        if isinstance(scope, PolicyResourceScope):
+            plan_scope = {
+                "allowed_paths": list(scope.allowed_paths),
+                "forbidden_paths": list(scope.forbidden_paths),
+                "max_file_size_mb": scope.max_file_size_mb,
+            }
+        elif isinstance(scope, dict):
+            # Explorer's exact mutation arguments are a different contract
+            # from path/network constraints. Never forward arbitrary maps
+            # into another plugin's authorization plan.
+            from ai_karen_engine.auth.rbac_middleware import (
+                FILE_EXPLORER_MUTATION_PERMISSIONS, Permission,
+            )
+
+            operation = scope.get("operation")
+            entitlement = (FILE_EXPLORER_MUTATION_PERMISSIONS.get(operation)
+                           if isinstance(operation, str) else None)
+            if self.allowed and scope:
+                if (
+                    entitlement is None
+                    or "file-explorer" not in (self.runtime_constraints.get("allowed_plugins") or [])
+                    or not {"file-explorer", Permission.DATA_READ.value,
+                            entitlement.value, operation}.issubset(self.allowed_capabilities)
+                ):
+                    raise ValueError("policy_operation_scope_invalid")
+                plan_scope = deepcopy(dict(scope))
+        elif scope is not None:
+            raise ValueError("policy_resource_scope_invalid")
         return AuthorizedExecutionPlan(
             execution_id=self.decision_id,
             policy_decision_id=self.decision_id,
@@ -196,15 +240,7 @@ class PolicyDecision:
                 else {}
             ),
             memory_scope=str(self.runtime_constraints.get("memory_scope", "session")),
-            resource_scope=(
-                {
-                    "allowed_paths": list(self.resource_scope.allowed_paths),
-                    "forbidden_paths": list(self.resource_scope.forbidden_paths),
-                    "max_file_size_mb": self.resource_scope.max_file_size_mb,
-                }
-                if self.resource_scope
-                else {}
-            ),
+            resource_scope=plan_scope,
             budget=ExecutionBudget(
                 max_duration_ms=(resource.max_wall_time_seconds * 1000 if resource else 30000),
                 max_model_calls=int(self.runtime_constraints.get("max_model_calls", 10)),
@@ -979,6 +1015,42 @@ class RuntimePolicyEnforcer:
                 and 0 <= external_requests <= external_limit
             )
 
+    async def authorize_generated_text_write(
+        self, *, context: "ChatExecutionContext",
+        plan: AuthorizedExecutionPlan, meter: Any,
+    ) -> None:
+        """Authorize the exact direct-chat execution at its write boundary.
+
+        This is an admission check, not a storage receipt or new execution
+        grant. Reuse the issuer, original plan, meter and durable session
+        witness. No copied or specialist-derived plan may authorize creation.
+        """
+        from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+        def authorized() -> bool:
+            return (
+                isinstance(meter, ExecutionBudgetMeter)
+                and context.original_runtime_model_plan(meter) is plan
+                and self.verifies_chat_model_policy(context=context, plan=plan)
+                and set(plan.allowed_capabilities) == {GENERATED_TEXT_ARTIFACT_CAPABILITY}
+                and plan.topology is ExecutionTopology.DIRECT
+                and not plan.approval_requirements
+                and not plan.allowed_tools
+                and not plan.allowed_plugins
+                and not plan.allowed_agents
+                and not plan.reasoning_modes
+            )
+
+        if not authorized():
+            raise PermissionError("generated_artifact_authority_denied")
+        remaining_ms = await meter.remaining_duration_ms()
+        if remaining_ms <= 0:
+            raise PermissionError("generated_artifact_deadline")
+        async with asyncio.timeout(remaining_ms / 1000):
+            await context.revalidate_runtime_artifact_write_session()
+        if not authorized() or not await meter.check_duration():
+            raise PermissionError("generated_artifact_authority_denied")
+
     async def _evaluate_policy_request(
         self, request: PolicyEvaluationRequest,
     ) -> PolicyDecision:
@@ -1140,6 +1212,56 @@ class RuntimePolicyEnforcer:
                     evaluated_at=evaluated_at,
                 )
 
+        # Generated artifacts are a dedicated direct-chat operation. Asking
+        # for a capability or possessing read access must not confer write
+        # authority. Actual principal/session verification at dispatch remains
+        # mandatory even after this issuer decision.
+        artifact_requested = (
+            request.action == GENERATED_TEXT_ARTIFACT_CAPABILITY
+            or GENERATED_TEXT_ARTIFACT_CAPABILITY in request.requested_capabilities
+        )
+        if artifact_requested:
+            from ai_karen_engine.auth.models import UserData
+            from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+            principal = UserData(
+                user_id=request.user_id,
+                tenant_id=request.tenant_id,
+                roles=list(request.roles),
+                permissions=list(request.permissions),
+            )
+            manager = get_rbac_manager()
+            topology = request.execution_topology
+            if (
+                request.action != GENERATED_TEXT_ARTIFACT_CAPABILITY
+                or set(request.requested_capabilities) != {GENERATED_TEXT_ARTIFACT_CAPABILITY}
+                or request.attachment_references
+                or not request.session_id
+                or not request.correlation_id
+                or request.runtime_level is not RuntimeLevel.FULL
+                or type(request.max_model_calls) is not int
+                or request.max_model_calls < 1
+                or request.requested_reasoning_modes
+                or request.tool_id or request.plugin_id or request.extension_id
+                or any(topology.get(key) for key in (
+                    "tool_requirements", "plugin_candidates", "requested_agents",
+                    "workflow_id", "agent_delegation", "requires_human_gate",
+                    "requires_resumability", "requires_parallel_execution",
+                    "graph_required",
+                ))
+                or not manager.has_permission(principal, Permission.DATA_READ)
+                or not manager.has_permission(principal, Permission.ARTIFACT_CREATE_OWN)
+            ):
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=[GENERATED_TEXT_ARTIFACT_CAPABILITY],
+                    denied_reasoning_modes=list(request.requested_reasoning_modes),
+                    evaluated_at=evaluated_at,
+                )
+
         # Freeze the exact selected sources in the issuer's authorization.
         # Client-provided reference IDs never confer read rights by themselves.
         if request.attachment_references:
@@ -1177,6 +1299,43 @@ class RuntimePolicyEnforcer:
                 )
         else:
             authorized_attachments = []
+
+        # Explorer mutations are owner-only and must not inherit broad data
+        # write/delete authority. Unknown future actions default to denial.
+        explorer_actions = {
+            capability for capability in request.requested_capabilities
+            if isinstance(capability, str) and capability.startswith("file_explorer.")
+        }
+        if explorer_actions:
+            from ai_karen_engine.auth.rbac_middleware import (
+                FILE_EXPLORER_MUTATION_PERMISSIONS, Permission,
+            )
+
+            scope = request.resource_scope
+            allowed = (
+                len(explorer_actions) == 1
+                and request.plugin_id == "file-explorer"
+                and request.action == "plugin_execution"
+                and isinstance(scope, dict)
+                and scope.get("operation") in explorer_actions
+                and Permission.DATA_READ.value in request.permissions
+                and all(
+                    action in FILE_EXPLORER_MUTATION_PERMISSIONS
+                    and FILE_EXPLORER_MUTATION_PERMISSIONS[action].value in request.permissions
+                    and FILE_EXPLORER_MUTATION_PERMISSIONS[action].value in request.requested_capabilities
+                    for action in explorer_actions
+                )
+            )
+            if not allowed:
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=sorted(explorer_actions),
+                    denied_reasoning_modes=list(request.requested_reasoning_modes),
+                    evaluated_at=evaluated_at,
+                )
 
         # Planner reads expose tenant-private commitments. Requested capability
         # alone never grants access, even for a read-only presentation.

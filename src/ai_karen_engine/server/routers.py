@@ -221,8 +221,7 @@ def configure_authentication_middleware(app: FastAPI) -> None:
     """Install the fail-closed global authenticated-request boundary."""
     auth_middleware = get_auth_middleware()
 
-    @app.middleware("http")
-    async def canonical_authentication(request: Request, call_next):
+    async def authenticate_and_dispatch(request: Request, call_next):
         path = request.url.path
 
         if auth_config.should_bypass_auth():
@@ -291,6 +290,15 @@ def configure_authentication_middleware(app: FastAPI) -> None:
             )
 
         return await call_next(request)
+
+    @app.middleware("http")
+    async def canonical_authentication(request: Request, call_next):
+        response = await authenticate_and_dispatch(request, call_next)
+        # Apply at the existing authenticated ingress boundary, not solely
+        # in the route: middleware and dependency rejection precede handlers.
+        if request.url.path.rstrip("/") == "/api/communications-center/inbox/wait":
+            response.headers["Cache-Control"] = "no-store"
+        return response
 
 
 def _include_specs(app: FastAPI, specs: Iterable[RouterSpec]) -> None:

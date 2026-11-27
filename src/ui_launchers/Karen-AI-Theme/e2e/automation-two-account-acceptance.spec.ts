@@ -1,6 +1,7 @@
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import { phases, parseParticipation, sameParticipation, type ParticipationReadback } from "./fixtures/specialist-evidence";
 import { openAutomationWorkspace } from "./fixtures/automation-workspace-navigation";
 
 /**
@@ -175,77 +176,8 @@ const crossTenantAccount = {
 };
 const crossTenantRunId = process.env.KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID;
 const personalRunsPath = "/api/agent-runtime/my-runs";
-const phases = {
-  started: "Method entered",
-  completed: "Invocation returned",
-  failed: "Invocation failed",
-  interrupted: "Invocation interrupted",
-  skipped: "Invocation skipped",
-} as const;
-type ParticipationRow = {
-  receipt_id: string;
-  step_id: string;
-  specialist_id: string;
-  phase: keyof typeof phases;
-  observed_at: string;
-};
-type ParticipationReadback = {
-  run_id: string;
-  evidence_status: "recorded" | "empty";
-  receipts: ParticipationRow[];
-  truncated: false;
-  response_source: "postgres_outcome_records";
-};
-
 function participationPath(runId: string): string {
   return personalRunsPath + "/" + encodeURIComponent(runId) + "/participation";
-}
-
-function hasExactKeys(value: unknown, keys: readonly string[]): value is Record<string, unknown> {
-  return !!value && typeof value === "object" && !Array.isArray(value)
-    && Object.keys(value).length === keys.length
-    && keys.every(key => Object.prototype.hasOwnProperty.call(value, key));
-}
-
-// Validate the raw wire payload before casting or comparing. Never include
-// unexpected fields or their values in a diagnostic.
-function parseParticipation(value: unknown, runId: string, expectedStatus: "recorded" | "empty" = "recorded"): ParticipationReadback {
-  if (!hasExactKeys(value, ["run_id", "evidence_status", "receipts", "truncated", "response_source"])
-      || value.run_id !== runId || value.response_source !== "postgres_outcome_records"
-      || value.evidence_status !== expectedStatus || value.truncated !== false
-      || !Array.isArray(value.receipts) || value.receipts.length > 100
-      || (expectedStatus === "empty" ? value.receipts.length !== 0 : value.receipts.length === 0)) {
-    throw new Error("Invalid or unexpected participation envelope");
-  }
-  const ids = new Set<string>();
-  let terminal = false;
-  for (const row of value.receipts) {
-    if (!hasExactKeys(row, ["receipt_id", "step_id", "specialist_id", "phase", "observed_at"])
-        || typeof row.receipt_id !== "string"
-        || !/^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(row.receipt_id)
-        || ids.has(row.receipt_id)
-        || typeof row.specialist_id !== "string" || !row.specialist_id.trim()
-        || typeof row.step_id !== "string" || !row.step_id.trim()
-        || typeof row.phase !== "string" || !Object.prototype.hasOwnProperty.call(phases, row.phase)
-        || typeof row.observed_at !== "string" || !Number.isFinite(Date.parse(row.observed_at))) {
-      throw new Error("Invalid or unexpected participation receipt");
-    }
-    ids.add(row.receipt_id);
-    terminal ||= row.phase !== "started";
-  }
-  if (expectedStatus === "recorded" && !terminal) throw new Error("Terminal observation fixture required");
-  return value as ParticipationReadback;
-}
-
-function sameParticipation(left: ParticipationReadback, right: ParticipationReadback): boolean {
-  return left.run_id === right.run_id && left.evidence_status === right.evidence_status
-    && left.receipts.length === right.receipts.length
-    && left.receipts.every((row, index) => {
-      const other = right.receipts[index];
-      return row.receipt_id === other.receipt_id && row.step_id === other.step_id
-        && row.specialist_id === other.specialist_id && row.phase === other.phase
-        && row.observed_at === other.observed_at;
-    });
 }
 
 // Use the same first-party bearer as the actual browser API client. Do not

@@ -169,11 +169,33 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     # Release SHA verification is centralized instead of duplicated at each
     # invocation; every release scenario still invokes the same exact check.
     assert 'async function requireReviewedRevision(page: Page, target: URL)' in consumer_source
-    assert 'if (!releaseMode) return;' in consumer_source
+    assert 'if (!releaseMode && !localSpecialistMode && !generatedDocumentAcceptance) return;' in consumer_source
+    assert 'if (localSpecialistMode || generatedDocumentAcceptance) {' in consumer_source
+    assert 'process.env.KAREN_GENERATED_DOCUMENT_APPROVED !== "true"' in consumer_source
+    assert 'process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined' in consumer_source
+    assert 'approvedUrl !== "http://127.0.0.1:8010"' in consumer_source
+    assert 'const localSpecialistMode = ordinarySpecialistAcceptance && localMode && !releaseMode &&' in consumer_source
+    assert 'approvedUrl === "http://127.0.0.1:8010"' in consumer_source
+    assert 'expect(body).toEqual({ status: "ok", revision: expectedRevision });' in consumer_source
     assert 'target.protocol !== "https:" || target.port !== ""' in consumer_source
     assert '/^[0-9a-f]{40}$/i.test(expectedRevision)' in consumer_source
     assert 'new URL("/api/deployment-revision", target)' in consumer_source
-    assert consumer_source.count("await requireReviewedRevision(page, target)") == 5
+    # Existing release/local specialist checks remain intact. The generated
+    # document trial adds owner and foreign preflights and an owner postflight.
+    document = consumer_source.split('test("KIQ-03G6 local generated document download and revocation"', 1)[1].split(
+        'test("boots, restores and loads assets without an inspector chunk failure"', 1
+    )[0]
+    assert consumer_source.count("await requireReviewedRevision(page, target)") == 8
+    assert document.count("await requireReviewedRevision(page, target)") == 2
+    assert document.count("await requireReviewedRevision(active, target)") == 1
+    assert document.index("await requireReviewedRevision(page, target)") < document.index("await signInApprovedKaren(page, owner.email!")
+    assert document.index("await requireReviewedRevision(active, target)") < document.index("await signInApprovedKaren(active, account.email!")
+    assert document.rindex("await requireReviewedRevision(page, target)") > document.index("await archiveCreatedFile()")
+    # The additional local-only check must follow all fresh authorization probes.
+    isolation = consumer_source.index("await expectFreshSpecialistIsolation(page, target, id!")
+    assert consumer_source.index("if (localSpecialistMode) {", isolation) < consumer_source.index(
+        "await requireReviewedRevision(page, target)", isolation
+    )
     assert 'if (releaseMode && localMode)' in consumer_source
     assert '["localhost", "127.0.0.1"].includes(target.hostname)' in consumer_source
     assert "async ({ page, request })" not in consumer_source
@@ -445,10 +467,12 @@ def test_protected_specialist_readback_reuses_exact_revision_gate_and_private_cr
         assert job.count(name) == step.count(name)
     assert 'bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" vercel' in step
     shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text(encoding="utf-8")
-    assert "--grep='ARM-05C.5B real participation receipts survive reload and deny a second account'" in shell
+    assert "title='ARM-05C.5B real participation receipts survive reload and deny a second account'" in shell
+    assert '--grep="$title"' in shell
     assert "--retries=0" in shell and "--workers=1" in shell
-    assert 'stats.get("expected") != 1' in shell
-    assert '"unexpected", "skipped", "flaky"' in shell
+    assert 'type(stats.get(key)) is not int or stats[key] != expected' in shell
+    for stat, expected in (("expected", 1), ("unexpected", 0), ("skipped", 0), ("flaky", 0)):
+        assert f'("{stat}", {expected})' in shell
     assert '"expected", "passed", "chromium", ["passed"]' in shell
     assert "umask 077" in shell and "mktemp -d" in shell
     assert "trap 'rm -rf --" in shell
@@ -486,10 +510,10 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
 
     path = tmp_path / "report.json"
 
-    def validate(payload: str) -> int:
+    def validate(payload: str, mode: str = "readback") -> int:
         path.write_text(payload, encoding="utf-8")
         return subprocess.run(
-            [sys.executable, "-c", validator, str(path)],
+            [sys.executable, "-c", validator, str(path), mode],
             capture_output=True,
             check=False,
         ).returncode
@@ -503,6 +527,9 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
         report(results=[]),
         {**report(), "errors": [{"message": "test-only"}]},
         {**report(), "stats": {"expected": 1}},
+        {**report(), "stats": {"expected": True, "unexpected": 0, "skipped": 0, "flaky": 0}},
+        {**report(), "stats": {"expected": 1, "unexpected": False, "skipped": 0, "flaky": 0}},
+        {**report(), "stats": {"expected": 1.0, "unexpected": 0, "skipped": 0, "flaky": 0}},
         {**report(), "stats": {"expected": 0, "unexpected": 0, "skipped": 1, "flaky": 0}},
         {**report(), "suites": []},
     ]
@@ -515,6 +542,17 @@ def test_specialist_private_report_gate_rejects_false_green(tmp_path: Path) -> N
     for payload in invalid:
         assert validate(json.dumps(payload)) != 0
     assert validate("{malformed") != 0
+    ordinary = report()
+    ordinary["suites"][0]["suites"][0]["specs"][0]["title"] = "ARM-08 fresh ordinary-chat specialist execution survives reload"
+    assert validate(json.dumps(ordinary), "ordinary-chat") == 0
+    assert validate(json.dumps(ordinary)) != 0
+    assert validate(json.dumps(report()), "ordinary-chat") != 0
+    assert validate(json.dumps(ordinary), "unknown") != 0
+    assert validate(json.dumps(ordinary), "local-ordinary-chat") != 0
+    local = report()
+    local["suites"][0]["suites"][0]["specs"][0]["title"] = "ARM-08 local ordinary-chat specialist execution survives reload"
+    assert validate(json.dumps(local), "local-ordinary-chat") == 0
+    assert validate(json.dumps(local), "ordinary-chat") != 0
 
 
 def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path: Path) -> None:
@@ -580,3 +618,122 @@ def test_specialist_runner_rejects_partial_modes_before_browser_launch(tmp_path:
     assert result.returncode != 0
     assert "private diagnostics suppressed" in result.stdout
     assert not list(tmp_path.glob("specialist-acceptance.*"))
+
+def test_ordinary_specialist_runner_rejects_unapproved_modes_before_browser(tmp_path: Path) -> None:
+    script = ROOT / "scripts/ci/run_specialist_browser_acceptance.sh"
+    marker = tmp_path / "browser-launched"
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    npx = bin_dir / "npx"
+    npx.write_text('#!/bin/sh\n: > "$TEST_LAUNCH_MARKER"\nexit 99\n', encoding="utf-8")
+    npx.chmod(0o700)
+    required = (
+        "KAREN_UX_EMAIL", "KAREN_UX_PASSWORD",
+        "KAREN_UX_ACCOUNT_B_EMAIL", "KAREN_UX_ACCOUNT_B_PASSWORD",
+        "KAREN_UX_ACCOUNT_C_EMAIL", "KAREN_UX_ACCOUNT_C_PASSWORD",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID", "KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT",
+        "KAREN_SPECIALIST_EXPECTED_PROVIDER", "KAREN_SPECIALIST_EXPECTED_MODEL",
+        "KAREN_SPECIALIST_EXPECTED_ENGINE", "KAREN_SPECIALIST_EXPECTED_AGENT",
+        "KAREN_SPECIALIST_EXPECTED_TOOL",
+    )
+    env = {
+        "PATH": str(bin_dir) + os.pathsep + os.defpath,
+        "RUNNER_TEMP": str(tmp_path),
+        "TEST_LAUNCH_MARKER": str(marker),
+        "KAREN_CHAT_BOOT_REVISION": "a" * 40,
+        "KAREN_CHAT_BOOT_ACCEPTANCE": "1",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE": "true",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED": "true",
+        **dict.fromkeys(required, "synthetic-test-only"),
+    }
+
+    def run(platform: str, overrides: dict[str, str | None], *, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+        current = env.copy()
+        for key, value in overrides.items():
+            if value is None:
+                current.pop(key, None)
+            else:
+                current[key] = value
+        return subprocess.run(
+            ["bash", str(script), platform, "ordinary-chat"],
+            env=current, capture_output=True, text=True, check=False, cwd=cwd,
+        )
+
+    for name in (*required, "KAREN_CHAT_BOOT_REVISION", "KAREN_CHAT_BOOT_ACCEPTANCE",
+                 "KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE", "KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED"):
+        result = run("docker", {name: None})
+        assert result.returncode != 0
+        assert not marker.exists()
+        assert "synthetic-test-only" not in result.stdout + result.stderr
+    for platform, overrides in (
+        ("vercel", {"VERCEL_AUTOMATION_BYPASS_SECRET": "synthetic-test-only"}),
+        ("docker", {"KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED": "false"}),
+        ("docker", {"KAREN_CHAT_BOOT_REVISION": "bad"}),
+        ("docker", {"VERCEL_AUTOMATION_BYPASS_SECRET": ""}),
+    ):
+        assert run(platform, overrides).returncode != 0
+        assert not marker.exists()
+
+    # Real git admission with a disposable clean checkout and inert browser.
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    subprocess.run(["git", "init", "-q", str(checkout)], check=True)
+    subprocess.run(["git", "-C", str(checkout), "-c", "user.name=Acceptance",
+                    "-c", "user.email=acceptance@example.invalid", "commit",
+                    "--allow-empty", "-qm", "test-only revision"], check=True)
+    revision = subprocess.check_output(["git", "-C", str(checkout), "rev-parse", "HEAD"], text=True).strip()
+    local = {
+        "KAREN_CHAT_BOOT_ACCEPTANCE": None,
+        "KAREN_LOCAL_CHAT_ACCEPTANCE": "1",
+        "KAREN_SANITIZED_ACCOUNT": "true",
+        "KAREN_BASE_URL": "http://127.0.0.1:8010",
+        "KAREN_CHAT_BOOT_REVISION": revision,
+    }
+    for changes in (
+        {"KAREN_LOCAL_CHAT_ACCEPTANCE": None},
+        {"KAREN_CHAT_BOOT_ACCEPTANCE": "1"},
+        {"KAREN_SANITIZED_ACCOUNT": "false"},
+        {"KAREN_BASE_URL": "https://example.invalid"},
+        {"KAREN_BASE_URL": "http://localhost:8010"},
+        {"KAREN_BASE_URL": "http://127.0.0.1:8010/path"},
+        {"KAREN_E2E_AUTH_STATE": "/test-only.json"},
+        {"KAREN_CHAT_BOOT_REVISION": "b" * 40},
+        {"VERCEL_AUTOMATION_BYPASS_SECRET": ""},
+    ):
+        assert run("local", {**local, **changes}, cwd=checkout).returncode != 0
+        assert not marker.exists()
+    (checkout / "untracked").write_text("test-only", encoding="utf-8")
+    assert run("local", local, cwd=checkout).returncode != 0
+    assert not marker.exists()
+    (checkout / "untracked").unlink()
+    result = run("local", local, cwd=checkout)
+    assert marker.exists()
+    assert result.returncode != 0
+    assert "private diagnostics suppressed" in result.stdout
+    assert not list(tmp_path.glob("specialist-acceptance.*"))
+    marker.unlink()
+
+    result = run("docker", {})
+    assert marker.exists()
+    assert result.returncode != 0
+    assert "private diagnostics suppressed" in result.stdout
+    assert not list(tmp_path.glob("specialist-acceptance.*"))
+
+
+def test_ordinary_specialist_has_distinct_report_identity() -> None:
+    """A greeting-mode pass cannot certify a specialist trial."""
+    title = "ARM-08 fresh ordinary-chat specialist execution survives reload"
+    source = (ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/copilotkit-consumer-boot.spec.ts").read_text(encoding="utf-8")
+    shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text(encoding="utf-8")
+    assert f'"{title}";' in source
+    assert "test(approvedSpecialist ? specialistTitle :" in source
+    local_title = "ARM-08 local ordinary-chat specialist execution survives reload"
+    assert f'"{local_title}"' in source
+    assert f"title='{local_title}'" in shell
+    assert 'report_mode=local-ordinary-chat' in shell
+    assert f"title='{title}'" in shell
+    assert 'title=\'persists a real user message and a real assistant reply\'' not in shell
+    assert "await expectFreshSpecialistIsolation(page, target, id!" in source
+    assert "Authorization probes must not start inference" in source
+    assert "Foreign principal must not read the actual fresh run or conversation" in source

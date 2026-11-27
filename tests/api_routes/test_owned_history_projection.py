@@ -183,6 +183,118 @@ def test_first_prompt_surface_from_runtime_structured_metadata_restores_without_
     assert "structured_content" not in str(result)
 
 
+
+def generated_document_metadata():
+    reference = {
+        "artifact_id": "55555555-5555-4555-8555-555555555555",
+        "filename": "generated.txt",
+        "mime_type": "text/plain",
+        "size_bytes": 1,
+        "sha256": "a" * 64,
+    }
+    surface = {
+        "schema_version": 1,
+        "presentation_id": "generated-text:" + reference["artifact_id"],
+        "component_type": "document.artifact",
+        "evidence_ref": reference["artifact_id"],
+        "correlation_id": REQUEST_ID,
+        "data": dict(reference),
+    }
+    return {
+        **receipt(),
+        "artifacts": [dict(reference)],
+        "structured_content": {"presentation": {**surface, "data": dict(reference)}},
+        "verified_presentations_v1": [surface],
+    }
+
+
+def test_generated_document_creation_receipt_replays_without_artifact_bytes():
+    meta = generated_document_metadata()
+    transcript = saved([
+        Message(id="generate-document", conversation_id=THREAD, tenant_id=TENANT,
+                role="user", content="Create a text file", metadata={}),
+        assistant(meta),
+    ])
+    result = project_attested(transcript)
+    assert result["messages"][-1]["content"] == "Verified original answer"
+    assert [event["name"] for event in result["replayEvents"]] == [
+        "karen.presentation.v1", "karen.execution_receipt.v1",
+    ]
+    assert result["replayEvents"][0]["messageId"] == ASSISTANT_ID
+    assert result["replayEvents"][0]["value"] == meta["verified_presentations_v1"][0]
+    assert "artifacts" not in result["messages"][-1]
+    assert "structured_content" not in str(result)
+    assert "verified_presentations_v1" not in str(result)
+
+
+@pytest.mark.parametrize("change", [
+    "missing_capture", "missing_structured", "multiple_artifacts", "multiple_captures",
+    "foreign_identity", "wrong_hash", "wrong_mime", "inline_bytes", "storage_key",
+    "bool_size", "float_size", "structured_bool_size", "structured_extra",
+    "other_component", "mixed_unsupported", "forged_access",
+])
+def test_generated_document_receipt_rejects_unmatched_or_unsafe_metadata(change):
+    meta = generated_document_metadata()
+    ref = meta["artifacts"][0]
+    if change == "missing_capture":
+        meta.pop("verified_presentations_v1")
+    elif change == "missing_structured":
+        meta.pop("structured_content")
+    elif change == "multiple_artifacts":
+        meta["artifacts"].append(dict(ref))
+    elif change == "multiple_captures":
+        meta["verified_presentations_v1"].append(presentation())
+    elif change == "foreign_identity":
+        ref["artifact_id"] = THREAD
+    elif change == "wrong_hash":
+        ref["sha256"] = "b" * 64
+    elif change == "wrong_mime":
+        ref["mime_type"] = "text/html"
+    elif change == "inline_bytes":
+        ref["text"] = "private bytes"
+    elif change == "storage_key":
+        ref["storage_key"] = "private/location"
+    elif change == "bool_size":
+        ref["size_bytes"] = True
+    elif change == "float_size":
+        ref["size_bytes"] = 1.0
+    elif change == "structured_bool_size":
+        meta["structured_content"]["presentation"]["data"]["size_bytes"] = True
+    elif change == "structured_extra":
+        meta["structured_content"]["download_url"] = "https://untrusted.invalid"
+    elif change == "other_component":
+        meta["verified_presentations_v1"] = [presentation()]
+        meta["structured_content"] = {"presentation": presentation()}
+    elif change == "mixed_unsupported":
+        meta["tool_calls"] = [{"name": "unapproved"}]
+    elif change == "forged_access":
+        ref["access_granted"] = True
+    with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
+        project_attested(saved([assistant(meta)]))
+
+
+def test_document_creation_receipt_cannot_bypass_exact_run_attestation():
+    message = assistant(generated_document_metadata())
+    transcript = saved([message])
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(transcript, attestations={})
+    proof = attested(transcript)
+    message.content = "Changed answer after commit"
+    with pytest.raises(UnreplayableHistory, match="modified_attested_message"):
+        project_owned_history(transcript, attestations=proof)
+
+
+def test_document_receipt_text_continuation_never_replays_creation_metadata():
+    transcript = saved([assistant(generated_document_metadata())])
+    result = project_owned_history(
+        transcript, attestations=attested(transcript), text_continuation=True,
+    )
+    assert result["replayEvents"] == []
+    assert result["omitted_rich_message_count"] == 1
+    assert "generated.txt" not in str(result)
+    assert "55555555-5555-4555-8555-555555555555" not in str(result)
+
+
 def test_first_prompt_search_result_replays_only_attested_source_cards():
     surface = {
         "schema_version": 1,
@@ -276,6 +388,83 @@ def test_search_sources_cannot_authorize_new_or_malformed_replay(mutation):
     snapshot = saved([assistant(meta)])
     with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
         project_owned_history(snapshot, attestations=attested(snapshot))
+
+
+
+def composed_source_metadata():
+    search = _search_surface()
+    weather = {
+        "schema_version": 1,
+        "presentation_id": "weather-verified",
+        "component_type": "weather.observation",
+        "evidence_ref": REQUEST_ID + ":weather",
+        "data": {"location": "Detroit", "temperature": "61°F",
+                 "conditions": "light rain"},
+    }
+    surface = {
+        "schema_version": 1,
+        "presentation_id": "surface-" + REQUEST_ID,
+        "component_type": "surface.composition",
+        "evidence_ref": "bundle:" + REQUEST_ID,
+        "data": {
+            "layout": "grid", "items": [search, weather],
+            "evidence_refs": [search["evidence_ref"], weather["evidence_ref"]],
+        },
+    }
+    return {
+        **receipt(),
+        "structured_content": {"presentation": surface},
+        "verified_presentations_v1": [surface],
+        "sources": [_search_source(), {"url": "https://open-meteo.com/data"}],
+        "citations": [{"url": "https://example.org/report", "id": "private-citation-id"}],
+    }
+
+
+def test_attested_source_composition_restores_original_layout_without_raw_citations():
+    meta = composed_source_metadata()
+    snapshot = saved([assistant(meta)])
+    result = project_attested(snapshot)
+    assert result["replayEvents"][0]["name"] == "karen.presentation.v1"
+    assert result["replayEvents"][0]["messageId"] == ASSISTANT_ID
+    assert result["replayEvents"][0]["value"] == meta["verified_presentations_v1"][0]
+    assert "CANONICAL-PRIVATE-CONTENT" not in str(result)
+    assert "private-citation-id" not in str(result)
+    assert "https://open-meteo.com/data" not in str(result)
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_source", "forged_snippet", "foreign_child", "wrong_bundle",
+    "duplicate_id", "unsupported_child", "missing_manifest", "empty_request",
+])
+def test_source_composition_cannot_expand_saved_evidence(mutation):
+    meta = composed_source_metadata()
+    surface = meta["verified_presentations_v1"][0]
+    items = surface["data"]["items"]
+    if mutation == "missing_source":
+        meta["sources"] = meta["sources"][1:]
+    elif mutation == "forged_snippet":
+        items[0]["data"]["results"][0]["snippet"] = "invented"
+    elif mutation == "foreign_child":
+        items[1]["evidence_ref"] = "foreign:weather"
+        surface["data"]["evidence_refs"][1] = "foreign:weather"
+    elif mutation == "wrong_bundle":
+        surface["evidence_ref"] = "bundle:foreign"
+    elif mutation == "duplicate_id":
+        items[1]["presentation_id"] = items[0]["presentation_id"]
+    elif mutation == "unsupported_child":
+        items[1] = {**presentation(), "evidence_ref": items[1]["evidence_ref"]}
+    elif mutation == "missing_manifest":
+        surface["data"].pop("evidence_refs")
+    elif mutation == "empty_request":
+        meta["request_id"] = ""
+    with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
+        project_attested(saved([assistant(meta)]))
+
+
+def test_source_composition_requires_completed_run_attestation():
+    snapshot = saved([assistant(composed_source_metadata())])
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(snapshot, attestations={})
 
 
 def test_unattested_source_rich_search_remains_closed():

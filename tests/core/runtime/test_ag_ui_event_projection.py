@@ -894,3 +894,24 @@ def test_persona_execution_receipt_rejects_unbounded_or_untyped_identity(
     assert "persona_id" not in receipt
     assert "persona_selection_revision" not in receipt
     assert "never-expose" not in str(events)
+
+
+@pytest.mark.parametrize("request_id", ["actual-request_1", None, "", "x" * 129, "bad/request", "bad\nrequest", 123])
+def test_execution_receipt_runtime_identity_comes_only_from_typed_envelope(request_id):
+    projector = AGUIEventProjection(thread_id="thread", run_id="transport-only")
+    projector.begin()
+    event = chunk(
+        "complete", actual_provider="local", actual_model="model",
+        response_source="local_inference", runtime_request_id="untrusted",
+        request_id="untrusted-metadata", transcript_persistence_status="persisted",
+    )
+    event.request_id = request_id
+    events = projector.project(event)
+    receipt = events[0]["value"]
+    assert events[0]["name"] == "karen.execution_receipt.v1"
+    if request_id == "actual-request_1":
+        assert receipt["runtime_request_id"] == request_id
+    else:
+        assert "runtime_request_id" not in receipt
+    assert "untrusted" not in str(receipt)
+    assert "transport-only" not in str(receipt)

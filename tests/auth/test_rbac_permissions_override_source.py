@@ -48,3 +48,17 @@ def test_invalid_override_fails_without_fallback(tmp_path, monkeypatch):
             rbac._load_permissions_config()
     finally:
         rbac._load_permissions_config.cache_clear()
+
+
+def test_owner_explorer_permissions_are_narrow_and_configurable():
+    from ai_karen_engine.auth.models import UserData
+
+    manager = rbac.get_rbac_manager()
+    user = UserData(user_id="owner", tenant_id="tenant", roles=["user"])
+    readonly = UserData(user_id="reader", tenant_id="tenant", roles=["readonly"])
+    assert manager.has_permission(user, rbac.Permission.FILE_EXPLORER_ORGANIZE)
+    assert manager.has_permission(user, rbac.Permission.FILE_EXPLORER_DELETE_EMPTY)
+    assert not manager.has_permission(user, rbac.Permission.DATA_WRITE)
+    assert not manager.has_permission(user, rbac.Permission.DATA_DELETE)
+    assert not manager.has_permission(readonly, rbac.Permission.FILE_EXPLORER_ORGANIZE)
+    assert not manager.has_permission(readonly, rbac.Permission.FILE_EXPLORER_DELETE_EMPTY)

@@ -205,14 +205,21 @@ class MedusaCoordinator:
                 raise OutcomeStoreError(
                     "Medusa response identity could not be confirmed"
                 )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
+            resolved_cancel: ExecutionRunStatus | None = None
             try:
-                await self.run_manager.mark_cancelled(request.request_id)
+                resolved_cancel = await self.run_manager.mark_cancelled(
+                    request.request_id
+                )
             except Exception:
                 logger.error(
                     "medusa_run_cancellation_transition_failed",
                     extra={"run_id": request.request_id},
                 )
+            if resolved_cancel is ExecutionRunStatus.ORPHANED:
+                raise OutcomeStoreError(
+                    "Medusa worker ownership could not be confirmed"
+                ) from exc
             logger.info(
                 "medusa_run_cancelled",
                 extra={
@@ -240,8 +247,11 @@ class MedusaCoordinator:
             )
             raise
         except Exception as exc:
+            resolved_failure: ExecutionRunStatus | None = None
             try:
-                await self.run_manager.mark_failed(request.request_id, exc)
+                resolved_failure = await self.run_manager.mark_failed(
+                    request.request_id, exc
+                )
             except Exception:
                 if not isinstance(exc, OutcomeStoreError):
                     raise
@@ -251,6 +261,12 @@ class MedusaCoordinator:
                     "medusa_run_failure_transition_failed",
                     extra={"run_id": request.request_id},
                 )
+            if resolved_failure is ExecutionRunStatus.CANCELLED:
+                raise asyncio.CancelledError from exc
+            if resolved_failure is ExecutionRunStatus.ORPHANED:
+                raise OutcomeStoreError(
+                    "Medusa worker ownership could not be confirmed"
+                ) from exc
             logger.error(
                 "medusa_run_failed",
                 extra={

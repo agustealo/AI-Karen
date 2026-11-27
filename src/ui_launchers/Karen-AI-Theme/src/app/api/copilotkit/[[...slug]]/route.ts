@@ -26,6 +26,8 @@ const STOP_ROUTE =
   /^\/api\/copilotkit\/agent\/default\/stop\/([0-9a-f-]{36})$/i;
 const RUN_STATUS_ROUTE =
   /^\/api\/copilotkit\/agent\/default\/runs\/([0-9a-f-]{36})\/([A-Za-z0-9_-]{1,100})\/status$/i;
+const SUBMISSION_STATUS_ROUTE =
+  /^\/api\/copilotkit\/agent\/default\/submissions\/([0-9a-f-]{36})\/([A-Za-z0-9_-]{1,100})\/status$/i;
 // Must equal the FastAPI AG_UI_MAX_REQUEST_BYTES ingress contract.
 // Reject an oversized SDK envelope locally, before forwarding any credentials.
 const MAX_RUN_BYTES = 262144;
@@ -36,7 +38,7 @@ function validateCopilotRoute(request: NextRequest): NextResponse | null {
   if (request.method === "GET" && path === "/api/copilotkit/info") return null;
   if (request.method === "GET" && ownedThreadHistoryId(request)) return null;
   if (request.method === "GET" && ownedRunEventTarget(request)) return null;
-  const statusMatch = RUN_STATUS_ROUTE.exec(path);
+  const statusMatch = RUN_STATUS_ROUTE.exec(path) ?? SUBMISSION_STATUS_ROUTE.exec(path);
   if (request.method === "GET" && statusMatch &&
       CONVERSATION_UUID.test(statusMatch[1])) return null;
   // Exact-run stop is handled by Karen's runtime rather than SDK in-memory
@@ -107,7 +109,9 @@ async function readKarenAgUiCapabilities(
   request: NextRequest,
   backendBaseUrl: string,
   headers: Record<string, string>,
-): Promise<{ governedHistory: boolean; observedEvents: boolean } | NextResponse> {
+): Promise<{
+  governedHistory: boolean; observedEvents: boolean; attachmentDraftSubmission?: boolean;
+} | NextResponse> {
   let response: Response;
   try {
     response = await fetch(`${backendBaseUrl}/api/chat/ag-ui/capabilities`, {
@@ -140,7 +144,15 @@ async function readKarenAgUiCapabilities(
     if (observed !== undefined && typeof observed !== "boolean") {
       return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
     }
-    return { governedHistory: governed === true, observedEvents: observed === true };
+    const attached = (flags as Record<string, unknown>).attachment_draft_submission;
+    if (attached !== undefined && (typeof attached !== "boolean" ||
+        (attached === true && governed !== true))) {
+      return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
+    }
+    return {
+      governedHistory: governed === true, observedEvents: observed === true,
+      ...(typeof attached === "boolean" ? { attachmentDraftSubmission: attached } : {}),
+    };
   } catch {
     return NextResponse.json({ detail: "Invalid Karen transport capability response" }, { status: 503 });
   }
@@ -210,14 +222,17 @@ async function handle(request: NextRequest): Promise<Response> {
   const capabilities = await readKarenAgUiCapabilities(request, backendBaseUrl, auth.headers);
   if (capabilities instanceof NextResponse) return capabilities;
 
+  const submissionTarget = request.method === "GET"
+    ? SUBMISSION_STATUS_ROUTE.exec(request.nextUrl.pathname) : null;
   const statusTarget = request.method === "GET"
-    ? RUN_STATUS_ROUTE.exec(request.nextUrl.pathname) : null;
+    ? RUN_STATUS_ROUTE.exec(request.nextUrl.pathname) ?? submissionTarget : null;
   if (statusTarget && CONVERSATION_UUID.test(statusTarget[1])) {
     if (!capabilities.governedHistory) {
       return NextResponse.json({ detail: "Durable run status is unavailable" }, { status: 404 });
     }
     return readKarenOwnedRunStatus(
       request, backendBaseUrl, auth.headers, statusTarget[1], statusTarget[2],
+      submissionTarget ? "submissions" : "runs",
     );
   }
 
@@ -243,6 +258,7 @@ async function handle(request: NextRequest): Promise<Response> {
     return readKarenOwnedThreadMessages(
       request, backendBaseUrl, auth.headers, auth.principal, requestedHistoryId,
       capabilities.governedHistory, false, 0, continuationRequested,
+      capabilities.attachmentDraftSubmission,
     );
   }
   const scopedStop = request.method === "POST"

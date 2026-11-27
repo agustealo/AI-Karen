@@ -49,7 +49,8 @@ class FakeSession:
             if self.record["state"] != params["expected_state"]:
                 return Result()
             self.record["state"] = params["next_state"]
-            self.record["artifact_id"] = params["artifact_id"]
+            if "artifact_id" in params:
+                self.record["artifact_id"] = params["artifact_id"]
         return Result(self.record)
 
     async def commit(self):
@@ -71,6 +72,10 @@ def record():
         "expected_bytes": 42,
         "received_bytes": 0,
         "artifact_id": None,
+        "expected_sha256": None,
+        "lease_owner": None,
+        "lease_expires_at": None,
+        "storage_key": None,
     }
 
 
@@ -116,8 +121,12 @@ async def test_transition_is_compare_and_swap_and_owner_scoped():
     )
     assert changed is not None and changed.state == "receiving"
     assert db.committed
-    assert "owner_user_id = :owner_user_id" in db.statements[0][0]
-    assert "expires_at > now()" in db.statements[0][0]
+    lock_sql, update_sql = (statement for statement, _ in db.statements)
+    assert "FOR UPDATE" in lock_sql
+    assert "owner_user_id = :owner_user_id" in lock_sql
+    assert "tenant_id = :tenant_id" in lock_sql
+    assert "owner_user_id = :owner_user_id" in update_sql
+    assert "expires_at > clock_timestamp()" in update_sql
 
 
 @pytest.mark.asyncio
@@ -136,29 +145,22 @@ async def test_illegal_or_unproven_commit_is_denied():
 
 
 @pytest.mark.asyncio
-async def test_committed_transition_requires_active_owner_matched_artifact():
+async def test_generic_commit_cannot_bypass_verified_readback():
     db = FakeSession({**record(), "state": "committing"})
     repo = UploadSessionRepository(lambda: db)
-    artifact_id = str(uuid4())
-    await repo.transition(
-        tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
-        expected_state="committing", next_state="committed",
-        artifact_id=artifact_id,
-    )
-    statement = db.statements[0][0]
-    assert "received_bytes = expected_bytes" in statement
-    assert "FROM public.files AS artifact" in statement
-    assert "artifact.tenant_id = :tenant_id" in statement
-    assert "artifact.owner_user_id = :owner_user_id" in statement
-    assert "artifact.deleted_at IS NULL" in statement
-    assert "artifact.bytes = expected_bytes" in statement
-    assert "artifact.sha256 = expected_sha256" in statement
+    with pytest.raises(ValueError, match="Illegal upload state"):
+        await repo.transition(
+            tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+            expected_state="committing", next_state="committed",
+            artifact_id=SESSION, lease_token=SESSION,
+        )
+    assert db.statements == []
 
 
 @pytest.mark.asyncio
 async def test_cannot_bind_artifact_before_verified_commit():
     repo = UploadSessionRepository(lambda: FakeSession(record()))
-    with pytest.raises(ValueError, match="only at commit"):
+    with pytest.raises(ValueError, match="only through verified readback"):
         await repo.transition(
             tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
             expected_state="created", next_state="receiving",
@@ -191,3 +193,95 @@ async def test_create_or_get_requires_unexpired_existing_session():
     select_sql = db.statements[1][0]
     assert "expires_at > now()" in select_sql
     assert "FOR UPDATE" in select_sql
+
+
+
+@pytest.mark.asyncio
+async def test_creation_pins_content_digest_to_idempotency_manifest():
+    db = FakeSession({**record(), "expected_sha256": DIGEST})
+    repo = UploadSessionRepository(lambda: db)
+    params = dict(
+        tenant_id=TENANT, owner_user_id=OWNER,
+        destination_id="explorer", recipe="store_only",
+        idempotency_key_hash=KEY, manifest_sha256=DIGEST,
+        expected_bytes=42, expires_at=datetime.utcnow() + timedelta(hours=1),
+    )
+    result = await repo.create_or_get(**params, expected_sha256=DIGEST)
+    assert result.expected_sha256 == DIGEST
+    assert db.statements[0][1]["expected_sha256"] == DIGEST
+    for changed in (None, "c" * 64):
+        with pytest.raises(UploadSessionConflict):
+            await repo.create_or_get(**params, expected_sha256=changed)
+    with pytest.raises(ValueError, match="content SHA-256"):
+        await repo.create_or_get(**params, expected_sha256="not-a-digest")
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("expected_state,next_state", [
+    ("receiving", "staged"), ("staged", "committing"),
+    ("reconcile_required", "committing"), ("reconcile_required", "committed"),
+])
+async def test_generic_transition_cannot_bypass_staging_claim_or_recovery(
+    expected_state, next_state,
+):
+    db = FakeSession(record())
+    repo = UploadSessionRepository(lambda: db)
+    with pytest.raises(ValueError, match="Illegal upload state"):
+        await repo.transition(
+            tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+            expected_state=expected_state, next_state=next_state,
+        )
+    assert db.statements == []
+
+
+@pytest.mark.asyncio
+async def test_commit_requires_lease_before_database_access():
+    db = FakeSession(record())
+    repo = UploadSessionRepository(lambda: db)
+    with pytest.raises(ValueError, match="Active commit lease"):
+        await repo.transition(
+            tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+            expected_state="committing", next_state="reconcile_required",
+        )
+    assert db.statements == []
+
+
+
+@pytest.mark.asyncio
+async def test_commit_rejects_unreserved_artifact_before_database_access():
+    db = FakeSession(record())
+    repo = UploadSessionRepository(lambda: db)
+    with pytest.raises(ValueError, match="Illegal upload state"):
+        await repo.transition(
+            tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+            expected_state="committing", next_state="committed",
+            artifact_id=str(uuid4()), lease_token=SESSION,
+        )
+    assert db.statements == []
+
+
+@pytest.mark.asyncio
+async def test_readback_failure_never_rewrites_uncertain_session():
+    from unittest.mock import AsyncMock
+
+    db = FakeSession({
+        **record(), "state": "reconcile_required",
+        "expected_sha256": DIGEST, "received_bytes": 42,
+        "storage_key": f"{TENANT}/{SESSION}/content",
+    })
+    repo = UploadSessionRepository(lambda: db)
+    store = SimpleNamespace(
+        read_owner_active_text_bounded=AsyncMock(return_value=SimpleNamespace(
+            success=False, data=None,
+        )),
+    )
+    assert await repo.reconcile_verified_text(
+        tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION,
+        artifact_store=store,
+    ) is None
+    store.read_owner_active_text_bounded.assert_awaited_once_with(
+        SESSION, TENANT, OWNER, max_bytes=42,
+    )
+    assert len(db.statements) == 1
+    assert not db.committed

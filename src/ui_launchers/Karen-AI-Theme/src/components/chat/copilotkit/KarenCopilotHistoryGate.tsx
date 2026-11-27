@@ -22,6 +22,7 @@ type KarenOwnedThreadResponse = {
   messages: KarenOwnedHistoryMessage[];
   replayEvents?: unknown;
   recovery_run?: unknown;
+  attachment_draft_submission?: unknown;
   text_only?: unknown;
   continuation_authorized?: unknown;
   omitted_rich_message_count?: unknown;
@@ -149,6 +150,7 @@ type ScopedAgentRegistration = ReturnType<typeof useAgent> & {
   refreshVerifiedHistory: () => Promise<boolean>;
   recoveryRun: RecoveryRun | null;
   revisionBoundSubmission: boolean;
+  attachmentDraftSubmission: boolean;
 };
 const ScopedAgentContext = createContext<ScopedAgentRegistration | null>(null);
 
@@ -253,6 +255,7 @@ export function KarenCopilotHistoryGate({
   const [loaded, setLoaded] = useState<string | null>(null);
   const [recoveryRun, setRecoveryRun] = useState<RecoveryRun | null>(null);
   const [revisionBoundSubmission, setRevisionBoundSubmission] = useState(false);
+  const [attachmentDraftSubmission, setAttachmentDraftSubmission] = useState(false);
   const [checkingRecovery, setCheckingRecovery] = useState(false);
   const recoveryCheckInFlight = useRef(false);
   const [error, setError] = useState<string | null>(null);
@@ -289,6 +292,7 @@ export function KarenCopilotHistoryGate({
     setLoaded(null);
     setRecoveryRun(null);
     setRevisionBoundSubmission(false);
+    setAttachmentDraftSubmission(false);
     setCheckingRecovery(false);
     recoveryCheckInFlight.current = false;
     setError(null);
@@ -349,7 +353,9 @@ export function KarenCopilotHistoryGate({
             // The governed proxy requires the recovery_run field. The
             // legacy projection never supplies it. Both governed contracts
             // ship together; admission independently enforces the revision.
-            setRevisionBoundSubmission(Object.hasOwn(snapshot, "recovery_run"));
+            const governedSubmission = Object.hasOwn(snapshot, "recovery_run");
+            setRevisionBoundSubmission(governedSubmission);
+            setAttachmentDraftSubmission(governedSubmission && snapshot.attachment_draft_submission === true);
             setVerifiedParts(parts);
             setTextContinuationActive(textMode);
             setContinuationWindowHasOlder(
@@ -362,6 +368,7 @@ export function KarenCopilotHistoryGate({
             restored = true;
           } catch (error: unknown) {
             if (cancelled || restoreQueued) continue;
+            setAttachmentDraftSubmission(false);
             const status = error && typeof error === "object" && "status" in error
               ? (error as { status?: unknown }).status : undefined;
             const details = error && typeof error === "object" && "details" in error
@@ -620,7 +627,7 @@ export function KarenCopilotHistoryGate({
     );
   }
   return (
-    <ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission }}>
+    <ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission, attachmentDraftSubmission }}>
       <KarenVerifiedHistoryProvider parts={verifiedParts}>
         {recoveryRun && (
           <section aria-label="Saved run recovery" className="space-y-2 border-b border-border px-3 py-2">

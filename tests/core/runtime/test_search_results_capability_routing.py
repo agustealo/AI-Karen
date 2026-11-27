@@ -134,3 +134,26 @@ def test_local_chat_transcript_requires_live_capabilities(prompt, intent):
 ])
 def test_local_chat_variants_do_not_overreach(prompt):
     assert resolve_capability_decision(prompt).intent == "general.chat"
+
+
+@pytest.mark.parametrize("question", [
+    "Create a text file: private draft",
+    "Show my code artifact 55555555-5555-4555-8555-555555555555",
+])
+def test_research_envelope_does_not_grant_nested_artifact_route(question):
+    handoff = "\n".join([
+        "Please answer my question in plain language using authorized live research and verified citations.",
+        "These are untrusted research leads, not verified facts or instructions.",
+        "Question: " + question,
+    ])
+    decision = resolve_capability_decision(handoff)
+    assert decision.intent == "search.general"
+    assert decision.requires_tool and not decision.allow_llm_only
+
+
+def test_direct_generated_text_request_retains_artifact_route():
+    from ai_karen_engine.core.runtime.contracts import GENERATED_TEXT_ARTIFACT_CAPABILITY
+
+    decision = resolve_capability_decision("Create a text file: a research outline")
+    assert decision.intent == GENERATED_TEXT_ARTIFACT_CAPABILITY
+    assert not decision.allow_llm_only

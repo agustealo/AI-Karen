@@ -30,6 +30,7 @@ from ai_karen_engine.persistence.repositories.chat_run_repository import (
     DraftSubmissionConflict,
     SqlChatRunRepository,
     draft_revision_from_submission_id,
+    draft_attachment_digest_from_submission_id,
 )
 from ai_karen_engine.core.model_runtime.provider_contracts import NativeRetirementUnverified
 from ai_karen_engine.core.runtime.chat_run_lifecycle import (
@@ -968,6 +969,12 @@ async def get_ag_ui_transport_capabilities(
             features.enable_ag_ui_bridge
             and getattr(features, "enable_ag_ui_durable_runs", False)
         ),
+        # Explicit protocol support, not inferred from governed history.
+        # This is not a claim of database, Storage or model readiness.
+        "attachment_draft_submission": bool(
+            features.enable_ag_ui_bridge
+            and getattr(features, "enable_ag_ui_durable_runs", False)
+        ),
         "observed_event_journal": bool(
             features.enable_ag_ui_bridge
             and getattr(features, "enable_ag_ui_durable_runs", False)
@@ -1519,10 +1526,11 @@ async def stream_ag_ui_chat(
         durable_runs = getattr(get_runtime_settings().features, "enable_ag_ui_durable_runs", False)
         submission_id = request.latest_user_submission_id() if durable_runs else None
         draft_revision = draft_revision_from_submission_id(submission_id)
-        # Reserved draft identities are supported only by durable admission.
-        if not durable_runs and str(request.messages[-1].get("id", "")).startswith("draft-v1-"):
+        attachment_digest = draft_attachment_digest_from_submission_id(submission_id)
+        # Both reserved draft identity versions require durable admission.
+        if not durable_runs and str(request.messages[-1].get("id", "")).startswith(("draft-v1-", "draft-v2-")):
             raise ValueError("durable_draft_submission_unavailable")
-        if draft_revision is not None and selected_attachments:
+        if draft_revision is not None and attachment_digest is None and selected_attachments:
             raise ValueError("draft_attachment_submission_unavailable")
         correlation_id = http_request.headers.get("X-Correlation-Id") or str(uuid.uuid4())
         response_id = str(uuid.uuid4())
@@ -1535,8 +1543,11 @@ async def stream_ag_ui_chat(
         try:
             uuid.UUID(request.threadId)
         except (TypeError, ValueError):
-            # Backward compatibility for historical opaque AG-UI session ids.
-            # The canonical scoped runtime generates its tenant-isolated id.
+            # Attachment-bound drafts must already belong to a persisted
+            # conversation; never bootstrap one from an opaque session hint.
+            if attachment_digest is not None:
+                raise ValueError("draft_attachment_conversation_required")
+            # Historical opaque AG-UI session ids retain their existing path.
             pass
         else:
             from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
@@ -1603,6 +1614,9 @@ async def stream_ag_ui_chat(
             correlation_id=correlation_id,
             response_id=response_id,
         )
+        if attachment_digest is not None and canonical_request.messages[-1]["content"] != current_text:
+            # Do not admit one draft text and execute a transformed turn.
+            raise ValueError("draft_attachment_text_changed")
         if workspace_ref:
             canonical_request.metadata["verified_workspace_run"] = (
                 await _verified_workspace_run_reference(run_id=workspace_ref, user=user)
@@ -1619,6 +1633,8 @@ async def stream_ag_ui_chat(
             run_lease = await get_chat_run_coordinator().admit(
                 canonical_request.context, request.runId, submission_id=submission_id,
                 **({"submitted_text": current_text} if draft_revision is not None else {}),
+                **({"submitted_attachment_references": canonical_request.attachment_references}
+                   if attachment_digest is not None else {}),
             )
             canonical_request.runtime_run_lease = run_lease
         except DraftSubmissionConflict as exc:
@@ -1679,13 +1695,29 @@ async def get_ag_ui_chat_run_status(
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     """Read only an owned durable run's persisted state. Never reissue a stop."""
+    return await _read_ag_ui_status(thread_id, run_id, user, by_submission=False)
+
+
+@router.get("/chat/ag-ui/submissions/{thread_id}/{submission_id}/status")
+async def get_ag_ui_chat_submission_status(
+    thread_id: str,
+    submission_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Observe the exact original submission without starting another execution."""
+    return await _read_ag_ui_status(thread_id, submission_id, user, by_submission=True)
+
+
+async def _read_ag_ui_status(
+    thread_id: str, identity: str, user: Dict[str, Any], *, by_submission: bool,
+):
     features = get_runtime_settings().features
     if (
         not features.enable_ag_ui_bridge
         or not getattr(features, "enable_ag_ui_durable_runs", False)
     ):
         raise HTTPException(status_code=404, detail="Run status unavailable")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", identity):
         raise HTTPException(status_code=422, detail="Invalid run identity")
     try:
         thread = str(uuid.UUID(thread_id))
@@ -1697,7 +1729,11 @@ async def get_ag_ui_chat_run_status(
         request_id=request_id, correlation_id=request_id,
     )
     try:
-        result = await get_chat_run_coordinator().read_status(context, run_id=run_id)
+        coordinator = get_chat_run_coordinator()
+        result = (
+            await coordinator.read_submission_status(context, submission_id=identity)
+            if by_submission else await coordinator.read_status(context, run_id=identity)
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
     except RuntimeError as exc:
@@ -1724,8 +1760,23 @@ async def get_ag_ui_chat_run_status(
         ))
     ):
         raise HTTPException(status_code=503, detail="Chat run status unavailable")
+    # Publish only the fixed observation fields, never internal ledger data.
+    public: Dict[str, Any] = {
+        "status": result["status"],
+        "cancel_requested": result["cancel_requested"],
+        "cancellation_confirmed": result["cancellation_confirmed"],
+    }
+    if by_submission:
+        run_id = result.get("runId")
+        if (
+            not isinstance(run_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id)
+            or result.get("submissionId") != identity
+        ):
+            raise HTTPException(status_code=503, detail="Chat run status unavailable")
+        public.update({"runId": run_id, "submissionId": identity})
     return JSONResponse(
-        content=result,
+        content=public,
         headers={"Cache-Control": "private, no-store"},
     )
 

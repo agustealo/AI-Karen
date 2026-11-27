@@ -2,6 +2,8 @@
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any, Dict, List, Optional
+
+from ai_karen_engine.core.runtime.contracts import GENERATED_TEXT_ARTIFACT_CAPABILITY
 _OWNER_CODE_ARTIFACT_COMMAND = re.compile(
     r"^(?:please\s+)?(?:show|view|display)\s+"
     r"(?:me\s+)?my\s+code\s+artifact\s+"
@@ -30,7 +32,6 @@ def parse_owner_code_artifact_view(query: str) -> Optional[str]:
     except (TypeError, ValueError, AttributeError):
         return None
     return artifact_id if raw_id == artifact_id else None
-
 
 
 def parse_research_handoff_question(query: str) -> Optional[str]:
@@ -89,7 +90,36 @@ def is_delegated_choice_reply(query: str) -> bool:
     ))
 
 
+_OWNER_GENERATED_TEXT_COMMAND = re.compile(
+    r"^(?:please[ \t]+)?(?:create|generate|write)[ \t]+"
+    r"(?:me[ \t]+)?(?:a[ \t]+)?(?:plain[ \t]+)?text[ \t]+file[ \t]*:"
+    r"[ \t]*(?P<description>[\s\S]+)$",
+    re.IGNORECASE,
+)
+
+
+def parse_owner_generated_text_request(query: str) -> Optional[str]:
+    """Recognize an explicit inert text-file creation request, not a grant.
+
+    The description is model input, never a filename, storage key, action
+    selector, or permission. No inferred intent or historical reply suffices.
+    """
+    if not isinstance(query, str) or not 1 <= len(query) <= 4000:
+        return None
+    match = _OWNER_GENERATED_TEXT_COMMAND.fullmatch(query.strip())
+    if match is None:
+        return None
+    return match.group("description").strip() or None
+
+
 CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
+    GENERATED_TEXT_ARTIFACT_CAPABILITY: {
+        "triggers": [],
+        "patterns": [],
+        "required_capability": GENERATED_TEXT_ARTIFACT_CAPABILITY,
+        "requires_live_data": False,
+        "allow_llm_only": False,
+    },
     "artifact.code.read": {
         "triggers": [],
         "patterns": [],
@@ -647,6 +677,14 @@ def resolve_capability_decision(
     has_search_options: bool = False,
     research_continuation: bool = False,
 ) -> CapabilityDecision:
+    # A deliverable description is content, never a nested action selector.
+    if parse_owner_generated_text_request(query) is not None:
+        return CapabilityDecision(
+            intent=GENERATED_TEXT_ARTIFACT_CAPABILITY, confidence=confidence,
+            requires_tool=False, requires_live_data=False,
+            capability=GENERATED_TEXT_ARTIFACT_CAPABILITY,
+            allow_llm_only=False, requires_chat_capable_model=True,
+        )
     research_continuation = research_continuation and is_research_paper_followup(query)
     handoff_question = parse_research_handoff_question(query)
     if handoff_question is not None:

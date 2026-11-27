@@ -1706,6 +1706,7 @@ async def test_prompt_assembly_includes_authorized_typed_clarification_without_m
             return await assembler.assemble_prompt(assembly_request)
 
     decision = SimpleNamespace(
+        intent="general_assist",
         memory_recall_required=False, tool_requirements=[],
         workflow_id=None, workflow_version=None, requires_human_gate=False,
         requires_resumability=False, token_budget=4096,

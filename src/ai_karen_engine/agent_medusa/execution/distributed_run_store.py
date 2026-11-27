@@ -10,6 +10,8 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
+from redis.exceptions import RedisError
+
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
 from ai_karen_engine.platform.memory.redis import (
     RedisConnectionManager,
@@ -30,16 +32,34 @@ redis.call('EXPIRE', KEYS[3], tonumber(ARGV[3]))
 return 1
 """
 
-_RENEW_CLAIM_SCRIPT = """
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-  return redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+# Recheck the claim and immutable run identity in the same operation as
+# renewal. A delayed heartbeat must never recreate or modify a retired run.
+_HEARTBEAT_RUN_SCRIPT = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then
+  return -1
 end
-return 0
-"""
-
-_RELEASE_CLAIM_SCRIPT = """
-if redis.call('GET', KEYS[1]) == ARGV[1] then
-  return redis.call('DEL', KEYS[1])
+if redis.call('EXISTS', KEYS[2]) == 0 then
+  return -2
+end
+if redis.call('HGET', KEYS[2], 'owner_worker_id') ~= ARGV[1]
+    or redis.call('HGET', KEYS[2], 'tenant_id') ~= ARGV[2]
+    or redis.call('HGET', KEYS[2], 'run_id') ~= ARGV[3] then
+  return -1
+end
+local status = redis.call('HGET', KEYS[2], 'status')
+if status ~= 'running' and status ~= 'cancelling' then
+  return -1
+end
+redis.call('EXPIRE', KEYS[1], tonumber(ARGV[4]))
+redis.call('HSET', KEYS[2],
+  'updated_at', ARGV[6],
+  'heartbeat_at', ARGV[6],
+  'lease_expires_at', ARGV[7])
+redis.call('EXPIRE', KEYS[2], tonumber(ARGV[5]))
+redis.call('EXPIRE', KEYS[3], tonumber(ARGV[5]))
+local cancel = redis.call('HGET', KEYS[2], 'cancel_requested_at')
+if cancel and cancel ~= '' then
+  return 1
 end
 return 0
 """
@@ -67,25 +87,141 @@ return 1
 
 _MARK_TERMINAL_SCRIPT = """
 if redis.call('GET', KEYS[1]) ~= ARGV[1] then
-  return 0
+  return -1
 end
-if redis.call('HGET', KEYS[2], 'owner_worker_id') ~= ARGV[1] then
-  return 0
+if redis.call('EXISTS', KEYS[2]) == 0 then
+  return -2
+end
+if redis.call('HGET', KEYS[2], 'owner_worker_id') ~= ARGV[1]
+    or redis.call('HGET', KEYS[2], 'tenant_id') ~= ARGV[2]
+    or redis.call('HGET', KEYS[2], 'run_id') ~= ARGV[3] then
+  return -1
+end
+local current = redis.call('HGET', KEYS[2], 'status')
+if current ~= 'running' and current ~= 'cancelling' then
+  return -1
+end
+local status = ARGV[4]
+local error_type = ARGV[6]
+local outcome = ARGV[7]
+local retention = tonumber(ARGV[8])
+if ARGV[9] ~= 'durable_arbitrated' and ARGV[9] ~= 'shared_only' then
+  return -3
+end
+if not retention or retention < 1 or retention % 1 ~= 0 then
+  return -3
+end
+if not ((status == 'completed' and (outcome == 'success' or outcome == 'partial' or outcome == 'degraded'))
+    or (status == 'failed' and (outcome == 'error' or outcome == 'timeout' or outcome == ''))
+    or (status == 'cancelled' and outcome == 'cancelled')
+    or (status == 'orphaned' and outcome == '')) then
+  return -3
+end
+if ARGV[9] == 'durable_arbitrated' then
+  local kind = redis.call('TYPE', KEYS[4]).ok
+  if kind ~= 'none' and kind ~= 'zset' then
+    return -3
+  end
+end
+if current == 'cancelling' and status ~= 'orphaned' then
+  status = 'cancelled'
+  error_type = ''
+  outcome = 'cancelled'
 end
 redis.call('HSET', KEYS[2],
-  'status', ARGV[2],
-  'updated_at', ARGV[3],
-  'completed_at', ARGV[3],
-  'error_type', ARGV[4],
+  'status', status,
+  'updated_at', ARGV[5],
+  'completed_at', ARGV[5],
+  'error_type', error_type,
+  'outcome_status', outcome,
+  'terminal_authority', ARGV[9],
   'lease_expires_at', '')
-redis.call('EXPIRE', KEYS[2], tonumber(ARGV[5]))
+-- An unacknowledged durable receipt is recovery evidence, not a lease.
+if ARGV[9] == 'durable_arbitrated' then
+  redis.call('PERSIST', KEYS[2])
+  local tail = redis.call('ZRANGE', KEYS[4], -1, -1, 'WITHSCORES')
+  local score = 0
+  if #tail > 0 then
+    score = tonumber(tail[2]) + 1
+  end
+  redis.call('ZADD', KEYS[4], score, ARGV[3])
+  redis.call('PERSIST', KEYS[4])
+else
+  redis.call('EXPIRE', KEYS[2], retention)
+end
+redis.call('EXPIRE', KEYS[3], retention)
 redis.call('DEL', KEYS[1])
+if status == 'cancelled' and ARGV[4] ~= 'cancelled' then
+  return 2
+end
 return 1
+"""
+
+
+# Release the retention hold only for the exact committed durable receipt.
+_ACK_DURABLE_TERMINAL_SCRIPT = """
+local kind = redis.call('TYPE', KEYS[3]).ok
+if kind ~= 'none' and kind ~= 'zset' then
+  return 0
+end
+if redis.call('EXISTS', KEYS[1]) ~= 0 then
+  return 0
+end
+if redis.call('EXISTS', KEYS[2]) == 0 then
+  redis.call('ZREM', KEYS[3], ARGV[2])
+  return 0
+end
+if redis.call('HGET', KEYS[2], 'terminal_authority') ~= 'durable_arbitrated'
+    or redis.call('HGET', KEYS[2], 'lease_expires_at') ~= '' then
+  return 0
+end
+for i = 1, 18, 2 do
+  if redis.call('HGET', KEYS[2], ARGV[i]) ~= ARGV[i + 1] then
+    return 0
+  end
+end
+if redis.call('PTTL', KEYS[2]) ~= -1 then
+  redis.call('ZREM', KEYS[3], ARGV[2])
+  return 0
+end
+local retention = tonumber(ARGV[19])
+if not retention or retention < 1 or retention % 1 ~= 0 then
+  return 0
+end
+local result = redis.call('EXPIRE', KEYS[2], retention)
+if result == 1 then
+  redis.call('ZREM', KEYS[3], ARGV[2])
+end
+return result
+"""
+
+
+# Rotate a bounded discovery batch. The index owns no terminal evidence.
+_PENDING_TERMINAL_BATCH_SCRIPT = """
+local limit = tonumber(ARGV[1])
+if not limit or limit < 1 or limit > 1000 then
+  return {}
+end
+local ids = redis.call('ZRANGE', KEYS[1], 0, limit - 1)
+local tail = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
+if #tail == 0 then
+  return ids
+end
+local score = tonumber(tail[2])
+for _, id in ipairs(ids) do
+  score = score + 1
+  redis.call('ZADD', KEYS[1], 'XX', score, id)
+end
+return ids
 """
 
 
 class DistributedRunStoreUnavailable(RuntimeError):
     """Raised when shared coordination is not currently authoritative."""
+
+
+class DistributedRunOwnershipLost(RuntimeError):
+    """Raised when Redis definitively rejects the worker's live authority."""
 
 
 class DistributedRunNotFound(LookupError):
@@ -122,19 +258,22 @@ class DistributedRunStore(Protocol):
         self,
         *,
         run_id: str,
+        tenant_id: str,
         worker_id: str,
         status: str,
         completed_at: datetime,
         error_type: str | None,
-    ) -> None: ...
+        outcome_status: str | None = None,
+        durable_arbitrated: bool = False,
+    ) -> str: ...
 
-    async def set_outcome_status(
-        self,
-        *,
-        run_id: str,
-        worker_id: str,
-        outcome_status: str,
-    ) -> None: ...
+    async def acknowledge_durable_terminal(
+        self, *, tenant_id: str, receipt: dict[str, Any]
+    ) -> bool: ...
+
+    async def pending_terminal_ids(
+        self, *, tenant_id: str, limit: int
+    ) -> list[str]: ...
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
 
@@ -180,6 +319,9 @@ class RedisDistributedRunStore:
 
     def _tenant_index(self, tenant_id: str) -> str:
         return f"{self._settings.run_key_prefix}:tenant:{tenant_id}"
+
+    def _pending_terminal_index(self, tenant_id: str) -> str:
+        return f"{self._settings.run_key_prefix}:terminal-pending:{tenant_id}"
 
     def _now(self) -> datetime:
         return datetime.now(timezone.utc)
@@ -252,158 +394,222 @@ class RedisDistributedRunStore:
 
     async def heartbeat(self, *, run_id: str, worker_id: str) -> bool:
         client = await self._client()
-        claim_key = self._claim_key(run_id)
-        renewed = await client.eval(
-            _RENEW_CLAIM_SCRIPT,
-            1,
-            claim_key,
-            worker_id,
-            str(self._settings.run_lease_ttl_seconds),
-        )
-        if not renewed:
-            raise RuntimeError(f"Medusa run ownership changed or expired: {run_id}")
-
         run_key = self._run_key(run_id)
+        # This read locates the tenant index only. The script repeats all
+        # identity, status and claim checks before touching any key.
         record = await client.hgetall(run_key)
         if not record:
-            await client.eval(_RELEASE_CLAIM_SCRIPT, 1, claim_key, worker_id)
             raise DistributedRunNotFound(run_id)
-        if record.get("owner_worker_id") != worker_id:
-            await client.eval(_RELEASE_CLAIM_SCRIPT, 1, claim_key, worker_id)
-            raise RuntimeError(f"Medusa run ownership metadata changed: {run_id}")
-        if record.get("status") not in self._ACTIVE:
-            return False
+        tenant_id = record.get("tenant_id")
+        if not tenant_id:
+            raise DistributedRunOwnershipLost(f"Missing Medusa tenant: {run_id}")
 
         now = self._now()
         lease_expires = now + timedelta(seconds=self._settings.run_lease_ttl_seconds)
-        index_key = self._tenant_index(str(record.get("tenant_id", "")))
-        pipeline = client.pipeline(transaction=True)
-        pipeline.hset(
-            run_key,
-            mapping={
-                "updated_at": self._iso(now),
-                "heartbeat_at": self._iso(now),
-                "lease_expires_at": self._iso(lease_expires),
-            },
+        result = int(
+            await client.eval(
+                _HEARTBEAT_RUN_SCRIPT,
+                3,
+                self._claim_key(run_id),
+                run_key,
+                self._tenant_index(tenant_id),
+                worker_id,
+                tenant_id,
+                run_id,
+                str(self._settings.run_lease_ttl_seconds),
+                str(self._settings.run_terminal_retention_seconds),
+                self._iso(now),
+                self._iso(lease_expires),
+            )
         )
-        pipeline.expire(run_key, self._settings.run_terminal_retention_seconds)
-        if record.get("tenant_id"):
-            pipeline.expire(index_key, self._settings.run_terminal_retention_seconds)
-        await pipeline.execute()
-        return bool(record.get("cancel_requested_at"))
+        if result == -2:
+            raise DistributedRunNotFound(run_id)
+        if result == -1:
+            raise DistributedRunOwnershipLost(
+                f"Medusa run ownership changed or expired: {run_id}"
+            )
+        if result not in {0, 1}:
+            raise DistributedRunStoreUnavailable("invalid_heartbeat_result")
+        return result == 1
 
     async def mark_terminal(
         self,
         *,
         run_id: str,
+        tenant_id: str,
         worker_id: str,
         status: str,
         completed_at: datetime,
         error_type: str | None,
-    ) -> None:
+        outcome_status: str | None = None,
+        durable_arbitrated: bool = False,
+    ) -> str:
+        """Publish one owner-fenced terminal receipt, returning its lifecycle."""
+
+        if not run_id or not tenant_id or not worker_id:
+            raise ValueError("Medusa terminal identity must not be empty")
         client = await self._client()
-        run_key = self._run_key(run_id)
-        record = await client.hgetall(run_key)
-        if not record:
-            return
-        index_key = self._tenant_index(str(record.get("tenant_id", "")))
-        result = await client.eval(
-            _MARK_TERMINAL_SCRIPT,
-            2,
-            self._claim_key(run_id),
-            run_key,
-            worker_id,
-            status,
-            self._iso(completed_at),
-            error_type or "",
-            str(self._settings.run_terminal_retention_seconds),
-        )
-        if not result:
-            return
-        if record.get("tenant_id"):
-            await client.expire(
-                index_key,
-                self._settings.run_terminal_retention_seconds,
+        try:
+            result = int(
+                await client.eval(
+                    _MARK_TERMINAL_SCRIPT,
+                    4,
+                    self._claim_key(run_id),
+                    self._run_key(run_id),
+                    self._tenant_index(tenant_id),
+                    self._pending_terminal_index(tenant_id),
+                    worker_id,
+                    tenant_id,
+                    run_id,
+                    status,
+                    self._iso(completed_at),
+                    error_type or "",
+                    outcome_status or "",
+                    str(self._settings.run_terminal_retention_seconds),
+                    "durable_arbitrated" if durable_arbitrated else "shared_only",
+                )
             )
-
-    async def set_outcome_status(
-        self,
-        *,
-        run_id: str,
-        worker_id: str,
-        outcome_status: str,
-    ) -> None:
-        """Attach task outcome to the retained shared run receipt."""
-
-        normalized = str(outcome_status or "").strip().lower()
-        if normalized not in {
-            "success",
-            "partial",
-            "degraded",
-            "error",
-            "timeout",
-            "cancelled",
-        }:
-            raise ValueError(f"Invalid Medusa outcome status: {outcome_status}")
-        client = await self._client()
-        run_key = self._run_key(run_id)
-        record = await client.hgetall(run_key)
-        if not record:
+        except (RedisError, TypeError, ValueError) as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_terminal_commit_unconfirmed"
+            ) from exc
+        if result == -2:
             raise DistributedRunNotFound(run_id)
-        if record.get("owner_worker_id") != worker_id:
-            raise RuntimeError(f"Medusa run ownership metadata changed: {run_id}")
-        await client.hset(run_key, mapping={"outcome_status": normalized})
+        if result == -1:
+            raise DistributedRunOwnershipLost(
+                f"Medusa run ownership changed or expired: {run_id}"
+            )
+        if result == -3:
+            raise ValueError("Invalid Medusa terminal transition")
+        if result == 1:
+            return status
+        if result == 2 and status in {"completed", "failed"}:
+            return "cancelled"
+        raise DistributedRunStoreUnavailable("invalid_terminal_result")
+
+    async def acknowledge_durable_terminal(
+        self, *, tenant_id: str, receipt: dict[str, Any]
+    ) -> bool:
+        """Start configured retention only after exact durable confirmation."""
+        keys = (
+            "run_id",
+            "tenant_id",
+            "owner_worker_id",
+            "correlation_id",
+            "user_id",
+            "status",
+            "completed_at",
+            "error_type",
+            "outcome_status",
+        )
+        if receipt.get("status") not in {"completed", "failed", "cancelled", "orphaned"}:
+            return False
+        if any(not receipt.get(key) for key in keys[:7]):
+            return False
+        completed = self._parse_time(receipt["completed_at"])
+        if completed is None:
+            return False
+        expected = {**receipt, "tenant_id": tenant_id, "completed_at": self._iso(completed)}
+        client = await self._client()
+        try:
+            return bool(
+                await client.eval(
+                    _ACK_DURABLE_TERMINAL_SCRIPT,
+                    3,
+                    self._claim_key(str(receipt["run_id"])),
+                    self._run_key(str(receipt["run_id"])),
+                    self._pending_terminal_index(tenant_id),
+                    *(value for key in keys for value in (key, str(expected.get(key) or ""))),
+                    str(self._settings.run_terminal_retention_seconds),
+                )
+            )
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_terminal_retention_unconfirmed"
+            ) from exc
+
+    async def pending_terminal_ids(
+        self, *, tenant_id: str, limit: int
+    ) -> list[str]:
+        """Return a bounded rotating batch of retained receipt identities."""
+        client = await self._client()
+        try:
+            result = await client.eval(
+                _PENDING_TERMINAL_BATCH_SCRIPT,
+                1,
+                self._pending_terminal_index(tenant_id),
+                str(max(1, min(limit, 1000))),
+            )
+            return [str(run_id) for run_id in result]
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_terminal_discovery_unavailable"
+            ) from exc
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         client = await self._client()
         run_key = self._run_key(run_id)
-        record = await client.hgetall(run_key)
+        try:
+            record = await client.hgetall(run_key)
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_cancel_read_unavailable"
+            ) from exc
         if not record:
             raise DistributedRunNotFound(run_id)
         if record.get("tenant_id") != tenant_id:
             raise DistributedRunTenantMismatch(run_id)
 
         now = self._now()
-        result = int(
-            await client.eval(
-                _CANCEL_RUN_SCRIPT,
-                2,
-                self._claim_key(run_id),
-                run_key,
-                tenant_id,
-                self._iso(now),
+        try:
+            result = int(
+                await client.eval(
+                    _CANCEL_RUN_SCRIPT,
+                    2,
+                    self._claim_key(run_id),
+                    run_key,
+                    tenant_id,
+                    self._iso(now),
+                )
             )
-        )
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_cancel_signal_unconfirmed"
+            ) from exc
         if result == -2:
             raise DistributedRunTenantMismatch(run_id)
         if result in {-1, -3, 0}:
-            refreshed = await client.hgetall(run_key)
-            if not refreshed:
-                raise DistributedRunNotFound(run_id)
-            owner = await client.get(self._claim_key(run_id))
-            snapshot = self._snapshot(
-                refreshed,
-                claim_alive=bool(owner and owner == refreshed.get("owner_worker_id")),
-            )
+            snapshot = await self.get(run_id=run_id, tenant_id=tenant_id)
             raise DistributedRunNotCancellable(
                 f"Run {run_id} is {snapshot['status']}, not cancellable"
             )
 
-        refreshed = await client.hgetall(run_key)
-        owner = await client.get(self._claim_key(run_id))
-        return self._snapshot(
-            refreshed,
-            claim_alive=bool(owner and owner == refreshed.get("owner_worker_id")),
-        )
+        return await self.get(run_id=run_id, tenant_id=tenant_id)
+
+    async def _read_run_authority(
+        self, client: Any, run_id: str
+    ) -> tuple[dict[str, str], str | None]:
+        # MULTI/EXEC is required: a terminal write retires the claim and
+        # updates the hash atomically. Two independent reads can combine
+        # the old active hash with the retired claim and invent an orphan.
+        try:
+            async with client.pipeline(transaction=True) as pipe:
+                pipe.hgetall(self._run_key(run_id))
+                pipe.get(self._claim_key(run_id))
+                record, owner = await pipe.execute()
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_run_observation_unavailable"
+            ) from exc
+        return record, owner
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         client = await self._client()
-        record = await client.hgetall(self._run_key(run_id))
-        if not record:
+        record, owner = await self._read_run_authority(client, run_id)
+        if not record or record.get("run_id") != run_id:
             raise DistributedRunNotFound(run_id)
         if record.get("tenant_id") != tenant_id:
             raise DistributedRunTenantMismatch(run_id)
-        owner = await client.get(self._claim_key(run_id))
         return self._snapshot(
             record,
             claim_alive=bool(owner and owner == record.get("owner_worker_id")),
@@ -417,16 +623,25 @@ class RedisDistributedRunStore:
     ) -> list[dict[str, Any]]:
         client = await self._client()
         index_key = self._tenant_index(tenant_id)
-        run_ids = await client.smembers(index_key)
+        try:
+            run_ids = await client.smembers(index_key)
+        except RedisError as exc:
+            raise DistributedRunStoreUnavailable(
+                "shared_run_index_unavailable"
+            ) from exc
         snapshots: list[dict[str, Any]] = []
         stale: list[str] = []
         for run_id in run_ids:
             normalized_run_id = str(run_id)
-            record = await client.hgetall(self._run_key(normalized_run_id))
+            record, owner = await self._read_run_authority(client, normalized_run_id)
             if not record:
                 stale.append(normalized_run_id)
                 continue
-            owner = await client.get(self._claim_key(normalized_run_id))
+            if (
+                record.get("tenant_id") != tenant_id
+                or record.get("run_id") != normalized_run_id
+            ):
+                continue
             snapshot = self._snapshot(
                 record,
                 claim_alive=bool(owner and owner == record.get("owner_worker_id")),
@@ -438,7 +653,12 @@ class RedisDistributedRunStore:
             }:
                 snapshots.append(snapshot)
         if stale:
-            await client.srem(index_key, *stale)
+            try:
+                await client.srem(index_key, *stale)
+            except RedisError as exc:
+                raise DistributedRunStoreUnavailable(
+                    "shared_run_index_cleanup_unavailable"
+                ) from exc
         return sorted(
             snapshots,
             key=lambda item: item["started_at"] or "",
@@ -462,12 +682,14 @@ class RedisDistributedRunStore:
             "run_id": record.get("run_id", ""),
             "correlation_id": record.get("correlation_id", ""),
             "tenant_id": record.get("tenant_id", ""),
+            "owner_worker_id": record.get("owner_worker_id", ""),
             "user_id": record.get("user_id", ""),
             "status": status,
             "started_at": record.get("started_at") or None,
             "completed_at": record.get("completed_at") or None,
             "error_type": record.get("error_type") or None,
             "outcome_status": record.get("outcome_status") or None,
+            "terminal_authority": record.get("terminal_authority") or None,
             "cancellable": status == "running" and lease_alive,
             "distributed_control": {
                 "supported": True,
@@ -479,6 +701,7 @@ class RedisDistributedRunStore:
 __all__ = [
     "DistributedRunNotCancellable",
     "DistributedRunNotFound",
+    "DistributedRunOwnershipLost",
     "DistributedRunStore",
     "DistributedRunStoreUnavailable",
     "DistributedRunTenantMismatch",

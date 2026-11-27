@@ -383,3 +383,73 @@ def test_unresolved_admission_migration_retains_orphan_fence():
     assert "WHERE status IN ('running', 'cancelling', 'orphaned')" in sql
     assert "DROP INDEX public.runtime_chat_runs_single_active_idx" in sql
     assert "UPDATE public.runtime_chat_runs" not in sql
+
+
+
+@pytest.mark.asyncio
+async def test_attachment_bound_identity_matches_exact_selection(monkeypatch):
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        draft_attachment_selection_digest,
+    )
+    import json
+
+    selected = [{"source_id": THREAD, "revision": "a" * 64}]
+    digest = draft_attachment_selection_digest(selected)
+    submission = f"draft-v2-3-{digest}"
+    assert repository.draft_revision_from_submission_id(submission) == 3
+    assert repository.draft_attachment_digest_from_submission_id(submission) == digest
+    transaction = Transaction([True, str(uuid.uuid4()), "same text"])
+    scoped_transaction(monkeypatch, transaction)
+    lease = await repository.SqlChatRunRepository().admit(
+        tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+        transport_run_id="attached", request_id="request", correlation_id="trace",
+        submission_id=submission, submitted_text="same text",
+        submitted_attachment_references=selected,
+    )
+    assert lease is not None and lease.submission_id == submission
+    assert transaction.parameters[2]["submission_id"] == submission
+    assert "revision = :revision" in transaction.sql[3]
+    assert "attachment_references = CAST(:attachments AS jsonb)" in transaction.sql[3]
+    assert transaction.parameters[3]["revision"] == 3
+    assert json.loads(transaction.parameters[3]["attachments"]) == selected
+
+
+@pytest.mark.asyncio
+async def test_attachment_bound_identity_rejects_missing_or_substituted_selection(monkeypatch):
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        draft_attachment_selection_digest,
+    )
+
+    selected = [{"source_id": THREAD, "revision": "a" * 64}]
+    digest = draft_attachment_selection_digest(selected)
+    transaction = Transaction([])
+    scoped_transaction(monkeypatch, transaction)
+    for submission, references in (
+        (f"draft-v2-3-{digest}", []),
+        (f"draft-v2-3-{digest}", [{**selected[0], "revision": "b" * 64}]),
+        ("draft-v1-3", selected),
+        ("ordinary-turn", selected),
+    ):
+        with pytest.raises(repository.DraftSubmissionConflict):
+            await repository.SqlChatRunRepository().admit(
+                tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+                transport_run_id="attached", request_id="request", correlation_id="trace",
+                submission_id=submission, submitted_text="same text",
+                submitted_attachment_references=references,
+            )
+    assert transaction.sql == []
+
+
+def test_attachment_identity_digest_binds_order_and_validates_reserved_format():
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        draft_attachment_selection_digest,
+    )
+
+    selected = [
+        {"source_id": THREAD, "revision": "a" * 64},
+        {"source_id": OWNER, "revision": "b" * 64},
+    ]
+    assert draft_attachment_selection_digest(selected) != draft_attachment_selection_digest(selected[::-1])
+    for value in ("draft-v2-0-" + "a" * 64, "draft-v2-1-short", "draft-v2-1-" + "A" * 64):
+        with pytest.raises(ValueError, match="invalid_draft_submission_identity"):
+            repository.draft_revision_from_submission_id(value)

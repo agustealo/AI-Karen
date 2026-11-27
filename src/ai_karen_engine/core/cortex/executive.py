@@ -6,6 +6,8 @@ from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.intelligence import get_intelligence_runtime
 from ai_karen_engine.core.cortex.routing_intents import (
+    GENERATED_TEXT_ARTIFACT_CAPABILITY,
+    parse_owner_generated_text_request,
     parse_research_handoff_question,
     resolve_capability_decision,
 )
@@ -77,7 +79,16 @@ class CortexExecutionDecider:
         ctx = request.context
         reason_codes: List[str] = []
 
-        user_content = str(meta.get("clarification_effective_query") or self._extract_user_content(request.messages))
+        latest_user = next(
+            (item.get("content") for item in reversed(request.messages)
+             if item.get("role") == "user"),
+            None,
+        )
+        explicit_artifact = parse_owner_generated_text_request(latest_user) is not None
+        user_content = (
+            latest_user if explicit_artifact else
+            str(meta.get("clarification_effective_query") or self._extract_user_content(request.messages))
+        )
         has_search_options = getattr(request, "search_retrieval_options", None) is not None
         routing_text = user_content
         research_continuation = getattr(request, "research_continuation_question", None)
@@ -93,6 +104,53 @@ class CortexExecutionDecider:
         handoff_question = parse_research_handoff_question(routing_text)
         if handoff_question is not None:
             user_content = handoff_question
+        if explicit_artifact:
+            # Keep observed risk and explicit graph/approval restrictions.
+            # Incidental ML tools, workflow and recall hints are not consent.
+            risk = self._assess_risk_level(analysis)
+            requires_human_gate = bool(analysis.get("requires_human_gate")) or risk in (
+                RiskLevel.HIGH, RiskLevel.CRITICAL,
+            )
+            graph_required = bool(
+                self._force_graph or meta.get("graph_required") or meta.get("force_graph")
+                or meta.get("workflow_required") or meta.get("agent_delegation")
+                or requires_human_gate
+            )
+            forbidden = list(dict.fromkeys([
+                *(analysis.get("forbidden_capabilities") or []),
+                *(meta.get("forbidden_capabilities") or []),
+            ]))
+            if (
+                meta.get("original_user_input") not in (None, latest_user)
+                or has_search_options
+                or meta.get("tool_requirements") or meta.get("plugin_candidates")
+                or meta.get("required_capabilities") or meta.get("requested_agents")
+                or meta.get("reasoning_modes")
+                or meta.get("memory_recall_required") or meta.get("memory_write_requested")
+                or meta.get("requires_resumability") or meta.get("requires_parallel_execution")
+                or meta.get("workflow_id") or meta.get("requires_human_gate")
+            ):
+                forbidden.append(GENERATED_TEXT_ARTIFACT_CAPABILITY)
+            return ExecutionDecision(
+                intent=GENERATED_TEXT_ARTIFACT_CAPABILITY,
+                intent_confidence=1.0,
+                risk_level=risk,
+                graph_required=graph_required,
+                requires_human_gate=requires_human_gate,
+                requires_agent_delegation=bool(meta.get("agent_delegation")),
+                required_capabilities=[GENERATED_TEXT_ARTIFACT_CAPABILITY],
+                forbidden_capabilities=list(dict.fromkeys(forbidden)),
+                max_model_calls=min(1, int(meta.get("max_model_calls", 1))),
+                max_steps=int(meta.get("max_steps", analysis.get("max_steps", 10))),
+                time_budget_ms=int(meta.get("time_budget_ms", analysis.get("time_budget_ms", 30000))),
+                token_budget=int(meta.get("token_budget", analysis.get("token_budget", 4096))),
+                reason_codes=["explicit_owner_text_creation"],
+                policy_constraints={
+                    "memory_write_requested": False,
+                    "memory_write_denied": True,
+                    "risk_signals": dict(analysis.get("risk_signals") or {}),
+                },
+            )
 
         explicit_graph = bool(meta.get("graph_required") or meta.get("force_graph"))
         if explicit_graph:

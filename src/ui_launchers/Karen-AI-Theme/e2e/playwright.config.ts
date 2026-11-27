@@ -22,10 +22,13 @@ const cardStudioAcceptance = process.env.KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE ===
 // recordings at configuration authority, even if a future spec forgets
 // its own test.use privacy override or someone opts into capture video.
 const participationAcceptance = process.env.KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE === 'true';
+const inboxAcceptance = process.env.KAREN_COMMS_INBOX_ACCEPTANCE === 'true';
+const generatedDocumentAcceptance = process.env.KAREN_GENERATED_DOCUMENT_ACCEPTANCE === 'true';
+const privateLifecycleAcceptance = participationAcceptance || inboxAcceptance || generatedDocumentAcceptance;
 // Playwright 1.59.1 also captures failure accessibility snapshots independently
 // of trace/screenshot settings. Suppress those before workers start; remove
 // per-test output (including error-context.md) during normal runner teardown.
-if (participationAcceptance) process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
+if (privateLifecycleAcceptance) process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';
 const privateBrowserRun = localBenchmark ||
   process.env.KAREN_UX_IDENTITY_REPLAY === 'true' ||
   process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true' ||
@@ -33,7 +36,7 @@ const privateBrowserRun = localBenchmark ||
   settingsAcceptance ||
   fileExplorerAcceptance ||
   pinReadbackAcceptance ||
-  cardStudioAcceptance || participationAcceptance;
+  cardStudioAcceptance || privateLifecycleAcceptance;
 
 export default defineConfig({
   testDir: './',
@@ -47,14 +50,14 @@ export default defineConfig({
 
   fullyParallel: false,
   forbidOnly: !!process.env.CI,
-  retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || cardStudioAcceptance || participationAcceptance ? 0 : process.env.CI ? 2 : 0,
-  preserveOutput: participationAcceptance ? 'never' : 'always',
+  retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || cardStudioAcceptance || privateLifecycleAcceptance ? 0 : process.env.CI ? 2 : 0,
+  preserveOutput: privateLifecycleAcceptance ? 'never' : 'always',
   workers: 1,
 
   // Authenticated Settings acceptance must not persist response text,
   // failure stacks or browser state into local HTML/JSON result artifacts.
   // The console list reporter supplies the protected job's result.
-  reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || documentAuthorAcceptance || cardStudioAcceptance || participationAcceptance
+  reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || documentAuthorAcceptance || cardStudioAcceptance || privateLifecycleAcceptance
     ? [['list']]
     : [
         ['html', { outputFolder: 'playwright-report' }],

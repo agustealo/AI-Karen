@@ -58,6 +58,7 @@ class ChatRunCoordinator:
         self, context: ChatExecutionContext, run_id: str, *,
         submission_id: Optional[str] = None,
         submitted_text: Optional[str] = None,
+        submitted_attachment_references: Optional[list[dict[str, str]]] = None,
     ) -> ChatRunLease:
         context.require_authenticated_user()
         # Reauthorize against the canonical repository at run-admission time.
@@ -72,6 +73,8 @@ class ChatRunCoordinator:
             correlation_id=context.correlation_id,
             **({"submission_id": submission_id} if submission_id is not None else {}),
             **({"submitted_text": submitted_text} if submitted_text is not None else {}),
+            **({"submitted_attachment_references": submitted_attachment_references}
+               if submitted_attachment_references is not None else {}),
         )
         if lease is None:
             raise ChatRunConflict("chat_run_already_exists")
@@ -101,6 +104,19 @@ class ChatRunCoordinator:
             user_id=context.user_id,
             conversation_id=context.require_conversation_id(),
             transport_run_id=run_id,
+        )
+
+    async def read_submission_status(
+        self, context: ChatExecutionContext, *, submission_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """Reauthorize the owner before reading exact submission evidence."""
+        context.require_authenticated_user()
+        await get_conversation_runtime_gateway().require_owned_conversation(context)
+        return await self._repository.read_submission_status(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            conversation_id=context.require_conversation_id(),
+            submission_id=submission_id,
         )
 
     @staticmethod

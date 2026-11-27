@@ -1,6 +1,10 @@
 from __future__ import annotations
 
+from unittest.mock import AsyncMock
+
 import pytest
+
+from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
 
 from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
@@ -59,15 +63,14 @@ async def test_runtime_policy_authorizes_requested_agents_as_typed_constraints()
     policy = await pipeline._evaluate_execution_policy(_request(), _cognitive())
 
     assert policy.allowed is True
-    assert policy.runtime_constraints["allowed_agents"] == [
-        "research-agent",
-        "verification-agent",
-    ]
+    # Metadata requests delegation but does not grant specialist execution.
+    assert policy.runtime_constraints["agent_delegation"] is True
+    assert policy.runtime_constraints["allowed_agents"] == []
     assert policy.runtime_constraints["allowed_tools"] == ["search"]
     assert policy.runtime_constraints["allowed_plugins"] == ["source-verifier"]
 
     plan = policy.to_authorized_plan()
-    assert plan.allowed_agents == ["research-agent", "verification-agent"]
+    assert plan.allowed_agents == []
     assert plan.allowed_tools == ["search"]
     assert plan.allowed_plugins == ["source-verifier"]
     assert plan.authorized_user_id == "user-a"
@@ -84,19 +87,52 @@ async def test_policy_allowlists_survive_decision_and_chat_plan_boundary():
     policy = await pipeline._evaluate_execution_policy(request, cognitive)
     decision = pipeline._apply_execution_policy(cognitive, policy)
 
-    assert decision.policy_constraints["allowed_agents"] == [
-        "research-agent",
-        "verification-agent",
-    ]
+    # The decision boundary must not turn advisory candidates into grants.
+    assert decision.policy_constraints["allowed_agents"] == []
     assert decision.policy_constraints["allowed_tools"] == ["search"]
     assert decision.policy_constraints["allowed_plugins"] == ["source-verifier"]
 
     runtime = ChatRuntime.__new__(ChatRuntime)
     plan = runtime._build_authorized_plan(request, decision)
 
-    assert plan.allowed_agents == ["research-agent", "verification-agent"]
+    assert plan.allowed_agents == []
     assert plan.allowed_tools == ["search"]
     assert plan.allowed_plugins == ["source-verifier"]
     assert plan.authorized_user_id == "user-a"
     assert plan.authorized_tenant_id == "tenant-a"
     assert plan.authorized_session_id == "task:task-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("delegation_requested", [False, True])
+async def test_cortex_delegation_topology_remains_unauthorized(
+    delegation_requested: bool,
+) -> None:
+    # Supply deterministic Intelligence analysis at the existing CORTEX seam;
+    # execute the real cognitive decision, not a preconstructed decision.
+    decider = CortexExecutionDecider.__new__(CortexExecutionDecider)
+    decider._force_graph = False
+    analysis = decider._default_analysis()
+    analysis["agent_delegation"] = delegation_requested
+    decider._analyze_request = AsyncMock(return_value=analysis)
+    request = ChatExecutionRequest(
+        messages=[{"role": "user", "content": "Help me plan a project."}],
+        context=_request().context,
+    )
+
+    decision = await decider.decide(request)
+
+    decider._analyze_request.assert_awaited_once()
+    assert decision.topology == (
+        ExecutionTopology.MULTI_AGENT if delegation_requested else ExecutionTopology.DIRECT
+    )
+    assert decision.execution_mode == (
+        RuntimeExecutionMode.GRAPH if delegation_requested else RuntimeExecutionMode.DIRECT
+    )
+    assert decision.is_graph_required is delegation_requested
+    assert decision.requires_agent_delegation is delegation_requested
+    assert ("agent_delegation_required" in decision.reason_codes) is delegation_requested
+    assert decision.policy_decision_id is None
+    assert decision.policy_version == ""
+    assert decision.policy_reason_codes == []
+    assert decision.memory_write_allowed is False

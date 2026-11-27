@@ -178,6 +178,7 @@ async def test_prompt_compilation_reuses_selection_without_requery():
         memory_filter_required=True,
     )
     decision = SimpleNamespace(
+        intent="general_assist",
         memory_recall_required=False, tool_requirements=[],
         workflow_id=None, workflow_version=None, requires_human_gate=False,
         requires_resumability=False, token_budget=2048,

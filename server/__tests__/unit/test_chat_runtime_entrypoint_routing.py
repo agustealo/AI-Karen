@@ -23,14 +23,17 @@ async def test_runtime_route_uses_canonical_runtime_entrypoint(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_websocket_gateway_uses_canonical_runtime_entrypoint():
+async def test_websocket_diagnostics_do_not_construct_unowned_gateway():
+    import json
+
     from ai_karen_engine.api_routes.chat import websocket as websocket_route
 
-    stub = _RuntimeStub()
-
-    gateway = await websocket_route.get_websocket_gateway(runtime_service=stub)
-    assert gateway is not None
-    assert stub.calls == 1
+    assert not hasattr(websocket_route, "get_websocket_gateway")
+    user = {"user_id": "user-1", "tenant_id": "tenant-1", "roles": ["admin"]}
+    response = await websocket_route.get_websocket_stats(user=user)
+    assert response.status_code == 503
+    assert response.headers["cache-control"] == "no-store"
+    assert json.loads(response.body)["error_code"] == "COLLABORATION_TRANSPORT_UNAVAILABLE"
 
 
 @pytest.mark.asyncio

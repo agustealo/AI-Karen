@@ -83,12 +83,25 @@ class ChatRunLease:
 
 def draft_revision_from_submission_id(submission_id: Optional[str]) -> Optional[int]:
     """Recognize the reserved original-draft identity; no client authority."""
-    if submission_id is None or not submission_id.startswith("draft-v1-"):
+    if submission_id is None or not submission_id.startswith(("draft-v1-", "draft-v2-")):
         return None
-    match = re.fullmatch(r"draft-v1-([1-9][0-9]{0,15})", submission_id)
+    pattern = (
+        r"draft-v2-([1-9][0-9]{0,15})-[a-f0-9]{64}"
+        if submission_id.startswith("draft-v2-")
+        else r"draft-v1-([1-9][0-9]{0,15})"
+    )
+    match = re.fullmatch(pattern, submission_id)
     if match is None or int(match[1]) > 9007199254740990:
         raise ValueError("invalid_draft_submission_identity")
     return int(match[1])
+
+
+def draft_attachment_digest_from_submission_id(submission_id: Optional[str]) -> Optional[str]:
+    """Read the durable v2 selection digest; it grants no content permission."""
+    if submission_id is None or not submission_id.startswith("draft-v2-"):
+        return None
+    draft_revision_from_submission_id(submission_id)
+    return submission_id.rsplit("-", 1)[1]
 
 
 class DraftSubmissionConflict(Exception):
@@ -144,12 +157,28 @@ class SqlChatRunRepository:
         correlation_id: str,
         submission_id: Optional[str] = None,
         submitted_text: Optional[str] = None,
+        submitted_attachment_references: Optional[list[dict[str, str]]] = None,
     ) -> Optional[ChatRunLease]:
         if submission_id is not None and (
             not isinstance(submission_id, str) or not _RUN_ID_PATTERN.fullmatch(submission_id)
         ):
             raise ValueError("invalid_chat_submission_id")
         draft_revision = draft_revision_from_submission_id(submission_id)
+        attachment_digest = draft_attachment_digest_from_submission_id(submission_id)
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            draft_attachment_selection_digest,
+            validate_draft_attachment_references,
+        )
+        selected = validate_draft_attachment_references(
+            [] if submitted_attachment_references is None else submitted_attachment_references
+        )
+        if (
+            (attachment_digest is None and selected)
+            or (attachment_digest is not None and (
+                not selected or draft_attachment_selection_digest(selected) != attachment_digest
+            ))
+        ):
+            raise DraftSubmissionConflict("composer_draft_submission_conflict")
         if draft_revision is not None and (
             not isinstance(submitted_text, str) or not submitted_text.strip()
             or len(submitted_text) > 10000
@@ -254,6 +283,7 @@ class SqlChatRunRepository:
                     session, tenant_id=tenant, user_id=user,
                     conversation_id=conversation, revision=draft_revision,
                     submitted_text=submitted_text,
+                    **({"attachment_references": selected} if selected else {}),
                 ):
                     raise DraftSubmissionConflict("composer_draft_submission_conflict")
         if attention_enabled and not admitted:
@@ -470,6 +500,13 @@ class SqlChatRunRepository:
             }
         ):
             raise ValueError("unsupported_chat_projection_custom_event")
+        if event_type == "CUSTOM" and event.get("name") == "karen.execution_receipt.v1":
+            value = event.get("value")
+            if not isinstance(value, Mapping) or (
+                "runtime_request_id" in value
+                and value["runtime_request_id"] != lease.request_id
+            ):
+                raise ValueError("chat_projection_identity_mismatch")
         # The coordinator sanitizes observed projections, but this repository
         # is the final durable write boundary. Reuse the canonical detector to
         # reject any source-bearing presentation from a future direct caller.
@@ -1093,18 +1130,73 @@ class SqlChatRunRepository:
         """
         if not _RUN_ID_PATTERN.fullmatch(transport_run_id):
             raise ValueError("invalid_transport_run_id")
+        row = await self._read_exact_status_row(
+            tenant_id=tenant_id, user_id=user_id, conversation_id=conversation_id,
+            transport_run_id=transport_run_id,
+        )
+        return None if row is None else self._project_run_status(row)
+
+    async def read_submission_status(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+        submission_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """Observe the exact original submission, never the newest unrelated run.
+
+        Internal ledger read only. The runtime must reauthorize the conversation
+        before exposing this observation. This does not grant a run lease or
+        authorize a retry, cancellation, or new submission.
+        """
+        if not isinstance(submission_id, str) or not _RUN_ID_PATTERN.fullmatch(
+            submission_id
+        ):
+            raise ValueError("invalid_chat_submission_id")
+        row = await self._read_exact_status_row(
+            tenant_id=tenant_id, user_id=user_id, conversation_id=conversation_id,
+            submission_id=submission_id,
+        )
+        if row is None:
+            return None
+        run_id = row["transport_run_id"]
+        if (
+            not isinstance(run_id, str)
+            or not _RUN_ID_PATTERN.fullmatch(run_id)
+            or row["submission_id"] != submission_id
+        ):
+            raise RuntimeError("unverified_chat_run_recovery_identity")
+        return {
+            "runId": run_id,
+            "submissionId": submission_id,
+            **self._project_run_status(row),
+        }
+
+    async def _read_exact_status_row(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+        transport_run_id: Optional[str] = None,
+        submission_id: Optional[str] = None,
+    ) -> Optional[Mapping[str, Any]]:
+        if (transport_run_id is None) == (submission_id is None):
+            raise ValueError("invalid_chat_run_status_selector")
+        # Only these two fixed predicates are interpolated; identities are
+        # bound parameters. one_or_none must reject ambiguous ledger rows.
+        predicate = (
+            "transport_run_id = :run_id" if transport_run_id is not None
+            else "submission_id = :submission_id"
+        )
         scope = {
             "tenant": _uuid(tenant_id),
             "owner": _uuid(user_id),
             "conversation": _uuid(conversation_id),
-            "run_id": transport_run_id,
         }
+        if transport_run_id is not None:
+            scope["run_id"] = transport_run_id
+        elif submission_id is not None:
+            scope["submission_id"] = submission_id
         async with async_transaction_scope(
             scope["tenant"], user_id=scope["owner"],
         ) as session:
             result = await session.execute(
                 text(f"""
-                    SELECT status,
+                    SELECT transport_run_id, submission_id, status,
                            cancel_requested_at IS NOT NULL AS stop_requested,
                            terminal_at IS NOT NULL AS terminal_recorded,
                            lease_expires_at > clock_timestamp() AS lease_live,
@@ -1115,15 +1207,11 @@ class SqlChatRunRepository:
                     WHERE tenant_id = CAST(:tenant AS uuid)
                       AND user_id = CAST(:owner AS uuid)
                       AND conversation_id = CAST(:conversation AS uuid)
-                      AND transport_run_id = :run_id
-                    LIMIT 1
+                      AND {predicate}
                 """),
                 scope,
             )
-            row = result.mappings().one_or_none()
-        if row is None:
-            return None
-        return self._project_run_status(row)
+            return result.mappings().one_or_none()
 
     @staticmethod
     def _project_run_status(row: Mapping[str, Any]) -> dict[str, Any]:
