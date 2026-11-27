@@ -193,7 +193,9 @@ test('SEARCH-PLUGIN-02: live weather uses the consumer plugin observation surfac
   await page.getByRole('button', { name: 'Research tools' }).click();
   await page.getByText('Technical search details').click();
   await expect(page.getByText('Actual mode', { exact: true })).toBeVisible();
-  await expect(page.locator('details').getByText('Provider', { exact: true }).first()).toBeVisible();
+  await expect(
+    page.locator('details', { hasText: 'Technical search details' }).getByText('Provider', { exact: true }).first(),
+  ).toBeVisible();
 });
 
 
