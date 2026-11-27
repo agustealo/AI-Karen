@@ -459,3 +459,16 @@ async def test_completed_turn_marks_only_commit_boundary_failures_uncertain(phas
     assert not receipt.success
     assert receipt.error == "completed_turn_write_failed"
     assert receipt.metadata["commit_outcome_uncertain"] is (phase != "before_commit")
+
+
+
+@pytest.mark.asyncio
+async def test_attachment_bound_run_cannot_commit_without_verified_private_execution():
+    from dataclasses import replace
+
+    current = replace(lease(), submission_id="draft-v2-1-" + "a" * 64)
+    tx = FakeTransaction()
+    result = await make_repo(tx).add_completed_turn(*messages(current), run_lease=current)
+    assert not result.success and result.error == "attachment_session_denied"
+    assert tx.rolled_back and not tx.committed
+    assert not any("INSERT INTO messages" in sql for sql, _ in tx.calls)

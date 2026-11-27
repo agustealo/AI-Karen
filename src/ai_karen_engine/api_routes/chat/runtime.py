@@ -1520,6 +1520,10 @@ async def stream_ag_ui_chat(
         submission_id = request.latest_user_submission_id() if durable_runs else None
         draft_revision = draft_revision_from_submission_id(submission_id)
         # Reserved draft identities are supported only by durable admission.
+        # v2 is reserved for the staged backend attachment contract. Do not
+        # expose it until the runtime and consumer handoff are certified.
+        if str(request.messages[-1].get("id", "")).startswith("draft-v2-"):
+            raise ValueError("draft_attachment_submission_unavailable")
         if not durable_runs and str(request.messages[-1].get("id", "")).startswith("draft-v1-"):
             raise ValueError("durable_draft_submission_unavailable")
         if draft_revision is not None and selected_attachments:
