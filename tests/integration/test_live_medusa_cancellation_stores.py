@@ -1383,6 +1383,8 @@ async def _redis_server_failure_acceptance(
             "maxmemory-policy"
         ] == "volatile-lru"
 
+        from ai_karen_engine.core.runtime.operational_health import OperationalHealthService
+
         async def observed_policy(policy: str, limit: int) -> None:
             observation = await redis.observe_durability()
             assert observation.status == "observed"
@@ -1395,8 +1397,13 @@ async def _redis_server_failure_acceptance(
             assert observation.appendfsync == "always"
             assert observation.aof_write_ok is True
             assert observation.evicted_keys is not None
+            readiness = OperationalHealthService._redis_durability_result(observation)
+            assert readiness["ready"] is (policy == "noeviction")
 
         await observed_policy("volatile-lru", 0)
+        assert await redis.client.config_set("maxmemory-policy", "noeviction")
+        await observed_policy("noeviction", 0)
+        assert await redis.client.config_set("maxmemory-policy", "volatile-lru")
 
         async def pressure(*, policy: str, run_key: str, pending_key: str) -> None:
             client = redis.client

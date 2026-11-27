@@ -34,7 +34,9 @@ async def initialize_application_redis(app: FastAPI) -> None:
         OperationalHealthService,
     )
 
-    if not OperationalHealthService.redis_lifecycle_enabled():
+    settings = getattr(app.state, "settings", None)
+    environment = str(getattr(settings, "environment", "development"))
+    if not OperationalHealthService.redis_lifecycle_enabled(environment=environment):
         return
     if getattr(app.state, _REDIS_LIFESPAN_OWNED_KEY, False):
         return
