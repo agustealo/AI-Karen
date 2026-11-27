@@ -120,7 +120,7 @@ class CommunicationsInboxService:
         """Admit only the current owner; reauthorize after releasing Redis."""
         scope = self._authorize(user, Permission.COMMUNICATIONS_READ, correlation_id)
         changed = await wait_for_inbox_invalidation(
-            tenant_id=scope[0], user_id=scope[1], disconnected=disconnected,
+            tenant_id=scope[0], user_id=scope[1], disconnected=disconnected, correlation_id=correlation_id,
         )
         fresh = await reauthenticate()
         if self._authorize(fresh, Permission.COMMUNICATIONS_READ, correlation_id) != scope:

@@ -383,10 +383,14 @@ describe("bounded authenticated inbox waits", () => {
   it.each([401, 403, 502, 503])("never refreshes, logs out or replays on %s", async (status) => {
     const scope = captureApiPrincipalScope("tenant", "owner")!;
     const refresh = vi.spyOn(clientInternals, "refreshAccessToken");
-    const fetchMock = vi.fn().mockResolvedValue(new Response("private error", { status }));
+    const denial = new Response("private error", { status });
+    const fetchMock = vi.fn().mockResolvedValue(denial);
     vi.stubGlobal("fetch", fetchMock);
     const controller = new AbortController();
-    await expect(apiClient.waitForInboxInvalidation(scope, controller.signal)).rejects.toMatchObject({ status });
+    await expect(apiClient.waitForInboxInvalidation(scope, controller.signal)).rejects.toMatchObject({
+      status, message: "Inbox invalidation unavailable",
+    });
+    expect(denial.bodyUsed).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0][0]).toBe("/api/communications-center/inbox/wait");
     expect(fetchMock.mock.calls[0][1]).toMatchObject({ method: "GET", cache: "no-store", redirect: "error", signal: controller.signal });
@@ -394,6 +398,30 @@ describe("bounded authenticated inbox waits", () => {
     expect(authService.clearAuth).not.toHaveBeenCalled();
     expect(localStorage.getItem("access_token")).toBe("existing-token");
     expect(localStorage.getItem("refresh_token")).toBe("existing-refresh");
+  });
+
+  it("does not settle at denial headers or publish a denial after the principal changes", async () => {
+    const scope = captureApiPrincipalScope("tenant", "owner")!;
+    let finishBody!: (text: string) => void;
+    const denial = new Response("private error", { status: 401 });
+    vi.spyOn(denial, "text").mockImplementation(() => new Promise(resolve => { finishBody = resolve; }));
+    const fetchMock = vi.fn().mockResolvedValue(denial);
+    vi.stubGlobal("fetch", fetchMock);
+    const controller = new AbortController();
+    const request = apiClient.waitForInboxInvalidation(scope, controller.signal);
+    let settled = false;
+    const observed = request.then(
+      () => { settled = true; },
+      () => { settled = true; },
+    );
+    await vi.waitFor(() => expect(finishBody).toBeTypeOf("function"));
+    expect(settled).toBe(false);
+    vi.mocked(authService.getAuthenticationRevision).mockReturnValue(2);
+    finishBody("private error");
+    await expect(request).rejects.toThrow("Authenticated request scope changed");
+    await observed;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(authService.clearAuth).not.toHaveBeenCalled();
   });
 
   it("does not dispatch an aborted or obsolete request and discards late results", async () => {

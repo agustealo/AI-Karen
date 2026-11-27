@@ -894,3 +894,35 @@ npx playwright test copilotkit-consumer-boot.spec.ts --project=chromium --retrie
 ```
 
 Require exactly one executed passing test, zero skips or retries. Keep console output private; never upload credentials, response bodies, downloaded files or browser profiles. Source gates are not authenticated execution proof.
+
+
+### KCOMM-03G signed-session invalidation acceptance
+
+The existing explicit `communications_browser` workflow dispatch now requires
+both KCOMM-02E and KCOMM-03G (two Chromium scenarios, zero skips/retries).
+After the frontend capability integration is merged, the disposable API image
+enables both invalidation flags and uses the existing Redis lifecycle.
+A test-only read-only witness checks exact owner subscription counts in the
+same guarded disposable Redis container. A second signed owner session commits
+a real inbox mutation, the browser receives the exact boolean hint and performs
+a canonical GET, and the foreign owner's concurrent wait returns idle.
+Workspace exit must abort the browser request and leave zero broker
+subscriptions. A real logout revokes the pending browser session; a subsequent
+committed owner change must not return an invalidation to that revoked session.
+No hosted account or deployment, fabricated event, mock API, direct runtime-row
+write, or production flag change. The exact-head run must actually execute
+both scenarios. This does not certify distributed HTTP worker capacity or
+real model inference failure.
+
+The same disposable acceptance can be explicitly requested on a non-draft,
+same-repository pull request by applying both `ci:merge-gate` and
+`ci:communications-browser`. Fork PRs cannot activate it with a label.
+The label is an opt-in CI execution control, not an application feature flag;
+ordinary pushes and unlabeled PRs retain the existing first-boot behavior.
+The workflow retains read-only permissions and does not use
+`pull_request_target`. Remove the browser label when no longer needed.
+
+Failure diagnostics emit only fixed scenario identifiers, allowed stage and
+result tokens, numeric source positions and the runner phase. The private
+Playwright report, raw exception text, response bodies and credentials remain
+suppressed. A failed test remains a hard failure.

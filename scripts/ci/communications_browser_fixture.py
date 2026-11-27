@@ -44,8 +44,58 @@ def canonical_uuid(value: str) -> str:
     return str(uuid.UUID(value))
 
 
+async def observe_subscribers(host: str, data: dict) -> dict:
+    """Read-only broker witness, never publish or manipulate a subscription."""
+    from ai_karen_engine.config.runtime import get_runtime_settings
+    from ai_karen_engine.core.realtime.inbox_invalidation import inbox_invalidation_channel
+    from ai_karen_engine.platform.memory.redis import get_redis_manager, shutdown_redis_manager
+
+    redis = urlsplit(os.environ["REDIS_URL"])
+    expected_host = "karen-beta-redis-" + host.removeprefix("karen-beta-postgres-")
+    if (
+        redis.scheme != "redis" or redis.hostname != expected_host
+        or redis.hostname != os.environ.get("REDIS_HOST")
+        or redis.port != 6379 or redis.path != "/0"
+        or redis.query or redis.fragment or not redis.password
+    ):
+        raise RuntimeError("Refusing non-disposable Redis target")
+    features = get_runtime_settings().features
+    if (
+        features.enable_communications_invalidation is not True
+        or features.enable_communications_invalidation_wait is not True
+    ):
+        raise RuntimeError("Disposable invalidation proof is not enabled")
+    tenant = canonical_uuid(data["tenant_id"])
+    owners = [canonical_uuid(owner) for owner in data["owners"]]
+    expected = data["expected_count"]
+    if (
+        not 1 <= len(owners) <= 2 or len(set(owners)) != len(owners)
+        or type(expected) is not int or expected not in (0, 1)
+    ):
+        raise RuntimeError("Invalid broker witness request")
+    manager = get_redis_manager()
+    try:
+        if not await manager.initialize() or manager.client is None or manager.is_degraded():
+            raise RuntimeError("Disposable Redis unavailable")
+        channels = [
+            inbox_invalidation_channel(prefix=manager.prefix, tenant_id=tenant, user_id=owner)
+            for owner in owners
+        ]
+        async with asyncio.timeout(6):
+            while True:
+                counts = dict(await manager.client.pubsub_numsub(*channels))
+                if all(counts.get(channel) == expected for channel in channels):
+                    return {"subscriber_counts": [counts[channel] for channel in channels]}
+                await asyncio.sleep(0.05)
+    finally:
+        await shutdown_redis_manager()
+
+
 async def main() -> dict:
     host = require_disposable()
+    data = json.loads(os.environ["KAREN_COMMS_FIXTURE_INPUT"])
+    if data["mode"] == "observe_subscribers":
+        return await observe_subscribers(host, data)
     from sqlalchemy import text
     from ai_karen_engine.config.runtime import get_runtime_settings
     from ai_karen_engine.persistence.postgres import get_postgres_engine
@@ -64,7 +114,6 @@ async def main() -> dict:
                 raise RuntimeError("Unexpected database")
         if not get_runtime_settings().features.enable_communications_terminal_producer:
             raise RuntimeError("Fixture producer not enabled")
-        data = json.loads(os.environ["KAREN_COMMS_FIXTURE_INPUT"])
         tenant = canonical_uuid(data["tenant_id"])
         if data["mode"] == "accounts":
             auth = AuthService()
