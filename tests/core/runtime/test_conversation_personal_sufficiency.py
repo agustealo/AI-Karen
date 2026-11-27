@@ -238,3 +238,71 @@ def test_conversation_change_without_explicit_correction_remains_unresolved():
     answer, _ = response("favorite_color", dialogue)
     assert "conflicting" in answer.casefold()
     assert "blue" not in answer.casefold()
+
+
+@pytest.mark.parametrize("claims", [
+    ("My name is Alice", "My name is Bob"),
+    ("My name is Alice", "My name is Carol"),
+])
+def test_identity_summary_never_asserts_saved_name_over_conversation_conflict(claims):
+    dialogue = ctx(*[("user", claim) for claim in claims])
+    dialogue.authorized_sources.append("memory")
+    dialogue.evidence.extend([
+        ContextEvidence(
+            evidence_id="saved-name", source=EvidenceSource.MEMORY,
+            content="preferred_name: Alice",
+            scope=EvidenceScope(tenant_id="tenant", user_id="user"),
+        ),
+        ContextEvidence(
+            evidence_id="saved-birthplace", source=EvidenceSource.MEMORY,
+            content="birthplace: Detroit",
+            scope=EvidenceScope(tenant_id="tenant", user_id="user"),
+        ),
+    ])
+    direct, direct_meta = response("preferred_name", dialogue)
+    assert direct_meta["evidence_sufficiency"] == "contradictory"
+    assert "Alice" not in direct
+
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_identity_summary_requested": True},
+    )
+    decision.cognitive_context = dialogue
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "Alice" not in answer
+    assert "Bob" not in answer and "Carol" not in answer
+    assert "Detroit" in answer
+    assert meta["evidence_count"] == 1
+    assert meta["response_source"] == "authorized_memory_evidence"
+
+    # If the disputed name is all we know, do not fabricate a summary.
+    dialogue.evidence.pop()
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "Alice" not in answer
+    assert meta["evidence_count"] == 0
+    assert meta["evidence_sufficiency"] == "missing"
+
+
+def test_identity_summary_preserves_matching_saved_and_recent_singleton():
+    dialogue = ctx(("user", "My name is Alice"))
+    dialogue.authorized_sources.append("memory")
+    dialogue.evidence.append(ContextEvidence(
+        evidence_id="saved-name", source=EvidenceSource.MEMORY,
+        content="preferred_name: Alice",
+        scope=EvidenceScope(tenant_id="tenant", user_id="user"),
+    ))
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_identity_summary_requested": True},
+    )
+    decision.cognitive_context = dialogue
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "Alice" in answer
+    assert meta["evidence_sufficiency"] == "supported"
+    assert meta["evidence_count"] == 1

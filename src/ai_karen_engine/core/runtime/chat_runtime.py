@@ -2925,6 +2925,14 @@ class ChatRuntime:
                     decision.cognitive_context,
                     tenant_id=tenant_id, user_id=user_id, attribute=key,
                 )
+                # An identity summary must not be a weaker assertion boundary
+                # than a direct question about the same fact. A disputed
+                # conversation cannot rehabilitate an older saved singleton.
+                if recent.status in {
+                    EvidenceSufficiencyStatus.CONTRADICTORY,
+                    EvidenceSufficiencyStatus.AMBIGUOUS,
+                }:
+                    continue
                 if (
                     saved.status is EvidenceSufficiencyStatus.SUPPORTED
                     and recent.status is EvidenceSufficiencyStatus.SUPPORTED
