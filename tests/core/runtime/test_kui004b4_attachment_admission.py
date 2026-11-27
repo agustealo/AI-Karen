@@ -1230,3 +1230,69 @@ async def test_generated_text_prompt_registry_contract(tmp_path):
         and item["content"] == definition.system_instructions
         for item in assembled.messages
     )
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("attack", ["removed", "substituted", "reordered", "scope", "v1"])
+async def test_durable_draft_attachment_binding_denies_before_read(monkeypatch, attack):
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        draft_attachment_selection_digest,
+    )
+
+    refs = [selected(), selected(SECOND)]
+    request, plan, meter = await authority(references=refs)
+    ctx = request.context
+    lease = ChatRunLease(
+        execution_id=str(uuid.uuid4()), lease_token=str(uuid.uuid4()),
+        tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+        conversation_id=ctx.conversation_id, transport_run_id="run",
+        request_id=ctx.request_id, correlation_id=ctx.correlation_id,
+        submission_id="draft-v2-1-" + draft_attachment_selection_digest(refs),
+    )
+    if attack == "removed":
+        request.attachment_references = []
+    elif attack == "substituted":
+        request.attachment_references = [selected(SECOND)]
+    elif attack == "reordered":
+        request.attachment_references = list(reversed(refs))
+    elif attack == "scope":
+        lease = replace(lease, user_id=str(uuid.uuid4()))
+    else:
+        lease = replace(lease, submission_id="draft-v1-1")
+    request.runtime_run_lease = lease
+    reader = BoundedReader({})
+    runtime = runtime_with_reader(monkeypatch, reader)
+    assert runtime._attachment_restriction_required(request)
+    with pytest.raises(AttachmentAdmissionDenied, match="draft_attachment_binding_denied"):
+        await runtime._admit_attachments(request, plan, meter)
+    assert reader.calls == []
+    with pytest.raises(AttachmentAdmissionDenied, match="draft_attachment_binding_denied"):
+        runtime._prompt_messages_with_admitted_attachments(request)
+
+
+@pytest.mark.asyncio
+async def test_durable_draft_attachment_binding_preserves_authorized_read(monkeypatch):
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        draft_attachment_selection_digest,
+    )
+
+    request, plan, meter = await authority()
+    ctx = request.context
+    request.runtime_run_lease = ChatRunLease(
+        execution_id=str(uuid.uuid4()), lease_token=str(uuid.uuid4()),
+        tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+        conversation_id=ctx.conversation_id, transport_run_id="run",
+        request_id=ctx.request_id, correlation_id=ctx.correlation_id,
+        submission_id="draft-v2-1-" + draft_attachment_selection_digest(request.attachment_references),
+    )
+    reader = BoundedReader({SOURCE: verified(ctx)})
+    runtime = runtime_with_reader(monkeypatch, reader)
+    await runtime._admit_attachments(request, plan, meter)
+    assert len(reader.calls) == 1
+    assert BODY in runtime._prompt_messages_with_admitted_attachments(request)[-2]["content"]
+    request.attachment_references = []
+    with pytest.raises(AttachmentAdmissionDenied, match="draft_attachment_binding_denied"):
+        runtime._prompt_messages_with_admitted_attachments(request)
