@@ -522,3 +522,31 @@ def test_alternative_readiness_failure_never_changes_chosen_plan(
         assert "verification_alternative_readiness" not in selected.policy_constraints
 
     asyncio.run(run())
+
+
+def test_chat_plan_uses_issuer_tool_quota_not_mutable_cognitive_hint() -> None:
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+    async def run() -> None:
+        request = _request()
+        issuer = RuntimePolicyEnforcer()
+        pipeline = RuntimeDecisionPipeline(
+            cortex=FakeCortex(ExecutionDecision(
+                topology=ExecutionTopology.DIRECT,
+                max_model_calls=1,
+                policy_constraints={"max_tool_calls": 999},
+            )),
+            policy=issuer,
+            evidence_resolver=NoEvidenceResolver(),
+        )
+        decision = await pipeline.decide(request)
+        assert decision.policy_constraints["max_tool_calls"] == 5
+        runtime = object.__new__(ChatRuntime)
+        plan = runtime._build_authorized_plan(request, decision)
+        assert plan.budget.max_tool_calls == 5
+        meter = ExecutionBudgetMeter(plan.budget)
+        request.context.bind_runtime_model_authority(plan, meter)
+        assert request.context.original_runtime_model_plan(meter) is plan
+
+    asyncio.run(run())
