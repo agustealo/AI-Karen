@@ -801,3 +801,33 @@ async def test_native_retirement_failure_never_resolves_chat_admission(monkeypat
         async for _ in stream:
             pytest.fail("unexpected output after unverified retirement")
     assert repo.finalized == []
+
+
+@pytest.mark.asyncio
+async def test_coordinator_passes_exact_attachment_draft_hints_after_ownership():
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        draft_attachment_selection_digest,
+    )
+
+    refs = [{"source_id": THREAD, "revision": "a" * 64}]
+    submission = "draft-v2-3-" + draft_attachment_selection_digest(refs)
+    lease = ChatRunLease(
+        execution_id="33333333-3333-4333-8333-333333333333",
+        lease_token="44444444-4444-4444-8444-444444444444",
+        tenant_id=TENANT_A, user_id=USER_A, conversation_id=THREAD,
+        transport_run_id="attachment-run", request_id="request-1",
+        correlation_id=CORRELATION_ID, submission_id=submission,
+    )
+    repo = AsyncMock()
+    repo.admit.return_value = lease
+    assert await ChatRunCoordinator(repo).admit(
+        context(), "attachment-run", submission_id=submission,
+        submitted_text="Read attachment", submitted_attachment_references=refs,
+    ) is lease
+    repo.admit.assert_awaited_once_with(
+        tenant_id=TENANT_A, user_id=USER_A, conversation_id=THREAD,
+        transport_run_id="attachment-run", request_id="request-1",
+        correlation_id=CORRELATION_ID, submission_id=submission,
+        submitted_text="Read attachment", submitted_attachment_references=refs,
+    )
