@@ -2729,3 +2729,70 @@ def test_native_sequence_never_certifies_multiple_computes_in_one_reserved_scope
     assert collector.snapshot()["counters"]["kari_native_execution_observations_total"]["values"] == {
         ("soft_guided", "unverified_result"): 1.0,
     }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("requirements,ceiling", [
+    (None, 10),
+    ([], 5),
+    (["first", "second"], 7),
+    (["tool-" + str(index) for index in range(8)], 13),
+])
+@pytest.mark.parametrize("narrow", [False, True])
+async def test_initial_tool_budget_is_bounded_by_real_issuer(requirements, ceiling, narrow):
+    issuer = RuntimePolicyEnforcer()
+    request = PolicyEvaluationRequest(
+        user_id="tool-quota-user",
+        tenant_id="tool-quota-tenant",
+        session_id="tool-quota-session",
+        correlation_id=f"tool-quota-{uuid4().hex}",
+        max_model_calls=0,
+        execution_topology=(
+            {} if requirements is None else {"tool_requirements": requirements}
+        ),
+    )
+    decision = await issuer.evaluate(request)
+    assert decision.allowed
+    assert decision.runtime_constraints["max_tool_calls"] == ceiling
+    context = ChatExecutionContext(
+        user_id=request.user_id, tenant_id=request.tenant_id,
+        session_id=request.session_id, correlation_id=request.correlation_id,
+        request_id=f"tool-quota-request-{uuid4().hex}",
+        authenticated_user=UserData(
+            user_id=request.user_id, tenant_id=request.tenant_id,
+            roles=["user"], permissions=[], is_active=True, is_verified=True,
+        ),
+    )
+    issuer.bind_chat_model_policy(context=context, decision=decision)
+    original = decision.to_authorized_plan()
+    assert original.budget.max_tool_calls == ceiling
+    for widened in (ceiling + 1, -1, True):
+        budget = replace(original.budget, max_tool_calls=widened)
+        plan = replace(original, budget=budget)
+        meter = ExecutionBudgetMeter(budget)
+        with pytest.raises(PermissionError, match="runtime_model_execution_authority_invalid"):
+            context.bind_runtime_model_authority(plan, meter)
+        assert context.original_runtime_model_plan(meter) is None
+        assert meter.tool_calls == 0
+
+    # Altering the issuer's decision after issuance is not a grant.
+    decision.runtime_constraints["max_tool_calls"] = ceiling + 1
+    assert not issuer.verifies_chat_model_policy(context=context, plan=original)
+    decision.runtime_constraints["max_tool_calls"] = ceiling
+
+    limit = 1 if narrow else ceiling
+    plan = replace(original, budget=replace(original.budget, max_tool_calls=limit))
+    meter = ExecutionBudgetMeter(plan.budget)
+    context.bind_runtime_model_authority(plan, meter)
+    assert context.original_runtime_model_plan(meter) is plan
+    fresh_meter = ExecutionBudgetMeter(plan.budget)
+    with pytest.raises(PermissionError, match="runtime_model_execution_authority_invalid"):
+        context.bind_runtime_model_authority(plan, fresh_meter)
+    assert context.original_runtime_model_plan(fresh_meter) is None
+    plan.budget.max_tool_calls = limit + 1
+    assert context.original_runtime_model_plan(meter) is None
+    plan.budget.max_tool_calls = limit
+    assert context.original_runtime_model_plan(meter) is plan
+    results = await asyncio.gather(*(meter.consume_tool_call() for _ in range(limit + 3)))
+    assert sum(results) == limit
+    assert meter.tool_calls == limit
