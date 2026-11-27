@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -27,6 +28,7 @@ from ai_karen_engine.core.runtime.contracts import (
 from ai_karen_engine.core.runtime.direct_capability_executor import (
     DirectCapabilityExecutor,
 )
+from ai_karen_engine.extensions.platform.core.manifest import ExtensionManifest
 from ai_karen_engine.services.plugin_service import PluginService
 
 USER = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
@@ -885,3 +887,87 @@ async def test_non_admin_manage_does_not_surface_confirmation_action():
     assert result.payload["requested_action_executed"] is False
     assert result.payload["plugin_management_preflight"]["status"] == "permission_denied"
     assert result.payload["next_action"] is None
+
+
+def _content_manifest():
+    path = (
+        Path(__file__).resolve().parents[3]
+        / "src/ai_karen_engine/extensions/plugins/content-intelligence/plugin_manifest.json"
+    )
+    return ExtensionManifest.from_dict(json.loads(path.read_text(encoding="utf-8")))
+
+
+@pytest.mark.asyncio
+async def test_content_intelligence_features_use_real_installed_manifest_contract():
+    service = _catalog()
+    manifest = _content_manifest()
+    service.list_plugins.return_value = [
+        {"manifest": manifest, "status": "disabled", "is_valid": True},
+    ]
+    service.execute_plugin = AsyncMock()
+    service.analyze_content_owner_sources = AsyncMock()
+    p = _plan()
+    with patch(
+        "ai_karen_engine.core.runtime.direct_capability_executor.get_plugin_service",
+        return_value=service,
+    ):
+        result = await DirectCapabilityExecutor().execute(
+            request=_request("What can my Content Intelligence plugin do?"),
+            decision=SimpleNamespace(intent="plugin.inspect"),
+            plan=p, meter=_meter(p),
+        )
+    assert result.success and result.source == "plugin_catalog"
+    entry = result.payload["plugin_inspection"]["matches"][0]
+    assert entry["declared_features"] == [
+        "plugin.ui", "plugin.operation.analyze",
+        "plugin.operation.search", "plugin.operation.compare",
+    ]
+    assert entry["readiness"] == "disabled"
+    assert entry["authorized_to_execute"] is False
+    assert entry["generic_execution_enabled"] is False
+    assert entry["runtime_execution_verified"] is False
+    assert "not verified execution" in result.text
+    for feature in entry["declared_features"]:
+        assert feature in result.text
+    assert result.payload["requested_action_executed"] is False
+    service.execute_plugin.assert_not_awaited()
+    service.analyze_content_owner_sources.assert_not_awaited()
+    service._execution_configuration_readiness.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("variation", [
+    "role_denied", "invalid", "blocked", "open_schema", "optional",
+    "wrong_type", "duplicate", "unsafe_name", "oversized",
+])
+async def test_operation_discovery_rejects_untrusted_or_unbounded_declarations(variation):
+    service = _catalog()
+    manifest = _content_manifest()
+    schema = manifest.execution_input_schema
+    assert schema is not None
+    if variation == "open_schema":
+        schema.additional_properties = True
+    elif variation == "optional":
+        schema.required = ["documents"]
+    elif variation == "wrong_type":
+        schema.properties["operation"]["type"] = "integer"
+    elif variation == "duplicate":
+        schema.properties["operation"]["enum"] = ["analyze", "analyze"]
+    elif variation == "unsafe_name":
+        schema.properties["operation"]["enum"] = ["analyze", "secret\\nvalue"]
+    elif variation == "oversized":
+        schema.properties["operation"]["enum"] = [f"operation{i}" for i in range(13)]
+    record = {"manifest": manifest, "status": "disabled", "is_valid": variation != "invalid"}
+    if variation == "blocked":
+        record["activation_blocked_reason"] = "review_required"
+    service.list_plugins.return_value = [record]
+    result = await service.inspect_for_conversation(
+        tenant_id=TENANT, target="Content Intelligence",
+        caller_roles=["unknown"] if variation == "role_denied" else ["user"],
+    )
+    entry = result["matches"][0]
+    assert not any(
+        name.startswith("plugin.operation.") for name in entry["declared_features"]
+    )
+    assert entry["authorized_to_execute"] is False
+    assert result["mutation_performed"] is False
