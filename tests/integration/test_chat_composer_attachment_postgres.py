@@ -386,10 +386,17 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         # A real database error during retirement must roll back BOTH messages
         # and the already-staged terminal UPDATE, not just the draft change.
         async with engine.begin() as conn:
+            # Sequences are not rolled back. This witness proves that the
+            # injected fault was reached, not an unrelated earlier SQL error.
+            await conn.execute(text("CREATE SEQUENCE retirement_fault_witness"))
             await conn.execute(text("""
-                CREATE FUNCTION reject_draft_retirement() RETURNS trigger LANGUAGE plpgsql AS $
-                BEGIN RAISE EXCEPTION 'controlled retirement failure'; END;
-                $
+                CREATE FUNCTION reject_draft_retirement() RETURNS trigger
+                LANGUAGE plpgsql AS $retirement$
+                BEGIN
+                    PERFORM nextval('retirement_fault_witness');
+                    RAISE EXCEPTION 'controlled retirement failure' USING ERRCODE = '23514';
+                END;
+                $retirement$
             """))
             await conn.execute(text("""
                 CREATE TRIGGER reject_retirement BEFORE UPDATE ON public.conversation_composer_drafts
@@ -401,6 +408,12 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         )
         assert not failed.success and failed.error == "completed_turn_write_failed"
         assert failed.metadata["commit_outcome_uncertain"] is False
+        assert failed.metadata["failure_class"] == "database_integrity_failure"
+        async with engine.connect() as conn:
+            witness = (await conn.execute(text(
+                "SELECT last_value, is_called FROM retirement_fault_witness"
+            ))).one()
+            assert tuple(witness) == (1, True)
         assert await observe(completing) == ("running", 0)
         assert (await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
