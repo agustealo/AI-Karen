@@ -553,7 +553,10 @@ async def test_ag_ui_capabilities_are_derived_from_canonical_feature_flag(monkey
     identity = {"user_id": USER, "tenant_id": TENANT_A}
     assert (
         await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
-    ) == {"enabled": True, "governed_history": False, "observed_event_journal": False}
+    ) == {
+        "enabled": True, "governed_history": False, "observed_event_journal": False,
+        "attachment_draft_submission": False,
+    }
     monkeypatch.setattr(
         chat_ingress,
         "get_runtime_settings",
@@ -561,7 +564,20 @@ async def test_ag_ui_capabilities_are_derived_from_canonical_feature_flag(monkey
     )
     assert (
         await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
-    ) == {"enabled": False, "governed_history": False, "observed_event_journal": False}
+    ) == {
+        "enabled": False, "governed_history": False, "observed_event_journal": False,
+        "attachment_draft_submission": False,
+    }
+    for bridge in (False, True):
+        monkeypatch.setattr(
+            chat_ingress, "get_runtime_settings",
+            lambda: SimpleNamespace(features=SimpleNamespace(
+                enable_ag_ui_bridge=bridge, enable_ag_ui_durable_runs=True,
+            )),
+        )
+        capabilities = await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
+        assert capabilities["attachment_draft_submission"] is bridge
+        assert capabilities["governed_history"] is bridge
 
 
 @pytest.mark.asyncio

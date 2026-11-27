@@ -969,6 +969,12 @@ async def get_ag_ui_transport_capabilities(
             features.enable_ag_ui_bridge
             and getattr(features, "enable_ag_ui_durable_runs", False)
         ),
+        # Explicit protocol support, not inferred from governed history.
+        # This is not a claim of database, Storage or model readiness.
+        "attachment_draft_submission": bool(
+            features.enable_ag_ui_bridge
+            and getattr(features, "enable_ag_ui_durable_runs", False)
+        ),
         "observed_event_journal": bool(
             features.enable_ag_ui_bridge
             and getattr(features, "enable_ag_ui_durable_runs", False)

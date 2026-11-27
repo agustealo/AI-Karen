@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { NextRequest } from "next/server";
+import { createHash } from "node:crypto";
 
 vi.mock("@/app/api/_lib/backend-proxy", () => ({
   getBackendBaseUrl: () => "http://api:8000",
@@ -42,7 +43,21 @@ afterEach(() => {
 });
 
 describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
-  it("streams a full AG-UI run without a second model executor", async () => {
+  it.each([false, true])("streams a full AG-UI run without a second model executor (attachment draft: %s)", async (attached) => {
+    const refs = [
+      { source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) },
+      { source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", revision: "b".repeat(64) },
+    ];
+    const digest = createHash("sha256").update(JSON.stringify(refs.map(
+      ({ revision, source_id }) => ({ revision, source_id }),
+    )), "utf8").digest("hex");
+    const submissionId = attached ? "draft-v2-7-" + digest : "user_1";
+    const messages = [{ id: submissionId, role: "user", content: "Check Karen" }];
+    const hints = {
+      preferred_llm_provider: "local",
+      preferred_model: "example-local",
+      ...(attached ? { attachment_references: refs } : {}),
+    };
     const calls: { url: string; init?: RequestInit }[] = [];
     const reply = [
       { type: "RUN_STARTED", threadId: CONVERSATION, runId: RUN_ID },
@@ -65,7 +80,9 @@ describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
       if (url === CAPABILITIES_ENDPOINT) {
         expect(init?.redirect).toBe("manual");
         expect(new Headers(init?.headers).get("cookie")).toBe("kari_session=verified");
-        return Response.json({ enabled: true });
+        return Response.json({
+          enabled: true, governed_history: attached, attachment_draft_submission: attached,
+        });
       }
       if (url === AGENT_ENDPOINT) {
         expect(init?.redirect).toBe("manual");
@@ -77,10 +94,8 @@ describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
         expect(payload.threadId).toBe(CONVERSATION);
         expect(payload.runId).toBe(RUN_ID);
         // UI requests are hints only; Karen's runtime selects the actual model.
-        expect(payload.forwardedProps).toEqual({
-          preferred_llm_provider: "local",
-          preferred_model: "example-local",
-        });
+        expect(payload.messages).toEqual(messages);
+        expect(payload.forwardedProps).toEqual(hints);
         return new Response(reply, {
           headers: { "content-type": "text/event-stream" },
         });
@@ -89,10 +104,8 @@ describe("CopilotKit v2 run over canonical Karen AG-UI", () => {
     }) as typeof fetch;
 
     const response = await POST(sdkRun({
-      forwardedProps: {
-        preferred_llm_provider: "local",
-        preferred_model: "example-local",
-      },
+      messages,
+      forwardedProps: hints,
     }));
     expect(response.status).toBe(200);
     expect(response.headers.get("content-type")).toContain("text/event-stream");
