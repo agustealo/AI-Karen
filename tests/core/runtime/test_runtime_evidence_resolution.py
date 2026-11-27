@@ -531,3 +531,37 @@ def test_canonical_event_origin_uses_selected_record_revision_not_custom_claim()
     assert RuntimeEvidenceResolver._canonical_memory_event_origin(
         item, tenant_id="tenant-1", user_id="user-1",
     ) is None
+
+
+@pytest.mark.parametrize("source,record_type,identity_key", [
+    ("postgres_profile_fact", "profile_fact", "fact_id"),
+    ("postgres_memory_ledger", "memory_assertion", "assertion_id"),
+])
+def test_canonical_memory_validity_bounds_survive_runtime_projection(source, record_type, identity_key):
+    record_id = "11111111-1111-4111-8111-111111111111"
+    event_id = "22222222-2222-4222-8222-222222222222"
+    start = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 3, tzinfo=timezone.utc)
+    custom = {
+        "event_id": event_id, "valid_from": start.isoformat(), "valid_to": end.isoformat(),
+        "provenance": {"store": "postgres", "record_type": record_type,
+                       identity_key: record_id, "event_id": event_id, "source_type": "chat"},
+    }
+    item = {"id": record_id, "content": "residence_location: Example",
+            "metadata": {"source": source, "tenant_id": "tenant-1", "user_id": "user-1",
+                         "custom": custom}}
+    def project():
+        return RuntimeEvidenceResolver._memory_item_to_evidence(
+            item, request=_request(), retrieved_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+    assert project().temporal.effective_from == start
+    assert project().temporal.effective_until == end
+    custom["valid_from"] = "not-a-date"
+    with pytest.raises(ValueError, match="invalid_canonical_memory_validity"):
+        project()
+    custom["valid_from"] = end.isoformat()
+    with pytest.raises(ValueError, match="invalid_canonical_memory_validity"):
+        project()
+    item["metadata"]["source"] = "untrusted"
+    assert project().temporal.effective_from is None
+    assert project().temporal.effective_until is None
