@@ -2506,6 +2506,8 @@ class ChatRuntime:
         Only the grounded synthesis boundary constructs it. Historical
         projection must independently verify the completed message digest.
         """
+        from ai_karen_engine.core.runtime.presentation_contract import is_public_source_url
+
         receipt = provider_meta.get("verified_citation_receipt_v1")
         if (
             request.runtime_run_lease is None
@@ -2526,8 +2528,7 @@ class ChatRuntime:
             or not 1 <= len(receipt["source_id"]) <= 128
             or not isinstance(receipt["urls"], tuple)
             or not 1 <= len(receipt["urls"]) <= 50
-            or any(not isinstance(url, str) or not 1 <= len(url) <= 2000
-                   for url in receipt["urls"])
+            or any(not is_public_source_url(url) for url in receipt["urls"])
             or len(set(receipt["urls"])) != len(receipt["urls"])
         ):
             return None

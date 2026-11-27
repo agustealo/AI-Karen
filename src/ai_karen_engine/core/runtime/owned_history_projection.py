@@ -9,6 +9,7 @@ never fabricates rich events or permits model execution by itself.
 
 from __future__ import annotations
 
+import hashlib
 import hmac
 import json
 from collections.abc import Mapping
@@ -22,12 +23,15 @@ from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import ConversationSnapshot
 from ai_karen_engine.core.runtime.presentation_contract import (
     contains_revocable_code_artifact,
+    is_public_source_url,
     validate_presentation,
 )
 from ai_karen_engine.core.runtime.plugin_management_contract import (
     validate_plugin_management_preflight,
 )
 from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
+from ai_karen_engine.services.response.response_contracts import ResponseContract
+from ai_karen_engine.services.response.response_validator import ResponseValidator
 
 _MAX_MESSAGES = 500
 _MAX_BYTES = 2 * 1024 * 1024
@@ -126,7 +130,105 @@ def _is_degraded_direct_search_context(metadata: Mapping[str, Any]) -> bool:
     )
 
 
-def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
+def _verified_document_receipt(metadata: Mapping[str, Any]) -> bool:
+    """Recognize the generated-text producer's duplicate creation receipt.
+
+    The canonical presentation validator owns the receipt schema. Both
+    persisted copies and the captured live presentation must describe the
+    same immutable receipt. This grants no current artifact access; the
+    ordinary completed-run attestation and authorized artifact read remain
+    mandatory at their respective boundaries.
+    """
+    artifacts = metadata.get("artifacts")
+    structured = metadata.get("structured_content")
+    captured = metadata.get("verified_presentations_v1")
+    if (
+        not isinstance(artifacts, list) or len(artifacts) != 1
+        or not isinstance(structured, Mapping) or set(structured) != {"presentation"}
+        or not isinstance(captured, list) or len(captured) != 1
+    ):
+        return False
+    part = validate_presentation(captured[0])
+    if (
+        part is None or part != captured[0]
+        or part["component_type"] != "document.artifact"
+    ):
+        return False
+    # Validate each copy independently: Python equality alone accepts
+    # boolean/integer and integer/float substitutions for size_bytes.
+    structured_part = validate_presentation(structured["presentation"])
+    receipt_part = validate_presentation({**part, "data": artifacts[0]})
+    return (
+        structured_part is not None
+        and structured_part == structured["presentation"] == part
+        and receipt_part is not None
+        and receipt_part == part
+    )
+
+
+def _verified_citation_urls(metadata: Mapping[str, Any], content: str) -> list[str] | None:
+    """Check exact historical URL provenance; never re-fetch or grant access."""
+    receipt = metadata.get("verified_citation_receipt_v1")
+    if (
+        not isinstance(receipt, dict)
+        or set(receipt) != {"schema_version", "request_id", "answer_sha256",
+                            "source_kind", "source_id", "urls"}
+        or type(receipt["schema_version"]) is not int or receipt["schema_version"] != 1
+        or metadata.get("response_source") != "grounded_search_model"
+        or metadata.get("answer_composition_status") != "grounded_model"
+        or metadata.get("degraded_mode") is not False
+        or not isinstance(receipt["request_id"], str) or not receipt["request_id"]
+        or receipt["request_id"] != metadata.get("request_id")
+        or receipt["source_kind"] not in ("tool", "plugin")
+        or not isinstance(receipt["source_id"], str)
+        or not 1 <= len(receipt["source_id"]) <= 128
+    ):
+        return None
+    try:
+        digest = hashlib.sha256(content.encode("utf-8")).hexdigest()
+    except UnicodeError:
+        return None
+    if receipt["answer_sha256"] != digest:
+        return None
+    urls = receipt["urls"]
+    if (
+        not isinstance(urls, list) or not 1 <= len(urls) <= 50
+        or any(not is_public_source_url(url) for url in urls)
+        or len(set(urls)) != len(urls)
+    ):
+        return None
+    attempts = metadata.get("provider_attempts")
+    if not isinstance(attempts, list) or len(attempts) > 100 or not any(
+        isinstance(attempt, Mapping)
+        and attempt.get("type") == receipt["source_kind"]
+        and attempt.get("id") == receipt["source_id"]
+        and attempt.get("status") == "success"
+        for attempt in attempts
+    ):
+        return None
+    sources = metadata.get("sources")
+    if not isinstance(sources, list) or len(sources) > 100:
+        return None
+    # Only top-level fetched URL identities may be used. Nested provider
+    # fields, discovery links and raw citations cannot manufacture evidence.
+    evidence = [
+        {"url": row["url"], "evidence_level": "fetched_page"}
+        for row in sources
+        if isinstance(row, Mapping) and row.get("evidence_level") == "fetched_page"
+        and is_public_source_url(row.get("url"))
+    ]
+    verdict = ResponseValidator().validate(content, ResponseContract(
+        purpose="tool_synthesis", requires_live_data=True,
+        tool_results=[{"sources": evidence}],
+    ))
+    if not verdict.valid or verdict.verified_citation_urls != tuple(urls):
+        return None
+    return list(urls)
+
+
+def _verified_source_context(
+    metadata: Mapping[str, Any], *, verified_citations: bool = False,
+) -> bool:
     """Allow *withheld* provider source metadata only with an attested UI part.
 
     This function grants no execution/replay authority. The completed-run
@@ -159,6 +261,13 @@ def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
 
     structured = metadata.get("structured_content")
     captured = metadata.get("verified_presentations_v1")
+    if verified_citations and captured is None and (
+        not _carries_value(structured) or (
+            isinstance(structured, Mapping)
+            and set(structured).issubset(_VERIFIED_PRESENTATION_CONTEXT_KEYS - {"presentation"})
+        )
+    ):
+        return True
     if (
         not isinstance(structured, Mapping)
         or not isinstance(captured, list)
@@ -167,25 +276,47 @@ def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
     ):
         return False
     part = validate_presentation(captured[0])
-    if part is None or part != captured[0] or part["component_type"] not in {
+    if part is None or part != captured[0]:
+        return False
+    # The runtime may arrange its already verified observations in a bounded
+    # composition. Only source-backed search/weather children are supported
+    # here; do not treat a layout plan as independent evidence authority.
+    parts = (
+        part["data"]["items"]
+        if part["component_type"] == "surface.composition"
+        else [part]
+    )
+    if any(child["component_type"] not in {
         "search.results", "weather.observation", "weather.comparison",
-    }:
+    } for child in parts):
+        return False
+    if len({child["presentation_id"] for child in parts}) != len(parts):
         return False
     # A source/citation-bearing capability must carry the original completed
     # request receipt; unpaired metadata from historical/legacy messages
     # cannot be silently admitted as if it were verified.
     if metadata.get("source") != "chat_runtime" or not isinstance(metadata.get("request_id"), str):
         return False
-    evidence = part.get("evidence_ref")
-    if not isinstance(evidence, str) or not evidence.startswith(metadata["request_id"] + ":"):
+    request_id = metadata["request_id"]
+    if not request_id:
+        return False
+    prefix = request_id + ":"
+    references = {child["evidence_ref"] for child in parts}
+    if any(not ref.startswith(prefix) or len(ref) <= len(prefix) for ref in references):
+        return False
+    expected = (
+        next(iter(references)) if len(references) == 1
+        else f"bundle:{request_id}"
+    )
+    if part["evidence_ref"] != expected:
         return False
 
-    if part["component_type"] == "search.results":
-        # Every *displayed* result must have been in the saved source receipts.
-        # Other source/citation records may be retained by the canonical
-        # repository but must not be shipped to the renderer.
-        records = part["data"]["results"]
-        for displayed in records:
+    for child in parts:
+        if child["component_type"] != "search.results":
+            continue
+        # Every displayed search result, including nested source cards, must
+        # match saved source receipts. Raw citations remain withheld.
+        for displayed in child["data"]["results"]:
             if not any(
                 row["url"] == displayed["url"]
                 and str(row.get("snippet") or row.get("content") or "").strip()
@@ -250,18 +381,29 @@ def project_owned_history(
         if not isinstance(metadata, Mapping):
             raise UnreplayableHistory("invalid_message_metadata")
         has_unknown_rich = any(
-            _carries_value(metadata.get(key)) for key in _UNSUPPORTED_RICH
+            _carries_value(metadata.get(key))
+            and not (key == "artifacts" and _verified_document_receipt(metadata))
+            for key in _UNSUPPORTED_RICH
         )
         has_source_context = any(
             _carries_value(metadata.get(key)) for key in ("sources", "citations")
         )
+        has_citation_receipt = "verified_citation_receipt_v1" in metadata
+        citation_urls = (
+            _verified_citation_urls(metadata, content)
+            if has_citation_receipt and not text_continuation else None
+        )
+        if has_citation_receipt and not text_continuation and citation_urls is None:
+            raise UnreplayableHistory("unsupported_rich_history")
         if has_unknown_rich and not text_continuation:
             raise UnreplayableHistory("unsupported_rich_history")
         # Raw source and citation records may accompany a *fully attested*
         # saved surface but cannot independently authorize new UI claims.
         # In explicit text-only continuation, these are withheld; the exact
         # completed-run digest remains necessary for the affected message.
-        if not text_continuation and not _verified_source_context(metadata):
+        if not text_continuation and not _verified_source_context(
+            metadata, verified_citations=citation_urls is not None,
+        ):
             raise UnreplayableHistory("unsupported_rich_history")
 
         # The direct-capability stream persists its *same* approved surface
@@ -320,6 +462,15 @@ def project_owned_history(
                         or snapshot_val.get("source") != "authenticated_runtime_observation"
                     ):
                         raise UnreplayableHistory("unsupported_rich_history")
+            elif (
+                citation_urls is not None
+                and metadata.get("verified_presentations_v1") is None
+                and isinstance(structured, Mapping)
+                and set(structured).issubset(_VERIFIED_PRESENTATION_CONTEXT_KEYS - {"presentation"})
+            ):
+                # A validated citation receipt supports text plus links, not
+                # a fabricated presentation from withheld search metadata.
+                pass
             elif _is_degraded_direct_search_context(metadata):
                 # Bounded degraded search diagnostics; raw sources remain
                 # withheld and exact completed-run attestation still runs below.
@@ -342,6 +493,7 @@ def project_owned_history(
         observed = (observed_activity or {}).get(identifier)
         rich = (
             observed is not None
+            or has_citation_receipt
             or any(_carries_value(metadata.get(key)) for key in _RUNTIME_RECEIPT)
             or _carries_value(metadata.get("verified_presentations_v1"))
             or (
@@ -437,6 +589,11 @@ def project_owned_history(
                         if event.get("type") != "CUSTOM" or event.get("name") != "karen.presentation.v1":
                             raise UnreplayableHistory("invalid_presentation_projection")
                         events.append({**event, "messageId": identifier})
+            if citation_urls is not None:
+                events.append({
+                    "type": "CUSTOM", "name": "karen.verified_citations.v1",
+                    "messageId": identifier, "value": {"urls": citation_urls},
+                })
             for event in projector.project(ChatStreamChunk(
                 type="complete", content="",
                 correlation_id=replay_trace_id,

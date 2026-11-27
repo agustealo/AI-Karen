@@ -1313,3 +1313,190 @@ async def test_owner_read_preserves_uncertain_terminal_during_redis_disconnect()
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("status", "limit", "used", "excluded", "reason"), [
+    ("observed", 100, 80, 10, None),
+    ("observed", 100, 80, 9, "redis_capacity_reserve_exhausted"),
+    ("observed", 100, 110, 5, "redis_capacity_reserve_exhausted"),
+    ("observed", 0, 80, 0, "redis_capacity_unverified"),
+    ("observed", 100, 80, 81, "redis_capacity_unverified"),
+    ("observed", 100, None, 0, "redis_capacity_unverified"),
+    ("partial", 100, 10, 0, "redis_capacity_unverified"),
+    ("unavailable", 100, 10, 0, "redis_capacity_unverified"),
+])
+async def test_redis_registration_reserve(status, limit, used, excluded, reason):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunAdmissionRejected,
+    )
+    from ai_karen_engine.platform.memory.redis.redis_connection_manager import (
+        RedisDurabilityObservation,
+    )
+
+    client = SimpleNamespace(ping=AsyncMock(return_value=True), eval=AsyncMock(return_value=1))
+    manager = SimpleNamespace(
+        client=client,
+        is_degraded=lambda: False,
+        observe_durability=AsyncMock(return_value=RedisDurabilityObservation(
+            status=status, maxmemory_bytes=limit, used_memory_bytes=used,
+            mem_not_counted_for_evict_bytes=excluded,
+        )),
+    )
+    store = RedisDistributedRunStore(
+        settings=replace(_settings("owner"), run_redis_admission_reserve_bytes=30),
+        redis_manager=manager,
+    )
+    args = dict(run_id="reserve", correlation_id="corr", tenant_id="tenant-a",
+                user_id="user", worker_id="owner", started_at=datetime.now(timezone.utc))
+    if reason is None:
+        await store.register(**args)
+        client.eval.assert_awaited_once()
+    else:
+        with pytest.raises(DistributedRunAdmissionRejected, match=reason):
+            await store.register(**args)
+        client.eval.assert_not_awaited()
+    manager.observe_durability.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["unavailable", "replacement", "degraded", "oom", "cancel"])
+async def test_redis_guard_never_writes_using_invalid_capacity_evidence(failure):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from redis.exceptions import OutOfMemoryError
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunAdmissionRejected,
+    )
+    from ai_karen_engine.platform.memory.redis.redis_connection_manager import (
+        RedisDurabilityObservation,
+    )
+
+    client = SimpleNamespace(ping=AsyncMock(return_value=failure != "unavailable"),
+                             eval=AsyncMock(return_value=1))
+    manager = SimpleNamespace(client=client, degraded=False)
+    manager.is_degraded = lambda: manager.degraded
+
+    async def observe():
+        if failure == "replacement":
+            manager.client = object()
+        if failure == "degraded":
+            manager.degraded = True
+        if failure == "cancel":
+            raise asyncio.CancelledError
+        return RedisDurabilityObservation(
+            status="observed", maxmemory_bytes=100, used_memory_bytes=10,
+            mem_not_counted_for_evict_bytes=0,
+        )
+
+    manager.observe_durability = observe
+    if failure == "oom":
+        client.eval.side_effect = OutOfMemoryError("private server detail")
+    store = RedisDistributedRunStore(
+        settings=replace(_settings("owner"), run_redis_admission_reserve_bytes=30),
+        redis_manager=manager,
+    )
+    args = dict(run_id="reserve", correlation_id="corr", tenant_id="tenant-a",
+                user_id="user", worker_id="owner", started_at=datetime.now(timezone.utc))
+    if failure == "cancel":
+        with pytest.raises(asyncio.CancelledError):
+            await store.register(**args)
+    else:
+        reason = "redis_registration_oom" if failure == "oom" else "redis_capacity_unverified"
+        with pytest.raises(DistributedRunAdmissionRejected, match=reason) as exc:
+            await store.register(**args)
+        assert "private server detail" not in str(exc.value)
+    if failure == "oom":
+        client.eval.assert_awaited_once()
+    else:
+        client.eval.assert_not_awaited()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reserve", [0, 30])
+@pytest.mark.parametrize(
+    ("reply", "reason"),
+    [
+        (0, "redis_registration_conflict"),
+        (None, "redis_registration_unconfirmed"),
+        (True, "redis_registration_unconfirmed"),
+        (2, "redis_registration_unconfirmed"),
+        ("1", "redis_registration_unconfirmed"),
+        ("timeout", "redis_registration_unconfirmed"),
+        ("connection", "redis_registration_unconfirmed"),
+        ("script", "redis_registration_unconfirmed"),
+        (1, None),
+    ],
+)
+async def test_registration_requires_exact_shared_acknowledgement(reserve, reply, reason):
+    from dataclasses import replace
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from redis.exceptions import ConnectionError, ResponseError, TimeoutError
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunAdmissionRejected,
+    )
+    from ai_karen_engine.platform.memory.redis.redis_connection_manager import (
+        RedisDurabilityObservation,
+    )
+
+    client = SimpleNamespace(
+        ping=AsyncMock(return_value=True), eval=AsyncMock(return_value=reply)
+    )
+    errors = {
+        "timeout": TimeoutError,
+        "connection": ConnectionError,
+        "script": ResponseError,
+    }
+    if reply in errors:
+        client.eval.side_effect = errors[reply]("private transport detail")
+    manager = SimpleNamespace(
+        client=client,
+        is_degraded=lambda: False,
+        observe_durability=AsyncMock(
+            return_value=RedisDurabilityObservation(
+                status="observed",
+                maxmemory_bytes=100,
+                used_memory_bytes=10,
+                mem_not_counted_for_evict_bytes=0,
+            )
+        ),
+    )
+    store = RedisDistributedRunStore(
+        settings=replace(_settings("owner"), run_redis_admission_reserve_bytes=reserve),
+        redis_manager=manager,
+    )
+    args = dict(
+        run_id="reserve",
+        correlation_id="corr",
+        tenant_id="tenant-a",
+        user_id="user",
+        worker_id="owner",
+        started_at=datetime.now(timezone.utc),
+    )
+    if reason is None:
+        await store.register(**args)
+    else:
+        with pytest.raises(DistributedRunAdmissionRejected, match=reason) as exc:
+            await store.register(**args)
+        assert "private transport detail" not in str(exc.value)
+    client.eval.assert_awaited_once()
+
+
+def test_redis_admission_reserve_configuration_is_validated():
+    from dataclasses import replace
+    from ai_karen_engine.config.agent_medusa import AgentMedusaConfigError
+
+    for invalid in (-1, True, 1.5):
+        with pytest.raises(AgentMedusaConfigError, match="nonnegative integer"):
+            replace(_settings("owner"), run_redis_admission_reserve_bytes=invalid)

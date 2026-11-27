@@ -70,6 +70,29 @@ function SharedAgentConsumer() {
 }
 
 describe("CopilotKit canonical conversation hydration", () => {
+  it("restores only bounded safe citation URLs bound to an assistant message", () => {
+    const messages = [{ id: "answer-1", role: "assistant" }, { id: "user-1", role: "user" }];
+    const event = {
+      type: "CUSTOM", name: "karen.verified_citations.v1", messageId: "answer-1",
+      value: { urls: ["https://example.org/history"] },
+    };
+    expect(parseKarenVerifiedHistory([event], messages).get("answer-1"))
+      .toEqual([{ type: "citations", value: event.value }]);
+    for (const value of [
+      { urls: [] }, { urls: ["http://127.0.0.1/private"] },
+      { urls: ["javascript:alert(1)"] }, { urls: ["https://user:secret@example.org/"] },
+      { urls: Array(2).fill("https://example.org/history") },
+      { urls: ["https://example.org/history"], private: "secret" },
+    ]) {
+      expect(() => parseKarenVerifiedHistory([{ ...event, value }], messages))
+        .toThrow("Unsupported verified citations");
+    }
+    expect(() => parseKarenVerifiedHistory([event, event], messages))
+      .toThrow("Unsupported verified citations");
+    expect(() => parseKarenVerifiedHistory([{ ...event, messageId: "user-1" }], messages))
+      .toThrow("Unsupported verified conversation event");
+  });
+
   it("restores healthy and degraded execution receipts without falsifying their boolean status", () => {
     const messages = [{ id: "answer-1", role: "assistant" }];
     const baseReceipt = {

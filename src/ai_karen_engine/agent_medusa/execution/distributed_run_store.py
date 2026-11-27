@@ -7,12 +7,14 @@ cannot provide truthful cluster leases or remote cancellation.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Any, Protocol
 
-from redis.exceptions import RedisError
+from redis.exceptions import OutOfMemoryError, RedisError
 
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
+from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
 from ai_karen_engine.platform.memory.redis import (
     RedisConnectionManager,
     get_redis_manager,
@@ -220,6 +222,22 @@ class DistributedRunStoreUnavailable(RuntimeError):
     """Raised when shared coordination is not currently authoritative."""
 
 
+class DistributedRunAdmissionCancelled(asyncio.CancelledError):
+    """Cancellation observed before any shared registration mutation."""
+
+
+class DistributedRunAdmissionUnconfirmedCancelled(asyncio.CancelledError):
+    """Cancellation after a shared registration mutation may have been attempted."""
+
+
+class DistributedRunAdmissionRejected(ExecutionAdmissionRejected):
+    """New run admission was rejected; never equivalent to local fallback."""
+
+    def __init__(self, reason_code: str) -> None:
+        super().__init__(reason_code)
+        self.reason_code = reason_code
+
+
 class DistributedRunOwnershipLost(RuntimeError):
     """Raised when Redis definitively rejects the worker's live authority."""
 
@@ -355,7 +373,33 @@ class RedisDistributedRunStore:
         worker_id: str,
         started_at: datetime,
     ) -> None:
-        client = await self._client()
+        reserve = self._settings.run_redis_admission_reserve_bytes
+        try:
+            client = await self._client()
+        except asyncio.CancelledError as exc:
+            raise DistributedRunAdmissionCancelled() from exc
+        except DistributedRunStoreUnavailable:
+            if reserve:
+                raise DistributedRunAdmissionRejected("redis_capacity_unverified") from None
+            raise
+        if reserve:
+            # The manager owns bounded, sanitized observations. Do not put
+            # capacity checks in available(), which also serves active runs.
+            try:
+                observation = await self._redis.observe_durability()
+                headroom = observation.admission_headroom_bytes()
+            except asyncio.CancelledError as exc:
+                raise DistributedRunAdmissionCancelled() from exc
+            except Exception:
+                raise DistributedRunAdmissionRejected("redis_capacity_unverified") from None
+            if (
+                headroom is None
+                or self._redis.client is not client
+                or self._redis.is_degraded()
+            ):
+                raise DistributedRunAdmissionRejected("redis_capacity_unverified")
+            if headroom < reserve:
+                raise DistributedRunAdmissionRejected("redis_capacity_reserve_exhausted")
         claim_key = self._claim_key(run_id)
         now = self._now()
         lease_expires = now + timedelta(seconds=self._settings.run_lease_ttl_seconds)
@@ -377,20 +421,36 @@ class RedisDistributedRunStore:
             "error_type": "",
             "outcome_status": "",
         }
-        claimed = await client.eval(
-            _REGISTER_RUN_SCRIPT,
-            3,
-            claim_key,
-            run_key,
-            index_key,
-            worker_id,
-            str(self._settings.run_lease_ttl_seconds),
-            str(self._settings.run_terminal_retention_seconds),
-            run_id,
-            *(value for pair in mapping.items() for value in pair),
-        )
-        if not claimed:
-            raise RuntimeError(f"Medusa distributed run already exists: {run_id}")
+        try:
+            claimed = await client.eval(
+                _REGISTER_RUN_SCRIPT,
+                3,
+                claim_key,
+                run_key,
+                index_key,
+                worker_id,
+                str(self._settings.run_lease_ttl_seconds),
+                str(self._settings.run_terminal_retention_seconds),
+                run_id,
+                *(value for pair in mapping.items() for value in pair),
+            )
+        except asyncio.CancelledError:
+            # The request may already have reached Redis. Do not claim rollback.
+            raise DistributedRunAdmissionUnconfirmedCancelled() from None
+        except OutOfMemoryError:
+            # Redis may reject a write after the advisory observation. Never
+            # authorize local execution or claim a guaranteed rollback.
+            raise DistributedRunAdmissionRejected("redis_registration_oom") from None
+        except Exception:
+            # A missing reply does not prove that Redis made no changes.
+            # Never turn an unconfirmed admission into provider fallback.
+            raise DistributedRunAdmissionRejected(
+                "redis_registration_unconfirmed"
+            ) from None
+        if type(claimed) is not int or claimed not in {0, 1}:
+            raise DistributedRunAdmissionRejected("redis_registration_unconfirmed")
+        if claimed == 0:
+            raise DistributedRunAdmissionRejected("redis_registration_conflict")
 
     async def heartbeat(self, *, run_id: str, worker_id: str) -> bool:
         client = await self._client()
@@ -699,6 +759,8 @@ class RedisDistributedRunStore:
 
 
 __all__ = [
+    "DistributedRunAdmissionCancelled",
+    "DistributedRunAdmissionRejected",
     "DistributedRunNotCancellable",
     "DistributedRunNotFound",
     "DistributedRunOwnershipLost",

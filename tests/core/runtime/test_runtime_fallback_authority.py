@@ -102,6 +102,8 @@ async def test_authorized_recovery_uses_exact_original_plan_and_meter():
         "authorized_tool", "authorized_plugin",
         "disallowed_degraded", "different_meter_budget",
         "gateway_exhausted", "permission_denied", "receipt_uncertain",
+        "medusa_admission_denied", "medusa_registration_unconfirmed",
+        "medusa_registration_conflict",
     ],
 )
 async def test_recovery_must_never_invent_execution_authority(case):
@@ -149,6 +151,21 @@ async def test_recovery_must_never_invent_execution_authority(case):
         failure = EngineUnavailableError("all_model_engines_failed")
     elif case == "permission_denied":
         failure = PermissionError("not authorized")
+    elif case in {
+        "medusa_admission_denied",
+        "medusa_registration_unconfirmed",
+        "medusa_registration_conflict",
+    }:
+        from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+            DistributedRunAdmissionRejected,
+        )
+
+        reason = {
+            "medusa_admission_denied": "redis_capacity_reserve_exhausted",
+            "medusa_registration_unconfirmed": "redis_registration_unconfirmed",
+            "medusa_registration_conflict": "redis_registration_conflict",
+        }[case]
+        failure = DistributedRunAdmissionRejected(reason)
     elif case == "receipt_uncertain":
         from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
 
