@@ -403,3 +403,60 @@ async def test_canonical_null_folder_labels_remain_valid():
         context=context(), plan=plan(), operation="analyze", references=REFS,
     )
     assert result["documents"][0]["folder_id"] is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", ["replace", "append", "clear", "revision"])
+async def test_owner_selection_is_pinned_before_kernel_admission(mutation):
+    store = Store()
+    references = [dict(REFS[0])]
+
+    class MutatingAdmissionKernel(Kernel):
+        async def admit(self, request):
+            result = await super().admit(request)
+            if mutation == "replace":
+                references[0]["source_id"] = OTHER
+            elif mutation == "append":
+                references.append({"source_id": OTHER, "revision": DIGEST})
+            elif mutation == "clear":
+                references.clear()
+            else:
+                references[0]["revision"] = "b" * 64
+            return result
+
+    kernel = MutatingAdmissionKernel()
+    answer = await ContentSourceHost(store=store, kernel=kernel).execute_owner_text(
+        context=context(), plan=plan(), operation="analyze", references=references,
+    )
+    assert store.calls == [(FILE_ID, TENANT, OWNER)]
+    assert len(answer["documents"]) == 1
+    assert answer["documents"][0]["id"] == FILE_ID
+    assert answer["documents"][0]["sha256"] == DIGEST
+    assert kernel.calls[1][1].payload["documents"][0]["id"] == FILE_ID
+
+
+@pytest.mark.asyncio
+async def test_owner_selection_remains_pinned_during_storage_read():
+    second_id = "44444444-4444-4444-8444-000000000002"
+    references = [dict(REFS[0]), {"source_id": second_id, "revision": DIGEST}]
+
+    class MutatingStore(Store):
+        async def read_owner_active_code(self, source_id, tenant_id, user_id):
+            result = await super().read_owner_active_code(source_id, tenant_id, user_id)
+            if source_id == FILE_ID:
+                references[0]["revision"] = "c" * 64
+                references[1]["source_id"] = OTHER
+            return SimpleNamespace(
+                success=result.success,
+                data=SimpleNamespace(**{**vars(result.data), "artifact_id": source_id}),
+            )
+
+    store, kernel = MutatingStore(), Kernel()
+    answer = await ContentSourceHost(store=store, kernel=kernel).execute_owner_text(
+        context=context(), plan=plan(), operation="compare", references=references,
+        left_id=FILE_ID, right_id=second_id,
+    )
+    assert store.calls == [(FILE_ID, TENANT, OWNER), (second_id, TENANT, OWNER)]
+    assert answer["left_id"] == FILE_ID
+    assert answer["right_id"] == second_id
+    assert answer["left_sha256"] == answer["right_sha256"] == DIGEST
