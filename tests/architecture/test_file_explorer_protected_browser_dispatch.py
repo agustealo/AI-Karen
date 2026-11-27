@@ -654,3 +654,77 @@ def test_owner_text_report_rejects_generic_isolation_pass_and_invalid_markers():
     assert "REPORT+=(--owner-text)" in runner
     assert "PASS explorer_owner_text_acceptance" in runner
     assert "NOT_RUN explorer_owner_text_acceptance" in runner
+
+
+def test_owner_text_mode_requires_real_local_storage_provenance(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    sha = "a" * 40
+    project = "kcard-" + sha[:12]
+    database = "kcard_" + sha[:12]
+    env_file = tmp_path / "local.env"
+    env_file.write_text("")
+    env_file.chmod(0o600)
+    storage_origin = "http://host.docker.internal:54341"
+    calls = []
+
+    def inspect(project_arg, sha_arg, service, **kwargs):
+        assert project_arg == project and sha_arg == sha
+        assert kwargs["explorer_database"] == database
+        calls.append((service, kwargs.get("require_local_storage", False)))
+        result = {"service": service}
+        if service == "api" and kwargs.get("require_local_storage"):
+            result["storage_origin"] = storage_origin
+        return result
+
+    def storage(container, origin):
+        assert container == "db-id" and origin == storage_origin
+        calls.append(("storage", True))
+        return {"container_id": "gateway-id", "origin": origin}
+
+    monkeypatch.setattr(verifier, "require_local_docker", lambda: None)
+    monkeypatch.setattr(verifier, "inspect_container", inspect)
+    monkeypatch.setattr(verifier, "http_json", lambda url: (
+        {"status": "ok", "revision": sha} if url.endswith("/api/deployment-revision")
+        else {"status": "ok", "backend_ready": True}
+    ))
+    monkeypatch.setattr(verifier, "verify_local_supabase_database",
+                        lambda *_: {"container_id": "db-id"})
+    monkeypatch.setattr(verifier, "verify_local_storage_gateway", storage)
+
+    def invoke(mode, filename):
+        output = tmp_path / filename
+        monkeypatch.setattr(sys, "argv", [
+            "verify", mode, "--sha", sha, "--project", project,
+            "--env-file", str(env_file), "--evidence", str(output),
+        ])
+        return verifier.main(), output
+
+    for mode, scenario, required in (
+        ("--file-explorer", "file-explorer", False),
+        ("--content-intelligence", "content-intelligence", True),
+        ("--owner-text", "file-explorer-owner-text", True),
+    ):
+        calls.clear()
+        status, output = invoke(mode, scenario + ".json")
+        assert status == 0
+        evidence = json.loads(output.read_text())
+        assert evidence["scenario"] == scenario
+        assert ("supabase_storage" in evidence) is required
+        assert calls == [("api", required), ("web", False)] + (
+            [("storage", True)] if required else []
+        )
+
+    def unavailable(*_):
+        raise verifier.GuardError("Local Storage gateway unavailable")
+
+    monkeypatch.setattr(verifier, "verify_local_storage_gateway", unavailable)
+    status, output = invoke("--owner-text", "denied.json")
+    assert status == 1
+    assert not output.exists()
+    runner = (ROOT / "scripts/ci/kui-local-acceptance.sh").read_text()
+    assert "PROVENANCE[2]='--owner-text'" in runner
+    assert "REPORT+=(--owner-text)" in runner

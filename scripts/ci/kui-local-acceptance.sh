@@ -161,6 +161,7 @@ if [[ "${RUN_FILE_EXPLORER_LOCAL:-0}" == '1' || "${RUN_CONTENT_INTELLIGENCE_LOCA
     REPORT+=(--content-intelligence)
     BROWSER_GREP='\bKCONTENT-(LIVE|DENY-LIVE|REVOKED-LIVE):'
   elif [[ "${KAREN_FILE_EXPLORER_OWNER_TEXT_ACCEPTANCE:-false}" == 'true' ]]; then
+    PROVENANCE[2]='--owner-text'
     REPORT+=(--owner-text)
   fi
   check_explorer_continuity() {
