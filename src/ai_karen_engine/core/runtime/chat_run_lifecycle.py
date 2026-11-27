@@ -106,6 +106,19 @@ class ChatRunCoordinator:
             transport_run_id=run_id,
         )
 
+    async def read_submission_status(
+        self, context: ChatExecutionContext, *, submission_id: str,
+    ) -> Optional[dict[str, Any]]:
+        """Reauthorize the owner before reading exact submission evidence."""
+        context.require_authenticated_user()
+        await get_conversation_runtime_gateway().require_owned_conversation(context)
+        return await self._repository.read_submission_status(
+            tenant_id=context.tenant_id,
+            user_id=context.user_id,
+            conversation_id=context.require_conversation_id(),
+            submission_id=submission_id,
+        )
+
     @staticmethod
     def _journal_safe_event(event: dict[str, Any]) -> dict[str, Any]:
         """Persist a source-free observation for revocable code presentations.
