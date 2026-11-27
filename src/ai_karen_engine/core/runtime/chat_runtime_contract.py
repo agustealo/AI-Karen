@@ -282,11 +282,24 @@ class ChatExecutionContext:
 
     async def revalidate_runtime_attachment_session(self, *, db_session: Any = None) -> None:
         """Require durable account truth and current RBAC for private content."""
+        await self._revalidate_runtime_data_session(db_session=db_session)
+
+    async def revalidate_runtime_artifact_write_session(self) -> None:
+        """Generated artifact writes require read and owner-create RBAC."""
+        await self._revalidate_runtime_data_session(require_write=True)
+
+    async def _revalidate_runtime_data_session(
+        self, *, db_session: Any = None, require_write: bool = False,
+    ) -> None:
+        """Shared original session-witness and durable permission boundary."""
         from ai_karen_engine.auth.models import UserData
         from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
 
         self.require_runtime_attachment_read_permission()
         principal = self.require_authenticated_user()
+        manager = get_rbac_manager()
+        if require_write and not manager.has_permission(principal, Permission.ARTIFACT_CREATE_OWN):
+            raise PermissionError("generated_artifact_write_permission_denied")
         grant = vars(principal).get("_runtime_session_witness")
         if (
             not isinstance(grant, tuple) or len(grant) != 2
@@ -321,12 +334,17 @@ class ChatExecutionContext:
             user_id=str(account.id), tenant_id=str(account.tenant_id),
             roles=list(account.roles or []), permissions=[],
         )
-        if not get_rbac_manager().has_permission(fresh, Permission.DATA_READ):
+        if not manager.has_permission(fresh, Permission.DATA_READ):
             raise PermissionError("runtime_attachment_read_permission_revoked")
         if self.require_authenticated_user() is not principal or vars(principal).get(
             "_runtime_session_witness"
         ) is not grant:
             raise PermissionError("runtime_attachment_session_binding_invalid")
+        if require_write and (
+            not manager.has_permission(principal, Permission.ARTIFACT_CREATE_OWN)
+            or not manager.has_permission(fresh, Permission.ARTIFACT_CREATE_OWN)
+        ):
+            raise PermissionError("generated_artifact_write_permission_revoked")
 
     def bind_runtime_attachment_scope(
         self, plan: Any, meter: Any, references: list[dict[str, str]],
@@ -546,6 +564,11 @@ class ChatExecutionRequest:
     # Assigned only by ChatRuntime after authenticating ingress identity.
     # init=False prevents SDK request construction from supplying this field.
     persona_snapshot: Optional[PersonaExecutionSnapshot] = field(
+        default=None, init=False, repr=False, compare=False,
+    )
+    # Runtime-owned read-only continuation. None means no matching task;
+    # empty means an observed prior task without verified retrieval settings.
+    research_continuation_question: Optional[str] = field(
         default=None, init=False, repr=False, compare=False,
     )
 

@@ -6,6 +6,7 @@ Stores artifact bytes in Supabase Storage and metadata in PostgreSQL.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import base64
 import binascii
 import io
@@ -19,6 +20,7 @@ import time
 from urllib.parse import urljoin, urlsplit, parse_qs
 
 import httpx
+from dataclasses import replace
 from datetime import datetime
 from typing import Any, BinaryIO, Dict, Optional, Sequence
 
@@ -28,26 +30,117 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ai_karen_engine.services.database.repositories.artifact_store import (
     Artifact,
     ArtifactStore,
+    ArtifactFolder,
     ArtifactUploadRequest,
     VerifiedArtifactText,
     RepositoryResult,
 )
 from ai_karen_engine.services.database.repositories.observability import instrument_repository
+from ai_karen_engine.services.database.repositories.upload_session import UploadSessionRepository
 from ai_karen_engine.core.logging.redaction import install_signed_storage_httpx_log_filter
 from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
 
 logger = logging.getLogger(__name__)
 
 
+class _HierarchyConflict(Exception):
+    """A no-row CAS must unwind without committing."""
+
+
 class SupabaseArtifactStore(ArtifactStore):
     """Supabase Storage + PostgreSQL artifact store."""
 
-    def __init__(self, session_factory, storage_client):
+    def __init__(self, session_factory, storage_client, *, hierarchy_transaction=None):
+        self._hierarchy_transaction = hierarchy_transaction
         self._session_factory = session_factory
         self._storage = storage_client
 
     async def _session(self) -> AsyncSession:
         return self._session_factory()
+
+    @asynccontextmanager
+    async def _hierarchy_scope(self, tenant_id: str, user_id: str):
+        """Admit only the existing trusted server role in this transaction.
+
+        Folder tables intentionally have FORCE RLS and no actor policies.
+        A non-bypass role with grants alone cannot execute this contract.
+        Never elevate or switch roles here; retain explicit owner predicates.
+        """
+        if self._hierarchy_transaction is None:
+            raise RuntimeError("artifact_hierarchy_transaction_unavailable")
+        async with self._hierarchy_transaction(tenant_id, user_id=user_id) as session:
+            admitted = await session.execute(text("""
+                SELECT
+                    current_setting('app.current_tenant_id', true) = :tenant
+                    AND current_setting('app.current_user_id', true) = :owner
+                    AND current_user NOT IN ('anon', 'authenticated', 'service_role')
+                    AND has_schema_privilege('public', 'USAGE')
+                    AND has_table_privilege('public.artifact_folders', 'SELECT')
+                    AND has_table_privilege('public.artifact_folders', 'INSERT')
+                    AND has_table_privilege('public.artifact_folders', 'UPDATE')
+                    AND has_table_privilege('public.artifact_folder_mutation_fences', 'SELECT')
+                    AND has_table_privilege('public.artifact_folder_mutation_fences', 'INSERT')
+                    AND has_table_privilege('public.artifact_folder_mutation_fences', 'UPDATE')
+                    AND has_table_privilege('public.files', 'SELECT')
+                    AND has_column_privilege('public.files', 'folder_id', 'UPDATE')
+                    AND has_column_privilege('public.files', 'organization_revision', 'SELECT')
+                    AND has_function_privilege(
+                        'public.move_owned_artifact_folder(uuid,uuid,uuid,uuid,bigint)', 'EXECUTE'
+                    )
+                    AND NOT row_security_active('public.artifact_folders')
+                    AND NOT row_security_active('public.artifact_folder_mutation_fences')
+                    AND (
+                        SELECT count(*) = 2 FROM pg_class
+                        WHERE oid IN ('public.artifact_folders'::regclass,
+                                      'public.artifact_folder_mutation_fences'::regclass)
+                          AND relrowsecurity AND relforcerowsecurity
+                    )
+                    AS hierarchy_admitted
+            """), {"tenant": tenant_id, "owner": user_id})
+            if admitted.scalar_one_or_none() is not True:
+                raise RuntimeError("artifact_hierarchy_transaction_unavailable")
+            yield session
+
+    @instrument_repository(operation="owner_hierarchy_available", repository="SupabaseArtifactStore")
+    async def owner_hierarchy_available(
+        self, tenant_id: str, user_id: str,
+    ) -> RepositoryResult[bool]:
+        if (not tenant_id or not user_id
+            or not self._valid_folder_ids(tenant_id, user_id)):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        try:
+            async with self._hierarchy_scope(tenant_id, user_id):
+                pass
+            return RepositoryResult(success=True, data=True)
+        except Exception:
+            logger.warning("Artifact hierarchy capability unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    @instrument_repository(operation="owner_folder_deletion_available", repository="SupabaseArtifactStore")
+    async def owner_folder_deletion_available(
+        self, tenant_id: str, user_id: str,
+    ) -> RepositoryResult[bool]:
+        if (not tenant_id or not user_id
+            or not self._valid_folder_ids(tenant_id, user_id)):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        try:
+            async with self._hierarchy_scope(tenant_id, user_id) as session:
+                proof = await session.execute(text("""
+                    SELECT
+                        current_setting('transaction_isolation') = 'read committed'
+                        AND NOT row_security_active('public.files'::regclass)
+                        AND has_table_privilege('public.artifact_folders', 'DELETE')
+                        AND COALESCE(has_function_privilege(
+                            to_regprocedure('public.delete_empty_owned_artifact_folder(uuid,uuid,uuid,bigint)'),
+                            'EXECUTE'
+                        ), FALSE)
+                """), {})
+                if proof.scalar_one_or_none() is not True:
+                    raise RuntimeError("artifact_folder_delete_unavailable")
+            return RepositoryResult(success=True, data=True)
+        except Exception:
+            logger.warning("Artifact folder deletion capability unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
 
     def _bucket(self):
         """Reuse the initialized platform Storage client, never recreate credentials."""
@@ -88,6 +181,309 @@ class SupabaseArtifactStore(ArtifactStore):
             return historical
         return None
 
+    @staticmethod
+    def _valid_folder_ids(*values: Optional[str]) -> bool:
+        try:
+            return all(value is None or (
+                isinstance(value, str) and str(uuid.UUID(value)) == value
+            ) for value in values)
+        except (ValueError, TypeError, AttributeError):
+            return False
+
+    @instrument_repository(operation="list_owner_folders", repository="SupabaseArtifactStore")
+    async def list_owner_folders(
+        self, tenant_id: str, user_id: str, *,
+        parent_folder_id: Optional[str] = None,
+        after_folder_id: Optional[str] = None,
+        limit: int = 100,
+    ) -> RepositoryResult[Sequence[ArtifactFolder]]:
+        """Read bounded children in UUID order, with an owner-scoped anchor."""
+        if (not tenant_id or not user_id or not self._valid_folder_ids(
+            tenant_id, user_id, parent_folder_id, after_folder_id
+        ) or type(limit) is not int or not 1 <= limit <= 200):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        params = {
+            "tenant": tenant_id, "owner": user_id, "parent": parent_folder_id,
+            "after": after_folder_id, "limit": limit + 1,
+        }
+        try:
+            async with self._hierarchy_scope(tenant_id, user_id) as session:
+                # Verify a non-root location and continuation anchor in the
+                # same statement snapshot as the listing. A foreign or deleted
+                # anchor must not silently become an empty authorized page.
+                result = await session.execute(text("""
+                    WITH scope AS (
+                        SELECT
+                            (CAST(:parent AS uuid) IS NULL OR EXISTS (
+                                SELECT 1 FROM public.artifact_folders
+                                WHERE tenant_id = CAST(:tenant AS uuid)
+                                  AND owner_user_id = CAST(:owner AS uuid)
+                                  AND folder_id = CAST(:parent AS uuid)
+                            )) AND
+                            (CAST(:after AS uuid) IS NULL OR EXISTS (
+                                SELECT 1 FROM public.artifact_folders
+                                WHERE tenant_id = CAST(:tenant AS uuid)
+                                  AND owner_user_id = CAST(:owner AS uuid)
+                                  AND parent_folder_id IS NOT DISTINCT FROM CAST(:parent AS uuid)
+                                  AND folder_id = CAST(:after AS uuid)
+                            )) AS valid
+                    )
+                    SELECT scope.valid, page.*
+                    FROM scope LEFT JOIN LATERAL (
+                        SELECT folder_id, parent_folder_id, name, revision,
+                               created_at, updated_at
+                        FROM public.artifact_folders
+                        WHERE scope.valid AND tenant_id = CAST(:tenant AS uuid)
+                          AND owner_user_id = CAST(:owner AS uuid)
+                          AND parent_folder_id IS NOT DISTINCT FROM CAST(:parent AS uuid)
+                          AND (CAST(:after AS uuid) IS NULL OR folder_id > CAST(:after AS uuid))
+                        ORDER BY folder_id LIMIT :limit
+                    ) AS page ON TRUE
+                    ORDER BY page.folder_id
+                """), params)
+                rows = result.mappings().all()
+            if not rows or not rows[0]["valid"]:
+                return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+            folders = [
+                self._row_to_folder(row)
+                for row in rows if row["folder_id"] is not None
+            ]
+            page = folders[:limit]
+            more = len(folders) > limit
+            return RepositoryResult(success=True, data=page, metadata={
+                "has_more": more,
+                "next_folder_id": page[-1].folder_id if more else None,
+            })
+        except Exception:
+            logger.warning("Artifact folder listing unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    @staticmethod
+    def _row_to_folder(row: Any) -> ArtifactFolder:
+        return ArtifactFolder(
+            folder_id=str(row["folder_id"]),
+            parent_folder_id=str(row["parent_folder_id"]) if row["parent_folder_id"] else None,
+            name=row["name"], revision=row["revision"],
+            created_at=row["created_at"], updated_at=row["updated_at"],
+        )
+
+    @staticmethod
+    def _valid_folder_name(name: str) -> bool:
+        return (
+            isinstance(name, str) and 1 <= len(name) <= 256
+            and name == name.strip()
+            and not any(ord(ch) < 32 or 127 <= ord(ch) <= 159
+                        or 0xD800 <= ord(ch) <= 0xDFFF for ch in name)
+        )
+
+    async def _write_folder_metadata(
+        self, statement: str, params: Dict[str, Any],
+    ) -> RepositoryResult[ArtifactFolder]:
+        """Shared transaction boundary for internal fixed create/rename SQL."""
+        commit_attempted = False
+        try:
+            async with self._hierarchy_scope(params["tenant"], params["owner"]) as session:
+                result = await session.execute(text(statement), params)
+                row = result.mappings().one_or_none()
+                if row is None:
+                    raise _HierarchyConflict()
+                folder = self._row_to_folder(row)
+                commit_attempted = True
+            return RepositoryResult(success=True, data=folder)
+        except _HierarchyConflict:
+            return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+        except Exception as exc:
+            if commit_attempted:
+                logger.warning("Artifact folder metadata commit outcome uncertain")
+                return RepositoryResult(success=False, error="artifact_folder_commit_uncertain")
+            code = getattr(getattr(exc, "orig", None), "sqlstate", None)
+            if code in {"23503", "23505", "23514", "40001", "40P01"}:
+                return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+            logger.warning("Artifact folder metadata mutation unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    @instrument_repository(operation="create_owner_folder", repository="SupabaseArtifactStore")
+    async def create_owner_folder(
+        self, tenant_id: str, user_id: str, *, name: str,
+        parent_folder_id: Optional[str] = None,
+    ) -> RepositoryResult[ArtifactFolder]:
+        if (not tenant_id or not user_id
+            or not self._valid_folder_ids(tenant_id, user_id, parent_folder_id)
+            or not self._valid_folder_name(name)):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        return await self._write_folder_metadata("""
+            INSERT INTO public.artifact_folders (tenant_id, owner_user_id, parent_folder_id, name)
+            VALUES (CAST(:tenant AS uuid), CAST(:owner AS uuid), CAST(:parent AS uuid), :name)
+            RETURNING folder_id, parent_folder_id, name, revision, created_at, updated_at
+        """, {"tenant": tenant_id, "owner": user_id, "parent": parent_folder_id, "name": name})
+
+    @instrument_repository(operation="rename_owner_folder", repository="SupabaseArtifactStore")
+    async def rename_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        name: str, expected_revision: int,
+    ) -> RepositoryResult[ArtifactFolder]:
+        if (not tenant_id or not user_id or not folder_id
+            or not self._valid_folder_ids(tenant_id, user_id, folder_id)
+            or not self._valid_folder_name(name)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        return await self._write_folder_metadata("""
+            UPDATE public.artifact_folders SET name = :name
+            WHERE tenant_id = CAST(:tenant AS uuid)
+              AND owner_user_id = CAST(:owner AS uuid)
+              AND folder_id = CAST(:folder AS uuid)
+              AND revision = :revision
+            RETURNING folder_id, parent_folder_id, name, revision, created_at, updated_at
+        """, {"tenant": tenant_id, "owner": user_id, "folder": folder_id,
+              "name": name, "revision": expected_revision})
+
+    @instrument_repository(operation="resolve_owner_breadcrumbs", repository="SupabaseArtifactStore")
+    async def resolve_owner_breadcrumbs(
+        self, tenant_id: str, user_id: str, folder_id: str,
+    ) -> RepositoryResult[Sequence[ArtifactFolder]]:
+        if (not tenant_id or not user_id or not folder_id
+            or not self._valid_folder_ids(tenant_id, user_id, folder_id)):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        try:
+            async with self._hierarchy_scope(tenant_id, user_id) as session:
+                result = await session.execute(text("""
+                    WITH RECURSIVE ancestry AS (
+                        SELECT folder_id, parent_folder_id, name, revision,
+                               created_at, updated_at, 1 AS depth, ARRAY[folder_id] AS visited
+                        FROM public.artifact_folders
+                        WHERE tenant_id = CAST(:tenant AS uuid)
+                          AND owner_user_id = CAST(:owner AS uuid)
+                          AND folder_id = CAST(:folder AS uuid)
+                        UNION ALL
+                        SELECT f.folder_id, f.parent_folder_id, f.name, f.revision,
+                               f.created_at, f.updated_at, a.depth + 1, a.visited || f.folder_id
+                        FROM public.artifact_folders f
+                        JOIN ancestry a ON f.folder_id = a.parent_folder_id
+                        WHERE f.tenant_id = CAST(:tenant AS uuid)
+                          AND f.owner_user_id = CAST(:owner AS uuid)
+                          AND a.depth < 64 AND NOT f.folder_id = ANY(a.visited)
+                    )
+                    SELECT folder_id, parent_folder_id, name, revision, created_at, updated_at
+                    FROM ancestry ORDER BY depth DESC
+                """), {"tenant": tenant_id, "owner": user_id, "folder": folder_id})
+                rows = result.mappings().all()
+            # Never return partial ancestry on cycle, missing parent, or depth cap.
+            if not rows or rows[0]["parent_folder_id"] is not None:
+                return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+            return RepositoryResult(success=True, data=[self._row_to_folder(row) for row in rows])
+        except Exception:
+            logger.warning("Artifact folder ancestry unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    @instrument_repository(operation="move_owner_folder", repository="SupabaseArtifactStore")
+    async def move_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        parent_folder_id: Optional[str], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        if (not tenant_id or not user_id or not folder_id
+            or not self._valid_folder_ids(tenant_id, user_id, folder_id, parent_folder_id)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        return await self._commit_organization_revision("""
+            SELECT public.move_owned_artifact_folder(
+                CAST(:tenant AS uuid), CAST(:owner AS uuid),
+                CAST(:folder AS uuid), CAST(:parent AS uuid),
+                CAST(:revision AS bigint)
+            )
+        """, {"tenant": tenant_id, "owner": user_id, "folder": folder_id,
+              "parent": parent_folder_id, "revision": expected_revision}, expected_revision)
+
+    @instrument_repository(operation="move_owner_artifact", repository="SupabaseArtifactStore")
+    async def move_owner_artifact(
+        self, tenant_id: str, user_id: str, artifact_id: str, *,
+        folder_id: Optional[str], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        if (not tenant_id or not user_id or not artifact_id
+            or not self._valid_folder_ids(tenant_id, user_id, artifact_id, folder_id)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        return await self._commit_organization_revision("""
+            UPDATE public.files SET folder_id = CAST(:folder AS uuid)
+            WHERE tenant_id = CAST(:tenant AS uuid)
+              AND owner_user_id = CAST(:owner AS uuid)
+              AND file_id = :artifact AND deleted_at IS NULL
+              AND organization_revision = :revision
+            RETURNING organization_revision
+        """, {"tenant": tenant_id, "owner": user_id, "artifact": artifact_id,
+              "folder": folder_id, "revision": expected_revision}, expected_revision)
+
+    async def _commit_organization_revision(
+        self, statement: str, params: Dict[str, Any], expected_revision: int,
+    ) -> RepositoryResult[int]:
+        """Shared CAS transaction boundary for folder and artifact movement."""
+        commit_attempted = False
+        try:
+            async with self._hierarchy_scope(params["tenant"], params["owner"]) as session:
+                result = await session.execute(text(statement), params)
+                revision = result.scalar_one_or_none()
+                if revision is None:
+                    raise _HierarchyConflict()
+                if type(revision) is not int or revision not in (expected_revision, expected_revision + 1):
+                    # The injected production session context commits on normal
+                    # exit. An invalid result must unwind exceptionally, never
+                    # return normally after potentially changing a row.
+                    raise ValueError("artifact_organization_revision_invalid")
+                commit_attempted = True
+            return RepositoryResult(success=True, data=revision)
+        except _HierarchyConflict:
+            return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+        except Exception as exc:
+            if commit_attempted:
+                logger.warning("Artifact folder move commit outcome uncertain")
+                return RepositoryResult(success=False, error="artifact_folder_commit_uncertain")
+            code = getattr(getattr(exc, "orig", None), "sqlstate", None)
+            if code in {"23503", "23514", "40001", "40P01"}:
+                return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+            logger.warning("Artifact folder movement unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
+    @instrument_repository(operation="delete_empty_owner_folder", repository="SupabaseArtifactStore")
+    async def delete_empty_owner_folder(
+        self, tenant_id: str, user_id: str, folder_id: str, *,
+        expected_revision: int,
+    ) -> RepositoryResult[bool]:
+        if (not tenant_id or not user_id or not folder_id
+            or not self._valid_folder_ids(tenant_id, user_id, folder_id)
+            or type(expected_revision) is not int
+            or not 1 <= expected_revision <= 9223372036854775806):
+            return RepositoryResult(success=False, error="artifact_hierarchy_invalid")
+        commit_attempted = False
+        try:
+            async with self._hierarchy_scope(tenant_id, user_id) as session:
+                result = await session.execute(text("""
+                    SELECT public.delete_empty_owned_artifact_folder(
+                        CAST(:tenant AS uuid), CAST(:owner AS uuid),
+                        CAST(:folder AS uuid), CAST(:revision AS bigint)
+                    )
+                """), {"tenant": tenant_id, "owner": user_id,
+                       "folder": folder_id, "revision": expected_revision})
+                deleted = result.scalar_one_or_none()
+                if deleted is False:
+                    raise _HierarchyConflict()
+                if deleted is not True:
+                    raise ValueError("artifact_folder_delete_result_invalid")
+                commit_attempted = True
+            return RepositoryResult(success=True, data=True)
+        except _HierarchyConflict:
+            return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+        except Exception as exc:
+            if commit_attempted:
+                logger.warning("Artifact folder deletion commit outcome uncertain")
+                return RepositoryResult(success=False, error="artifact_folder_commit_uncertain")
+            code = getattr(getattr(exc, "orig", None), "sqlstate", None)
+            if code in {"23503", "23514", "40001", "40P01"}:
+                return RepositoryResult(success=False, error="artifact_folder_conflict_or_unavailable")
+            logger.warning("Artifact folder deletion unavailable")
+            return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
+
     @instrument_repository(operation="health_check", repository="SupabaseArtifactStore")
     async def health_check(self) -> RepositoryResult:
         try:
@@ -106,19 +502,115 @@ class SupabaseArtifactStore(ArtifactStore):
         Failed compensation is logged for operator reconciliation. This is not
         a durable two-phase commit; U2 will supply a persistent staging ledger.
         """
+        return await self._upload_object_and_metadata(
+            request, artifact_id=str(uuid.uuid4()), reserved=False,
+        )
+
+    @instrument_repository(operation="upload_reserved_text", repository="SupabaseArtifactStore")
+    async def upload_reserved_text(
+        self, request: ArtifactUploadRequest, *, session_id: str, lease_token: str,
+    ) -> RepositoryResult[Artifact]:
+        """Consume the existing ledger claim, write once, and prove readback.
+
+        Only the authenticated runtime may call this internal method. A failed
+        or interrupted reserved write is never automatically compensated or
+        replayed: the ledger already records uncertain finality.
+        """
+        unavailable = "reserved_upload_unavailable"
+        data = request.data
+        if (
+            not all(
+                isinstance(value, str) and self._canonical_uuid_value(value)
+                for value in (session_id, lease_token, request.tenant_id, request.user_id)
+            )
+            or not isinstance(data, bytes)
+            or not 1 <= len(data) <= 65536
+            or request.content_type != "text/plain"
+            or not isinstance(request.filename, str)
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", request.filename) is None
+            or not request.filename.lower().endswith((".txt", ".md"))
+        ):
+            return RepositoryResult(success=False, error=unavailable)
+        try:
+            try:
+                body = data.decode("utf-8", errors="strict")
+            except UnicodeError:
+                return RepositoryResult(success=False, error=unavailable)
+            if not body.strip() or any(
+                ord(char) < 32 and char not in "\n\r\t" for char in body
+            ):
+                return RepositoryResult(success=False, error=unavailable)
+            # Freeze validated data and metadata before yielding to the ledger.
+            # Another coroutine must not mutate the payload after digest admission.
+            try:
+                request = replace(
+                    request, data=data,
+                    metadata=json.loads(json.dumps(request.metadata, allow_nan=False)),
+                )
+            except (TypeError, ValueError):
+                return RepositoryResult(success=False, error=unavailable)
+            ledger = UploadSessionRepository(self._session_factory)
+            scope = dict(
+                tenant_id=request.tenant_id, owner_user_id=request.user_id,
+                session_id=session_id,
+            )
+            claimed = await ledger.consume_write_claim(
+                **scope, lease_token=lease_token, observed_bytes=len(data),
+                observed_sha256=hashlib.sha256(data).hexdigest(),
+            )
+            if claimed is None:
+                return RepositoryResult(success=False, error=unavailable)
+            written = await self._upload_object_and_metadata(
+                request, artifact_id=session_id, reserved=True,
+            )
+            if not written.success:
+                return RepositoryResult(success=False, error="reserved_upload_reconcile_required")
+            recovered = await ledger.reconcile_verified_text(
+                **scope, artifact_store=self,
+            )
+            if (
+                recovered is None or recovered.state != "committed"
+                or recovered.artifact_id != session_id
+            ):
+                return RepositoryResult(success=False, error="reserved_upload_reconcile_required")
+            return written
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            logger.warning(
+                "Reserved artifact write outcome unavailable",
+                extra={"error_type": type(exc).__name__},
+            )
+            return RepositoryResult(success=False, error="reserved_upload_reconcile_required")
+
+    async def _upload_object_and_metadata(
+        self, request: ArtifactUploadRequest, *, artifact_id: str, reserved: bool,
+    ) -> RepositoryResult[Artifact]:
+        """Single canonical object + metadata writer for both upload paths."""
         start = time.perf_counter()
-        artifact_id = str(uuid.uuid4())
         # Storage keys must never contain a client-controlled filename.
         storage_key = self._canonical_object_key(request.tenant_id, artifact_id)
         data = request.data or b""
         digest = hashlib.sha256(data).hexdigest()
         try:
             bucket = self._bucket()
-            bucket.upload(
-                storage_key, data, {"content-type": request.content_type}
-            )
-        except Exception:
-            logger.exception("Artifact object upload failed for artifact_id=%s", artifact_id)
+            options = {"content-type": request.content_type}
+            if reserved:
+                options["upsert"] = "false"
+            if reserved:
+                # Cancellation cannot establish remote non-execution. The spent
+                # claim already fences retries even if the SDK worker continues.
+                await asyncio.to_thread(bucket.upload, storage_key, data, options)
+            else:
+                bucket.upload(storage_key, data, options)
+        except Exception as exc:
+            if reserved:
+                logger.warning(
+                    "Reserved artifact object upload outcome unavailable",
+                    extra={"artifact_id": artifact_id, "error_type": type(exc).__name__},
+                )
+            else:
+                logger.exception("Artifact object upload failed for artifact_id=%s", artifact_id)
             return RepositoryResult(success=False, error="storage_upload_failed")
 
         artifact = Artifact(
@@ -165,9 +657,15 @@ class SupabaseArtifactStore(ArtifactStore):
                 )
                 commit_attempted = True
                 await session.commit()
-        except Exception:
-            logger.exception("Artifact metadata persistence uncertain for artifact_id=%s", artifact_id)
-            if not commit_attempted:
+        except Exception as exc:
+            if reserved:
+                logger.warning(
+                    "Reserved artifact metadata persistence uncertain",
+                    extra={"artifact_id": artifact_id, "error_type": type(exc).__name__},
+                )
+            else:
+                logger.exception("Artifact metadata persistence uncertain for artifact_id=%s", artifact_id)
+            if not commit_attempted and not reserved:
                 try:
                     bucket.remove([storage_key])
                 except Exception:
@@ -176,8 +674,8 @@ class SupabaseArtifactStore(ArtifactStore):
                         artifact_id,
                     )
             else:
-                # A commit exception can occur after the database committed.
-                # Never delete a potentially live object's bytes on uncertainty.
+                # Reserved identities are recoverable; never delete their
+                # bytes on failure. A legacy commit can also be ambiguous.
                 logger.error("Artifact commit outcome requires reconciliation artifact_id=%s", artifact_id)
             return RepositoryResult(success=False, error="artifact_commit_failed")
 
@@ -540,8 +1038,31 @@ class SupabaseArtifactStore(ArtifactStore):
             return RepositoryResult(success=False, error=str(exc))
 
     @staticmethod
+    def _normalize_owner_search(search: Optional[str]) -> str:
+        if search is None:
+            return ""
+        if not isinstance(search, str) or len(search) > 160 or any(
+            ord(char) < 32 or 127 <= ord(char) <= 159 or 0xD800 <= ord(char) <= 0xDFFF
+            for char in search
+        ):
+            raise ValueError("artifact_owner_search_invalid")
+        return search.strip()
+
+    @staticmethod
+    def _owner_cursor_version(folder_scoped: bool, search: str) -> int:
+        # Preserve unfiltered v1 (flat) and v2 (folder). Searched pages
+        # have separate versions so no query cursor can cross scope.
+        return (3 if search else 1) + int(folder_scoped)
+
+    @staticmethod
+    def _owner_search_digest(search: str) -> str:
+        return hashlib.sha256(search.encode("utf-8")).hexdigest()
+
+    @staticmethod
     def _decode_owner_cursor(
-        cursor: Optional[str], tenant_id: str, user_id: str
+        cursor: Optional[str], tenant_id: str, user_id: str,
+        *, folder_scoped: bool = False, folder_id: Optional[str] = None,
+        search: str = "",
     ) -> Optional[tuple[datetime, str]]:
         if cursor is None:
             return None
@@ -553,10 +1074,18 @@ class SupabaseArtifactStore(ArtifactStore):
                 (cursor + padding).encode("ascii"), altchars=b"-_", validate=True
             )
             value = json.loads(raw)
+            keys = {"v", "tenant_id", "user_id", "created_at", "file_id"}
+            if folder_scoped:
+                keys.add("folder_id")
+            if search:
+                keys.add("query_sha256")
             if (
                 not isinstance(value, dict)
-                or set(value) != {"v", "tenant_id", "user_id", "created_at", "file_id"}
-                or value["v"] != 1
+                or set(value) != keys
+                or type(value["v"]) is not int
+                or value["v"] != SupabaseArtifactStore._owner_cursor_version(folder_scoped, search)
+                or (search and value["query_sha256"] != SupabaseArtifactStore._owner_search_digest(search))
+                or (folder_scoped and value["folder_id"] != folder_id)
                 or value["tenant_id"] != tenant_id
                 or value["user_id"] != user_id
                 or not isinstance(value["created_at"], str)
@@ -574,15 +1103,21 @@ class SupabaseArtifactStore(ArtifactStore):
 
     @staticmethod
     def _encode_owner_cursor(
-        artifact: Artifact, tenant_id: str, user_id: str
+        artifact: Artifact, tenant_id: str, user_id: str,
+        *, folder_scoped: bool = False, folder_id: Optional[str] = None,
+        search: str = "",
     ) -> str:
         payload = {
-            "v": 1,
+            "v": SupabaseArtifactStore._owner_cursor_version(folder_scoped, search),
             "tenant_id": tenant_id,
             "user_id": user_id,
             "created_at": artifact.created_at.isoformat(),
             "file_id": artifact.id,
         }
+        if folder_scoped:
+            payload["folder_id"] = folder_id
+        if search:
+            payload["query_sha256"] = SupabaseArtifactStore._owner_search_digest(search)
         return base64.urlsafe_b64encode(
             json.dumps(payload, separators=(",", ":"), sort_keys=True).encode("utf-8")
         ).decode("ascii").rstrip("=")
@@ -595,6 +1130,9 @@ class SupabaseArtifactStore(ArtifactStore):
         *,
         limit: int = 100,
         cursor: Optional[str] = None,
+        folder_scoped: bool = False,
+        folder_id: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> RepositoryResult[Sequence[Artifact]]:
         """Stable, bounded owner-only metadata listing. No storage reads.
 
@@ -609,11 +1147,18 @@ class SupabaseArtifactStore(ArtifactStore):
                 or not isinstance(user_id, str)
                 or tenant_id != tenant
                 or user_id != owner
+                or type(folder_scoped) is not bool
+                or (not folder_scoped and folder_id is not None)
+                or not self._valid_folder_ids(folder_id)
                 or type(limit) is not int
                 or not 1 <= limit <= 200
             ):
                 raise ValueError("artifact_owner_page_scope_invalid")
-            before = self._decode_owner_cursor(cursor, tenant, owner)
+            normalized_search = self._normalize_owner_search(search)
+            before = self._decode_owner_cursor(
+                cursor, tenant, owner, folder_scoped=folder_scoped, folder_id=folder_id,
+                search=normalized_search,
+            )
         except (ValueError, TypeError, AttributeError) as exc:
             return RepositoryResult(
                 success=False, error=f"artifact_owner_page_invalid: {exc}"
@@ -632,25 +1177,56 @@ class SupabaseArtifactStore(ArtifactStore):
                 "AND (created_at < :before_created OR "
                 "(created_at = :before_created AND file_id < :before_id))"
             )
+        search_clause = ""
+        if normalized_search:
+            # strpos treats SQL wildcard characters literally. Filter before
+            # keyset paging, without changing ownership or active predicates.
+            params["search"] = normalized_search
+            search_clause = "AND strpos(lower(name), lower(:search)) > 0"
+        folder_clause = ""
+        if folder_scoped:
+            params["folder_id"] = folder_id
+            folder_clause = "AND folder_id IS NOT DISTINCT FROM CAST(:folder_id AS uuid)"
+        projection = ", folder_id, organization_revision" if folder_scoped else ""
         sql = f"""
             SELECT file_id, tenant_id, owner_user_id, name, mime_type,
-                   bytes, storage_uri, sha256, metadata, created_at, deleted_at
+                   bytes, storage_uri, sha256, metadata, created_at, deleted_at{projection}
             FROM files
             WHERE tenant_id = :tenant_id
               AND owner_user_id = :user_id
               AND deleted_at IS NULL
+              {folder_clause}
+              {search_clause}
               {cursor_clause}
             ORDER BY created_at DESC, file_id DESC
             LIMIT :page_limit
         """
         try:
-            async with await self._session() as session:
+            scope = (
+                self._hierarchy_scope(tenant, owner) if folder_scoped
+                else await self._session()
+            )
+            async with scope as session:
+                if folder_scoped and folder_id is not None:
+                    # Lock the authorized destination until the page is read.
+                    scope = await session.execute(text("""
+                        SELECT folder_id FROM public.artifact_folders
+                        WHERE tenant_id = CAST(:tenant_id AS uuid)
+                          AND owner_user_id = CAST(:user_id AS uuid)
+                          AND folder_id = CAST(:folder_id AS uuid)
+                        FOR KEY SHARE
+                    """), {"tenant_id": tenant, "user_id": owner, "folder_id": folder_id})
+                    if scope.scalar_one_or_none() is None:
+                        return RepositoryResult(success=False, error="artifact_hierarchy_unavailable")
                 result = await session.execute(text(sql), params)
                 rows = list(result.fetchall())
             has_more = len(rows) > limit
             page = [self._row_to_artifact(row) for row in rows[:limit]]
             next_cursor = (
-                self._encode_owner_cursor(page[-1], tenant, owner)
+                self._encode_owner_cursor(
+                    page[-1], tenant, owner, folder_scoped=folder_scoped, folder_id=folder_id,
+                    search=normalized_search,
+                )
                 if has_more and page else None
             )
             return RepositoryResult(
@@ -828,7 +1404,8 @@ class SupabaseArtifactStore(ArtifactStore):
             return RepositoryResult(success=False, error=str(exc))
 
     def _row_to_artifact(self, row: Any) -> Artifact:
-        metadata = json.loads(row.metadata) if row.metadata else {}
+        metadata = (row.metadata if isinstance(row.metadata, dict)
+                    else json.loads(row.metadata) if row.metadata else {})
         return Artifact(
             id=str(row.file_id),
             tenant_id=str(row.tenant_id) if row.tenant_id else "",
@@ -843,4 +1420,6 @@ class SupabaseArtifactStore(ArtifactStore):
             metadata=metadata,
             created_at=row.created_at,
             deleted_at=row.deleted_at,
+            folder_id=str(row.folder_id) if getattr(row, "folder_id", None) else None,
+            organization_revision=getattr(row, "organization_revision", None),
         )

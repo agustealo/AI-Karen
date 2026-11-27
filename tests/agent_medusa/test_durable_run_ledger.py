@@ -19,6 +19,7 @@ from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
     DurableRunLedgerConflict,
     DurableRunLedgerUnavailable,
     PostgresDurableRunLedger,
+    TerminalAuthorizer,
     _canonical_tenant_id,
 )
 from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
@@ -136,16 +137,25 @@ class InMemoryDurableLedger:
         completed_at: datetime,
         error_type: str | None,
         outcome_status: str | None = None,
-    ) -> None:
+        authorize_terminal: TerminalAuthorizer | None = None,
+    ) -> str:
         record = self._owned(run_id, tenant_id, worker_id)
         if record["status"] not in {"created", "running", "cancellation_requested"}:
             raise DurableRunLedgerConflict("already terminal")
         previous = record["status"]
+        if authorize_terminal is not None:
+            if previous == "cancellation_requested" and status != "orphaned":
+                status, error_type, outcome_status = "cancelled", None, "cancelled"
+            resolved = await authorize_terminal(status, error_type, outcome_status)
+            if resolved != status:
+                assert resolved == "cancelled" and status in {"completed", "failed"}
+                status, error_type, outcome_status = "cancelled", None, "cancelled"
         record["status"] = status
         record["completed_at"] = completed_at
         record["error_type"] = error_type
         record["outcome_status"] = outcome_status
         self._transition(run_id, previous, status, worker_id, "runtime", completed_at)
+        return status
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None:
         record = self.records.get(run_id)
@@ -201,10 +211,37 @@ class InMemoryDurableLedger:
         reconciled_at: datetime,
         completed_at: datetime | None = None,
         error_type: str | None = None,
+        outcome_status: str | None = None,
+        expected_worker_id: str | None = None,
+        expected_correlation_id: str | None = None,
+        expected_user_id: str | None = None,
+        terminal_authority: str | None = None,
     ) -> bool:
         record = self.records[run_id]
         assert record["tenant_id"] == tenant_id
         normalized = "cancellation_requested" if status == "cancelling" else status
+        if any(
+            expected is not None and record[key] != expected
+            for key, expected in (
+                ("owner_worker_id", expected_worker_id),
+                ("correlation_id", expected_correlation_id),
+                ("user_id", expected_user_id),
+            )
+        ):
+            return False
+        if (
+            record["status"] == "cancellation_requested"
+            and normalized in {"completed", "failed"}
+            and (
+                terminal_authority != "durable_arbitrated"
+                or not expected_worker_id
+                or not expected_correlation_id
+                or not expected_user_id
+                or completed_at is None
+                or outcome_status is None
+            )
+        ):
+            return False
         if record["status"] not in {"created", "running", "cancellation_requested"}:
             return False
         if record["status"] == normalized:
@@ -215,6 +252,7 @@ class InMemoryDurableLedger:
         if normalized in {"completed", "failed", "cancelled", "orphaned"}:
             record["completed_at"] = completed_at or reconciled_at
             record["error_type"] = error_type
+            record["outcome_status"] = outcome_status
         elif normalized == "cancellation_requested":
             record["cancel_requested_at"] = reconciled_at
         self._transition(
@@ -374,6 +412,7 @@ class SharedTruthStore:
             "correlation_id": f"corr-{run_id}",
             "tenant_id": tenant_id,
             "user_id": "user-1",
+            "owner_worker_id": "dead-worker",
             "status": status,
             "started_at": now.isoformat(),
             "completed_at": (
@@ -520,6 +559,7 @@ def test_redis_terminal_truth_repairs_missed_durable_terminal_transition() -> No
         ledger.seed_active(run_id="repair-1", tenant_id=tenant_id)
         shared = SharedTruthStore()
         shared.seed(run_id="repair-1", tenant_id=tenant_id, status="failed")
+        shared.records["repair-1"]["outcome_status"] = "timeout"
         manager = MedusaRunManager(
             settings=_settings(distributed=True, worker_id="observer"),
             distributed_store=shared,
@@ -530,6 +570,7 @@ def test_redis_terminal_truth_repairs_missed_durable_terminal_transition() -> No
 
         assert ledger.records["repair-1"]["status"] == "failed"
         assert ledger.records["repair-1"]["error_type"] == "SharedFailure"
+        assert ledger.records["repair-1"]["outcome_status"] == "timeout"
 
     asyncio.run(scenario())
 
@@ -794,3 +835,301 @@ async def test_unverified_retirement_is_owner_fenced_and_survives_manager_recrea
         "running",
         "orphaned",
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("commit_first", [False, True])
+async def test_local_terminal_acknowledgement_loss_never_publishes_proposal(
+    commit_first: bool,
+) -> None:
+    class UncertainLedger(InMemoryDurableLedger):
+        async def mark_terminal(self, **kwargs: Any) -> str:
+            if commit_first:
+                await super().mark_terminal(**kwargs)
+            raise DurableRunLedgerUnavailable("injected lost acknowledgement")
+
+    ledger = UncertainLedger()
+    manager = MedusaRunManager(settings=_settings(), durable_ledger=ledger)
+    task = asyncio.create_task(asyncio.sleep(0))
+    scope = dict(
+        run_id="uncertain-local",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+    )
+    await manager.register(**scope, correlation_id="corr", user_id="user-1", task=task)
+    await task
+    assert (await manager.mark_response(scope["run_id"], "success")).value == "orphaned"
+    snapshot = await manager.get(**scope)
+    if commit_first:
+        durable = await ledger.get(**scope)
+        assert durable is not None
+        assert snapshot["status"] == "completed"
+        assert snapshot["outcome_status"] == "success"
+        assert snapshot["completed_at"] == durable["completed_at"]
+    else:
+        assert snapshot["status"] == "orphaned"
+        assert snapshot["outcome_status"] is None
+        assert snapshot["completed_at"] is None
+        assert snapshot["error_type"] == "TerminalCommitUnconfirmed"
+    assert (await manager.mark_response(scope["run_id"], "success")).value == "orphaned"
+    assert ledger.records[scope["run_id"]]["status"] == (
+        "completed" if commit_first else "running"
+    )
+    assert (await manager.list_runs(tenant_id=scope["tenant_id"])) == [snapshot]
+
+
+@pytest.mark.parametrize("field", ["owner_worker_id", "correlation_id", "user_id"])
+def test_reconciliation_rejects_foreign_receipt_identity(field: str) -> None:
+    async def scenario() -> None:
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+        ledger = InMemoryDurableLedger()
+        ledger.seed_active(run_id="foreign", tenant_id=tenant_id)
+        shared = SharedTruthStore()
+        shared.seed(run_id="foreign", tenant_id=tenant_id, status="completed")
+        shared.records["foreign"][field] = "foreign-value"
+        shared.records["foreign"]["outcome_status"] = "success"
+        manager = MedusaRunManager(
+            settings=_settings(distributed=True, worker_id="observer"),
+            distributed_store=shared,
+            durable_ledger=ledger,
+        )
+        await manager.list_runs(tenant_id=tenant_id)
+        assert ledger.records["foreign"]["status"] == "running"
+        assert not ledger.transitions
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("authority", ["durable_arbitrated", "shared_only", None])
+def test_late_cancellation_requires_arbitrated_terminal_receipt(
+    authority: str | None,
+) -> None:
+    async def scenario() -> None:
+        tenant_id = "11111111-1111-1111-1111-111111111111"
+        ledger = InMemoryDurableLedger()
+        ledger.seed_active(run_id="late", tenant_id=tenant_id)
+        await ledger.mark_cancelling(
+            run_id="late",
+            tenant_id=tenant_id,
+            requested_at=datetime.now(timezone.utc),
+            audit_event_ref="late-audit",
+            source="admin_cancel",
+        )
+        shared = SharedTruthStore()
+        shared.seed(run_id="late", tenant_id=tenant_id, status="completed")
+        shared.records["late"]["outcome_status"] = "success"
+        shared.records["late"]["terminal_authority"] = authority
+        manager = MedusaRunManager(
+            settings=_settings(distributed=True, worker_id="observer"),
+            distributed_store=shared,
+            durable_ledger=ledger,
+        )
+        await manager.list_runs(tenant_id=tenant_id)
+        durable = await ledger.get(run_id="late", tenant_id=tenant_id)
+        assert durable is not None
+        assert durable["audit_event_ref"] == "late-audit"
+        if authority == "durable_arbitrated":
+            assert durable["status"] == "completed"
+            assert durable["outcome_status"] == "success"
+            assert ledger.transitions[-1]["from_status"] == "cancellation_requested"
+        else:
+            assert durable["status"] == "cancellation_requested"
+            assert len(ledger.transitions) == 1
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["unavailable", "pressure"])
+async def test_guarded_admission_cannot_fall_back_to_durable_only(failure):
+    from dataclasses import replace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunAdmissionRejected,
+    )
+
+    ledger = InMemoryDurableLedger()
+    store = SharedTruthStore()
+    store.available_state = False
+    error = (
+        DistributedRunStoreUnavailable("private detail")
+        if failure == "unavailable"
+        else DistributedRunAdmissionRejected("redis_capacity_reserve_exhausted")
+    )
+    store.register = AsyncMock(side_effect=error)
+    manager = MedusaRunManager(
+        settings=replace(
+            _settings(distributed=True), run_redis_admission_reserve_bytes=30
+        ),
+        distributed_store=store,
+        durable_ledger=ledger,
+    )
+    task = asyncio.create_task(asyncio.sleep(0))
+    try:
+        reason = (
+            "redis_capacity_unverified"
+            if failure == "unavailable"
+            else "redis_capacity_reserve_exhausted"
+        )
+        with pytest.raises(DistributedRunAdmissionRejected, match=reason):
+            await manager.register(
+                run_id="blocked",
+                correlation_id="corr",
+                tenant_id="11111111-1111-1111-1111-111111111111",
+                user_id="user-1",
+                task=task,
+            )
+        store.register.assert_awaited_once()
+        assert "blocked" not in manager._runs
+        assert ledger.records["blocked"]["status"] == "failed"
+        assert (
+            ledger.records["blocked"]["error_type"] == "DistributedRunAdmissionRejected"
+        )
+        assert [t["to_status"] for t in ledger.transitions] == ["created", "failed"]
+    finally:
+        await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+@pytest.mark.parametrize("phase", ["availability", "capacity", "eval"])
+async def test_admission_cancellation_retires_owned_registration(repeat_cancel, phase):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        RedisDistributedRunStore,
+    )
+
+    observing = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    class Ledger(InMemoryDurableLedger):
+        async def mark_terminal(self, **kwargs):
+            cleanup_started.set()
+            await release_cleanup.wait()
+            return await super().mark_terminal(**kwargs)
+
+    from ai_karen_engine.platform.memory.redis.redis_connection_manager import (
+        RedisDurabilityObservation,
+    )
+
+    async def pause():
+        observing.set()
+        await asyncio.Future()
+
+    async def observe():
+        if phase == "capacity":
+            await pause()
+        return RedisDurabilityObservation(
+            status="observed",
+            maxmemory_bytes=100,
+            used_memory_bytes=10,
+            mem_not_counted_for_evict_bytes=0,
+        )
+
+    ledger = Ledger()
+    settings = replace(
+        _settings(distributed=True),
+        run_redis_admission_reserve_bytes=0 if phase == "availability" else 30,
+    )
+    client = SimpleNamespace(
+        ping=AsyncMock(return_value=True),
+        eval=AsyncMock(),
+    )
+    if phase == "availability":
+        client.ping.side_effect = pause
+
+    async def eval_register(*args):
+        await pause()
+
+    client.eval.side_effect = eval_register
+    redis = SimpleNamespace(
+        client=client, is_degraded=lambda: False, observe_durability=observe
+    )
+    store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+    manager = MedusaRunManager(
+        settings=settings, distributed_store=store, durable_ledger=ledger
+    )
+
+    async def register():
+        await manager.register(
+            run_id="interrupted",
+            correlation_id="corr",
+            tenant_id="11111111-1111-1111-1111-111111111111",
+            user_id="user-1",
+            task=asyncio.current_task(),
+        )
+        pytest.fail("Cancelled admission returned execution authority")
+
+    task = asyncio.create_task(register())
+    try:
+        await asyncio.wait_for(observing.wait(), 2)
+        task.cancel()
+        await asyncio.wait_for(cleanup_started.wait(), 2)
+        if repeat_cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+        release_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+        if phase == "eval":
+            client.eval.assert_awaited_once()
+        else:
+            client.eval.assert_not_awaited()
+        assert "interrupted" not in manager._runs
+        assert ledger.records["interrupted"]["status"] == "failed"
+        assert ledger.records["interrupted"]["error_type"] == (
+            "AdmissionCancelledRegistrationUnconfirmed"
+            if phase == "eval"
+            else "AdmissionCancelledBeforeRegistration"
+        )
+        assert [t["to_status"] for t in ledger.transitions] == ["created", "failed"]
+    finally:
+        release_cleanup.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_admission_denial_survives_durable_cleanup_failure():
+    from dataclasses import replace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunAdmissionRejected,
+    )
+    from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
+
+    ledger = InMemoryDurableLedger()
+    ledger.mark_terminal = AsyncMock(
+        side_effect=DurableRunLedgerUnavailable("unavailable")
+    )
+    store = SharedTruthStore()
+    store.register = AsyncMock(
+        side_effect=DistributedRunAdmissionRejected("redis_capacity_reserve_exhausted"),
+    )
+    manager = MedusaRunManager(
+        settings=replace(
+            _settings(distributed=True), run_redis_admission_reserve_bytes=30
+        ),
+        distributed_store=store,
+        durable_ledger=ledger,
+    )
+    task = asyncio.create_task(asyncio.sleep(0))
+    try:
+        with pytest.raises(
+            ExecutionAdmissionRejected, match="redis_capacity_reserve_exhausted"
+        ):
+            await manager.register(
+                run_id="denied",
+                correlation_id="corr",
+                tenant_id="11111111-1111-1111-1111-111111111111",
+                user_id="user-1",
+                task=task,
+            )
+        assert "denied" not in manager._runs
+        # Persistence failure must not be represented as a confirmed closure.
+        assert ledger.records["denied"]["status"] == "created"
+    finally:
+        await task

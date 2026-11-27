@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
+import subprocess
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from sqlalchemy.engine import make_url
@@ -224,6 +226,147 @@ async def test_real_postgres_owner_read_archive_and_foreign_owner_denial() -> No
         await engine.dispose()
 
 
+def _live_storage_target() -> str:
+    """Resolve an explicitly approved cloud or local fixture without contacting Storage."""
+    if (
+        os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
+        or os.getenv("KAREN_TEST_SUPABASE_DISPOSABLE") != "1"
+    ):
+        pytest.fail("Real Storage acceptance requires two disposable target attestations")
+
+    url = os.getenv("SUPABASE_PROJECT_URL", "")
+    mode = os.getenv("KAREN_TEST_SUPABASE_LOCAL", "0")
+    project_ref = os.getenv("KAREN_TEST_SUPABASE_PROJECT_REF", "")
+    local_project = os.getenv("KAREN_TEST_SUPABASE_LOCAL_PROJECT_ID", "")
+    if mode == "0":
+        if (
+            local_project
+            or re.fullmatch(r"[a-z0-9]{20}", project_ref) is None
+            or url != f"https://{project_ref}.supabase.co"
+        ):
+            pytest.fail("Real Storage target does not match the approved disposable project")
+    elif mode == "1":
+        from scripts.ci.verify_local_card_studio_acceptance import (
+            GuardError, local_storage_origin, require_local_docker, verify_local_storage_gateway,
+        )
+
+        if (
+            project_ref
+            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}", local_project) is None
+            or os.getenv("GITHUB_ACTIONS", "").lower() == "true"
+            or os.getenv("SUPABASE_URL", "") not in ("", url)
+            or any(os.getenv(key) for key in (
+                "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+                "http_proxy", "https_proxy", "all_proxy",
+            ))
+        ):
+            pytest.fail("Local Storage requires an unambiguous direct disposable project")
+        try:
+            local_storage_origin(url, host_loopback=True)
+            require_local_docker()
+            verify_local_storage_gateway(
+                "supabase_db_" + local_project, url, host_loopback=True,
+            )
+        except (GuardError, OSError, ValueError, subprocess.TimeoutExpired):
+            pytest.fail("Local Storage gateway provenance could not be verified")
+        if not (os.getenv("SUPABASE_SECRET_KEY") or os.getenv("SUPABASE_SERVICE_ROLE_KEY")):
+            pytest.fail("Explicit local server-side Storage credential is required")
+    else:
+        pytest.fail("Storage fixture mode must be 0 (hosted) or 1 (local)")
+
+    if not any(os.getenv(key) for key in (
+        "SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY",
+        "SUPABASE_PUBLISHABLE_KEY", "SUPABASE_ANON_KEY",
+    )):
+        pytest.fail("Explicit disposable Supabase project authentication is required")
+    return url
+
+
+@pytest.fixture
+def storage_target_env(monkeypatch):
+    """Synthetic configuration only: never contacts a real project."""
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    for key in (
+        "KAREN_TEST_DISPOSABLE_DATABASE", "KAREN_TEST_SUPABASE_DISPOSABLE",
+        "KAREN_TEST_SUPABASE_LOCAL", "KAREN_TEST_SUPABASE_PROJECT_REF",
+        "KAREN_TEST_SUPABASE_LOCAL_PROJECT_ID", "SUPABASE_PROJECT_URL", "SUPABASE_URL",
+        "SUPABASE_SECRET_KEY", "SUPABASE_SERVICE_ROLE_KEY", "SUPABASE_PUBLISHABLE_KEY",
+        "SUPABASE_ANON_KEY", "GITHUB_ACTIONS", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY",
+        "http_proxy", "https_proxy", "all_proxy",
+    ):
+        monkeypatch.delenv(key, raising=False)
+    for key, value in {
+        "KAREN_TEST_DISPOSABLE_DATABASE": "1",
+        "KAREN_TEST_SUPABASE_DISPOSABLE": "1",
+        "KAREN_TEST_SUPABASE_LOCAL": "1",
+        "KAREN_TEST_SUPABASE_LOCAL_PROJECT_ID": "disposable-test",
+        "SUPABASE_PROJECT_URL": "http://127.0.0.1:54341",
+        "SUPABASE_SECRET_KEY": "test-only",
+    }.items():
+        monkeypatch.setenv(key, value)
+    calls = []
+    monkeypatch.setattr(verifier, "require_local_docker", lambda: calls.append("docker"))
+
+    def gateway(database, origin, *, host_loopback=False):
+        assert database == "supabase_db_disposable-test"
+        assert origin == "http://127.0.0.1:54341"
+        assert host_loopback is True
+        calls.append("gateway")
+
+    monkeypatch.setattr(verifier, "verify_local_storage_gateway", gateway)
+    return verifier, calls
+
+
+async def test_live_storage_target_local_and_hosted_modes(storage_target_env, monkeypatch):
+    _, calls = storage_target_env
+    assert _live_storage_target() == "http://127.0.0.1:54341"
+    assert calls == ["docker", "gateway"]
+    calls.clear()
+    monkeypatch.setenv("KAREN_TEST_SUPABASE_LOCAL", "0")
+    monkeypatch.delenv("KAREN_TEST_SUPABASE_LOCAL_PROJECT_ID")
+    monkeypatch.setenv("KAREN_TEST_SUPABASE_PROJECT_REF", "a" * 20)
+    monkeypatch.setenv("SUPABASE_PROJECT_URL", "https://" + "a" * 20 + ".supabase.co")
+    assert _live_storage_target() == "https://" + "a" * 20 + ".supabase.co"
+    assert calls == []
+
+
+@pytest.mark.parametrize(("key", "value"), [
+    ("KAREN_TEST_DISPOSABLE_DATABASE", "0"),
+    ("KAREN_TEST_SUPABASE_DISPOSABLE", "0"),
+    ("KAREN_TEST_SUPABASE_LOCAL", "invalid"),
+    ("KAREN_TEST_SUPABASE_PROJECT_REF", "a" * 20),
+    ("KAREN_TEST_SUPABASE_LOCAL_PROJECT_ID", "../other"),
+    ("SUPABASE_PROJECT_URL", "https://cloud.supabase.co"),
+    ("SUPABASE_PROJECT_URL", "http://localhost:54341"),
+    ("SUPABASE_PROJECT_URL", "http://127.0.0.1:54341/path"),
+    ("SUPABASE_PROJECT_URL", "http://127.0.0.1:54341?secret=value"),
+    ("SUPABASE_PROJECT_URL", "http://127.0.0.1:54341@remote.invalid"),
+    ("SUPABASE_URL", "https://cloud.supabase.co"),
+    ("GITHUB_ACTIONS", "true"),
+    ("HTTP_PROXY", "http://proxy.invalid"),
+    ("https_proxy", "http://proxy.invalid"),
+    ("SUPABASE_SECRET_KEY", ""),
+])
+async def test_live_storage_target_rejects_unsafe_local_configuration(
+    storage_target_env, monkeypatch, key, value,
+):
+    monkeypatch.setenv(key, value)
+    with pytest.raises(pytest.fail.Exception):
+        _live_storage_target()
+
+
+async def test_live_storage_target_rejects_unverified_gateway(storage_target_env, monkeypatch):
+    verifier, _ = storage_target_env
+
+    def reject(*args, **kwargs):
+        raise verifier.GuardError("synthetic denial")
+
+    monkeypatch.setattr(verifier, "verify_local_storage_gateway", reject)
+    with pytest.raises(pytest.fail.Exception, match="provenance"):
+        _live_storage_target()
+
+
 @pytest.mark.skipif(
     os.getenv("KAREN_TEST_CODE_ARTIFACT_LIVE_STORAGE") != "1",
     reason="Requires explicit live Supabase Storage read-only acceptance opt-in",
@@ -239,18 +382,7 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
 
     from ai_karen_engine.integrations.supabase_client import SupabasePlatformClient
 
-    if os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1":
-        pytest.fail("Live Storage acceptance requires disposable PostgreSQL opt-in")
-    if os.getenv("KAREN_TEST_SUPABASE_DISPOSABLE") != "1":
-        pytest.fail("Live Storage acceptance requires an explicitly disposable project")
-
-    project_ref = os.getenv("KAREN_TEST_SUPABASE_PROJECT_REF", "")
-    project_url = os.getenv("SUPABASE_PROJECT_URL", "")
-    if (
-        re.fullmatch(r"[a-z0-9]{20}", project_ref) is None
-        or project_url != f"https://{project_ref}.supabase.co"
-    ):
-        pytest.fail("Live Storage target must match the explicitly named test project")
+    project_url = _live_storage_target()
 
     dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
     if not dsn:
@@ -277,16 +409,6 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
     expected_sha = os.getenv("KAREN_TEST_LIVE_ARTIFACT_SHA256", "")
     if re.fullmatch(r"[a-f0-9]{64}", expected_sha) is None:
         pytest.fail("A canonical preseeded artifact SHA-256 is required")
-    if not any(
-        os.getenv(name)
-        for name in (
-            "SUPABASE_SECRET_KEY",
-            "SUPABASE_SERVICE_ROLE_KEY",
-            "SUPABASE_PUBLISHABLE_KEY",
-            "SUPABASE_ANON_KEY",
-        )
-    ):
-        pytest.fail("Supabase test project credential is unavailable")
 
     # No uploads, bucket creation, metadata writes or archive mutations.
     # Confirm the fixture and expected digest before contacting Storage.
@@ -319,9 +441,9 @@ async def test_live_supabase_object_read_with_disposable_postgres_owner_scope() 
                 or record["deleted_at"] is not None
                 or record["sha256"] != expected_sha
                 or not isinstance(record["name"], str)
-                or record["storage_uri"] != (
-                    f"supabase://artifacts/{tenant}/{artifact}/{record['name']}"
-                )
+                or SupabaseArtifactStore._verified_object_key(
+                    tenant, artifact, record["name"], record["storage_uri"],
+                ) is None
             ):
                 pytest.fail("Preseeded artifact metadata does not match test scope")
 
@@ -871,7 +993,10 @@ async def test_bounded_signed_range_holds_real_postgres_archive_lock(monkeypatch
     or os.getenv("KAREN_TEST_CODE_ARTIFACT_POSTGRES") != "1",
     reason="Requires existing disposable PostgreSQL artifact acceptance database",
 )
-async def test_real_postgres_explorer_selection_to_content_revision_and_owner_races() -> None:
+@pytest.mark.parametrize("generated", [False, True], ids=["legacy", "generated"])
+async def test_real_postgres_explorer_selection_to_content_revision_and_owner_races(
+    monkeypatch, generated: bool,
+) -> None:
     """Prove live DB selection is never a transferable content-read permission.
 
     Uses real migrated PostgreSQL rows, ArtifactStore, File Explorer adapter,
@@ -883,6 +1008,7 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
     from importlib import import_module
 
     from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+    from ai_karen_engine.persistence.postgres import transactions
     from ai_karen_engine.extensions.content_intelligence_sources import ContentSourceHost
     from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
     from ai_karen_engine.extensions.file_explorer_inventory import FileExplorerInventoryHost
@@ -906,8 +1032,9 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
     engine = create_async_engine(parsed, pool_pre_ping=True, pool_size=3)
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     artifact = str(uuid4())
-    filename = "kplug_revision_proof.txt"
-    key = f"{tenant}/{artifact}/{filename}"
+    folder = str(uuid4()) if generated else None
+    filename = "generated.txt" if generated else "kplug_revision_proof.txt"
+    key = f"{tenant}/{artifact}/content" if generated else f"{tenant}/{artifact}/{filename}"
     versions = (
         b"Original bounded source proof.\n",
         b"Updated bounded source revision.\n",
@@ -921,7 +1048,13 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
             from_=lambda name: bucket if name == "artifacts" else None
         ),
     )
-    store = SupabaseArtifactStore(sessions, platform)
+    monkeypatch.setattr(
+        transactions, "get_postgres_engine",
+        lambda: SimpleNamespace(async_session_factory=sessions),
+    )
+    store = SupabaseArtifactStore(
+        sessions, platform, hierarchy_transaction=transactions.async_transaction_scope,
+    )
     explorer_module = import_module(
         "ai_karen_engine.extensions.plugins.file-explorer.artifact_source"
     )
@@ -1020,17 +1153,25 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
             assert (await admin.execute(
                 text("SELECT current_database()")
             )).scalar_one() == "karen_code_artifact_test"
+            if folder is not None:
+                await admin.execute(text(
+                    "INSERT INTO public.artifact_folders "
+                    "(folder_id, tenant_id, owner_user_id, name) "
+                    "VALUES (CAST(:folder AS uuid), CAST(:tenant AS uuid), "
+                    "CAST(:owner AS uuid), 'Generated document lifecycle proof')"
+                ), {"folder": folder, "tenant": tenant, "owner": owner})
             await admin.execute(
                 text(
                     "INSERT INTO files (file_id, tenant_id, owner_user_id, name, "
                     "mime_type, bytes, storage_uri, sha256, metadata, created_at) "
                     "VALUES (:id, CAST(:tenant AS uuid), CAST(:owner AS uuid), "
-                    ":name, 'text/plain', :size, :uri, :digest, '{}'::jsonb, NOW())"
+                    ":name, 'text/plain', :size, :uri, :digest, CAST(:metadata AS jsonb), NOW())"
                 ),
                 {
                     "id": artifact, "tenant": tenant, "owner": owner,
                     "name": filename, "size": len(versions[0]),
                     "uri": f"supabase://artifacts/{key}", "digest": digests[0],
+                    "metadata": '{"kind":"generated_text"}' if generated else "{}",
                 },
             )
             await admin.commit()
@@ -1044,6 +1185,44 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
             "size_bytes": len(versions[0]), "sha256": digests[0],
         }]
         assert "storage_uri" not in page["items"][0]
+        if folder is not None:
+            # SQL fixture has the canonical generated filename, kind and object
+            # key; no real model or Storage write is claimed by this test.
+            root = await store.list_owner_artifacts_page(
+                tenant, owner, folder_scoped=True, folder_id=None, search=filename,
+            )
+            assert root.success and [item.id for item in root.data] == [artifact]
+            assert root.data[0].kind == "generated_text"
+            assert root.data[0].organization_revision == 1
+            moved = await store.move_owner_artifact(
+                tenant, owner, artifact, folder_id=folder, expected_revision=1,
+            )
+            assert moved.success and moved.data == 2
+            stale = await store.move_owner_artifact(
+                tenant, owner, artifact, folder_id=None, expected_revision=1,
+            )
+            assert not stale.success
+            root_after = await store.list_owner_artifacts_page(
+                tenant, owner, folder_scoped=True, folder_id=None, search=filename,
+            )
+            assert root_after.success and not root_after.data
+            inside = await source.list_owner_sources_page(
+                tenant_id=tenant, user_id=owner, folder_scoped=True,
+                folder_id=folder, search=filename,
+            )
+            assert inside["items"] == [{
+                **page["items"][0], "parent_id": folder, "organization_revision": "2",
+            }]
+            current = await store.get_metadata(artifact, tenant)
+            assert current.success and current.data.storage_key == key
+            assert current.data.sha256 == digests[0]
+            reference = await explorer.revalidate_owner_selection(
+                context=context, plan=plan, source_id=artifact,
+                expected_revision=digests[0],
+            )
+            assert reference["revision"] == digests[0]
+            assert reference["owner_scope_verified"] is True
+
         initial = await analyze(digests[0])
         assert initial["persisted"] is False
         assert initial["documents"][0]["sha256"] == digests[0]
@@ -1118,10 +1297,17 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
         assert accepted["documents"][0]["sha256"] == digests[2]
         assert len(kernel.analysis_executions) == 3
 
-        # Real owner transfer removes this source from the old principal's
-        # inventory and prevents both revalidation and content execution.
+        # Both owner transfer and archive revoke previously selected content.
         calls_before_revocation = bucket.download.call_count
-        await change(new_owner=other_owner)
+        if generated:
+            archived = await store.archive(artifact, tenant)
+            assert archived.success and archived.data is True
+            denied_move = await store.move_owner_artifact(
+                tenant, owner, artifact, folder_id=None, expected_revision=2,
+            )
+            assert not denied_move.success
+        else:
+            await change(new_owner=other_owner)
         assert (await inventory())["items"] == []
         with pytest.raises(PermissionError, match="file_explorer_source_unavailable"):
             await explorer.revalidate_owner_selection(
@@ -1148,6 +1334,12 @@ async def test_real_postgres_explorer_selection_to_content_revision_and_owner_ra
                          "tenant_id=CAST(:tenant AS uuid)"),
                     {"id": artifact, "tenant": tenant},
                 )
+                if folder is not None:
+                    await admin.execute(
+                        text("DELETE FROM public.artifact_folders WHERE folder_id=CAST(:folder AS uuid) "
+                             "AND tenant_id=CAST(:tenant AS uuid) AND owner_user_id=CAST(:owner AS uuid)"),
+                        {"folder": folder, "tenant": tenant, "owner": owner},
+                    )
                 await admin.commit()
         await engine.dispose()
 
@@ -1170,26 +1362,7 @@ async def test_live_signed_range_read_uses_real_storage_and_disposable_postgres_
 
     from ai_karen_engine.integrations.supabase_client import SupabasePlatformClient
 
-    if (
-        os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1"
-        or os.getenv("KAREN_TEST_SUPABASE_DISPOSABLE") != "1"
-    ):
-        pytest.fail("Real Storage acceptance requires two disposable target attestations")
-
-    project_ref = os.getenv("KAREN_TEST_SUPABASE_PROJECT_REF", "")
-    project_url = os.getenv("SUPABASE_PROJECT_URL", "")
-    if (
-        re.fullmatch(r"[a-z0-9]{20}", project_ref) is None
-        or project_url != f"https://{project_ref}.supabase.co"
-    ):
-        pytest.fail("Real Storage target does not match the approved disposable project")
-    if not any(os.getenv(key) for key in (
-        "SUPABASE_SECRET_KEY",
-        "SUPABASE_SERVICE_ROLE_KEY",
-        "SUPABASE_PUBLISHABLE_KEY",
-        "SUPABASE_ANON_KEY",
-    )):
-        pytest.fail("Explicit disposable Supabase project authentication is required")
+    project_url = _live_storage_target()
 
     dsn = os.getenv("KAREN_TEST_CODE_ARTIFACT_DATABASE_URL", "")
     parsed = _disposable_database_url(dsn)
@@ -1246,9 +1419,9 @@ async def test_live_signed_range_read_uses_real_storage_and_disposable_postgres_
                 or type(size) is not int
                 or not 1 <= size <= 65536
                 or metadata["sha256"] != digest
-                or metadata["storage_uri"] != (
-                    f"supabase://artifacts/{tenant}/{artifact}/{name}"
-                )
+                or SupabaseArtifactStore._verified_object_key(
+                    tenant, artifact, name, metadata["storage_uri"],
+                ) is None
             ):
                 pytest.fail("Preseeded source violates bounded owner-text schema")
 

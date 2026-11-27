@@ -62,7 +62,8 @@ vi.mock("@/components/chat/KarenBrowserDictationCapture", () => ({
   KarenBrowserDictationCapture: () => <div data-testid="shared-browser-dictation" />,
 }));
 
-vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", () => ({
+vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", async (importOriginal) => ({
+  ...await importOriginal<typeof import("@/components/chat/copilotkit/useKarenPersistedDraft")>(),
   useKarenPersistedDraft: () => {
     const [draft, setDraft] = React.useState("");
     const text = React.useRef("");
@@ -1147,6 +1148,118 @@ describe("KUI uncertain finality recovery", () => {
     expect(sdk.runAgent).not.toHaveBeenCalled();
     act(() => input().onSubmitMessage("new message"));
     await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+  });
+
+  it.each([
+    new Error('HTTP 409: {"detail":"Chat execution has already been admitted"}'),
+    { response: { status: 409, data: { detail: "Chat execution has already been admitted" } } },
+  ])("holds a rejected duplicate admission without resending or guessing its run ID", async (failure) => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(failure);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Original governed question");
+      input().onSubmitMessage("Original governed question");
+    });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("alert").textContent).toContain("already exists");
+    expect(screen.getByRole("button", { name: "Check run status and saved history" })).toBeTruthy();
+    expect(input().value).toBe("Original governed question");
+    act(() => input().onSubmitMessage("Another question"));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(sdk.prepareRevision).toHaveBeenCalledTimes(1);
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.get).not.toHaveBeenCalled();
+  });
+
+  it("does not recover against the rejected attempt's observed run ID", async () => {
+    sdk.runAgent.mockImplementationOnce(async () => {
+      sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "attempt-id" } });
+      sdk.lifecycle?.onRunFailed({
+        error: new Error('HTTP 409: {"detail":"Chat execution has already been admitted"}'),
+      });
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onSubmitMessage("Original question"));
+    await waitFor(() => expect(screen.getByText(/No verified run identity was received/)).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Check run status and saved history" })).toBeNull();
+    act(() => input().onSubmitMessage("Another question"));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.get).not.toHaveBeenCalled();
+  });
+
+
+  it("checks exact governed submission and history without retrying the rejected request", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(new Error('HTTP 409: {"detail":"Chat execution has already been admitted"}'));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Original governed question");
+      input().onSubmitMessage("Original governed question");
+    });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    const path = "/api/copilotkit/agent/default/submissions/" + THREAD + "/draft-v1-7/status";
+    const receipt = {
+      runId: "original-run", submissionId: "draft-v1-7",
+      status: "completed", cancel_requested: false, cancellation_confirmed: false,
+    };
+    sdk.get.mockResolvedValueOnce({ ...receipt, submissionId: "wrong-turn" });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/Run status or saved history is unavailable/)).toBeTruthy());
+    expect(sdk.refreshHistory).not.toHaveBeenCalled();
+    sdk.get.mockResolvedValueOnce({ ...receipt, status: "running" });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/No verified completion/)).toBeTruthy());
+    expect(sdk.refreshHistory).not.toHaveBeenCalled();
+    sdk.get.mockResolvedValueOnce(receipt);
+    sdk.refreshHistory.mockResolvedValueOnce(false);
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/saved history could not be verified/)).toBeTruthy());
+    act(() => {
+      input().onSubmitMessage("Another question");
+      input().onChange("");
+    });
+    expect(input().value).toBe("Original governed question");
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    sdk.get.mockResolvedValueOnce(receipt);
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/Run status and saved history were checked/)).toBeTruthy());
+    expect(sdk.get.mock.calls).toEqual([[path], [path], [path], [path]]);
+    expect(sdk.refreshDraft).toHaveBeenCalledTimes(2);
+    expect(sdk.refreshHistory).toHaveBeenCalledTimes(2);
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+  });
+
+  it("keeps the governed identity when SDK reports a conflicting observed transport", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockImplementationOnce(async () => {
+      sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "rejected-attempt" } });
+      const failure = new Error('HTTP 409: {"detail":"Chat execution has already been admitted"}');
+      sdk.lifecycle?.onRunFailed({ error: failure });
+      throw failure;
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onSubmitMessage("Original question"));
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    sdk.get.mockRejectedValueOnce(new Error("Not found"));
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/Run status or saved history is unavailable/)).toBeTruthy());
+    expect(sdk.get).toHaveBeenCalledWith(
+      "/api/copilotkit/agent/default/submissions/" + THREAD + "/draft-v1-7/status",
+    );
+    expect(sdk.refreshHistory).not.toHaveBeenCalled();
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not classify a distinct saved-draft conflict as duplicate admission", async () => {
+    sdk.runAgent.mockRejectedValueOnce(new Error('HTTP 409: {"detail":"Saved draft changed before execution admission"}'));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onSubmitMessage("Original question"));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.queryByRole("region", { name: "Unverified run recovery" })).toBeNull();
   });
 
   it("does not invent a run identity or resend after a pre-start uncertainty error", async () => {

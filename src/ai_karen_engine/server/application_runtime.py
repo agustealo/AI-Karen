@@ -25,15 +25,18 @@ _REDIS_LIFESPAN_OWNED_KEY = "_canonical_redis_lifespan_owned"
 async def initialize_application_redis(app: FastAPI) -> None:
     """Initialize the one canonical Redis manager before runtime composition.
 
-    A failed private-Redis connection must leave /ready unready, never pretend
-    success or replace session memory with a second local in-process store.
-    Process liveness remains independent of this optional dependency.
+    A failed required Redis connection leaves /ready unready. Optional
+    Communications invalidation alone does not change global readiness;
+    its transport fails closed and the inbox retains canonical polling.
+    Neither path replaces Redis with a second local in-process store.
     """
     from ai_karen_engine.core.runtime.operational_health import (
         OperationalHealthService,
     )
 
-    if not OperationalHealthService.redis_required():
+    settings = getattr(app.state, "settings", None)
+    environment = str(getattr(settings, "environment", "development"))
+    if not OperationalHealthService.redis_lifecycle_enabled(environment=environment):
         return
     if getattr(app.state, _REDIS_LIFESPAN_OWNED_KEY, False):
         return
@@ -54,7 +57,8 @@ async def initialize_application_redis(app: FastAPI) -> None:
             extra={"component": "redis", "status": "ready" if ready else "degraded"},
         )
     except Exception as exc:
-        # The readiness owner still probes the same manager and returns 503.
+        # Required consumers still gate readiness through the same manager.
+        # Optional hints fail closed without blocking unrelated requests.
         # Do not expose Redis URLs, credentials, or exception messages.
         logger.warning(
             "Canonical Redis runtime startup degraded",

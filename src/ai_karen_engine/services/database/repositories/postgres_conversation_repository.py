@@ -19,7 +19,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ai_karen_engine.persistence.repositories.chat_run_repository import (
-    ChatRunLease, draft_revision_from_submission_id,
+    ChatRunLease, draft_attachment_digest_from_submission_id, draft_revision_from_submission_id,
 )
 from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
 
@@ -30,6 +30,7 @@ from ai_karen_engine.services.database.repositories.conversation_repository impo
     Message,
     RepositoryResult,
     validate_draft_attachment_references,
+    draft_attachment_selection_digest,
 )
 from ai_karen_engine.services.database.repositories.observability import (
     instrument_repository,
@@ -590,19 +591,24 @@ class PostgresConversationRepository(ConversationRepository):
     async def lock_matching_submission_draft(
         session: AsyncSession, *, tenant_id: str, user_id: str,
         conversation_id: str, revision: int, submitted_text: Optional[str],
+        attachment_references: Optional[list[dict[str, str]]] = None,
     ) -> bool:
-        """Lock the exact text-only draft in the caller's authenticated transaction."""
+        """Lock the exact draft revision, text and ordered reference selection."""
+        selected = validate_draft_attachment_references(
+            [] if attachment_references is None else attachment_references
+        )
         result = await session.execute(text("""
             SELECT draft_text FROM public.conversation_composer_drafts
             WHERE tenant_id = CAST(:tenant AS uuid)
               AND user_id = CAST(:owner AS uuid)
               AND conversation_id = CAST(:conversation AS uuid)
               AND revision = :revision
-              AND attachment_references = '[]'::jsonb
+              AND attachment_references = CAST(:attachments AS jsonb)
             FOR UPDATE
         """), {
             "tenant": tenant_id, "owner": user_id,
             "conversation": conversation_id, "revision": revision,
+            "attachments": json.dumps(selected),
         })
         saved = result.scalar_one_or_none()
         return (
@@ -1057,7 +1063,25 @@ class PostgresConversationRepository(ConversationRepository):
                             )
                         except Exception:
                             raise ValueError("attachment_session_denied") from None
+                    submitted_references: list[dict[str, str]] = []
                     if run_lease is not None:
+                        # A v2 receipt can only complete with the original verified
+                        # attachment scope, not a caller's replacement references.
+                        attachment_digest = draft_attachment_digest_from_submission_id(
+                            run_lease.submission_id
+                        )
+                        if attachment_digest is not None:
+                            try:
+                                if private_execution is None:
+                                    raise PermissionError("attachment_session_denied")
+                                submitted_references = validate_draft_attachment_references([
+                                    {"source_id": item["source_id"], "revision": item["revision"]}
+                                    for item in private_execution.runtime_attachment_documents()
+                                ])
+                                if draft_attachment_selection_digest(submitted_references) != attachment_digest:
+                                    raise PermissionError("attachment_session_denied")
+                            except Exception:
+                                raise ValueError("attachment_session_denied") from None
                         # Validate the lease before installing its scope.
                         if (
                             user_message.tenant_id != run_lease.tenant_id
@@ -1267,19 +1291,21 @@ class PostgresConversationRepository(ConversationRepository):
                             user_id=run_lease.user_id,
                             conversation_id=run_lease.conversation_id,
                             revision=draft_revision, submitted_text=user_message.content,
+                            **({"attachment_references": submitted_references} if submitted_references else {}),
                         ):
                             await session.execute(text("""
                                 UPDATE public.conversation_composer_drafts
-                                SET draft_text = '', revision = revision + 1,
-                                    updated_at = clock_timestamp()
+                                SET draft_text = '', attachment_references = '[]'::jsonb,
+                                    revision = revision + 1, updated_at = clock_timestamp()
                                 WHERE tenant_id = CAST(:tenant AS uuid)
                                   AND user_id = CAST(:owner AS uuid)
                                   AND conversation_id = CAST(:conversation AS uuid)
                                   AND revision = :revision
-                                  AND attachment_references = '[]'::jsonb
+                                  AND attachment_references = CAST(:attachments AS jsonb)
                             """), {
                                 "tenant": run_lease.tenant_id, "owner": run_lease.user_id,
                                 "conversation": run_lease.conversation_id, "revision": draft_revision,
+                                "attachments": json.dumps(submitted_references),
                             })
                     # Only the transaction exit can commit this staged pair.
                     # An exception during commit or later cleanup is uncertain;

@@ -7,20 +7,23 @@
  * no storage credentials and cannot grant read access to selected references.
  * Requests made by an earlier principal or page generation never update state.
  */
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 
-import { apiClient } from '@/lib/api';
+import { apiClient, captureApiPrincipalScope, isCurrentApiPrincipalScope, type ApiPrincipalScope } from '@/lib/api';
 import { useAuth } from '@/lib/useAuth';
+import { MAX_DRAFT_ATTACHMENTS, type DraftAttachment } from '../chat/copilotkit/useKarenPersistedDraft';
 import { ContentIntelligenceSelectionPanel } from './ContentIntelligenceSelectionPanel';
+import type { ExplorerCapability, ExplorerDestinationBrowser, ExplorerManagement, ExplorerMutation, ExplorerOperation } from '@/plugin_repo/file-explorer/FileExplorerPage';
 
 interface ExplorerItem {
   source_id: string;
-  parent_id: null;
-  kind: 'file';
+  parent_id: string | null;
+  kind: 'file' | 'folder';
   name: string;
   revision: string;
   size_bytes: number;
-  sha256: string;
+  sha256: string | null;
+  organization_revision?: string;
 }
 
 interface ExplorerSelection {
@@ -31,6 +34,7 @@ interface ExplorerSelection {
 }
 
 interface InventoryPage {
+  maxSelection: number;
   items: ExplorerItem[];
   has_more: boolean;
   next_cursor: string | null;
@@ -39,29 +43,62 @@ interface InventoryPage {
   correlation_id: string;
 }
 
+interface HierarchyLocation {
+  parentId: string | null;
+  breadcrumbs: { folder_id: string; name: string }[];
+  hasMoreFolders: boolean;
+  nextFolderId: string | null;
+  onNavigate?: (folderId: string | null) => void;
+  onNextFolders?: (folderId: string) => void;
+}
+
 interface ScopedPage extends InventoryPage {
+  scopeIdentity: object;
+  principalScope: ApiPrincipalScope | null;
+  hierarchy?: HierarchyLocation;
   principalKey: string;
   generation: number;
 }
 
+interface DestinationRequest {
+  generation: number;
+  principalScope: ApiPrincipalScope;
+  sourceId: string;
+  expectedRevision: string;
+  kind: ExplorerItem['kind'];
+  parentId: string | null;
+  cursor: string | null;
+  page: ReturnType<typeof assertHierarchyPage> | null;
+  error: string | null;
+}
+
 interface PageRequest {
+  scopeIdentity?: object;
+  search?: string;
   principalKey: string;
   cursor: string | null;
+  parentId?: string | null;
+  afterFolderId?: string | null;
   generation: number;
 }
 
 export interface FileExplorerInventoryProps extends Record<string, unknown> {
   authorized: boolean;
+  maxSelection: number;
   items: ExplorerItem[];
   loading: boolean;
   error: string | null;
   selectedSourceIds: string[];
   onSelect: (references: ExplorerSelection[]) => void;
   onRefresh: () => void;
+  search: string;
+  onSearch?: (query: string) => void;
   hasMore: boolean;
   nextCursor: string | null;
   onNextPage: (cursor: string) => void;
   pageKey: string;
+  hierarchy?: HierarchyLocation;
+  management?: ExplorerManagement;
 }
 
 export type InventoryConsumer = 'file-explorer' | 'content-intelligence';
@@ -74,8 +111,12 @@ const INVENTORY_ENDPOINTS: Record<InventoryConsumer, string> = {
 const HEX_SHA256 = /^[a-f0-9]{64}$/;
 const MAX_PAGE_SIZE = 200;
 const MAX_CURSOR_LENGTH = 768;
+// Compatibility with older generic inventory servers. The independently
+// authorized Content Intelligence endpoint requires explicit metadata.
+const LEGACY_ANALYSIS_LIMIT = 12;
+const NO_ATTACHMENTS: readonly DraftAttachment[] = [];
 
-function assertInventoryPage(data: unknown): InventoryPage {
+function assertInventoryPage(data: unknown, parentId: string | null = null, requireCeiling = false): InventoryPage {
   if (!data || typeof data !== 'object' || Array.isArray(data)) {
     throw new Error('Invalid file inventory response');
   }
@@ -101,6 +142,10 @@ function assertInventoryPage(data: unknown): InventoryPage {
     throw new Error('Invalid file inventory response');
   }
 
+  const ceiling = page.max_selection === undefined && !requireCeiling ? LEGACY_ANALYSIS_LIMIT : page.max_selection;
+  if (typeof ceiling !== 'number' || !Number.isSafeInteger(ceiling) || ceiling < 1 || ceiling > MAX_PAGE_SIZE) {
+    throw new Error('Invalid file inventory response');
+  }
   const seen = new Set<string>();
   const items: ExplorerItem[] = [];
   for (const raw of page.items) {
@@ -112,7 +157,7 @@ function assertInventoryPage(data: unknown): InventoryPage {
       typeof item.source_id !== 'string' ||
       !/^[a-f0-9-]{36}$/.test(item.source_id) ||
       seen.has(item.source_id) ||
-      item.parent_id !== null ||
+      item.parent_id !== parentId ||
       item.kind !== 'file' ||
       typeof item.name !== 'string' ||
       !item.name ||
@@ -131,7 +176,7 @@ function assertInventoryPage(data: unknown): InventoryPage {
     seen.add(item.source_id);
     items.push({
       source_id: item.source_id,
-      parent_id: null,
+      parent_id: parentId,
       kind: 'file',
       name: item.name,
       revision: item.revision,
@@ -140,7 +185,7 @@ function assertInventoryPage(data: unknown): InventoryPage {
     });
   }
   return {
-    items,
+    items, maxSelection: ceiling,
     has_more: page.has_more as boolean,
     next_cursor: page.next_cursor as string | null,
     inventory_semantics: 'owner_metadata_page_not_live_acl',
@@ -149,11 +194,124 @@ function assertInventoryPage(data: unknown): InventoryPage {
   };
 }
 
+const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/;
+const validUuid = (value: unknown): value is string => typeof value === 'string' && UUID.test(value);
+const validRevision = (value: unknown): value is string =>
+  typeof value === 'string' && /^[1-9][0-9]{0,18}$/.test(value) &&
+  (value.length < 19 || value <= '9223372036854775806');
+
+function assertHierarchyPage(data: unknown, parentId: string | null, folderCursor: string | null, fileCursor: string | null):
+  InventoryPage & { hierarchy: HierarchyLocation } {
+  if (!data || typeof data !== 'object' || Array.isArray(data)) throw new Error('Invalid file inventory response');
+  const page = data as Record<string, unknown>;
+  if (page.available !== true) throw new Error('File hierarchy unavailable');
+  if (!Array.isArray(page.folders) || page.folders.length > 100 ||
+      !Array.isArray(page.breadcrumbs) || page.breadcrumbs.length > 64 ||
+      !Array.isArray(page.files) || page.files.length > 100 ||
+      typeof page.has_more !== 'boolean' ||
+      (page.has_more ? !validUuid(page.next_folder_id) || page.next_folder_id === folderCursor ||
+          page.folders.length === 0 || page.folders[page.folders.length - 1]?.folder_id !== page.next_folder_id
+        : page.next_folder_id !== null) ||
+      (page.files_has_more === true && page.next_file_cursor === fileCursor)) {
+    throw new Error('Invalid file inventory response');
+  }
+  function folder(raw: unknown, expectedParent: string | null): ExplorerItem {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) throw new Error('Invalid file inventory response');
+    const item = raw as Record<string, unknown>;
+    if (!validUuid(item.folder_id) || item.folder_id === expectedParent ||
+        item.parent_folder_id !== expectedParent || typeof item.name !== 'string' ||
+        !item.name || item.name.length > 256 || !validRevision(item.revision)) {
+      throw new Error('Invalid file inventory response');
+    }
+    return { source_id: item.folder_id, parent_id: expectedParent, kind: 'folder',
+      name: item.name, revision: item.revision, size_bytes: 0, sha256: null,
+      organization_revision: item.revision };
+  }
+  const breadcrumbs: HierarchyLocation['breadcrumbs'] = [];
+  const seen = new Set<string>();
+  let previous: string | null = null;
+  for (const raw of page.breadcrumbs) {
+    const item = folder(raw, previous);
+    if (seen.has(item.source_id)) throw new Error('Invalid file inventory response');
+    seen.add(item.source_id);
+    breadcrumbs.push({ folder_id: item.source_id, name: item.name });
+    previous = item.source_id;
+  }
+  if (previous !== parentId) throw new Error('Invalid file inventory response');
+  const folders = page.folders.map(raw => folder(raw, parentId));
+  const files = assertInventoryPage({
+    items: page.files, has_more: page.files_has_more, next_cursor: page.next_file_cursor,
+    max_selection: page.max_selection,
+    inventory_semantics: 'owner_metadata_page_not_live_acl',
+    request_id: page.request_id, correlation_id: page.correlation_id,
+  }, parentId);
+  for (let i = 0; i < files.items.length; i++) {
+    const revision = page.files[i]?.organization_revision;
+    if (!validUuid(files.items[i].source_id) || !validRevision(revision)) {
+      throw new Error('Invalid file inventory response');
+    }
+    files.items[i].organization_revision = revision;
+  }
+  const items = [...folders, ...files.items];
+  for (const item of items) {
+    if (seen.has(item.source_id)) throw new Error('Invalid file inventory response');
+    seen.add(item.source_id);
+  }
+  return { ...files, items, hierarchy: { parentId, breadcrumbs,
+    hasMoreFolders: page.has_more, nextFolderId: page.next_folder_id as string | null } };
+}
+
+const OPERATIONS: ExplorerOperation[] = [
+  'file_explorer.folder.create', 'file_explorer.folder.rename', 'file_explorer.folder.move',
+  'file_explorer.artifact.move', 'file_explorer.folder.delete',
+];
+
+function capabilityResponse(data: unknown): ExplorerManagement['capabilities'] {
+  if (!data || typeof data !== 'object') return {};
+  const value = data as Record<string, unknown>;
+  if (value.browse !== 'available' || value.semantics !== 'preflight_not_resource_authorization' ||
+      typeof value.request_id !== 'string' || !value.request_id ||
+      typeof value.correlation_id !== 'string' || !value.correlation_id ||
+      !value.operations || typeof value.operations !== 'object') return {};
+  const operations = value.operations as Record<string, unknown>;
+  const result: Partial<Record<ExplorerOperation, ExplorerCapability>> = {};
+  for (const operation of OPERATIONS) {
+    const state = operations[operation];
+    if (state !== 'available' && state !== 'denied' && state !== 'unavailable') return {};
+    result[operation] = state;
+  }
+  return result;
+}
+
+function assertMutationReceipt(data: unknown, mutation: ExplorerMutation, parent: string | null, item?: ExplorerItem) {
+  if (!data || typeof data !== 'object') throw new Error('Unconfirmed organization change');
+  const result = data as Record<string, unknown>;
+  if (typeof result.request_id !== 'string' || !result.request_id ||
+      typeof result.correlation_id !== 'string' || !result.correlation_id) throw new Error('Unconfirmed organization change');
+  const matchesRevision = (revision: unknown, expected: string, changed: boolean) => validRevision(revision) &&
+    BigInt(revision) === BigInt(expected) + BigInt(changed ? 1 : 0);
+  if (mutation.action === 'delete') {
+    if (result.deleted === true && result.folder_id === mutation.sourceId) return;
+  } else if (mutation.action === 'move') {
+    if (result.source_id === mutation.sourceId && result.kind === (item?.kind === 'file' ? 'artifact' : 'folder') &&
+        result.parent_folder_id === mutation.destinationId &&
+        matchesRevision(result.organization_revision, mutation.expectedRevision, item?.parent_id !== mutation.destinationId)) return;
+  } else if (result.folder && typeof result.folder === 'object') {
+    const folder = result.folder as Record<string, unknown>;
+    if (validUuid(folder.folder_id) && folder.parent_folder_id === parent && folder.name === mutation.name &&
+        (mutation.action === 'create' ? folder.revision === '1' :
+          folder.folder_id === mutation.sourceId && matchesRevision(folder.revision, mutation.expectedRevision, item?.name !== mutation.name))) return;
+  }
+  throw new Error('Unconfirmed organization change');
+}
+
 export function FileExplorerInventoryHost({
   children,
   mode = 'analysis',
   consumer = 'file-explorer',
+  hierarchy = consumer === 'file-explorer',
   onAttach,
+  existingAttachments = NO_ATTACHMENTS,
   renderAnalysis,
 }: {
   children: (props: FileExplorerInventoryProps) => ReactNode;
@@ -161,38 +319,70 @@ export function FileExplorerInventoryHost({
   mode?: 'analysis' | 'selection';
   /** Trusted UI composition selects a fixed endpoint; the server authorizes it. */
   consumer?: InventoryConsumer;
+  /** Flat inventory remains explicit for existing non-hierarchy consumers. */
+  hierarchy?: boolean;
   onAttach?: (references: { source_id: string; revision: string }[]) => void;
+  existingAttachments?: readonly DraftAttachment[];
   /** Optional layout slot; authorization and selection remain host-owned. */
   renderAnalysis?: (panel: ReactNode, props: FileExplorerInventoryProps) => ReactNode;
 }) {
   const { user, isAuthenticated, isLoading: authLoading } = useAuth();
+  const tenantId = user?.tenant_id ?? '';
+  const userId = user?.user_id ?? '';
   const principalKey = useMemo(() => {
     if (!isAuthenticated || !user?.user_id || !user?.tenant_id) {
       return '';
     }
     return [
       consumer,
+      mode,
+      hierarchy ? 'hierarchy' : 'flat',
       user.tenant_id,
       user.user_id,
       [...(user.roles || [])].sort().join(','),
       [...(user.permissions || [])].sort().join(','),
     ].join('|');
-  }, [isAuthenticated, user, consumer]);
+  }, [isAuthenticated, user, consumer, hierarchy, mode]);
 
+  const scopeIdentity = useMemo(() => ({ principalKey, authLoading }), [principalKey, authLoading]);
+  const scopeRef = useRef<object | null>(scopeIdentity);
   const [request, setRequest] = useState<PageRequest>({
     principalKey: '',
     cursor: null,
     generation: 0,
   });
   const [page, setPage] = useState<ScopedPage | null>(null);
-  const [errorState, setErrorState] = useState<{ principalKey: string; message: string } | null>(null);
+  const [errorState, setErrorState] = useState<{ scopeIdentity: object; principalKey: string; message: string } | null>(null);
   const [selectedSourceIds, setSelectedSourceIds] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const generationRef = useRef(0);
+  const managementEnabled = hierarchy && consumer === 'file-explorer' && mode === 'analysis';
+  const [capability, setCapability] = useState<{ generation: number; operations: ExplorerManagement['capabilities'] } | null>(null);
+  const [mutationState, setMutationState] = useState<{ principalKey: string; message: string | null; busy: boolean } | null>(null);
+  const mutationRef = useRef<{ generation: number; principalKey: string } | null>(null);
+  const destinationRef = useRef<DestinationRequest | null>(null);
+  const [destinationState, setDestinationState] = useState<DestinationRequest | null>(null);
+
+  // Revoke event closures at the committed identity/mode boundary, before
+  // passive fetch effects run. Retained plugin callbacks are untrusted.
+  useLayoutEffect(() => {
+    scopeRef.current = scopeIdentity;
+    return () => {
+      scopeRef.current = null;
+      generationRef.current += 1;
+      mutationRef.current = null;
+      destinationRef.current = null;
+    };
+  }, [scopeIdentity]);
 
   useEffect(() => {
     // The source is authenticated API truth, never browser-supplied inventory.
+    destinationRef.current = null;
+    setDestinationState(null);
     if (!principalKey || authLoading) {
+      mutationRef.current = null;
+      setMutationState(null);
+      setCapability(null);
       generationRef.current += 1;
       setPage(null);
       setSelectedSourceIds([]);
@@ -203,29 +393,52 @@ export function FileExplorerInventoryHost({
 
     let cancelled = false;
     const generation = ++generationRef.current;
-    const cursor = request.principalKey === principalKey ? request.cursor : null;
+    setMutationState(value => value?.principalKey === principalKey && !value.busy ? value : null);
+    const cursor = request.scopeIdentity === scopeIdentity ? request.cursor : null;
+    const parentId = request.scopeIdentity === scopeIdentity ? request.parentId ?? null : null;
+    const afterFolderId = request.scopeIdentity === scopeIdentity ? request.afterFolderId ?? null : null;
+    const search = request.scopeIdentity === scopeIdentity ? request.search ?? '' : '';
 
     setLoading(true);
     setPage(null);
     setErrorState(null);
     setSelectedSourceIds([]);
 
-    const endpoint = INVENTORY_ENDPOINTS[consumer] + '?limit=100' +
-      (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+    // Management evidence is bound to the transport identity that requested it,
+    // not a freshly captured session at the time a retained callback is invoked.
+    const principalScope = managementEnabled ? captureApiPrincipalScope(tenantId, userId) : null;
+    if (managementEnabled && !principalScope) {
+      setErrorState({ principalKey, scopeIdentity, message: 'File inventory is unavailable or access was denied.' });
+      setLoading(false);
+      return;
+    }
 
-    void apiClient.get<unknown>(endpoint)
-      .then((data) => {
-        if (cancelled || generationRef.current !== generation) return;
-        const verified = assertInventoryPage(data);
-        setPage({ ...verified, principalKey, generation });
+    const inventoryEndpoint = hierarchy
+      ? '/api/plugins/file-explorer/hierarchy?limit=100' +
+        (parentId ? '&parent_folder_id=' + encodeURIComponent(parentId) : '') +
+        (afterFolderId ? '&after_folder_id=' + encodeURIComponent(afterFolderId) : '') +
+        (cursor ? '&file_cursor=' + encodeURIComponent(cursor) : '')
+      : INVENTORY_ENDPOINTS[consumer] + '?limit=100' +
+        (cursor ? '&cursor=' + encodeURIComponent(cursor) : '');
+    const endpoint = inventoryEndpoint + (search ? '&search=' + encodeURIComponent(search) : '');
+
+    const inventoryRequest = principalScope
+      ? apiClient.get<unknown>(endpoint, principalScope)
+      : apiClient.get<unknown>(endpoint);
+    void inventoryRequest.then((data) => {
+        if (cancelled || scopeRef.current !== scopeIdentity || generationRef.current !== generation) return;
+        if (principalScope && !isCurrentApiPrincipalScope(principalScope)) throw new Error('Authenticated request scope changed');
+        const verified = hierarchy ? assertHierarchyPage(data, parentId, afterFolderId, cursor) : assertInventoryPage(data, null, consumer === 'content-intelligence');
+        if (verified.has_more && verified.next_cursor === cursor) throw new Error('Invalid file inventory response');
+        setPage({ ...verified, principalKey, scopeIdentity, generation, principalScope });
       })
       .catch((error: unknown) => {
-        if (cancelled || generationRef.current !== generation) return;
+        if (cancelled || scopeRef.current !== scopeIdentity || generationRef.current !== generation) return;
         // Failure is not an empty authorized inventory. Avoid exposing API
         // error payloads containing tenancy or internal runtime detail.
         setPage(null);
         setErrorState({
-          principalKey,
+          principalKey, scopeIdentity,
           message: error instanceof Error && error.message === 'Invalid file inventory response'
             ? 'Invalid file inventory response.'
             : 'File inventory is unavailable or access was denied.',
@@ -241,94 +454,358 @@ export function FileExplorerInventoryHost({
       cancelled = true;
       generationRef.current += 1;
     };
-  }, [principalKey, authLoading, request, consumer]);
+  }, [principalKey, authLoading, request, consumer, hierarchy, scopeIdentity, managementEnabled, tenantId, userId]);
 
-  const currentPage = !authLoading && principalKey && page?.principalKey === principalKey ? page : null;
-  const currentError = !authLoading && principalKey && errorState?.principalKey === principalKey ? errorState.message : null;
+  const currentPage = !authLoading && principalKey && page?.scopeIdentity === scopeIdentity ? page : null;
+  const callbackGeneration = generationRef.current;
+  const currentError = !authLoading && principalKey && errorState?.scopeIdentity === scopeIdentity ? errorState.message : null;
+  const activeSearch = !authLoading && request.scopeIdentity === scopeIdentity ? request.search ?? '' : '';
 
+  useEffect(() => {
+    if (!managementEnabled || !currentPage?.principalScope || !isCurrentApiPrincipalScope(currentPage.principalScope)) return;
+    const principalScope = currentPage.principalScope;
+    let cancelled = false;
+    const generation = currentPage.generation;
+    void apiClient.get<unknown>('/api/plugins/file-explorer/capabilities', principalScope)
+      .then(data => {
+        if (!cancelled && generationRef.current === generation && isCurrentApiPrincipalScope(principalScope)) {
+          setCapability({ generation, operations: capabilityResponse(data) });
+        }
+      })
+      .catch(() => {
+        if (!cancelled && generationRef.current === generation) setCapability({ generation, operations: {} });
+      });
+    return () => { cancelled = true; };
+  }, [managementEnabled, currentPage]);
+
+  const attachedIds = useMemo(() => new Set(existingAttachments.map(item => item.source_id)), [existingAttachments]);
+  const capacity = currentPage ? (mode === 'selection'
+    ? Math.max(0, Math.min(currentPage.maxSelection, MAX_DRAFT_ATTACHMENTS - attachedIds.size))
+    : currentPage.maxSelection) : 0;
+  const selectableItems = useMemo(() => currentPage?.items.filter(item =>
+    mode !== 'selection' || item.kind === 'folder' || !attachedIds.has(item.source_id)) ?? [],
+    [currentPage, mode, attachedIds]);
+  // Distinct identity on every committed capacity/reference transition; A-B-A
+  // cannot revive retained selection or attach callbacks.
+  const capacityKey = JSON.stringify([capacity, ...existingAttachments.map(item =>
+    JSON.stringify([item.source_id, item.revision])).sort()]);
+  const capacityIdentity = useMemo(() => ({ capacityKey }), [capacityKey]);
+  const capacityRef = useRef<object | null>(capacityIdentity);
+  const capacityChanged = capacityRef.current !== capacityIdentity;
+  useLayoutEffect(() => {
+    if (capacityRef.current !== capacityIdentity) setSelectedSourceIds([]);
+    capacityRef.current = capacityIdentity;
+    return () => { capacityRef.current = null; };
+  }, [capacityIdentity]);
+  const eligibleSelection = !capacityChanged && selectedSourceIds.length <= capacity
+    ? selectedSourceIds.filter(id => selectableItems.some(item => item.source_id === id && item.kind === 'file'))
+    : [];
+  // Mirror accepted selection events synchronously, not only after a React
+  // render. A retained confirmation cannot attach a superseded selection.
+  const acceptedSelectionRef = useRef<string[] | null>(null);
   const onSelect = useCallback((references: ExplorerSelection[]) => {
-    if (!currentPage || loading || currentError) {
-      setSelectedSourceIds([]);
+    if (scopeRef.current !== scopeIdentity || capacityRef.current !== capacityIdentity ||
+        generationRef.current !== callbackGeneration || !currentPage ||
+        currentPage.generation !== callbackGeneration) return;
+    const accept = (next: string[]) => {
+      acceptedSelectionRef.current = next;
+      setSelectedSourceIds(next);
+    };
+    if (loading || currentError || mutationRef.current?.principalKey === principalKey) {
+      accept([]);
       return;
     }
     // A plugin UI event is untrusted presentation input, not authority.
     // Never accept a remembered ID with a forged/stale revision or hash.
     // Reject the entire event rather than partially accepting mixed evidence.
-    if (!Array.isArray(references) || references.length > 24) {
-      setSelectedSourceIds([]);
+    if (!Array.isArray(references) || references.length > capacity) {
+      accept([]);
       return;
     }
-    const byId = new Map(currentPage.items.map((item) => [item.source_id, item]));
+    const byId = new Map(selectableItems.map((item) => [item.source_id, item]));
     const seen = new Set<string>();
     const accepted: string[] = [];
     for (const reference of references) {
       const item = reference && typeof reference.source_id === 'string'
         ? byId.get(reference.source_id) : undefined;
       if (
-        !item ||
+        !item || item.kind !== 'file' ||
         seen.has(item.source_id) ||
         reference.kind !== item.kind ||
         reference.revision !== item.revision ||
         reference.sha256 !== item.sha256
       ) {
-        setSelectedSourceIds([]);
+        accept([]);
         return;
       }
       seen.add(item.source_id);
       accepted.push(item.source_id);
     }
-    setSelectedSourceIds(accepted);
-  }, [currentPage, loading, currentError]);
+    accept(accepted);
+  }, [currentPage, loading, currentError, principalKey, callbackGeneration, scopeIdentity,
+      capacityIdentity, capacity, selectableItems]);
+
+  const isCurrentNavigation = useCallback(() => !authLoading &&
+    scopeRef.current === scopeIdentity && capacityRef.current === capacityIdentity &&
+    generationRef.current === callbackGeneration,
+  [authLoading, scopeIdentity, capacityIdentity, callbackGeneration]);
+
+  const onSearch = useCallback((value: string) => {
+    if (!principalKey || !isCurrentNavigation() || mutationRef.current ||
+        typeof value !== 'string' || Array.from(value).length > 160 ||
+        /[\u0000-\u001f\u007f-\u009f]/u.test(value)) return;
+    // URI encoding must not throw for an unpaired surrogate.
+    try { encodeURIComponent(value); } catch { return; }
+    const search = value.trim();
+    generationRef.current += 1;
+    destinationRef.current = null;
+    setDestinationState(null);
+    setSelectedSourceIds([]);
+    setPage(null);
+    setErrorState(null);
+    setRequest(previous => ({ principalKey, scopeIdentity, search, cursor: null,
+      parentId: previous.scopeIdentity === scopeIdentity ? previous.parentId ?? null : null,
+      afterFolderId: null, generation: previous.generation + 1 }));
+  }, [principalKey, isCurrentNavigation, scopeIdentity]);
 
   const onRefresh = useCallback(() => {
-    if (!principalKey) return;
+    if (!principalKey || !isCurrentNavigation() ||
+        mutationRef.current?.principalKey === principalKey) return;
+    generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
-      principalKey,
+      principalKey, scopeIdentity, search: activeSearch,
       cursor: null,
+      parentId: !currentError && value.scopeIdentity === scopeIdentity ? value.parentId ?? null : null,
+      afterFolderId: null,
       generation: value.generation + 1,
     }));
-  }, [principalKey]);
+  }, [principalKey, isCurrentNavigation, currentError, scopeIdentity, activeSearch]);
 
   const onNextPage = useCallback((cursor: string) => {
     if (
-      !principalKey || !currentPage || loading || currentError ||
+      !principalKey || !isCurrentNavigation() || !currentPage || generationRef.current !== currentPage.generation ||
+      loading || currentError || mutationRef.current?.principalKey === principalKey ||
       !currentPage.has_more || currentPage.next_cursor !== cursor
     ) return;
+    generationRef.current += 1;
     setSelectedSourceIds([]);
     setPage(null);
     setRequest((value) => ({
-      principalKey,
+      principalKey, scopeIdentity, search: activeSearch,
       cursor,
+      parentId: currentPage.hierarchy?.parentId ?? null,
+      afterFolderId: value.scopeIdentity === scopeIdentity ? value.afterFolderId ?? null : null,
       generation: value.generation + 1,
     }));
-  }, [principalKey, currentPage, loading, currentError]);
+  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch, isCurrentNavigation]);
+
+  const onNavigate = useCallback((folderId: string | null) => {
+    if (!principalKey || !isCurrentNavigation() || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
+        loading || currentError || mutationRef.current?.principalKey === principalKey) return;
+    if (folderId !== null &&
+        !currentPage.hierarchy.breadcrumbs.some(crumb => crumb.folder_id === folderId) &&
+        !currentPage.items.some(item => item.kind === 'folder' && item.source_id === folderId)) return;
+    generationRef.current += 1;
+    setSelectedSourceIds([]);
+    setPage(null);
+    setRequest(value => ({ principalKey, scopeIdentity, search: '', cursor: null, parentId: folderId,
+      afterFolderId: null, generation: value.generation + 1 }));
+  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch, isCurrentNavigation]);
+
+  const onNextFolders = useCallback((folderId: string) => {
+    if (!principalKey || !isCurrentNavigation() || !currentPage?.hierarchy || generationRef.current !== currentPage.generation ||
+        loading || currentError || mutationRef.current?.principalKey === principalKey ||
+        !currentPage.hierarchy.hasMoreFolders || currentPage.hierarchy.nextFolderId !== folderId) return;
+    generationRef.current += 1;
+    setSelectedSourceIds([]);
+    setPage(null);
+    setRequest(value => ({ principalKey, scopeIdentity, search: activeSearch,
+      cursor: value.scopeIdentity === scopeIdentity ? value.cursor : null,
+      parentId: currentPage.hierarchy?.parentId ?? null,
+      afterFolderId: folderId, generation: value.generation + 1 }));
+  }, [principalKey, currentPage, loading, currentError, scopeIdentity, activeSearch, isCurrentNavigation]);
+
+  const loadDestination = useCallback((next: DestinationRequest) => {
+    if (generationRef.current !== next.generation || mutationRef.current || !isCurrentApiPrincipalScope(next.principalScope)) return;
+    destinationRef.current = next;
+    setDestinationState(next);
+    const endpoint = '/api/plugins/file-explorer/hierarchy?limit=100' +
+      (next.parentId ? '&parent_folder_id=' + encodeURIComponent(next.parentId) : '') +
+      (next.cursor ? '&after_folder_id=' + encodeURIComponent(next.cursor) : '');
+    void apiClient.get<unknown>(endpoint, next.principalScope).then(data => {
+      if (destinationRef.current !== next || generationRef.current !== next.generation || !isCurrentApiPrincipalScope(next.principalScope)) return;
+      const page = assertHierarchyPage(data, next.parentId, next.cursor, null);
+      if (next.kind === 'folder' && page.hierarchy.breadcrumbs.some(crumb => crumb.folder_id === next.sourceId)) {
+        throw new Error('Invalid descendant destination');
+      }
+      const verified = { ...next, page };
+      destinationRef.current = verified;
+      setDestinationState(verified);
+    }).catch(() => {
+      if (destinationRef.current !== next || generationRef.current !== next.generation) return;
+      const failed = { ...next, error: 'Destination unavailable or access denied.' };
+      destinationRef.current = failed;
+      setDestinationState(failed);
+    });
+  }, []);
+
+  const onBrowseDestination = useCallback((sourceId: string, expectedRevision: string) => {
+    if (!managementEnabled || !currentPage?.hierarchy || loading || currentError ||
+        generationRef.current !== currentPage.generation || capability?.generation !== currentPage.generation ||
+        !currentPage.principalScope || !isCurrentApiPrincipalScope(currentPage.principalScope) || mutationRef.current) return;
+    const item = currentPage.items.find(entry => entry.source_id === sourceId);
+    if (!item || !validRevision(item.organization_revision) || item.organization_revision !== expectedRevision ||
+        capability.operations[item.kind === 'folder' ? 'file_explorer.folder.move' : 'file_explorer.artifact.move'] !== 'available') return;
+    loadDestination({ generation: currentPage.generation, principalScope: currentPage.principalScope, sourceId, expectedRevision, kind: item.kind,
+      parentId: null, cursor: null, page: null, error: null });
+  }, [managementEnabled, currentPage, loading, currentError, capability, loadDestination]);
+
+  const activeDestination = managementEnabled && currentPage && destinationState?.generation === currentPage.generation
+    ? destinationState : null;
+  const destination: ExplorerDestinationBrowser | undefined = activeDestination ? {
+    sourceId: activeDestination.sourceId, expectedRevision: activeDestination.expectedRevision,
+    parentId: activeDestination.parentId,
+    breadcrumbs: activeDestination.page?.hierarchy.breadcrumbs ?? [],
+    folders: activeDestination.page?.items.filter(item => item.kind === 'folder' &&
+      !(activeDestination.kind === 'folder' && item.source_id === activeDestination.sourceId))
+      .map(item => ({ folder_id: item.source_id, name: item.name })) ?? [],
+    loading: !activeDestination.page && !activeDestination.error,
+    error: activeDestination.error,
+    canConfirm: Boolean(activeDestination.page && !activeDestination.error),
+    hasMore: activeDestination.page?.hierarchy.hasMoreFolders ?? false,
+    onNavigate: folderId => {
+      if (destinationRef.current !== activeDestination || generationRef.current !== activeDestination.generation) return;
+      if (folderId !== null && (!activeDestination.page ||
+          (activeDestination.kind === 'folder' && folderId === activeDestination.sourceId) ||
+          !(activeDestination.page.hierarchy.breadcrumbs.some(crumb => crumb.folder_id === folderId) ||
+            activeDestination.page.items.some(item => item.kind === 'folder' && item.source_id === folderId)))) return;
+      loadDestination({ ...activeDestination, parentId: folderId, cursor: null, page: null, error: null });
+    },
+    onNext: () => {
+      if (destinationRef.current !== activeDestination || generationRef.current !== activeDestination.generation ||
+          !activeDestination.page?.hierarchy.hasMoreFolders || !activeDestination.page.hierarchy.nextFolderId) return;
+      loadDestination({ ...activeDestination, cursor: activeDestination.page.hierarchy.nextFolderId, page: null, error: null });
+    },
+    onCancel: () => {
+      if (destinationRef.current !== activeDestination || generationRef.current !== activeDestination.generation) return;
+      destinationRef.current = null;
+      setDestinationState(null);
+    },
+  } : undefined;
+
+  const onMutate = useCallback(async (mutation: ExplorerMutation) => {
+    if (!managementEnabled || !currentPage?.hierarchy || loading || currentError ||
+        generationRef.current !== currentPage.generation ||
+        capability?.generation !== currentPage.generation || scopeRef.current !== scopeIdentity ||
+        !currentPage.principalScope || !isCurrentApiPrincipalScope(currentPage.principalScope) ||
+        mutationRef.current?.principalKey === principalKey) return;
+    const principalScope = currentPage.principalScope;
+    if (!mutation || typeof mutation !== 'object' ||
+        !['create', 'rename', 'move', 'delete'].includes(mutation.action)) return;
+    const item = mutation.action === 'create' ? undefined :
+      currentPage.items.find(entry => entry.source_id === mutation.sourceId);
+    if (mutation.action !== 'create' && (!item || !validRevision(item.organization_revision) ||
+        mutation.expectedRevision !== item.organization_revision)) return;
+    if ((mutation.action === 'rename' || mutation.action === 'delete') && item?.kind !== 'folder') return;
+    if (mutation.action === 'create' || mutation.action === 'rename') {
+      if (typeof mutation.name !== 'string' || !mutation.name || mutation.name.length > 256 ||
+          mutation.name !== mutation.name.trim() || /[\x00-\x1f\x7f-\x9f]/.test(mutation.name)) return;
+    }
+    const operation: ExplorerOperation = mutation.action === 'move'
+      ? (item?.kind === 'file' ? 'file_explorer.artifact.move' : 'file_explorer.folder.move')
+      : mutation.action === 'create' ? 'file_explorer.folder.create'
+      : mutation.action === 'rename' ? 'file_explorer.folder.rename' : 'file_explorer.folder.delete';
+    if (capability.operations[operation] !== 'available') return;
+    const location = currentPage.hierarchy;
+    if (mutation.action === 'move') {
+      const proof = destinationRef.current;
+      if (!proof?.page || proof.error || proof.generation !== currentPage.generation || proof.principalScope !== principalScope ||
+          proof.sourceId !== mutation.sourceId || proof.expectedRevision !== mutation.expectedRevision ||
+          proof.kind !== item?.kind || proof.parentId !== mutation.destinationId) return;
+    }
+    destinationRef.current = null;
+    setDestinationState(null);
+    const token = { generation: currentPage.generation, principalKey };
+    mutationRef.current = token;
+    setSelectedSourceIds([]);
+    setMutationState({ principalKey, busy: true, message: null });
+    const prefix = '/api/plugins/file-explorer';
+    let message = 'Organization change confirmed. Reloading inventory.';
+    try {
+      let result: unknown;
+      if (mutation.action === 'create') {
+        result = await apiClient.post(prefix + '/folders', { name: mutation.name, parent_folder_id: location.parentId }, {}, principalScope);
+      } else if (mutation.action === 'rename') {
+        result = await apiClient.patch(prefix + '/folders/' + mutation.sourceId, {
+          name: mutation.name, expected_revision: mutation.expectedRevision,
+        }, {}, principalScope);
+      } else if (mutation.action === 'delete') {
+        result = await apiClient.delete(prefix + '/folders/' + mutation.sourceId, {
+          expected_revision: mutation.expectedRevision,
+        }, {}, principalScope);
+      } else {
+        result = await apiClient.post(prefix + '/move/' + (item?.kind === 'file' ? 'artifact' : 'folder') + '/' + mutation.sourceId, {
+          destination_id: mutation.destinationId, expected_revision: mutation.expectedRevision,
+        }, {}, principalScope);
+      }
+      if (!isCurrentApiPrincipalScope(principalScope)) throw new Error('Authenticated request scope changed');
+      assertMutationReceipt(result, mutation, location.parentId, item);
+    } catch (error) {
+      const status = error && typeof error === 'object' && 'status' in error ? error.status : null;
+      message = status === 409 ? 'Organization conflict. Review the refreshed inventory before trying again.'
+        : status === 403 ? 'Organization change denied. Permissions will be checked again.'
+        : 'Organization change not confirmed. Review inventory before trying again; no automatic retry.';
+    } finally {
+      if (mutationRef.current === token) mutationRef.current = null;
+      if (generationRef.current === token.generation) {
+        generationRef.current += 1;
+        setMutationState({ principalKey, busy: false, message });
+        setCapability(null);
+        setPage(null);
+        setRequest(value => ({ principalKey, scopeIdentity, search: activeSearch, cursor: null, parentId: location.parentId,
+          afterFolderId: null, generation: value.generation + 1 }));
+      }
+    }
+  }, [managementEnabled, currentPage, loading, currentError, capability, principalKey, scopeIdentity, activeSearch]);
 
   const props: FileExplorerInventoryProps = {
     authorized: Boolean(currentPage && !currentError),
-    items: currentPage?.items || [],
+    maxSelection: capacity,
+    items: selectableItems,
     loading: Boolean(principalKey && !authLoading && (loading || (!currentPage && !currentError))),
     error: currentError,
-    selectedSourceIds: currentPage && !currentError ? selectedSourceIds : [],
+    selectedSourceIds: currentPage && !currentError ? eligibleSelection : [],
     onSelect,
     onRefresh,
+    search: activeSearch,
+    onSearch: principalKey && !authLoading ? onSearch : undefined,
     hasMore: currentPage?.has_more || false,
     nextCursor: currentPage?.next_cursor || null,
     onNextPage,
     pageKey: principalKey + ':' + (currentPage?.generation ?? 'pending'),
+    hierarchy: currentPage?.hierarchy ? { ...currentPage.hierarchy, onNavigate, onNextFolders } : undefined,
+    management: managementEnabled && currentPage?.hierarchy ? {
+      capabilities: capability?.generation === currentPage.generation ? capability.operations : {},
+      capabilityStatus: capability?.generation !== currentPage.generation ? 'checking' :
+        Object.keys(capability.operations).length === OPERATIONS.length ? 'ready' : 'unavailable',
+      busy: mutationState?.principalKey === principalKey && mutationState.busy,
+      message: mutationState?.principalKey === principalKey ? mutationState.message : null,
+      onMutate, onBrowseDestination, destination,
+    } : undefined,
   };
 
   const selectedAnalysisSources = mode === 'analysis' && currentPage && !currentError && !loading
-    ? selectedSourceIds.flatMap((id) => {
+    ? props.selectedSourceIds.flatMap((id) => {
       const item = currentPage.items.find((entry) => entry.source_id === id);
-      return item ? [{ source_id: item.source_id, revision: item.revision, name: item.name }] : [];
+      return item?.kind === 'file' ? [{ source_id: item.source_id, revision: item.revision, name: item.name }] : [];
     })
     : [];
   const selectedDraftSources = mode === 'selection' && currentPage && !currentError && !loading
-    ? selectedSourceIds.flatMap(id => {
+    ? props.selectedSourceIds.flatMap(id => {
       const item = currentPage.items.find(entry => entry.source_id === id);
-      return item ? [{ source_id: item.source_id, revision: item.revision }] : [];
+      return item?.kind === 'file' ? [{ source_id: item.source_id, revision: item.revision }] : [];
     })
     : [];
   const selectionKey = props.pageKey + ':' +
@@ -338,6 +815,7 @@ export function FileExplorerInventoryHost({
     <ContentIntelligenceSelectionPanel
       key={selectionKey}
       sources={selectedAnalysisSources}
+      maxSelection={capacity}
       onRefreshInventory={onRefresh}
     />
   ) : null;
@@ -348,7 +826,11 @@ export function FileExplorerInventoryHost({
       {mode === 'selection' && onAttach && selectedDraftSources.length > 0 && (
         <button type="button" className="m-2 min-h-11 rounded-lg border border-input px-3 text-sm"
           onClick={() => {
-            if (!currentPage || currentPage.generation !== generationRef.current) return;
+            if (!currentPage || currentPage.generation !== generationRef.current ||
+                scopeRef.current !== scopeIdentity || capacityRef.current !== capacityIdentity ||
+                selectedDraftSources.length > capacity || acceptedSelectionRef.current !== selectedSourceIds) return;
+            acceptedSelectionRef.current = null;
+            setSelectedSourceIds([]);
             onAttach(selectedDraftSources);
           }}>
           Attach selected files ({selectedDraftSources.length})

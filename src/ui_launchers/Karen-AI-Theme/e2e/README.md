@@ -805,3 +805,124 @@ before marking live specialist readback verified.
 ### Signed Docker specialist readback (ARM-05C.7B)
 
 Choose `docker-specialist-participation` on the exact reviewed current main SHA. Reuse the existing approved `KAREN_DOCKER_SEARCH_ACCEPTANCE_URL` origin and signed API/web image references and config IDs in the protected environment. The existing operator-host jobs verify signed running images and public ingress before and after the hosted browser. Browser setup never runs on the host. The hosted browser uses the same specialist fixture credentials, run IDs and private one-test report gate as `specialist-participation`, with Docker fixture mode and no Vercel bypass. No host mutation, deployment, new fixture or inference is part of this trial. Before/after proof is not continuous runtime identity or fresh specialist execution. The Vercel scenario remains a separate frontend provenance and backend readiness proof.
+
+## KCOMM-02E: authenticated personal inbox lifecycle acceptance
+
+Run on a disposable, explicitly approved local or HTTPS installation with the canonical producer migration applied and the producer enabled. Two dedicated accounts are mandatory. Account A must have a **genuine runtime-created pending eligibility marker**, not an already admitted notification; account B must have a distinct existing active runtime notification. Use a controlled real-runtime failure and interrupted projection in the disposable environment to establish A's fixture. No fixture creation is performed by this browser test; never insert a fake notification or mark a production execution to obtain a passing result. The designated execution IDs must fit the first active/archived pages of the sanitized accounts. The test permanently archives A's fixture, so supply a fresh fixture for each run.
+
+```sh
+KAREN_COMMS_INBOX_ACCEPTANCE=true \
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \
+KAREN_BASE_URL=http://127.0.0.1:8010 \
+npx playwright test comms-visual-acceptance.spec.ts --project=chromium --retries=0 --grep="KCOMM-02E"
+```
+
+Supply KAREN_UX_EMAIL, KAREN_UX_PASSWORD, KAREN_UX_ACCOUNT_B_EMAIL, KAREN_UX_ACCOUNT_B_PASSWORD, KAREN_UX_ACCOUNT_A_PENDING_INBOX_EXECUTION_ID and KAREN_UX_ACCOUNT_B_INBOX_EXECUTION_ID securely in the environment, never in committed files. On approved HTTPS omit the loopback opt-in. The suite checks real recovery POST, server-derived count, exact revision and source receipts for read/ack/archive, readback after reload, signed-out denial, and A-to-B isolation in the same browser. It does not prove new runtime failure creation by itself, cross-tenant isolation unless fixtures have distinct tenants, or delivery over a push transport. No retries, trace, video, screenshot or persistent per-test output in this mode; treat console logs as sensitive. Source/CI typecheck is not execution of this authenticated suite.
+
+
+KCOMM-03A uses bounded authenticated **read** refresh while the inbox is open (30 seconds, focus, online and visibility return). This is not WebSocket/Supabase push delivery. Refresh does not POST reconciliation or replay mutations, cannot bypass an uncertain outcome, and stops on hidden/inactive or unmounted views. The existing simulated realtime client and tenant-wide notification topic are not authorized personal-inbox transports.
+
+
+### Disposable signed-session Communications acceptance (KCOMM-02E)
+
+Run the existing **Production First-Boot Smoke** workflow on an approved source
+revision with its explicit `communications_browser` dispatch input enabled.
+The default remains false; ordinary PR and mainline boot checks do not claim
+browser acceptance. No hosted deployment credentials or live model endpoint
+are used. The proof uses disposable production images, isolated PostgreSQL,
+loopback HTTP ingress, distinct signed user accounts and the existing runtime
+ledger/reconciliation owners. It rejects skipped or retried browser tests.
+
+Historical execution: [run 45852298782](https://github.com/agustealo/AI-Karen/actions/runs/45852298782),
+source `1dffc88011bff58852b1fe8b353b5242cdafb019`, one passing Chromium
+scenario with zero skips/retries. The controlled terminal repository fixture
+does not establish real model inference failure, multiworker push delivery or
+hosted production acceptance. A new source revision needs a fresh opt-in run.
+
+### ARM-08: fresh ordinary-chat specialist execution
+
+The existing consumer first-send test has an explicit ordinary-specialist mode. Use only the approved disposable non-admin tenant/account with a preconfigured local model and policy restricted to the single approved read-only tool. Set `KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE=true`, `KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED=true`, `KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID`, `KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID`, `KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT`, and `KAREN_SPECIALIST_EXPECTED_PROVIDER`, `MODEL`, `ENGINE`, `AGENT`, `TOOL` (each with the same prefix). The prompt must naturally request one registered specialist and one permitted read-only action, not ask for fabricated proof. It creates one new conversation through the UI, uses the approved signed Docker origin, and compares the attested runtime identity, actual model attribution, terminal lifecycle, participation and tool acknowledgment before and after reload. Neither tool success nor model attribution independently proves external state or installed model inventory; operator preflight and signed host attestation remain required. Depends on #1344/#1346 merged contracts. Protected execution remains NOT_RUN.
+
+Select `docker-specialist-ordinary-chat` in **KAREN Browser Acceptance** on the exact reviewed current main SHA. This reuses the signed host pre/post and exact-origin hosted browser chain and the private one-test report validator. Set approval and expected identifiers in the existing protected environment; supply dedicated owner credentials, approved principal IDs and the sanitized prompt as step-scoped secrets. The ordinary mode receives the existing sanitized B/C credentials only in its protected proof step, never pre-existing run IDs. The operator must approve these read-only isolation probes along with the disposable owner trial: after verified owner reload, sign out and require 401/403 on the exact new run evidence endpoints, then authenticate distinct same-tenant B and cross-tenant C principals and require 404 on the new run details, transitions, participation, tool receipts and owned history. No second inference or runtime mutation is permitted. It deliberately fails on a run detail missing policy/request identity (including a remote snapshot that cannot expose those fields), multiple tools, partial/degraded execution, or incomplete evidence. It does not mutate the host, alter policy or install a model. The single approved conversation and read-only tool execution are real mutations/observations inside the disposable tenant. A green source build is not the live trial.
+
+Consolidation: ARM-05C.8C (#1350) contributes canonical UUIDv4 tool-call/derived receipt identity, a required result digest, empty verified thread and explicit local-engine admission, replay of complete receipt inventories, and strict scenario-report substitution tests to ARM-08 (#1354). There is one fresh ordinary-chat scenario (`docker-specialist-ordinary-chat`), not a parallel fresh runner. The operator-approved prompt, exact principal and tool configuration remain required; a local engine label does not independently establish physical locality.
+
+The trial additionally joins the owner-visible, completed assistant-digest-attested `karen.agent_step.v1` history projection to the actual SDK transport run, exact assistant and runtime request IDs, and durable specialist step. It requires ordered outer invocation entry/completion, rejecting contradictory, stale, foreign or internal-only activity. It compares the attested sequence evidence after reload. The generic event cursor intentionally cannot replay arbitrary agent/tool activity; this trial does not expand that boundary. The governed tool evidence remains independently read from its owner-scoped receipt endpoint, not inferred from an agent-step event.
+
+The run tool envelope uses the exact same pure `src/lib/governed-tool-receipts.ts` wire validator as the Mission Control receipt view (#1352). ARM-08 only adds trial-specific requirements (one successful approved call, matching policy/step, digest and time window). The shared file is byte-identical across the dependent candidates; preserve it once during reconciliation.
+
+
+#### ARM-08 local-only ordinary specialist trial
+
+External deployment quotas and hosted runner availability are not source-integration blockers. The same browser scenario and private report gate also support explicit local loopback acceptance. A local pass is **local execution/readback evidence only**, never signed-release provenance. Use a clean exact reviewed checkout and local production-built API/Web images with matching source labels and deployed revision, local PostgreSQL/Redis and configured installed inference engine. Independently inspect the running image IDs, database/tenant isolation and approved read-only tool before and after the trial; do not point at a shared or production account/database. The browser itself checks the exact uncached frontend revision and canonical backend readiness before credentials and after all isolation probes. No deployment, image build, account provisioning or policy mutation is performed by the browser gate.
+
+In a private shell, configure the same dedicated non-admin A/B/C credentials, explicit approval, exact principal IDs, approved prompt and expected executor/tool variables documented above. Do not place credentials in the checkout or command history. A and B must share a tenant; C must be in a separate tenant. Run from the repository root:
+
+```bash
+export KAREN_CHAT_BOOT_REVISION="$(git rev-parse HEAD)"
+export KAREN_BASE_URL=http://127.0.0.1:8010
+export KAREN_LOCAL_CHAT_ACCEPTANCE=1
+export KAREN_SANITIZED_ACCOUNT=true
+export KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE=true
+# Set KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED=true only after operator approval.
+unset KAREN_CHAT_BOOT_ACCEPTANCE KAREN_E2E_AUTH_STATE VERCEL_AUTOMATION_BYPASS_SECRET
+export RUNNER_TEMP="$(mktemp -d)"
+trap 'rm -rf -- "$RUNNER_TEMP"' EXIT
+cd src/ui_launchers/Karen-AI-Theme
+bash ../../../scripts/ci/run_specialist_browser_acceptance.sh local ordinary-chat
+````
+
+Install pinned frontend dependencies and Chromium before entering credentials. The local runner rejects dirty/wrong revisions, unapproved or non-loopback origins, inherited bypass credentials and partial configuration. It requires exactly one passing local scenario, no skips or retries, and deletes private browser output. Signed Docker and Vercel scenarios keep their existing admission rules; a local report cannot substitute for either. Report local runtime proof separately from image provenance and external deployment status.
+
+
+### KIQ-03G6: real local generated document delivery
+
+Use the existing `copilotkit-consumer-boot.spec.ts` on a disposable, explicitly approved loopback installation with exact reviewed frontend revision, real local provider, PostgreSQL and private Supabase Storage. No signed-release claim is implied. Configure three dedicated non-admin accounts (owner, distinct same-tenant B, distinct cross-tenant C), each with normal data-read access, and the owner with artifact-create permission. Independently verify the running images, installed local model, private bucket and account scopes. The trial creates one conversation and one text file, reads the actual bytes, downloads and deletes the temporary browser copy, reloads the conversation, tests signed-out and foreign denial while active, and archives only the exact verified owner file. If creation cannot be verified, the test refuses to guess a cleanup target; inspect the disposable tenant manually. A failed test is not acceptance. No traces, videos, screenshots, HTML/JSON reports or retries are allowed.
+
+From `src/ui_launchers/Karen-AI-Theme/e2e` after installing pinned dependencies and Chromium, set the owner and foreign credentials (`KAREN_UX_EMAIL/PASSWORD`, `KAREN_UX_ACCOUNT_B_EMAIL/PASSWORD`, `KAREN_UX_ACCOUNT_C_EMAIL/PASSWORD`) securely in the environment. Set `KAREN_GENERATED_DOCUMENT_TENANT_ID`, `KAREN_GENERATED_DOCUMENT_USER_ID`, `KAREN_GENERATED_DOCUMENT_B_USER_ID`, `KAREN_GENERATED_DOCUMENT_C_TENANT_ID`, `KAREN_GENERATED_DOCUMENT_C_USER_ID` to the independently verified UUIDs and `KAREN_GENERATED_DOCUMENT_PROVIDER`, `KAREN_GENERATED_DOCUMENT_MODEL`, `KAREN_GENERATED_DOCUMENT_ENGINE` to the approved installed executor identifiers. Set `KAREN_CHAT_BOOT_REVISION` to the reviewed 40-character SHA. Do not use production credentials, saved browser state, a Vercel bypass token or shared user data. Only after operator approval:
+
+```bash
+KAREN_GENERATED_DOCUMENT_ACCEPTANCE=true \\
+KAREN_GENERATED_DOCUMENT_APPROVED=true \\
+KAREN_SANITIZED_ACCOUNT=true \\
+KAREN_LOCAL_CHAT_ACCEPTANCE=1 \\
+KAREN_SEARCH_ACCEPTANCE_PLATFORM=local \\
+KAREN_LOCAL_SEARCH_ACCEPTANCE=1 \\
+KAREN_SEARCH_ACCEPTANCE_REQUIRED=true \\
+KAREN_BASE_URL=http://127.0.0.1:8010 \\
+npx playwright test copilotkit-consumer-boot.spec.ts --project=chromium --retries=0 --grep 'KIQ-03G6 local generated document download and revocation'
+```
+
+Require exactly one executed passing test, zero skips or retries. Keep console output private; never upload credentials, response bodies, downloaded files or browser profiles. Source gates are not authenticated execution proof.
+
+
+### KCOMM-03G signed-session invalidation acceptance
+
+The existing explicit `communications_browser` workflow dispatch now requires
+both KCOMM-02E and KCOMM-03G (two Chromium scenarios, zero skips/retries).
+After the frontend capability integration is merged, the disposable API image
+enables both invalidation flags and uses the existing Redis lifecycle.
+A test-only read-only witness checks exact owner subscription counts in the
+same guarded disposable Redis container. A second signed owner session commits
+a real inbox mutation, the browser receives the exact boolean hint and performs
+a canonical GET, and the foreign owner's concurrent wait returns idle.
+Workspace exit must abort the browser request and leave zero broker
+subscriptions. A real logout revokes the pending browser session; a subsequent
+committed owner change must not return an invalidation to that revoked session.
+No hosted account or deployment, fabricated event, mock API, direct runtime-row
+write, or production flag change. The exact-head run must actually execute
+both scenarios. This does not certify distributed HTTP worker capacity or
+real model inference failure.
+
+The same disposable acceptance can be explicitly requested on a non-draft,
+same-repository pull request by applying both `ci:merge-gate` and
+`ci:communications-browser`. Fork PRs cannot activate it with a label.
+The label is an opt-in CI execution control, not an application feature flag;
+ordinary pushes and unlabeled PRs retain the existing first-boot behavior.
+The workflow retains read-only permissions and does not use
+`pull_request_target`. Remove the browser label when no longer needed.
+
+Failure diagnostics emit only fixed scenario identifiers, allowed stage and
+result tokens, numeric source positions and the runner phase. The private
+Playwright report, raw exception text, response bodies and credentials remain
+suppressed. A failed test remains a hard failure.

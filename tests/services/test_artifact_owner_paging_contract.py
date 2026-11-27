@@ -6,6 +6,7 @@ Live PostgreSQL performance and full UI acceptance are separate gates.
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import uuid
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -41,6 +42,8 @@ class _Session:
     def __init__(self, rows):
         self.rows = rows
         self.calls = []
+        self.admissions = []
+        self.admitted = True
 
     async def __aenter__(self):
         return self
@@ -49,8 +52,20 @@ class _Session:
         return False
 
     async def execute(self, statement, params):
+        if "AS hierarchy_admitted" in str(statement):
+            self.admissions.append((str(statement), dict(params)))
+            return SimpleNamespace(scalar_one_or_none=lambda: self.admitted)
         self.calls.append((str(statement), dict(params)))
         return SimpleNamespace(fetchall=lambda: self.rows)
+
+
+@asynccontextmanager
+async def _scoped_fixture(session, tenant, *, user_id):
+    assert tenant == TENANT and user_id == OWNER
+    async with session:
+        yield session
+        if hasattr(session, "commit"):
+            await session.commit()
 
 
 def _store(rows):
@@ -58,6 +73,7 @@ def _store(rows):
     store = SupabaseArtifactStore(
         session_factory=lambda: session,
         storage_client=None,
+        hierarchy_transaction=lambda tenant, *, user_id: _scoped_fixture(session, tenant, user_id=user_id),
     )
     return store, session
 
@@ -159,3 +175,267 @@ def test_repository_errors_fail_closed_without_fabricated_empty_page():
     assert result.success is False
     assert result.error == "artifact_owner_page_unavailable"
     assert result.data is None
+
+
+def test_root_page_cursor_cannot_replay_across_scopes():
+    store, session = _store([_row(3), _row(2)])
+    first = _run(store.list_owner_artifacts_page(
+        TENANT, OWNER, limit=1, folder_scoped=True,
+    ))
+    assert first.success
+    cursor = first.metadata["next_cursor"]
+    sql, params = session.calls[-1]
+    assert "folder_id IS NOT DISTINCT FROM CAST(:folder_id AS uuid)" in sql
+    assert params["folder_id"] is None
+    assert "organization_revision" in sql
+    count = len(session.calls)
+    for options in (
+        {"folder_scoped": False},
+        {"folder_scoped": True, "folder_id": str(uuid.uuid4())},
+        {"folder_scoped": False, "folder_id": str(uuid.uuid4())},
+    ):
+        result = _run(store.list_owner_artifacts_page(
+            TENANT, OWNER, cursor=cursor, **options,
+        ))
+        assert not result.success
+    assert len(session.calls) == count
+    assert _run(store.list_owner_artifacts_page(
+        TENANT, OWNER, cursor=cursor, folder_scoped=True,
+    )).success
+
+
+def test_flat_cursor_cannot_enter_root_inventory():
+    store, session = _store([_row(3), _row(2)])
+    first = _run(store.list_owner_artifacts_page(TENANT, OWNER, limit=1))
+    count = len(session.calls)
+    result = _run(store.list_owner_artifacts_page(
+        TENANT, OWNER, folder_scoped=True, cursor=first.metadata["next_cursor"],
+    ))
+    assert not result.success
+    assert len(session.calls) == count
+
+
+class _HierarchySession(_Session):
+    def __init__(self, scalar=None, rows=(), fail_commit=False):
+        super().__init__(rows)
+        self.scalar = scalar
+        self.fail_commit = fail_commit
+        self.commits = 0
+
+    async def execute(self, statement, params):
+        if "AS hierarchy_admitted" in str(statement):
+            self.admissions.append((str(statement), dict(params)))
+            return SimpleNamespace(scalar_one_or_none=lambda: self.admitted)
+        self.calls.append((str(statement), dict(params)))
+        return SimpleNamespace(
+            scalar_one_or_none=lambda: self.scalar,
+            fetchall=lambda: self.rows,
+        )
+
+    async def commit(self):
+        self.commits += 1
+        if self.fail_commit:
+            raise RuntimeError("uncertain commit")
+
+
+def _hierarchy_store(session):
+    return SupabaseArtifactStore(
+        lambda: session, None,
+        hierarchy_transaction=lambda tenant, *, user_id: _scoped_fixture(session, tenant, user_id=user_id),
+    )
+
+
+def test_foreign_folder_fails_before_inventory_read():
+    session = _HierarchySession()
+    result = _run(_hierarchy_store(session).list_owner_artifacts_page(
+        TENANT, OWNER, folder_scoped=True, folder_id=str(uuid.uuid4()),
+    ))
+    assert not result.success
+    assert result.error == "artifact_hierarchy_unavailable"
+    assert len(session.calls) == 1
+    sql, params = session.calls[0]
+    assert "FOR KEY SHARE" in sql
+    assert "owner_user_id" in sql
+    assert params["user_id"] == OWNER
+
+
+def test_folder_page_projects_organization_and_binds_continuation():
+    folder = str(uuid.uuid4())
+    rows = [_row(3), _row(2)]
+    for row in rows:
+        row.folder_id = uuid.UUID(folder)
+        row.organization_revision = 7
+    session = _HierarchySession(scalar=uuid.UUID(folder), rows=rows)
+    store = _hierarchy_store(session)
+    result = _run(store.list_owner_artifacts_page(
+        TENANT, OWNER, folder_scoped=True, folder_id=folder, limit=1,
+    ))
+    assert result.success
+    assert result.data[0].folder_id == folder
+    assert result.data[0].organization_revision == 7
+    assert len(session.calls) == 2
+    count = len(session.calls)
+    assert not _run(store.list_owner_artifacts_page(
+        TENANT, OWNER, folder_scoped=True, folder_id=str(uuid.uuid4()),
+        cursor=result.metadata["next_cursor"],
+    )).success
+    assert len(session.calls) == count
+
+
+def test_artifact_movement_commits_only_valid_revision():
+    artifact_id, folder_id = str(uuid.uuid4()), str(uuid.uuid4())
+    for returned, expected_success in ((None, False), (9, False), (2, True), (3, True)):
+        session = _HierarchySession(scalar=returned)
+        result = _run(_hierarchy_store(session).move_owner_artifact(
+            TENANT, OWNER, artifact_id, folder_id=folder_id, expected_revision=2,
+        ))
+        assert result.success is expected_success
+        assert session.commits == int(expected_success)
+        sql, params = session.calls[0]
+        assert "deleted_at IS NULL" in sql
+        assert "owner_user_id = CAST(:owner AS uuid)" in sql
+        assert "organization_revision = :revision" in sql
+        assert params == {
+            "tenant": TENANT, "owner": OWNER, "artifact": artifact_id,
+            "folder": folder_id, "revision": 2,
+        }
+
+
+def test_invalid_mutation_result_unwinds_autocommit_session():
+    class AutoCommitSession(_HierarchySession):
+        async def __aexit__(self, exc_type, exc, tb):
+            if exc_type is None:
+                await self.commit()
+            return False
+
+    session = AutoCommitSession(scalar=99)
+    result = _run(_hierarchy_store(session).move_owner_artifact(
+        TENANT, OWNER, str(uuid.uuid4()), folder_id=None, expected_revision=1,
+    ))
+    assert not result.success
+    assert session.commits == 0
+
+
+def test_uncertain_movement_commit_is_not_retried():
+    session = _HierarchySession(scalar=2, fail_commit=True)
+    result = _run(_hierarchy_store(session).move_owner_artifact(
+        TENANT, OWNER, str(uuid.uuid4()), folder_id=None, expected_revision=1,
+    ))
+    assert not result.success
+    assert result.error == "artifact_folder_commit_uncertain"
+    assert session.commits == 1
+    assert len(session.calls) == 1
+
+
+def test_invalid_hierarchy_mutations_do_not_execute_sql():
+    session = _HierarchySession()
+    store = _hierarchy_store(session)
+    artifact = str(uuid.uuid4())
+    for revision in (True, 0, -1, 9223372036854775807):
+        assert not _run(store.move_owner_artifact(
+            TENANT, OWNER, artifact, folder_id=None, expected_revision=revision,
+        )).success
+    assert not _run(store.create_owner_folder(TENANT, OWNER, name=" bad ")).success
+    assert not _run(store.rename_owner_folder(
+        TENANT, OWNER, artifact, name="bad\x00name", expected_revision=1,
+    )).success
+    assert session.calls == []
+
+
+def test_unwired_hierarchy_denies_without_legacy_session():
+    session = _HierarchySession(scalar=2)
+    store = SupabaseArtifactStore(lambda: session, None)
+    result = _run(store.move_owner_artifact(
+        TENANT, OWNER, str(uuid.uuid4()), folder_id=None, expected_revision=1,
+    ))
+    assert not result.success
+    assert session.calls == []
+    assert session.commits == 0
+
+
+def test_hierarchy_commit_owned_by_scoped_context():
+    session = _HierarchySession(scalar=2)
+    scopes = []
+
+    @asynccontextmanager
+    async def scope(tenant, *, user_id):
+        scopes.append((tenant, user_id))
+        yield session
+        assert session.commits == 0
+        await session.commit()
+
+    def legacy_session():
+        raise AssertionError("Hierarchy must not use the legacy session")
+
+    store = SupabaseArtifactStore(legacy_session, None, hierarchy_transaction=scope)
+    result = _run(store.move_owner_artifact(
+        TENANT, OWNER, str(uuid.uuid4()), folder_id=None, expected_revision=1,
+    ))
+    assert result.success and result.data == 2
+    assert scopes == [(TENANT, OWNER)]
+    assert session.commits == 1
+
+
+def test_hierarchy_capability_denial_precedes_any_mutation():
+    session = _HierarchySession(scalar=2)
+    session.admitted = False
+    store = _hierarchy_store(session)
+    result = _run(store.move_owner_artifact(
+        TENANT, OWNER, str(uuid.uuid4()), folder_id=None, expected_revision=1,
+    ))
+    assert not result.success
+    assert result.error == "artifact_hierarchy_unavailable"
+    assert not session.calls and session.commits == 0
+    sql, params = session.admissions[0]
+    assert params == {"tenant": TENANT, "owner": OWNER}
+    assert "row_security_active" in sql
+    assert "relforcerowsecurity" in sql
+    assert "has_function_privilege" in sql
+
+
+def test_hierarchy_capability_probe_reports_only_live_admission():
+    session = _HierarchySession()
+    store = _hierarchy_store(session)
+    assert _run(store.owner_hierarchy_available(TENANT, OWNER)).data is True
+    session.admitted = False
+    result = _run(store.owner_hierarchy_available(TENANT, OWNER))
+    assert not result.success and result.data is None
+    assert len(session.admissions) == 2 and not session.calls
+
+
+def test_empty_folder_delete_commits_only_explicit_true():
+    folder = str(uuid.uuid4())
+    for returned in (False, None, 1, True):
+        session = _HierarchySession(scalar=returned)
+        result = _run(_hierarchy_store(session).delete_empty_owner_folder(
+            TENANT, OWNER, folder, expected_revision=7,
+        ))
+        assert result.success is (returned is True)
+        assert session.commits == int(returned is True)
+        sql, params = session.calls[0]
+        assert "public.delete_empty_owned_artifact_folder" in sql
+        assert params == {"tenant": TENANT, "owner": OWNER,
+                          "folder": folder, "revision": 7}
+
+
+def test_empty_folder_delete_uncertainty_is_not_success_or_retry():
+    session = _HierarchySession(scalar=True, fail_commit=True)
+    result = _run(_hierarchy_store(session).delete_empty_owner_folder(
+        TENANT, OWNER, str(uuid.uuid4()), expected_revision=1,
+    ))
+    assert not result.success
+    assert result.error == "artifact_folder_commit_uncertain"
+    assert session.commits == 1 and len(session.calls) == 1
+
+
+def test_folder_deletion_capability_requires_explicit_database_proof():
+    for returned in (False, None, True):
+        session = _HierarchySession(scalar=returned)
+        result = _run(_hierarchy_store(session).owner_folder_deletion_available(TENANT, OWNER))
+        assert result.success is (returned is True)
+        assert session.commits == int(returned is True)
+        sql, _ = session.calls[0]
+        assert "transaction_isolation" in sql
+        assert "row_security_active('public.files'" in sql
+        assert "'DELETE'" in sql
+        assert "delete_empty_owned_artifact_folder" in sql

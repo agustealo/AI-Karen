@@ -171,11 +171,40 @@ describe("canonical CopilotKit chat ownership", () => {
     // Each independent real-browser scenario must verify backend readiness
     // before credentials are used. Do not hardcode the number of scenarios:
     // new time/weather acceptance must increase coverage without weakening auth.
-    const preflights = [...liveBrowser.matchAll(/await requireLiveCanonicalBackend\(page, target\);/g)]
+    const postflight = /if \(localSpecialistMode\) \{\s*await requireReviewedRevision\(page, target\);\s*await requireLiveCanonicalBackend\(page, target\);\s*\}/g;
+    const isolation = liveBrowser.indexOf("await expectFreshSpecialistIsolation(page, target, id!");
+    const postflights = [...liveBrowser.matchAll(postflight)];
+    expect(postflights).toHaveLength(1);
+    expect(isolation).toBeGreaterThanOrEqual(0);
+    expect(postflights[0].index!).toBeGreaterThan(isolation);
+    // The local postflight is an extra integrity check, not another login.
+    // Every actual owner or foreign-account login still needs its own preflight.
+    const documentStart = liveBrowser.indexOf('test("KIQ-03G6 local generated document download and revocation"');
+    const documentEnd = liveBrowser.indexOf('test("boots, restores and loads assets without an inspector chunk failure"', documentStart);
+    expect(documentStart).toBeGreaterThanOrEqual(0);
+    expect(documentEnd).toBeGreaterThan(documentStart);
+    const documentTrial = liveBrowser.slice(documentStart, documentEnd);
+    const ownerPreflight = documentTrial.indexOf("await requireLiveCanonicalBackend(page, target);");
+    const ownerLogin = documentTrial.indexOf("await signInApprovedKaren(page, owner.email!");
+    const foreignPreflight = documentTrial.indexOf("await requireLiveCanonicalBackend(active, target);");
+    const foreignLogin = documentTrial.indexOf("await signInApprovedKaren(active, account.email!");
+    expect(ownerPreflight).toBeGreaterThanOrEqual(0);
+    expect(ownerLogin).toBeGreaterThan(ownerPreflight);
+    expect(foreignPreflight).toBeGreaterThan(ownerLogin);
+    expect(foreignLogin).toBeGreaterThan(foreignPreflight);
+    expect(documentTrial.match(/await signInApprovedKaren\(/g)).toHaveLength(2);
+    expect(documentTrial.match(/await requireLiveCanonicalBackend\(page, target\);/g)).toHaveLength(2);
+    expect(documentTrial.match(/await requireLiveCanonicalBackend\(active, target\);/g)).toHaveLength(1);
+    expect(documentTrial.lastIndexOf("await requireLiveCanonicalBackend(page, target);")).toBeGreaterThan(
+      documentTrial.indexOf("await archiveCreatedFile()"),
+    );
+    const beforeCredentials = (liveBrowser.slice(0, documentStart) + liveBrowser.slice(documentEnd)).replace(postflight, "");
+    const preflights = [...beforeCredentials.matchAll(/await requireLiveCanonicalBackend\(page, target\);/g)]
       .map(match => match.index!);
-    const signIns = [...liveBrowser.matchAll(/await signInApprovedKaren\(page, approvedEmail!, approvedPassword!, \{ allowLocalLoopback: localMode \}\);/g)]
+    const signIns = [...beforeCredentials.matchAll(/await signInApprovedKaren\(page, (?:approvedEmail!, approvedPassword!|account\.email!, account\.password!), \{ allowLocalLoopback: localMode \}\);/g)]
       .map(match => match.index!);
-    expect(preflights.length).toBeGreaterThanOrEqual(2);
+    expect(preflights.length).toBeGreaterThanOrEqual(3);
+    expect(signIns).toHaveLength([...beforeCredentials.matchAll(/await signInApprovedKaren\(/g)].length);
     expect(preflights).toHaveLength(signIns.length);
     preflights.forEach((position, index) => {
       expect(position).toBeLessThan(signIns[index]);
@@ -187,7 +216,8 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(liveBrowser).toContain('new URL("/api/health", target)');
     expect(liveBrowser).toContain("maxRedirects: 0");
     expect(liveBrowser).toContain('response.headers()["cache-control"] ?? ""');
-    expect(liveBrowser).toContain('expectVerifiedExecutionReceipt(page, id!, persistedAnswer)');
+    expect(liveBrowser).toContain('const firstReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);');
+    expect(liveBrowser).toContain('const replayedReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);');
   });
 
   it("uses the governed runtime, canonical session and verified history", () => {
@@ -226,7 +256,7 @@ describe("canonical CopilotKit chat ownership", () => {
 
   it("registers a scoped SDK agent from one canonical owner only", () => {
     expect(history).toContain("const registration = useAgent({");
-    expect(history).toContain("ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission }}");
+    expect(history).toContain("ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission, attachmentDraftSubmission }}");
     expect(history.match(/\buseAgent\(/g)).toHaveLength(1);
     expect(history).toContain("restoreHistoryRef.current = restore;");
     expect(history).toContain("export function useKarenScopedAgent()");

@@ -553,7 +553,10 @@ async def test_ag_ui_capabilities_are_derived_from_canonical_feature_flag(monkey
     identity = {"user_id": USER, "tenant_id": TENANT_A}
     assert (
         await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
-    ) == {"enabled": True, "governed_history": False, "observed_event_journal": False}
+    ) == {
+        "enabled": True, "governed_history": False, "observed_event_journal": False,
+        "attachment_draft_submission": False,
+    }
     monkeypatch.setattr(
         chat_ingress,
         "get_runtime_settings",
@@ -561,7 +564,20 @@ async def test_ag_ui_capabilities_are_derived_from_canonical_feature_flag(monkey
     )
     assert (
         await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
-    ) == {"enabled": False, "governed_history": False, "observed_event_journal": False}
+    ) == {
+        "enabled": False, "governed_history": False, "observed_event_journal": False,
+        "attachment_draft_submission": False,
+    }
+    for bridge in (False, True):
+        monkeypatch.setattr(
+            chat_ingress, "get_runtime_settings",
+            lambda: SimpleNamespace(features=SimpleNamespace(
+                enable_ag_ui_bridge=bridge, enable_ag_ui_durable_runs=True,
+            )),
+        )
+        capabilities = await chat_ingress.get_ag_ui_transport_capabilities(user=identity)
+        assert capabilities["attachment_draft_submission"] is bridge
+        assert capabilities["governed_history"] is bridge
 
 
 @pytest.mark.asyncio
@@ -996,3 +1012,118 @@ def test_durable_user_submission_identity_is_validated(value):
     request = agui_run(messages=[{"id": value, "role": "user", "content": "hello"}])
     with pytest.raises(ValueError, match="Invalid AG-UI user submission identity"):
         request.latest_user_submission_id()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", [
+    "valid", "missing", "substituted", "reordered", "stale",
+    "foreign", "legacy", "v1", "opaque", "malformed", "transformed",
+])
+async def test_attachment_bound_ag_ui_handoff(monkeypatch, scenario):
+    from ai_karen_engine.core.runtime import chat_run_lifecycle as lifecycle
+    from ai_karen_engine.core.runtime import conversation_runtime_gateway as gateway
+    from ai_karen_engine.persistence.repositories.chat_run_repository import (
+        ChatRunLease,
+        DraftSubmissionConflict,
+    )
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        draft_attachment_selection_digest,
+    )
+    from unittest.mock import AsyncMock
+
+    thread = "7e76d870-5314-40ae-9478-513b843a9fd0"
+    refs = [
+        {"source_id": "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "revision": "a" * 64},
+        {"source_id": "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "revision": "b" * 64},
+    ]
+    submission = "draft-v2-7-" + draft_attachment_selection_digest(refs)
+    selected = [dict(item) for item in refs]
+    if scenario == "missing":
+        selected = []
+    elif scenario == "substituted":
+        selected[0]["revision"] = "c" * 64
+    elif scenario == "reordered":
+        selected.reverse()
+    elif scenario == "v1":
+        submission = "draft-v1-7"
+    elif scenario == "malformed":
+        submission = "draft-v2-7-invalid"
+
+    owned = SimpleNamespace(
+        conversation=SimpleNamespace(id=thread, session_id="owned-session"),
+    )
+    ownership = SimpleNamespace(
+        get_owned_snapshot=AsyncMock(return_value=owned),
+        require_owned_conversation=AsyncMock(return_value=owned),
+    )
+    if scenario == "foreign":
+        ownership.get_owned_snapshot.side_effect = PermissionError("foreign")
+    monkeypatch.setattr(gateway, "get_conversation_runtime_gateway", lambda: ownership)
+    monkeypatch.setattr(lifecycle, "get_conversation_runtime_gateway", lambda: ownership)
+    monkeypatch.setattr(
+        chat_ingress, "get_runtime_settings",
+        lambda: SimpleNamespace(features=SimpleNamespace(
+            enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=scenario != "legacy",
+        )),
+    )
+    seen = []
+
+    class Repository:
+        async def admit(self, **kwargs):
+            seen.append(kwargs)
+            assert kwargs["tenant_id"] == TENANT_A and kwargs["user_id"] == USER
+            assert kwargs["conversation_id"] == thread
+            assert kwargs["submitted_text"] == "Research safely"
+            assert kwargs["submitted_attachment_references"] == selected
+            if scenario in {"missing", "substituted", "reordered", "stale"}:
+                raise DraftSubmissionConflict("test repository denial")
+            return ChatRunLease(
+                execution_id="33333333-3333-4333-8333-333333333333",
+                lease_token="44444444-4444-4444-8444-444444444444",
+                **{key: value for key, value in kwargs.items()
+                   if key not in {"submitted_text", "submitted_attachment_references"}},
+            )
+
+    coordinator = lifecycle.ChatRunCoordinator(Repository())
+    monkeypatch.setattr(chat_ingress, "get_chat_run_coordinator", lambda: coordinator)
+    projected = []
+
+    async def capture(runtime_request, *, thread_id, run_id, run_lease):
+        projected.append(runtime_request)
+        assert runtime_request.runtime_run_lease is run_lease
+        assert run_lease.submission_id == submission
+        assert runtime_request.attachment_references == refs
+        assert runtime_request.context.session_id == "owned-session"
+        assert thread_id == thread and run_id == "run-1"
+        yield ": test handoff\n\n"
+
+    monkeypatch.setattr(chat_ingress, "_ag_ui_sse", capture)
+    if scenario == "transformed":
+        monkeypatch.setattr(
+            chat_ingress.SecurityValidator, "validate_user_input",
+            staticmethod(lambda value, **kwargs: "Transformed"),
+        )
+    req = agui_run(
+        threadId="opaque-session" if scenario == "opaque" else thread,
+        messages=[{"id": submission, "role": "user", "content": "Research safely"}],
+        forwardedProps={"attachment_references": selected},
+    )
+    identity = {"user_id": USER, "tenant_id": TENANT_A, "is_active": True, "is_verified": True}
+    if scenario == "valid":
+        response = await chat_ingress.stream_ag_ui_chat(
+            request=req, http_request=SimpleNamespace(headers={}), user=identity,
+        )
+        assert "".join([part async for part in response.body_iterator]) == ": test handoff\n\n"
+        assert len(seen) == len(projected) == 1
+        ownership.require_owned_conversation.assert_awaited_once()
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await chat_ingress.stream_ag_ui_chat(
+                request=req, http_request=SimpleNamespace(headers={}), user=identity,
+            )
+        expected = 404 if scenario == "foreign" else (
+            409 if scenario in {"missing", "substituted", "reordered", "stale"} else 422
+        )
+        assert exc.value.status_code == expected
+        assert not projected
+        assert len(seen) == (1 if expected == 409 else 0)

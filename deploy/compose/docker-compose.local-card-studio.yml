@@ -23,8 +23,11 @@ services:
       KARI_AUTH_BYPASS: "false"
       AUTH_ENABLE_SESSION_VALIDATION: "true"
       KARI_ENABLE_CARD_STUDIO_CRUD: "true"
+      # Only explicit local fixture credentials; never inherit a cloud project.
+      SUPABASE_PROJECT_URL: "${KCARD_LOCAL_STORAGE_URL:-}"
+      SUPABASE_SECRET_KEY: "${KCARD_LOCAL_STORAGE_SECRET_KEY:-}"
       DB_HOST: "host.docker.internal"
-      DB_PORT: "54322"
+      DB_PORT: "${KCARD_DB_PORT:?KCARD_DB_PORT is required}"
       DB_USER: "${KCARD_DB_USER:?KCARD_DB_USER is required}"
       DB_PASSWORD: "${KCARD_DB_PASSWORD:?KCARD_DB_PASSWORD is required}"
       DB_NAME: "${KCARD_DB_NAME:?KCARD_DB_NAME is required}"
@@ -36,7 +39,7 @@ services:
         condition: service_healthy
 
   web:
-    ports:
+    ports: !override
       - "127.0.0.1:${KCARD_WEB_PORT:-8010}:8010"
 
   prometheus:

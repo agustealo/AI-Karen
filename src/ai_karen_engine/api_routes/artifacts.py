@@ -10,10 +10,13 @@ from __future__ import annotations
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 
 from ai_karen_engine.auth.session import get_current_user
+from ai_karen_engine.core.services.dependencies import get_chat_execution_context
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
 from ai_karen_engine.database.factory import DatabaseServiceFactory
 from ai_karen_engine.database.id_types import coerce_tenant_id, coerce_user_id
 from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
@@ -241,6 +244,63 @@ async def list_owned_artifact_page(
         items=items, has_more=has_more,
         next_cursor=next_cursor if has_more else None,
     )
+
+
+@router.get("/{artifact_id}/text")
+async def read_artifact_text(
+    artifact_id: str,
+    request: Request,
+    response: Response,
+    current_user=Depends(get_chat_execution_context),
+):
+    """Return only currently authorized, bounded and byte-verified owner text."""
+    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
+    from uuid import UUID
+
+    tenant_id, user_id = _artifact_principal(current_user)
+    rbac = get_rbac_manager()
+    allowed = rbac.has_permission(current_user, Permission.DATA_READ)
+    rbac.audit_access_attempt(
+        current_user, Permission.DATA_READ, resource=request.url.path,
+        granted=allowed, request=request,
+        additional_context={"operation": "artifact_owner_text_read"},
+    )
+    if not allowed:
+        raise HTTPException(status_code=403, detail="Artifact access denied")
+    try:
+        if str(UUID(artifact_id)) != artifact_id:
+            raise ValueError("noncanonical artifact ID")
+    except ValueError:
+        raise HTTPException(status_code=404, detail="Artifact text unavailable") from None
+    # The existing witness-based private-data boundary rejects development
+    # identities, stale RBAC and revoked sessions. Recheck after storage I/O.
+    context = ChatExecutionContext(
+        user_id=user_id, tenant_id=tenant_id, authenticated_user=current_user,
+        request_id=getattr(request.state, "request_id", None),
+    )
+    try:
+        await context.revalidate_runtime_attachment_session()
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Artifact access denied") from None
+    result = await _get_artifact_store().read_owner_active_text_bounded(
+        artifact_id, tenant_id, user_id, max_bytes=65536,
+    )
+    value = result.data
+    if (
+        not result.success or not isinstance(value, VerifiedArtifactText)
+        or (value.artifact_id, value.tenant_id, value.user_id) != (artifact_id, tenant_id, user_id)
+    ):
+        raise HTTPException(status_code=404, detail="Artifact text unavailable")
+    try:
+        await context.revalidate_runtime_attachment_session()
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Artifact access denied") from None
+    response.headers["Cache-Control"] = "private, no-store"
+    return {
+        "artifact_id": value.artifact_id, "filename": value.filename,
+        "mime_type": value.mime_type, "sha256": value.sha256,
+        "size_bytes": len(value.text.encode("utf-8")), "text": value.text,
+    }
 
 
 @router.get("/{artifact_id}", response_model=ArtifactMetadataResponse)

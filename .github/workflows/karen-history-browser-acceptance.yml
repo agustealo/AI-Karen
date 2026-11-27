@@ -13,6 +13,7 @@ on:
           - search
           - docker-search
           - docker-specialist-participation
+          - docker-specialist-ordinary-chat
           - copilotkit-protocol
           - copilotkit-native
           - copilotkit-native-stop
@@ -578,7 +579,7 @@ jobs:
   # Operator-controlled Docker host proof. NEVER npm install or type browser
   # credentials on this production-capable runner.
   docker-provenance-before:
-    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat') && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, karen-consumer-release]
     timeout-minutes: 20
     environment: karen-sanitized-browser-acceptance
@@ -621,7 +622,7 @@ jobs:
   # Credentials and untrusted npm/Playwright setup are isolated on a GitHub-
   # hosted runner with no operator-host Docker socket or production env file.
   authenticated-docker-search-replay:
-    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat') && github.ref == 'refs/heads/main'
     needs: docker-provenance-before
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -665,7 +666,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           python scripts/ci/verify_deployment_revision.py
-          if [[ "${{ inputs.scenario }}" == "docker-specialist-participation" ]]; then
+          if [[ "${{ inputs.scenario }}" == "docker-specialist-participation" || "${{ inputs.scenario }}" == "docker-specialist-ordinary-chat" ]]; then
             python -m scripts.ci.verify_backend_target --base-url "$KAREN_BASE_URL"
           fi
 
@@ -713,6 +714,30 @@ jobs:
           KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID: ${{ secrets.KAREN_UX_ACCOUNT_C_PARTICIPATION_RUN_ID }}
         run: bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" docker
 
+      - name: Prove fresh ordinary-chat specialist execution on signed Docker
+        if: inputs.scenario == 'docker-specialist-ordinary-chat'
+        shell: bash
+        env:
+          KAREN_CHAT_BOOT_ACCEPTANCE: "1"
+          KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}
+          KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE: "true"
+          KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED: ${{ vars.KAREN_SPECIALIST_ORDINARY_CHAT_APPROVED }}
+          KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID: ${{ secrets.KAREN_SPECIALIST_ORDINARY_CHAT_TENANT_ID }}
+          KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID: ${{ secrets.KAREN_SPECIALIST_ORDINARY_CHAT_USER_ID }}
+          KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT: ${{ secrets.KAREN_SPECIALIST_ORDINARY_CHAT_PROMPT }}
+          KAREN_SPECIALIST_EXPECTED_PROVIDER: ${{ vars.KAREN_SPECIALIST_EXPECTED_PROVIDER }}
+          KAREN_SPECIALIST_EXPECTED_MODEL: ${{ vars.KAREN_SPECIALIST_EXPECTED_MODEL }}
+          KAREN_SPECIALIST_EXPECTED_ENGINE: ${{ vars.KAREN_SPECIALIST_EXPECTED_ENGINE }}
+          KAREN_UX_ACCOUNT_B_EMAIL: ${{ secrets.KAREN_UX_ACCOUNT_B_EMAIL }}
+          KAREN_UX_ACCOUNT_B_PASSWORD: ${{ secrets.KAREN_UX_ACCOUNT_B_PASSWORD }}
+          KAREN_UX_ACCOUNT_C_EMAIL: ${{ secrets.KAREN_UX_ACCOUNT_C_EMAIL }}
+          KAREN_UX_ACCOUNT_C_PASSWORD: ${{ secrets.KAREN_UX_ACCOUNT_C_PASSWORD }}
+          KAREN_SPECIALIST_EXPECTED_AGENT: ${{ vars.KAREN_SPECIALIST_EXPECTED_AGENT }}
+          KAREN_SPECIALIST_EXPECTED_TOOL: ${{ vars.KAREN_SPECIALIST_EXPECTED_TOOL }}
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+        run: bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" docker ordinary-chat
+
       - name: Recheck public Docker revision and main after browser replay
         working-directory: .
         shell: bash
@@ -721,7 +746,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/ci/verify_deployment_revision.py
-          if [[ "${{ inputs.scenario }}" == "docker-specialist-participation" ]]; then
+          if [[ "${{ inputs.scenario }}" == "docker-specialist-participation" || "${{ inputs.scenario }}" == "docker-specialist-ordinary-chat" ]]; then
             python -m scripts.ci.verify_backend_target --base-url "$KAREN_BASE_URL"
           fi
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
@@ -733,7 +758,7 @@ jobs:
   # Recheck the exact Docker signatures and running images only after the
   # credentialed browser has demonstrated durable citations and replay.
   docker-provenance-after:
-    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat') && github.ref == 'refs/heads/main'
     needs: authenticated-docker-search-replay
     runs-on: [self-hosted, Linux, X64, karen-consumer-release]
     timeout-minutes: 20
@@ -798,6 +823,7 @@ jobs:
       KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID: ${{ vars.KAREN_CONTENT_INTELLIGENCE_REVOKED_SOURCE_ID }}
       KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION: ${{ vars.KAREN_CONTENT_INTELLIGENCE_REVOKED_REVISION }}
       KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}
+      KAREN_FILE_EXPLORER_REQUIRE_NESTED: ${{ inputs.scenario == 'file-explorer' && 'true' || 'false' }}
       KAREN_PIN_READBACK_ACCEPTANCE: ${{ (inputs.scenario == 'pins-readback' || inputs.scenario == 'pins-mutation') && '1' || '0' }}
       KAREN_PIN_MUTATION_ACCEPTANCE: ${{ inputs.scenario == 'pins-mutation' && '1' || '0' }}
       KAREN_PIN_MUTATION_DISPOSABLE_APPROVED: ${{ vars.KAREN_PIN_MUTATION_DISPOSABLE_APPROVED }}

@@ -37,6 +37,15 @@ LIVE_MODEL_PROVIDER="${KAREN_SMOKE_LIVE_MODEL_PROVIDER:-lmstudio-desktop}"
 LIVE_MODEL_NAME="${KAREN_SMOKE_LIVE_MODEL_NAME:-}"
 LIVE_MODEL_TIMEOUT_SECONDS="${KAREN_SMOKE_LIVE_MODEL_TIMEOUT_SECONDS:-90}"
 OLLAMA_SETTINGS_ONLY="${KAREN_SMOKE_ONLY_OLLAMA_SETTINGS:-false}"
+COMMS_BROWSER_PROOF="${KAREN_SMOKE_COMMS_BROWSER_PROOF:-false}"
+if [[ "${COMMS_BROWSER_PROOF}" != "true" && "${COMMS_BROWSER_PROOF}" != "false" ]]; then
+  echo "Invalid disposable Communications browser proof flag" >&2
+  exit 1
+fi
+if [[ "${COMMS_BROWSER_PROOF}" == "true" && -n "${LIVE_MODEL_BASE_URL}" ]]; then
+  echo "Communications fixture proof must not contact a live model" >&2
+  exit 1
+fi
 if [[ "${OLLAMA_SETTINGS_ONLY}" == "true" && ( -z "${LIVE_MODEL_BASE_URL}" || ( "${LIVE_MODEL_PROVIDER}" != "ollama" && "${LIVE_MODEL_PROVIDER}" != "ollama-local" ) ) ]]; then
   echo "Ollama Settings-only proof requires a real Ollama endpoint and provider" >&2
   exit 1
@@ -123,7 +132,21 @@ api_env=(
   -e REDIS_URL="redis://:${REDIS_PASSWORD}@${REDIS_CONTAINER}:6379/0"
   -e REDIS_HOST="${REDIS_CONTAINER}"
   -e REDIS_PORT=6379
+  -e KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED=true
+  -e KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES=16777216
 )
+
+if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then
+  api_env+=(
+    -e KAREN_SMOKE_COMMS_BROWSER_PROOF=true
+    -e KARI_ENABLE_AG_UI_BRIDGE=true
+    -e KARI_ENABLE_AG_UI_DURABLE_RUNS=true
+    -e KARI_ENABLE_COMMUNICATIONS_TERMINAL_PRODUCER=true
+    -e KARI_ENABLE_COMMUNICATIONS_INVALIDATION=true
+    -e KARI_ENABLE_COMMUNICATIONS_INVALIDATION_WAIT=true
+    -e KARI_COMMUNICATIONS_INVALIDATION_WAIT_SECONDS=15
+  )
+fi
 
 if [[ -n "${LIVE_MODEL_BASE_URL}" ]]; then
   container_model_url="$("${PYTHON_BIN}" - "${LIVE_MODEL_BASE_URL}" <<'PY'
@@ -210,7 +233,8 @@ docker run -d \
   --name "${REDIS_CONTAINER}" \
   --network "${NETWORK}" \
   "${REDIS_IMAGE}" \
-  redis-server --requirepass "${REDIS_PASSWORD}" >/dev/null
+  redis-server --requirepass "${REDIS_PASSWORD}" \
+    --maxmemory 512mb --maxmemory-policy noeviction --appendonly yes --appendfsync always >/dev/null
 
 if ! wait_for_command "Redis" 30 docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" ping; then
   docker logs "${REDIS_CONTAINER}" >&2 || true
@@ -262,6 +286,57 @@ fi
 echo "[smoke] booting production API image"
 start_api
 
+echo "[smoke] proving production distributed Redis readiness and recovery"
+assert_redis_ready() {
+  local payload
+  payload="$(curl -fsS --max-time 10 "${BASE_URL}/ready")"
+  "${PYTHON_BIN}" - "${payload}" <<'PY'
+import json
+import sys
+
+payload = json.loads(sys.argv[1])
+assert payload["ready"] is True, payload
+assert payload["status"] == "ready", payload
+assert payload["components"]["redis"] == "ready", payload
+redis = payload["checks"]["redis"]
+assert redis == {
+    "ready": True,
+    "status": "healthy",
+    "durability_status": "configuration_verified",
+}, redis
+PY
+}
+
+if ! wait_for_command "production operational readiness" 30 curl -fsS "${BASE_URL}/ready"; then
+  fail_with_api_logs
+fi
+assert_redis_ready
+# Mutate only the disposable, isolated smoke Redis. PING must still succeed.
+[[ "$(docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" --raw \
+  CONFIG SET maxmemory-policy allkeys-lru)" == "OK" ]]
+[[ "$(docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" --raw ping)" == "PONG" ]]
+blocked_redis_readiness="$(curl -sS --max-time 10 -w '\n%{http_code}' "${BASE_URL}/ready")"
+curl -fsS --max-time 10 "${BASE_URL}/health/live" >/dev/null
+[[ "$(docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" --raw \
+  CONFIG SET maxmemory-policy noeviction)" == "OK" ]]
+"${PYTHON_BIN}" - "${blocked_redis_readiness}" <<'PY'
+import json
+import sys
+
+body, code = sys.argv[1].rsplit("\n", 1)
+assert code == "503", code
+payload = json.loads(body)["detail"]
+assert payload["ready"] is False, payload
+assert payload["components"]["redis"] == "not_ready", payload
+assert payload["checks"]["redis"] == {
+    "ready": False,
+    "status": "durability_unsafe",
+    "reason": "redis_eviction_policy_unsafe",
+}, payload
+PY
+assert_redis_ready
+echo "PRODUCTION REDIS DURABILITY READINESS PROOF PASSED"
+
 echo "[smoke] rejecting known first-boot startup wiring faults"
 startup_logs="$(docker logs "${API_CONTAINER}" 2>&1 || true)"
 if grep -Fq "'PromptRegistry' object has no attribute 'get'" <<<"${startup_logs}"; then
@@ -272,6 +347,22 @@ if grep -Fq "name 'RobotsPolicy' is not defined" <<<"${startup_logs}"; then
   echo "Crawl4AI started without RobotsPolicy wiring" >&2
   fail_with_api_logs
 fi
+
+echo "[smoke] proving access logs omit raw request query values"
+privacy_marker="karen_privacy_probe_$("${PYTHON_BIN}" -c 'import secrets; print(secrets.token_hex(16))')"
+privacy_before="$(docker logs "${API_CONTAINER}" 2>&1 | grep -Fc 'GET /health/live HTTP/' || true)"
+curl -fsS "${BASE_URL}/health/live?search=${privacy_marker}&file_cursor=${privacy_marker}_cursor" >/dev/null
+privacy_logs="$(docker logs "${API_CONTAINER}" 2>&1)"
+if grep -Fq "$privacy_marker" <<<"$privacy_logs"; then
+  echo "Request query value escaped the application logging privacy boundary" >&2
+  exit 1
+fi
+privacy_after="$(grep -Fc 'GET /health/live HTTP/' <<<"$privacy_logs" || true)"
+if (( privacy_after <= privacy_before )); then
+  echo "Expected sanitized access record was not observed" >&2
+  exit 1
+fi
+echo "PRODUCTION REQUEST TARGET PRIVACY PROOF PASSED"
 
 echo "[smoke] proving empty installation reports first-run"
 first_run_json="$(curl -fsS "${BASE_URL}/api/auth/first-run")"
@@ -870,6 +961,13 @@ PY
   echo "PRODUCTION LIVE-MODEL CROSS-SESSION NAME RECALL PROOF PASSED"
 
   echo "PRODUCTION LIVE-MODEL TWO-TURN CHAT PROOF PASSED"
+fi
+
+if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then
+  tenant_id="$(printf '%s' "${me_after_restart}" | "${PYTHON_BIN}" -c 'import json,sys,uuid; print(uuid.UUID(json.load(sys.stdin)["tenant_id"]))')"
+  "${PYTHON_BIN}" scripts/ci/communications_browser_smoke.py \
+    --api-container "${API_CONTAINER}" --network "${NETWORK}" \
+    --api-url "${BASE_URL}" --tenant-id "${tenant_id}"
 fi
 
 echo "PRODUCTION FIRST-RUN SMOKE PASSED"

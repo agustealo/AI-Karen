@@ -27,10 +27,20 @@ def test_release_requires_https_and_reviewed_commit() -> None:
     source = SPEC.read_text(encoding="utf-8")
     assert 'target.protocol !== "https:" || target.port !== ""' in source
     assert '/^[0-9a-f]{40}$/i.test(expectedRevision)' in source
-    assert 'if (!releaseMode) return;' in source
+    assert 'if (!releaseMode && !localSpecialistMode && !generatedDocumentAcceptance) return;' in source
+    assert 'if (localSpecialistMode || generatedDocumentAcceptance) {' in source
+    assert 'const localSpecialistMode = ordinarySpecialistAcceptance && localMode && !releaseMode &&' in source
+    assert 'approvedUrl === "http://127.0.0.1:8010"' in source
+    assert 'expect(body).toEqual({ status: "ok", revision: expectedRevision });' in source
     assert 'new URL("/api/deployment-revision", target)' in source
     assert "await requireReviewedRevision(page, target)" in source
-    assert source.count("await requireReviewedRevision(page, target)") == 5
+    assert source.count("await requireReviewedRevision(page, target)") == 8
+    assert source.count("await requireReviewedRevision(active, target)") == 1
+    isolation = source.index("await expectFreshSpecialistIsolation(page, target, id!")
+    postflight = source.index("if (localSpecialistMode) {", isolation)
+    assert isolation < postflight < source.index(
+        "await requireReviewedRevision(page, target)", postflight
+    ) < source.index("await requireLiveCanonicalBackend(page, target)", postflight)
 
 
 def test_local_reuses_real_first_turn_model_persistence_and_replay_proof() -> None:
@@ -38,7 +48,15 @@ def test_local_reuses_real_first_turn_model_persistence_and_replay_proof() -> No
     assert 'const enabled = releaseMode || localMode;' in source
     assert 'test.skip(!enabled,' in source
     assert 'await requireLiveCanonicalBackend(page, target)' in source
-    assert 'await expectVerifiedExecutionReceipt(page, id!, persistedAnswer)' in source
+    first = source.index(
+        'const firstReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);'
+    )
+    replay = source.index(
+        'const replayedReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);'
+    )
+    reload = source.index("await page.reload()", first)
+    assert first < reload < replay
+    assert "expect(replayedReceipt).toEqual(firstReceipt);" in source
     assert 'await composer.press("Enter")' in source
     assert 'observedRunRequests' in source
     assert 'karen.presentation.v1' in source
@@ -58,7 +76,13 @@ def test_real_first_turn_requires_generative_response_source_not_metadata_only()
     assert 'const required = ["actual_provider", "actual_model", "response_source"] as const;' in source
     assert 'const responseSource = (metadata.response_source as string).trim().toLowerCase();' in source
     assert "function isVerifiedGenerativeResponseSource(responseSource: string): boolean" in source
-    assert "return isVerifiedGenerativeResponseSource(responseSource);" in source
+    # Both ordinary and specialist paths must reject invalid receipt sources
+    # before assigning verified identity or allowing the poll to succeed.
+    branch = source.index("if (specialist ? !matchesApprovedSpecialistReceipt(metadata, specialist) :")
+    reject = source.index("!isVerifiedGenerativeResponseSource(responseSource)) return false;", branch)
+    verified = source.index("verified = {", reject)
+    success = source.index("return true;", verified)
+    assert branch < reject < verified < success
     for canonical_source in sorted(MODEL_GENERATION_RESPONSE_SOURCES):
         assert f'"{canonical_source}"' in source
     assert '/(?:^|[_-])(?:unavailable|error|failed|canned|static|replay|memory|tool)(?:[_-]|$)/.test(normalized)' in source
@@ -177,7 +201,7 @@ def test_kcon776_benchmark_has_zero_retries_and_runs_headless_on_local_machine()
     """A local benchmark cannot turn a failing real attempt into a passing sample."""
     config = (SPEC.parent / "playwright.config.ts").read_text(encoding="utf-8")
     assert "const localBenchmark = process.env.KAREN_LOCAL_LATENCY_BENCHMARK === '1';" in config
-    assert "retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || cardStudioAcceptance || participationAcceptance ? 0 : process.env.CI ? 2 : 0," in config
+    assert "retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || cardStudioAcceptance || privateLifecycleAcceptance ? 0 : process.env.CI ? 2 : 0," in config
     assert "headless: localBenchmark || !!process.env.CI," in config
     assert "workers: 1," in config
     assert "['json', { outputFile: 'test-results.json' }]" in config
@@ -200,7 +224,7 @@ def test_kcon774_local_latency_runner_disables_sensitive_recordings_by_default()
     assert "process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED === 'true' ||" in config
     assert "const cardStudioAcceptance = process.env.KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE === 'true';" in config
     private_modes = config.split("const privateBrowserRun = localBenchmark ||", 1)[1].split(";", 1)[0]
-    for required in ("settingsAcceptance", "fileExplorerAcceptance", "pinReadbackAcceptance", "cardStudioAcceptance", "participationAcceptance"):
+    for required in ("settingsAcceptance", "fileExplorerAcceptance", "pinReadbackAcceptance", "cardStudioAcceptance", "privateLifecycleAcceptance"):
         assert required in private_modes
     assert "const pinReadbackAcceptance = process.env.KAREN_PIN_READBACK_ACCEPTANCE === '1';" in config
     assert "reporter: settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance" in config
@@ -208,7 +232,7 @@ def test_kcon774_local_latency_runner_disables_sensitive_recordings_by_default()
     assert "video: privateBrowserRun\n      ? 'off'" in config
     assert "trace: privateBrowserRun\n      ? 'off'" in config
     assert "process.env.KAREN_E2E_CAPTURE_VIDEO === 'true'" in config
-    assert "retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || cardStudioAcceptance || participationAcceptance ? 0 : process.env.CI ? 2 : 0," in config
+    assert "retries: localBenchmark || settingsAcceptance || navigationAcceptance || fileExplorerAcceptance || pinReadbackAcceptance || cardStudioAcceptance || privateLifecycleAcceptance ? 0 : process.env.CI ? 2 : 0," in config
     assert "headless: localBenchmark || !!process.env.CI," in config
     assert "['json', { outputFile: 'test-results.json' }]" in config
 
@@ -310,8 +334,11 @@ def test_kcon770_failure_acceptance_requires_operator_fault_and_private_evidence
 def test_arm05c5b_private_participation_acceptance_suppresses_failure_context() -> None:
     config = (SPEC.parent / "playwright.config.ts").read_text(encoding="utf-8")
     assert "const participationAcceptance = process.env.KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE === 'true';" in config
-    assert "if (participationAcceptance) process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';" in config
-    assert "preserveOutput: participationAcceptance ? 'never' : 'always'," in config
+    assert "const inboxAcceptance = process.env.KAREN_COMMS_INBOX_ACCEPTANCE === 'true';" in config
+    assert "const generatedDocumentAcceptance = process.env.KAREN_GENERATED_DOCUMENT_ACCEPTANCE === 'true';" in config
+    assert "const privateLifecycleAcceptance = participationAcceptance || inboxAcceptance || generatedDocumentAcceptance;" in config
+    assert "if (privateLifecycleAcceptance) process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';" in config
+    assert "preserveOutput: privateLifecycleAcceptance ? 'never' : 'always'," in config
     reporter = config.split("reporter:", 1)[1].split("use:", 1)[0]
-    assert "participationAcceptance" in reporter.split("?", 1)[0]
+    assert "privateLifecycleAcceptance" in reporter.split("?", 1)[0]
     assert "? [['list']]" in reporter

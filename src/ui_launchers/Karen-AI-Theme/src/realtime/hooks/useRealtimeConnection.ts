@@ -1,36 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useSyncExternalStore } from "react";
 import { ConnectionState } from "../types";
 import { RealtimeClient } from "../client";
 
-let globalClient: RealtimeClient | null = null;
-
+/** Independent compatibility instance; never reuse a previous tenant's client. */
 export function getRealtimeClient(tenantId: string): RealtimeClient {
-  if (!globalClient || globalClient.connectionState === "disconnected") {
-    globalClient = new RealtimeClient(tenantId);
-  }
-  return globalClient;
+  return new RealtimeClient(tenantId);
 }
 
 export function useRealtimeConnection(tenantId: string) {
-  const [state, setState] = useState<ConnectionState>("disconnected");
-  const clientRef = useRef<RealtimeClient | null>(null);
-
-  if (!clientRef.current || clientRef.current.connectionState === "disconnected") {
-    clientRef.current = getRealtimeClient(tenantId);
-  }
+  const client = useMemo(() => getRealtimeClient(tenantId), [tenantId]);
+  const subscribe = useCallback((notify: () => void) => client.onStateChange(notify), [client]);
+  const snapshot = useCallback(() => client.connectionState, [client]);
+  const state = useSyncExternalStore<ConnectionState>(subscribe, snapshot, () => "disconnected");
 
   useEffect(() => {
-    const client = clientRef.current!;
-    setState(client.connectionState);
-    const unsub = client.onStateChange((prev, next) => {
-      setState(next);
-    });
     client.connect();
-    return () => {
-      unsub();
-      client.disconnect();
-    };
-  }, [tenantId]);
+    return () => client.disconnect();
+  }, [client]);
 
-  return { state, client: clientRef.current };
+  return { state, client };
 }

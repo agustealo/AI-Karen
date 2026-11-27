@@ -252,3 +252,170 @@ def test_base_image_package_retry_preserves_integrity_checks() -> None:
     assert "--allow-unauthenticated" not in base
     assert "--allow-insecure-repositories" not in base
     assert "--fix-missing" not in base
+
+
+def test_disposable_communications_browser_is_opt_in_and_isolated() -> None:
+    workflow = _read(WORKFLOW)
+    smoke = _read(SMOKE)
+    fixture = _read(ROOT / "scripts/ci/communications_browser_fixture.py")
+    runner = _read(ROOT / "scripts/ci/communications_browser_smoke.py")
+    assert "communications_browser:" in workflow
+    assert "default: false" in workflow.split("communications_browser:", 1)[1].split("  push:", 1)[0]
+    assert "kcomm-02e-disposable-browser-proof-" not in workflow
+    assert workflow.count("github.event_name == 'workflow_dispatch' && inputs.communications_browser == true") == 3
+    assert workflow.count("github.event.pull_request.head.repo.full_name == github.repository") == 3
+    assert workflow.count("contains(github.event.pull_request.labels.*.name, 'ci:communications-browser')") == 3
+    assert "pull_request_target:" not in workflow
+    assert "contents: read" in workflow
+    assert "kcomm-03g-signed-invalidation-proof-" not in workflow
+    assert 'COMMS_BROWSER_PROOF="${KAREN_SMOKE_COMMS_BROWSER_PROOF:-false}"' in smoke
+    assert "Communications fixture proof must not contact a live model" in smoke
+    assert "Refusing non-disposable database target" in fixture
+    assert "Only explicitly isolated loopback origin allowed" in runner
+    assert "API host binding is not the isolated smoke container" in runner
+    assert "Exactly two passing browser scenarios without skips or retries required" in runner
+    assert "DISPOSABLE COMMUNICATIONS SIGNED-SESSION LIFECYCLE PROOF PASSED" in runner
+
+
+def test_canonical_factory_installs_request_target_privacy_before_ingress():
+    source = _read(ROOT / "src/ai_karen_engine/app.py")
+    tree = ast.parse(source)
+    factory = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "create_app")
+    calls = [
+        node.value.func.id
+        for node in factory.body
+        if isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+        and isinstance(node.value.func, ast.Name)
+    ]
+    assert calls.count("install_request_target_privacy_filter") == 1
+    assert calls.index("install_request_target_privacy_filter") < calls.index("_validate_environment")
+    smoke = _read(SMOKE)
+    assert "/health/live?search=" in smoke
+    assert 'grep -Fq "$privacy_marker"' in smoke
+    assert "privacy_after <= privacy_before" in smoke
+    assert "PRODUCTION REQUEST TARGET PRIVACY PROOF PASSED" in smoke
+
+
+def test_disposable_communications_invalidation_requires_real_broker_and_browser_receipts() -> None:
+    smoke = _read(SMOKE)
+    fixture = _read(ROOT / "scripts/ci/communications_browser_fixture.py")
+    runner = _read(ROOT / "scripts/ci/communications_browser_smoke.py")
+    spec = _read(ROOT / "src/ui_launchers/Karen-AI-Theme/e2e/comms-visual-acceptance.spec.ts")
+    block = smoke.split('if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then', 1)[1].split("\nfi", 1)[0]
+    assert "-e KARI_ENABLE_COMMUNICATIONS_INVALIDATION=true" in block
+    assert "-e KARI_ENABLE_COMMUNICATIONS_INVALIDATION_WAIT=true" in block
+    assert "Refusing non-disposable Redis target" in fixture
+    assert "pubsub_numsub(*channels)" in fixture
+    assert "DISPOSABLE COMMUNICATIONS BROKER WITNESS PASSED" in runner
+    assert 'stats.get("expected") != 2' in runner
+    assert "DISPOSABLE COMMUNICATIONS SIGNED-SESSION INVALIDATION PROOF PASSED" in runner
+    assert 'await witness([ownerA, ownerB], 1)' in spec
+    assert 'expect(sequence[0]).toBe("hint")' in spec
+    assert 'expect(sequence[1]).toBe("read")' in spec
+    assert 'expect(await foreign.json()).toEqual({ changed: false })' in spec
+    assert 'page.waitForEvent("requestfailed"' in spec
+    assert 'await witness([ownerB], 0)' in spec
+    assert 'expect([401, 403]).toContain(rejection.status())' in spec
+    assert 'expect(rejectionBody).not.toHaveProperty("changed")' in spec
+
+
+def test_communications_failure_diagnostics_do_not_disclose_private_report(capsys) -> None:
+    import importlib.util
+
+    path = ROOT / "scripts/ci/communications_browser_smoke.py"
+    spec = importlib.util.spec_from_file_location("communications_browser_smoke", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.report_failure_summary({"suites": [{"specs": [{
+        "title": "KCOMM-03G: committed change delivery, cancellation and live session revocation",
+        "tests": [{
+            "status": "unexpected",
+            "annotations": [{"type": "kcomm-stage", "description": "private-secret"},
+                            {"type": "kcomm-stage", "description": "revoke"},
+                            {"type": "kcomm-hint-http", "description": "503"},
+                            {"type": "kcomm-hint-http", "description": "private-secret"},
+                            {"type": "kcomm-hint-failure", "description": "invalidation_unavailable"},
+                            {"type": "kcomm-hint-failure", "description": "private-secret"},
+                            {"type": "kcomm-revoked-http", "description": "401"},
+                            {"type": "kcomm-revoked-body", "description": "json"},
+                            {"type": "kcomm-revoked-body", "description": "private-secret"}],
+            "results": [{"status": "failed", "errors": [{
+                "message": "private-secret", "stack": "private-secret /tmp/comms-visual-acceptance.spec.ts:123:45",
+                "location": {"file": "/tmp/private-secret/comms-visual-acceptance.spec.ts", "line": 124, "column": 5},
+            }]}],
+        }],
+    }]}]})
+    output = capsys.readouterr().out
+    assert "scenario=KCOMM-03G status=unexpected stage=revoke" in output
+    assert "KCOMM_BROWSER_RESULT status=failed" in output
+    assert "KCOMM_BROWSER_HINT_HTTP status=503" in output
+    assert "KCOMM_BROWSER_REVOKED_HTTP status=401" in output
+    assert "KCOMM_BROWSER_REVOKED_BODY state=json" in output
+    assert "KCOMM_BROWSER_HINT_FAILURE kind=invalidation_unavailable" in output
+    assert "line=123 column=45" in output
+    assert "line=124 column=5" in output
+    assert "private-secret" not in output
+
+    # Backend logs remain private even if an unexpected exception contains
+    # secrets or a user supplies text resembling a diagnostic event.
+    module.report_backend_failure_summary("\n".join([
+        "2026-01-01 - ai_karen_engine.core.realtime.inbox_invalidation - WARNING - communications.invalidation.wait_unavailable",
+        "2026-01-01 - ai_karen_engine.middleware.rate_limit - ERROR - Rate limit enforcement unavailable: TimeoutError",
+        "2026-01-01 - ai_karen_engine.middleware.rate_limit - ERROR - Rate limit enforcement unavailable: private-secret",
+        '{"name":"ai_karen_engine.api_routes.content.communications","message":"communications.inbox.unavailable","error_type":"AttributeError","user_id":"private-secret"}',
+        '{"name":"untrusted","message":"communications.invalidation.wait_unavailable","error_type":"private-secret"}',
+        "private-secret",
+    ]))
+    output = capsys.readouterr().out
+    assert "kind=wait_unavailable error_type=unknown count=1" in output
+    assert "kind=rate_limit_unavailable error_type=TimeoutError count=1" in output
+    assert "kind=rate_limit_unavailable error_type=unknown count=1" in output
+    assert "kind=inbox_unavailable error_type=AttributeError count=1" in output
+    assert "private-secret" not in output
+    assert output.count("KCOMM_BACKEND_EVENT ") == 4
+
+    correlation = "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a6"
+    foreign = "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a7"
+    module.report_backend_failure_summary("\n".join([
+        '{"logger":"ai_karen_engine.core.realtime.inbox_invalidation","message":"communications.invalidation.wait_unavailable reason=duplicate_owner","reason":"duplicate_owner","error_type":"InboxInvalidationUnavailable","correlation_id":"' + correlation + '","private":"private-secret"}',
+        '{"name":"ai_karen_engine.core.realtime.inbox_invalidation","message":"communications.invalidation.wait_admitted","correlation_id":"' + foreign + '"}',
+        '{"name":"ai_karen_engine.core.realtime.inbox_invalidation","message":"communications.invalidation.wait_unavailable","reason":"private-secret","error_type":"private-secret","correlation_id":"' + correlation + '"}',
+    ]), correlations={correlation})
+    output = capsys.readouterr().out
+    assert "kind=wait_unavailable error_type=InboxInvalidationUnavailable count=1 reason=duplicate_owner" in output
+    assert "kind=wait_unavailable error_type=unknown count=1 reason=unknown" in output
+    assert "wait_admitted" not in output
+    assert correlation not in output and foreign not in output and "private-secret" not in output
+    assert output.count("KCOMM_CORRELATED_BACKEND_EVENT ") == 2
+    assert module.safe_correlation("private-secret") is None
+    assert module.safe_correlation(correlation.upper()) == correlation
+
+    import hashlib
+
+    trace_tag = hashlib.sha256(correlation.encode("ascii")).hexdigest()
+    foreign_tag = hashlib.sha256(foreign.encode("ascii")).hexdigest()
+    module.report_backend_failure_summary("\n".join([
+        "2026-01-01 - ai_karen_engine.core.realtime.inbox_invalidation - WARNING - communications.invalidation.wait_unavailable reason=duplicate_owner trace=" + trace_tag,
+        "2026-01-01 - ai_karen_engine.core.realtime.inbox_invalidation - INFO - communications.invalidation.wait_admitted trace=" + foreign_tag,
+        "2026-01-01 - untrusted - WARNING - communications.invalidation.wait_unavailable reason=duplicate_owner trace=" + trace_tag,
+    ]), correlations={correlation})
+    output = capsys.readouterr().out
+    assert "kind=wait_unavailable error_type=unknown count=1 reason=duplicate_owner" in output
+    assert output.count("KCOMM_CORRELATED_BACKEND_EVENT ") == 1
+    assert trace_tag not in output and foreign_tag not in output and correlation not in output
+
+
+ 
+def test_logging_handler_proof_runs_in_the_built_api_image():
+    """Keep the pytest-only architecture stage free of application imports."""
+    workflow = _read(WORKFLOW)
+    proof = workflow.index("name: Verify correlated logging sinks in production API image")
+    build = workflow.index("name: Build production API image")
+    browser = workflow.index("name: Execute real production first boot")
+    assert build < proof < browser
+    block = workflow[proof:workflow.index("name: Build production web image", proof)]
+    assert "docker run --rm --network none" in block
+    assert "ai-karen-api:beta python -" in block
+    assert "from ai_karen_engine.server.logging_setup import configure_logging" in block
+    assert "PRODUCTION CORRELATED LOGGING SINK PROOF PASSED" in block

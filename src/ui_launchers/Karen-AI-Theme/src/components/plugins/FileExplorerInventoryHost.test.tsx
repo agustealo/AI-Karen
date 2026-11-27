@@ -3,17 +3,26 @@ import React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FileExplorerInventoryHost, type InventoryConsumer } from './FileExplorerInventoryHost';
+import { SharedFileExplorer, type ExplorerManagement } from '@/plugin_repo/file-explorer/FileExplorerPage';
+import { FileExplorerInventoryHost, type InventoryConsumer, type FileExplorerInventoryProps } from './FileExplorerInventoryHost';
 
 import { ContentIntelligenceWorkspace } from './ContentIntelligenceWorkspace';
 
 const mocks = vi.hoisted(() => ({
   get: vi.fn(),
   post: vi.fn(),
+  patch: vi.fn(),
+  delete: vi.fn(),
   useAuth: vi.fn(),
+  captureApiPrincipalScope: vi.fn(),
+  isCurrentApiPrincipalScope: vi.fn(),
 }));
 
-vi.mock('@/lib/api', () => ({ apiClient: { get: mocks.get, post: mocks.post } }));
+vi.mock('@/lib/api', () => ({
+  apiClient: { get: mocks.get, post: mocks.post, patch: mocks.patch, delete: mocks.delete },
+  captureApiPrincipalScope: mocks.captureApiPrincipalScope,
+  isCurrentApiPrincipalScope: mocks.isCurrentApiPrincipalScope,
+}));
 vi.mock('@/lib/useAuth', () => ({ useAuth: mocks.useAuth }));
 
 const SHA = 'a'.repeat(64);
@@ -33,6 +42,7 @@ function response(id: string, hasMore = false, cursor: string | null = null) {
     }],
     has_more: hasMore,
     next_cursor: cursor,
+    max_selection: 12,
     inventory_semantics: 'owner_metadata_page_not_live_acl',
     request_id: 'request-1',
     correlation_id: 'corr-1',
@@ -54,7 +64,7 @@ function auth(userId = 'owner-one') {
 
 function Consumer({ mode, consumer, onAttach }: { mode?: 'analysis' | 'selection'; consumer?: InventoryConsumer; onAttach?: (refs: { source_id: string; revision: string }[]) => void } = {}) {
   return (
-    <FileExplorerInventoryHost mode={mode} consumer={consumer} onAttach={onAttach}>
+    <FileExplorerInventoryHost hierarchy={false} mode={mode} consumer={consumer} onAttach={onAttach}>
       {(props) => (
         <section>
           <output data-testid="authorized">{String(props.authorized)}</output>
@@ -108,11 +118,33 @@ function Consumer({ mode, consumer, onAttach }: { mode?: 'analysis' | 'selection
   );
 }
 
+type TransportScope = { tenant_id: string; user_id: string; revision: number };
+let transportOverride: TransportScope | null | undefined;
+const ownerScope: TransportScope = { tenant_id: 'tenant-one', user_id: 'owner-one', revision: 1 };
+function transportScope(): TransportScope | null {
+  if (transportOverride !== undefined) return transportOverride;
+  const state = mocks.useAuth();
+  return state?.isAuthenticated && state.user ? {
+    tenant_id: state.user.tenant_id, user_id: state.user.user_id, revision: 1,
+  } : null;
+}
+
 beforeEach(() => {
+  transportOverride = undefined;
   mocks.get.mockReset();
   mocks.post.mockReset();
+  mocks.patch.mockReset();
+  mocks.delete.mockReset();
   mocks.useAuth.mockReset();
   mocks.useAuth.mockReturnValue(auth());
+  mocks.captureApiPrincipalScope.mockReset().mockImplementation((tenant_id: string, user_id: string) => {
+    const current = transportScope();
+    return current?.tenant_id === tenant_id && current.user_id === user_id ? { ...current } : null;
+  });
+  mocks.isCurrentApiPrincipalScope.mockReset().mockImplementation((scope: TransportScope) => {
+    const current = transportScope();
+    return current?.tenant_id === scope.tenant_id && current.user_id === scope.user_id && current.revision === scope.revision;
+  });
 });
 
 afterEach(() => {
@@ -141,6 +173,30 @@ describe('File Explorer authenticated UI host', () => {
     );
     expect(screen.getByTestId('selection').textContent).toBe('');
     expect(screen.getByTestId('key').textContent).not.toBe(firstKey);
+  });
+
+  it('rejects callbacks retained from the previous authorized page', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'first-cursor'))
+      .mockResolvedValueOnce(response(FILE_B, true, 'second-cursor'));
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <output>{props.items.map(item => item.name).join(',')}</output>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    const previous = latest;
+    await act(async () => previous.onNextPage('first-cursor'));
+    await waitFor(() => expect(latest.authorized && !latest.loading && latest.items[0]?.source_id === FILE_B).toBe(true));
+    await act(async () => latest.onSelect([latest.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    await act(async () => {
+      previous.onSelect([]);
+      previous.onRefresh();
+      previous.onNextPage('first-cursor');
+    });
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    expect(latest.items.map(item => item.source_id)).toEqual([FILE_B]);
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 
   it('rejects stale and forged selection receipts without partially accepting IDs', async () => {
@@ -411,7 +467,9 @@ describe('Content Intelligence document search', () => {
     fireEvent.click(screen.getByText('Select A'));
     fireEvent.change(screen.getByLabelText('Operation'), { target: { value: 'search' } });
     fireEvent.change(screen.getByLabelText('Search terms'), { target: { value: 'vendor' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Search selected files' }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Search selected files' }));
+    });
   }
 
   it('submits a bounded query and displays revision-bound passages', async () => {
@@ -566,10 +624,32 @@ describe('Explicit composer attachment handoff', () => {
     fireEvent.click(screen.getByText('Select A'));
     expect(onAttach).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: 'Attach selected files (1)' }));
-    expect(onAttach).toHaveBeenCalledExactlyOnceWith([{ source_id: FILE_A, revision: SHA }]);
+    expect(onAttach).toHaveBeenCalledWith([{ source_id: FILE_A, revision: SHA }]);
     fireEvent.click(screen.getByText('Forged hash'));
     expect(screen.queryByRole('button', { name: /Attach selected files/ })).toBeNull();
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('rejects confirmation from a superseded selection before React commits the next render', async () => {
+    let latest!: FileExplorerInventoryProps;
+    const onAttach = vi.fn();
+    const page = response(FILE_A);
+    page.items.push(response(FILE_B).items[0]);
+    mocks.get.mockResolvedValue(page);
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection" onAttach={onAttach}>
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => latest.onSelect([latest.items[0]]));
+    const prior = screen.getByRole('button', { name: 'Attach selected files (1)' });
+    act(() => {
+      latest.onSelect([latest.items[1]]);
+      prior.click();
+    });
+    expect(onAttach).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Attach selected files (1)' }));
+    expect(onAttach).toHaveBeenCalledTimes(1);
+    expect(onAttach).toHaveBeenCalledWith([{ source_id: FILE_B, revision: SHA }]);
   });
 
   it('revokes the attachment action when authentication is revalidated', async () => {
@@ -609,5 +689,704 @@ describe('Standalone Content Intelligence workspace', () => {
     expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
     expect(mocks.get.mock.calls).toEqual([['/api/plugins/content-intelligence/inventory?limit=100']]);
     expect(mocks.post).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('governed hierarchy inventory', () => {
+  const folderId = '55555555-5555-4555-8555-555555555555';
+  function hierarchyPage(parent: string | null = null) {
+    return {
+      available: true, request_id: 'request', correlation_id: 'correlation',
+      folders: parent ? [] : [{ folder_id: folderId, parent_folder_id: null, name: 'Reports', revision: '1' }],
+      breadcrumbs: parent ? [{ folder_id: folderId, parent_folder_id: null, name: 'Reports', revision: '1' }] : [],
+      has_more: false, next_folder_id: null,
+      files: parent ? [{ ...response(FILE_A).items[0], parent_id: parent, organization_revision: '2' }] : [],
+      files_has_more: false, next_file_cursor: null,
+    };
+  }
+  function HierarchyConsumer() {
+    return <FileExplorerInventoryHost hierarchy mode="selection">
+      {props => <div>
+        <span data-testid="hierarchy-authorized">{String(props.authorized)}</span>
+        <span data-testid="hierarchy-error">{props.error}</span>
+        {props.items.map(item => <button key={item.source_id} onClick={() => {
+          if (item.kind === 'folder') props.hierarchy?.onNavigate?.(item.source_id);
+          else props.onSelect([item]);
+        }}>{item.name}</button>)}
+        <button onClick={() => props.hierarchy?.onNavigate?.(null)}>Go root</button>
+        <span data-testid="hierarchy-selected">{props.selectedSourceIds.join(',')}</span>
+      </div>}
+    </FileExplorerInventoryHost>;
+  }
+  it('loads a nested location from the backend and preserves file selection semantics', async () => {
+    mocks.get.mockResolvedValueOnce(hierarchyPage()).mockResolvedValueOnce(hierarchyPage(folderId))
+      .mockResolvedValueOnce(hierarchyPage());
+    render(<HierarchyConsumer />);
+    await waitFor(() => expect(screen.getByText('Reports')).toBeTruthy());
+    fireEvent.click(screen.getByText('Reports'));
+    await waitFor(() => expect(screen.getByText('alpha.txt')).toBeTruthy());
+    expect(mocks.get).toHaveBeenNthCalledWith(2,
+      '/api/plugins/file-explorer/hierarchy?limit=100&parent_folder_id=' + folderId);
+    fireEvent.click(screen.getByText('alpha.txt'));
+    expect(screen.getByTestId('hierarchy-selected').textContent).toBe(FILE_A);
+    fireEvent.click(screen.getByText('Go root'));
+    await waitFor(() => expect(screen.getByText('Reports')).toBeTruthy());
+    expect(screen.getByTestId('hierarchy-selected').textContent).toBe('');
+  });
+  it('rejects a malformed breadcrumb chain instead of displaying foreign location metadata', async () => {
+    mocks.get.mockResolvedValueOnce(hierarchyPage()).mockResolvedValueOnce({
+      ...hierarchyPage(folderId), breadcrumbs: [],
+    });
+    render(<HierarchyConsumer />);
+    await waitFor(() => expect(screen.getByText('Reports')).toBeTruthy());
+    fireEvent.click(screen.getByText('Reports'));
+    await waitFor(() => expect(screen.getByTestId('hierarchy-error').textContent).toContain('Invalid file inventory response'));
+    expect(screen.getByTestId('hierarchy-authorized').textContent).toBe('false');
+    expect(screen.queryByText('alpha.txt')).toBeNull();
+  });
+});
+
+
+describe('Explorer management preflight and mutation receipts', () => {
+  const folder = '55555555-5555-4555-8555-555555555555';
+  const evidence = { request_id: 'request', correlation_id: 'correlation' };
+  const inventory = { ...evidence, available: true, breadcrumbs: [],
+    folders: [{ folder_id: folder, parent_folder_id: null, name: 'Reports', revision: '7' }],
+    has_more: false, next_folder_id: null, files: [], files_has_more: false, next_file_cursor: null };
+  function capabilities(deletion = 'available') {
+    return { ...evidence, browse: 'available', semantics: 'preflight_not_resource_authorization',
+      operations: {
+        'file_explorer.folder.create': 'available', 'file_explorer.folder.rename': 'available',
+        'file_explorer.folder.move': 'available', 'file_explorer.artifact.move': 'available',
+        'file_explorer.folder.delete': deletion,
+      } };
+  }
+  function Manager() {
+    return <FileExplorerInventoryHost hierarchy mode="analysis">
+      {props => <div>
+        <span data-testid="message">{props.management?.message}</span>
+        <button disabled={props.management?.capabilities['file_explorer.folder.delete'] !== 'available'}
+          onClick={() => props.management?.onMutate({action: 'delete', sourceId: folder, expectedRevision: '7'})}>Delete</button>
+        <button onClick={() => props.management?.onMutate({action: 'rename', sourceId: folder, expectedRevision: '6', name: 'Wrong'})}>Stale</button>
+        <button disabled={props.management?.capabilities['file_explorer.folder.rename'] !== 'available'}
+          onClick={() => props.management?.onMutate({action: 'rename', sourceId: folder, expectedRevision: '7', name: 'New'})}>Rename</button>
+      </div>}
+    </FileExplorerInventoryHost>;
+  }
+  it('does not send a denied delete or a stale revision', async () => {
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities('denied') : inventory));
+    render(<Manager />);
+    await waitFor(() => expect((screen.getByText('Rename') as HTMLButtonElement).disabled).toBe(false));
+    expect((screen.getByText('Delete') as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByText('Delete'));
+    fireEvent.click(screen.getByText('Stale'));
+    expect(mocks.delete).not.toHaveBeenCalled();
+    expect(mocks.patch).not.toHaveBeenCalled();
+  });
+  it('uses organization revision, rejects a substituted receipt, refreshes without retrying', async () => {
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    mocks.patch.mockResolvedValue({ ...evidence, folder: { folder_id: FILE_A, parent_folder_id: null, name: 'New', revision: '8' } });
+    render(<Manager />);
+    await waitFor(() => expect((screen.getByText('Rename') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText('Rename'));
+    await waitFor(() => expect(screen.getByTestId('message').textContent).toContain('not confirmed'));
+    expect(mocks.patch).toHaveBeenCalledWith('/api/plugins/file-explorer/folders/' + folder,
+      { name: 'New', expected_revision: '7' }, {}, ownerScope);
+    expect(mocks.get.mock.calls.filter(([path]) => path.includes('/hierarchy?'))).toHaveLength(2);
+  });
+  it('rejects retained mutation and selection callbacks across mode and principal changes', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    function Probe({ mode }: { mode: 'analysis' | 'selection' }) {
+      return <FileExplorerInventoryHost hierarchy mode={mode}>
+        {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+      </FileExplorerInventoryHost>;
+    }
+    const view = render(<Probe mode="analysis" />);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.rename']).toBe('available'));
+    const old = latest;
+    view.rerender(<Probe mode="selection" />);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => {
+      old.management?.onMutate({ action: 'rename', sourceId: folder, expectedRevision: '7', name: 'New' });
+      old.hierarchy?.onNavigate?.(folder);
+      old.onRefresh();
+    });
+    expect(mocks.patch).not.toHaveBeenCalled();
+    expect(mocks.get.mock.calls.filter(([path]) => path.includes('parent_folder_id='))).toHaveLength(0);
+    view.rerender(<Probe mode="analysis" />);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.rename']).toBe('available'));
+    const other = latest;
+    mocks.useAuth.mockReturnValue(auth('owner-two'));
+    view.rerender(<Probe mode="analysis" />);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.rename']).toBe('available'));
+    await act(async () => other.management?.onMutate({ action: 'rename', sourceId: folder, expectedRevision: '7', name: 'New' }));
+    expect(mocks.patch).not.toHaveBeenCalled();
+  });
+
+  it('binds root creation and its management evidence to the displayed transport principal', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    mocks.post.mockResolvedValue({ ...evidence, folder: { folder_id: FILE_B, parent_folder_id: null, name: 'New', revision: '1' } });
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">{props => {
+      latest = props; return <span>{String(props.authorized)}</span>;
+    }}</FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.create']).toBe('available'));
+    expect(mocks.get).toHaveBeenNthCalledWith(1, '/api/plugins/file-explorer/hierarchy?limit=100', ownerScope);
+    expect(mocks.get).toHaveBeenNthCalledWith(2, '/api/plugins/file-explorer/capabilities', ownerScope);
+    await act(async () => latest.management?.onMutate({ action: 'create', name: 'New' }));
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(mocks.post).toHaveBeenCalledWith('/api/plugins/file-explorer/folders',
+      { name: 'New', parent_folder_id: null }, {}, ownerScope);
+  });
+
+  it.each([
+    { tenant_id: 'tenant-one', user_id: 'owner-two', revision: 2 },
+    { tenant_id: 'tenant-two', user_id: 'owner-one', revision: 2 },
+    { tenant_id: 'tenant-one', user_id: 'owner-one', revision: 2 },
+    null,
+  ])('rejects retained organization callbacks before React commits a transport identity transition: %j', async (next) => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">{props => {
+      latest = props; return <span>{String(props.authorized)}</span>;
+    }}</FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.create']).toBe('available'));
+    const retained = latest.management!;
+    transportOverride = next;
+    await act(async () => {
+      await retained.onMutate({ action: 'create', name: 'Previous owner name' });
+      await retained.onMutate({ action: 'rename', sourceId: folder, expectedRevision: '7', name: 'New' });
+      await retained.onMutate({ action: 'delete', sourceId: folder, expectedRevision: '7' });
+      retained.onBrowseDestination?.(folder, '7');
+    });
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.patch).not.toHaveBeenCalled();
+    expect(mocks.delete).not.toHaveBeenCalled();
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not request management inventory when UI and transport principals disagree', async () => {
+    transportOverride = { tenant_id: 'tenant-one', user_id: 'owner-two', revision: 2 };
+    let latest!: FileExplorerInventoryProps;
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">{props => {
+      latest = props; return <span>{String(props.authorized)}</span>;
+    }}</FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.error).toContain('access was denied'));
+    expect(latest.authorized).toBe(false);
+    expect(mocks.get).not.toHaveBeenCalled();
+  });
+
+  it('rejects a changed-name receipt that fails to advance the organization revision', async () => {
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    mocks.patch.mockResolvedValue({ ...evidence, folder: { folder_id: folder, parent_folder_id: null, name: 'New', revision: '7' } });
+    render(<Manager />);
+    await waitFor(() => expect((screen.getByText('Rename') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText('Rename'));
+    await waitFor(() => expect(screen.getByTestId('message').textContent).toContain('not confirmed'));
+    expect(mocks.patch).toHaveBeenCalledTimes(1);
+  });
+
+  it('browses nested destinations without replacing the source revision', async () => {
+    const child = '66666666-6666-4666-8666-666666666666';
+    const source = { ...inventory.folders[0] };
+    const destinationFolder = { folder_id: child, parent_folder_id: null, name: 'Archive', revision: '1' };
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockImplementation((path: string) => Promise.resolve(
+      path.endsWith('/capabilities') ? capabilities() :
+      path.includes('parent_folder_id=' + child) ? { ...inventory, folders: [], breadcrumbs: [destinationFolder] } :
+      { ...inventory, folders: [source, destinationFolder] },
+    ));
+    mocks.post.mockResolvedValue({ ...evidence, kind: 'folder', source_id: folder,
+      parent_folder_id: child, organization_revision: '8' });
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.move']).toBe('available'));
+    await act(async () => latest.management?.onBrowseDestination?.(folder, '7'));
+    await waitFor(() => expect(latest.management?.destination?.canConfirm).toBe(true));
+    expect(latest.management?.destination?.folders.map(entry => entry.folder_id)).toEqual([child]);
+    await act(async () => latest.management?.destination?.onNavigate(child));
+    await waitFor(() => expect(latest.management?.destination?.parentId).toBe(child));
+    await waitFor(() => expect(latest.management?.destination?.canConfirm).toBe(true));
+    expect(latest.items.find(item => item.source_id === folder)?.organization_revision).toBe('7');
+    await act(async () => latest.management?.onMutate({ action: 'move', sourceId: folder,
+      expectedRevision: '7', destinationId: null }));
+    expect(mocks.post).not.toHaveBeenCalled();
+    await act(async () => latest.management?.onMutate({ action: 'move', sourceId: folder,
+      expectedRevision: '7', destinationId: child }));
+    expect(mocks.post).toHaveBeenCalledTimes(1);
+    expect(mocks.post).toHaveBeenCalledWith('/api/plugins/file-explorer/move/folder/' + folder,
+      { destination_id: child, expected_revision: '7' }, {}, ownerScope);
+  });
+
+  it('does not accept a destination response after cancellation', async () => {
+    let latest!: FileExplorerInventoryProps;
+    let resolveDestination!: (data: unknown) => void;
+    mocks.get.mockResolvedValueOnce(inventory).mockResolvedValueOnce(capabilities())
+      .mockImplementationOnce(() => new Promise(resolve => { resolveDestination = resolve; }));
+    render(<FileExplorerInventoryHost hierarchy mode="analysis">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.management?.capabilities['file_explorer.folder.move']).toBe('available'));
+    await act(async () => latest.management?.onBrowseDestination?.(folder, '7'));
+    const pending = latest.management?.destination;
+    expect(pending?.loading).toBe(true);
+    await act(async () => pending?.onCancel());
+    await act(async () => resolveDestination(inventory));
+    expect(latest.management?.destination).toBeUndefined();
+    await act(async () => latest.management?.onMutate({ action: 'move', sourceId: folder, expectedRevision: '7', destinationId: null }));
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('sends explicit delete revision and confirms only matching evidence', async () => {
+    mocks.get.mockImplementation((path: string) => Promise.resolve(path.endsWith('/capabilities') ? capabilities() : inventory));
+    mocks.delete.mockResolvedValue({ ...evidence, folder_id: folder, deleted: true });
+    render(<Manager />);
+    await waitFor(() => expect((screen.getByText('Delete') as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByText('Delete'));
+    await waitFor(() => expect(screen.getByTestId('message').textContent).toContain('confirmed'));
+    expect(mocks.delete).toHaveBeenCalledWith('/api/plugins/file-explorer/folders/' + folder,
+      { expected_revision: '7' }, {}, ownerScope);
+  });
+});
+
+
+describe('shared Explorer accessible organization controls', () => {
+  const folder = { source_id: '55555555-5555-4555-8555-555555555555', parent_id: null,
+    kind: 'folder' as const, name: 'Reports', revision: '7', organization_revision: '7',
+    sha256: null, size_bytes: 0 };
+  const hierarchy = { parentId: null, breadcrumbs: [], hasMoreFolders: false, nextFolderId: null };
+  function management(onMutate = vi.fn()): ExplorerManagement {
+    return { busy: false, message: null, capabilityStatus: 'ready', onMutate,
+      capabilities: { 'file_explorer.folder.create': 'available',
+        'file_explorer.folder.rename': 'available', 'file_explorer.folder.delete': 'denied' } };
+  }
+  it('focuses the editor and restores focus on Escape without submitting', () => {
+    const controls = management();
+    render(<SharedFileExplorer authorized items={[folder]} hierarchy={hierarchy} management={controls} />);
+    const rename = screen.getByRole('button', { name: 'Rename Reports' });
+    fireEvent.click(rename);
+    const input = screen.getByLabelText('Folder name');
+    expect(document.activeElement).toBe(input);
+    expect((screen.getByRole('button', { name: /^Root$/ }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.keyDown(input, { key: 'Escape' });
+    expect(screen.queryByLabelText('Folder name')).toBeNull();
+    expect(document.activeElement).toBe(rename);
+    expect(controls.onMutate).not.toHaveBeenCalled();
+  });
+  it('announces denial and rejects an invalid name before submission', () => {
+    const controls = management();
+    render(<SharedFileExplorer authorized items={[folder]} hierarchy={hierarchy} management={controls} />);
+    expect(screen.getByText(/Delete empty folder: permission denied/)).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Delete Reports' }) as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'New folder' }));
+    const input = screen.getByLabelText('Folder name');
+    fireEvent.change(input, { target: { value: '   ' } });
+    const confirm = screen.getByRole('button', { name: 'Confirm create' });
+    expect((confirm as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.submit(screen.getByRole('form', { name: 'Confirm organization change' }));
+    expect(controls.onMutate).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('Folder name')).toBeTruthy();
+  });
+  it('moves focus to the authorized content after an explicit page transition', () => {
+    const navigate = vi.fn();
+    const view = render(<SharedFileExplorer authorized items={[folder]} pageKey="principal:1"
+      hierarchy={{...hierarchy, onNavigate: navigate}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open folder Reports' }));
+    expect(navigate).toHaveBeenCalledWith(folder.source_id);
+    view.rerender(<SharedFileExplorer authorized items={[]} pageKey="principal:2"
+      hierarchy={{...hierarchy, parentId: folder.source_id}} />);
+    expect(document.activeElement).toBe(screen.getByLabelText('File Explorer content'));
+  });
+});
+
+
+describe('governed server filename search', () => {
+  it('binds search to pagination and refresh, and clears selection on query changes', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'old'))
+      .mockResolvedValueOnce(response(FILE_B, true, 'bound'))
+      .mockResolvedValueOnce(response(FILE_A))
+      .mockResolvedValueOnce(response(FILE_B));
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{props.items.map(item => item.name).join(',')}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => latest.onSelect([latest.items[0]]));
+    const stale = latest;
+    await act(async () => latest.onSearch?.(' report_% '));
+    await waitFor(() => expect(latest.items[0]?.source_id).toBe(FILE_B));
+    expect(latest.search).toBe('report_%');
+    expect(latest.selectedSourceIds).toEqual([]);
+    expect(mocks.get).toHaveBeenNthCalledWith(2, '/api/plugins/file-explorer/inventory?limit=100&search=report_%25');
+    await act(async () => stale.onNextPage('old'));
+    expect(mocks.get).toHaveBeenCalledTimes(2);
+    await act(async () => latest.onNextPage('bound'));
+    await waitFor(() => expect(latest.items[0]?.source_id).toBe(FILE_A));
+    expect(mocks.get).toHaveBeenNthCalledWith(3, '/api/plugins/file-explorer/inventory?limit=100&cursor=bound&search=report_%25');
+    await act(async () => latest.onRefresh());
+    await waitFor(() => expect(latest.items[0]?.source_id).toBe(FILE_B));
+    expect(mocks.get).toHaveBeenNthCalledWith(4, '/api/plugins/file-explorer/inventory?limit=100&search=report_%25');
+  });
+  it('rejects same-principal out-of-order search and stale page callbacks', async () => {
+    let latest!: FileExplorerInventoryProps;
+    let resolveOld!: (data: ReturnType<typeof response>) => void;
+    const delayed = new Promise<ReturnType<typeof response>>(resolve => { resolveOld = resolve; });
+    mocks.get.mockResolvedValueOnce(response(FILE_A, true, 'old-cursor'))
+      .mockReturnValueOnce(delayed).mockResolvedValueOnce(response(FILE_B, true, 'new-cursor'));
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{props.items.map(item => item.name).join(',')}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    const stale = latest;
+    act(() => latest.onSearch?.('old'));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    act(() => latest.onSearch?.('new'));
+    await waitFor(() => expect(latest.authorized && !latest.loading && latest.search === 'new').toBe(true));
+    await act(async () => { resolveOld(response(FILE_A)); await delayed; });
+    act(() => latest.onSelect([latest.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    act(() => { stale.onSelect([]); stale.onRefresh(); stale.onNextPage('old-cursor'); });
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    expect(latest.items.map(item => item.source_id)).toEqual([FILE_B]);
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('clears Content Intelligence filename search through its own authorized endpoint', async () => {
+    mocks.get.mockResolvedValueOnce(response(FILE_A))
+      .mockResolvedValueOnce(response(FILE_B)).mockResolvedValueOnce(response(FILE_A));
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search authorized filenames' }), { target: { value: 'report_%' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'Search authorized filenames' }));
+    await screen.findByRole('checkbox', { name: 'Select beta.txt' });
+    expect(mocks.get).toHaveBeenNthCalledWith(2, '/api/plugins/content-intelligence/inventory?limit=100&search=report_%25');
+    fireEvent.click(screen.getByRole('button', { name: /^Clear search$/ }));
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    expect(mocks.get).toHaveBeenNthCalledWith(3, '/api/plugins/content-intelligence/inventory?limit=100');
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('discards a delayed query result and resets query on principal changes', async () => {
+    let latest!: FileExplorerInventoryProps;
+    let finish!: (data: unknown) => void;
+    mocks.get.mockResolvedValueOnce(response(FILE_A))
+      .mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+      .mockResolvedValueOnce(response(FILE_B));
+    function Probe() { return <FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{props.items.map(item => item.name).join(',')}</span>; }}
+    </FileExplorerInventoryHost>; }
+    const view = render(<Probe />);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    const stale = latest;
+    await act(async () => latest.onSearch?.('private'));
+    await waitFor(() => expect(mocks.get).toHaveBeenCalledTimes(2));
+    mocks.useAuth.mockReturnValue(auth('owner-two'));
+    view.rerender(<Probe />);
+    await waitFor(() => expect(latest.items[0]?.source_id).toBe(FILE_B));
+    await act(async () => finish(response(FILE_A)));
+    await act(async () => stale.onSearch?.('private'));
+    expect(latest.search).toBe('');
+    expect(latest.items[0]?.source_id).toBe(FILE_B);
+    expect(mocks.get).toHaveBeenNthCalledWith(3, '/api/plugins/file-explorer/inventory?limit=100');
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+  });
+  it('rejects invalid queries without changing the current page or selection', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValue(response(FILE_A));
+    render(<FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => latest.onSelect([latest.items[0]]));
+    await act(async () => {
+      for (const value of ['x'.repeat(161), 'bad\nquery', 'bad\u0000query', '\uD800']) latest.onSearch?.(value);
+    });
+    expect(latest.selectedSourceIds).toEqual([FILE_A]);
+    expect(latest.search).toBe('');
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+  });
+  it('does not revive a query after logout and return to the same principal', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValue(response(FILE_A));
+    function Probe() { return <FileExplorerInventoryHost hierarchy={false} mode="selection">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>; }
+    const view = render(<Probe />);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => latest.onSearch?.('private'));
+    await waitFor(() => expect(latest.authorized && latest.search === 'private').toBe(true));
+    const stale = latest;
+    mocks.useAuth.mockReturnValue({ ...auth(), isAuthenticated: false, user: null });
+    view.rerender(<Probe />);
+    expect(latest.authorized).toBe(false);
+    mocks.useAuth.mockReturnValue(auth());
+    view.rerender(<Probe />);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    await act(async () => stale.onSearch?.('private'));
+    expect(latest.search).toBe('');
+    expect(mocks.get).toHaveBeenLastCalledWith('/api/plugins/file-explorer/inventory?limit=100');
+    expect(mocks.get).toHaveBeenCalledTimes(3);
+  });
+  it('submits explicit search without replacing the local page filter', () => {
+    const onSearch = vi.fn();
+    const item = { ...response(FILE_A).items[0], kind: 'file' as const };
+    render(<SharedFileExplorer authorized items={[item]} onSearch={onSearch} />);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'alpha' } });
+    expect(onSearch).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Search authorized filenames' }), { target: { value: 'report' } });
+    fireEvent.submit(screen.getByRole('form', { name: 'Search authorized filenames' }));
+    expect(onSearch).toHaveBeenCalledWith('report');
+  });
+});
+
+
+describe('consumer-specific reference capacity', () => {
+  const draft = Array.from({length: 11}, (_, index) => ({
+    source_id: '77777777-7777-4777-8777-' + String(index).padStart(12, '0'), revision: SHA,
+  }));
+  it('enforces the backend analysis ceiling rather than the generic UI limit', async () => {
+    let latest!: FileExplorerInventoryProps;
+    const page = response(FILE_A);
+    page.items.push(response(FILE_B).items[0]);
+    mocks.get.mockResolvedValue({ ...page, max_selection: 1 });
+    render(<FileExplorerInventoryHost consumer="content-intelligence" mode="analysis">
+      {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+    </FileExplorerInventoryHost>);
+    await waitFor(() => expect(latest.authorized).toBe(true));
+    expect(latest.maxSelection).toBe(1);
+    await act(async () => latest.onSelect([latest.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([FILE_A]);
+    await act(async () => latest.onSelect(latest.items));
+    expect(latest.selectedSourceIds).toEqual([]);
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+  it.each([undefined, null, true, '12', 0, -1, 1.5, 201])('fails closed on invalid Content Intelligence selection evidence %s', async (max_selection) => {
+    mocks.get.mockResolvedValue({ ...response(FILE_A), max_selection });
+    render(<Consumer consumer="content-intelligence" />);
+    await waitFor(() => expect(screen.getByTestId('error').textContent).toContain('Invalid file inventory response'));
+    expect(screen.getByTestId('authorized').textContent).toBe('false');
+  });
+  it('enforces the thirteenth selection boundary through the investigation workspace', async () => {
+    const page = response(FILE_A);
+    page.items = Array.from({ length: 13 }, (_, i) => ({
+      ...page.items[0],
+      source_id: '44444444-4444-4444-8444-' + String(i + 1).padStart(12, '0'),
+      name: 'file-' + String(i + 1).padStart(2, '0') + '.txt',
+    }));
+    mocks.get.mockResolvedValue(page);
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select file-01.txt' });
+    const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
+    expect(boxes).toHaveLength(13);
+    boxes.slice(0, 12).forEach(box => fireEvent.click(box));
+    expect(boxes[12].disabled).toBe(true);
+    expect(screen.getByText(/Selection limit reached/)).toBeTruthy();
+    fireEvent.click(boxes[0]);
+    expect(boxes[12].disabled).toBe(false);
+    fireEvent.click(boxes[12]);
+    expect(boxes[12].checked).toBe(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(boxes.every(box => !box.checked && !box.disabled)).toBe(true);
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('excludes attached references, enforces remaining capacity and revokes stale callbacks', async () => {
+    let latest!: FileExplorerInventoryProps;
+    const onAttach = vi.fn();
+    const page = response(FILE_A);
+    page.items.push(response(FILE_B).items[0]);
+    mocks.get.mockResolvedValue(page);
+    function Probe({ existing }: { existing: typeof draft }) {
+      return <FileExplorerInventoryHost hierarchy={false} mode="selection" existingAttachments={existing} onAttach={onAttach}>
+        {props => { latest = props; return <span>{String(props.authorized)}</span>; }}
+      </FileExplorerInventoryHost>;
+    }
+    const view = render(<Probe existing={draft} />);
+    await waitFor(() => expect(latest.maxSelection).toBe(1));
+    const stale = latest;
+    await act(async () => latest.onSelect(latest.items));
+    expect(latest.selectedSourceIds).toEqual([]);
+    await act(async () => latest.onSelect([latest.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([FILE_A]);
+    view.rerender(<Probe existing={[...draft, {source_id: FILE_A, revision: SHA}]} />);
+    expect(latest.maxSelection).toBe(0);
+    expect(latest.items.map(item => item.source_id)).toEqual([FILE_B]);
+    expect(latest.selectedSourceIds).toEqual([]);
+    view.rerender(<Probe existing={draft} />);
+    await act(async () => stale.onSelect([stale.items[0]]));
+    expect(latest.selectedSourceIds).toEqual([]);
+    expect(onAttach).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('hierarchy-aware visual controls', () => {
+  const folder = { source_id: '55555555-5555-4555-8555-555555555555', parent_id: null,
+    kind: 'folder' as const, name: 'Reports', revision: '1', organization_revision: '1', sha256: null, size_bytes: 0 };
+  const hierarchy = { parentId: null, breadcrumbs: [], hasMoreFolders: false, nextFolderId: null };
+  const first = { ...response(FILE_A).items[0], kind: 'file' as const, size_bytes: 100 };
+  const second = { ...response(FILE_B).items[0], kind: 'file' as const, size_bytes: 5 };
+  it('preserves selection and local filter across layouts and keeps folders first when sorting', () => {
+    const onSelect = vi.fn();
+    render(<SharedFileExplorer authorized items={[folder, first, second]} hierarchy={hierarchy}
+      maxSelection={2} onSelect={onSelect} />);
+    fireEvent.change(screen.getByLabelText('Sort current page'), { target: { value: 'size-asc' } });
+    const list = screen.getByRole('list', { name: 'Files and folders' });
+    expect(Array.from(list.children).map(node => node.textContent)).toEqual([
+      expect.stringContaining('Reports'), expect.stringContaining('beta.txt'), expect.stringContaining('alpha.txt'),
+    ]);
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Select alpha.txt' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'beta' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Grid view' }));
+    expect(screen.getByRole('button', { name: 'Grid view' }).getAttribute('aria-pressed')).toBe('true');
+    expect(screen.getByText(/1 selected · 1 shown/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Review selection (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove alpha.txt from selection' }));
+    expect(onSelect).toHaveBeenLastCalledWith([]);
+  });
+  it('bulk selection excludes folders and refuses overflow without truncating', () => {
+    const onSelect = vi.fn();
+    render(<SharedFileExplorer authorized items={[folder, first, second]} hierarchy={hierarchy}
+      maxSelection={1} onSelect={onSelect} />);
+    expect(screen.queryByRole('checkbox', { name: 'Select Reports' })).toBeNull();
+    const bulk = screen.getByRole('button', { name: 'Select visible files (2)' });
+    expect((bulk as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByText(/Selection would exceed the limit/)).toBeTruthy();
+    fireEvent.click(bulk);
+    expect(onSelect).not.toHaveBeenCalled();
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'alpha' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Select visible files (1)' }));
+    expect(onSelect).toHaveBeenLastCalledWith([{ source_id: FILE_A, revision: SHA, sha256: SHA, kind: 'file' }]);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear selection' }));
+    expect(onSelect).toHaveBeenLastCalledWith([]);
+  });
+  it('reports a genuinely empty authorized inventory through the investigation workspace', async () => {
+    mocks.get.mockResolvedValue({ ...response(FILE_A), items: [] });
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByText('No files or folders in this view.');
+    expect(screen.queryByText('No matching references on this page.')).toBeNull();
+    expect(screen.queryByText('No matching files or folders on this search page.')).toBeNull();
+    expect(screen.queryByRole('checkbox')).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Analyze selected files' })).toBeNull();
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+  });
+
+  it('keeps layout and hidden selection changes local to the investigation workspace', async () => {
+    const page = response(FILE_A);
+    page.items = [
+      { ...page.items[0], size_bytes: 20 },
+      { ...response(FILE_B).items[0], size_bytes: 10 },
+    ];
+    mocks.get.mockResolvedValue(page);
+    render(<ContentIntelligenceWorkspace />);
+    await screen.findByRole('checkbox', { name: 'Select alpha.txt' });
+    fireEvent.change(screen.getByLabelText('Sort current page'), { target: { value: 'size-asc' } });
+    expect(screen.getAllByRole('checkbox').map(box => box.getAttribute('aria-label'))).toEqual([
+      'Select beta.txt', 'Select alpha.txt',
+    ]);
+    fireEvent.click(screen.getByRole('button', { name: 'Select visible files (2)' }));
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'alpha' } });
+    for (const layout of ['Grid view', 'List view']) {
+      fireEvent.click(screen.getByRole('button', { name: layout }));
+      expect(screen.getByRole('button', { name: layout }).getAttribute('aria-pressed')).toBe('true');
+      const otherLayout = layout === 'Grid view' ? 'List view' : 'Grid view';
+      expect(screen.getByRole('button', { name: otherLayout }).getAttribute('aria-pressed')).toBe('false');
+      expect(screen.getByRole('list', { name: 'Files and folders' }).className).toContain(layout === 'Grid view' ? 'grid' : 'flex-col');
+      expect((screen.getByRole('searchbox', { name: 'Filter current folder' }) as HTMLInputElement).value).toBe('alpha');
+      expect((screen.getByRole('checkbox', { name: 'Select alpha.txt' }) as HTMLInputElement).checked).toBe(true);
+      expect(screen.queryByRole('checkbox', { name: 'Select beta.txt' })).toBeNull();
+      expect(screen.getByRole('button', { name: 'Review selection (2)' })).toBeTruthy();
+    }
+    fireEvent.click(screen.getByRole('button', { name: 'Review selection (2)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Remove beta.txt from selection' }));
+    expect(screen.getByRole('button', { name: 'Review selection (1)' })).toBeTruthy();
+    expect((screen.getByRole('checkbox', { name: 'Select alpha.txt' }) as HTMLInputElement).checked).toBe(true);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(mocks.post).not.toHaveBeenCalled();
+    expect(mocks.patch).not.toHaveBeenCalled();
+    expect(mocks.delete).not.toHaveBeenCalled();
+  });
+
+  it('distinguishes a filtered page from genuinely empty inventory', () => {
+    const onNextPage = vi.fn();
+    render(<SharedFileExplorer authorized items={[first]} hasMore
+      nextCursor="owner-scoped-cursor" onNextPage={onNextPage} />);
+    fireEvent.change(screen.getByRole('searchbox', { name: 'Filter current folder' }), { target: { value: 'missing' } });
+    expect(screen.getByText('No matching references on this page.')).toBeTruthy();
+    expect(screen.getByText(/Filtering and sorting apply only to this page/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Clear filter' }));
+    expect(screen.getByRole('checkbox', { name: 'Select alpha.txt' })).toBeTruthy();
+    expect(onNextPage).not.toHaveBeenCalled();
+  });
+});
+
+describe('KEXP-003F capacity transition isolation', () => {
+  it('clears pending selections on a full draft and rejects ABA callback replay after capacity returns', async () => {
+    let latest!: FileExplorerInventoryProps;
+    const page = response(FILE_A);
+    page.items.push(response(FILE_B).items[0]);
+    mocks.get.mockResolvedValue(page);
+    const onAttach = vi.fn();
+    const existing = Array.from({ length: 12 }, (_, i) => ({
+      source_id: '66666666-6666-4666-8666-' + String(i + 1).padStart(12, '0'),
+      revision: SHA,
+    }));
+    const view = (count: number) => <FileExplorerInventoryHost hierarchy={false} mode="selection"
+      existingAttachments={existing.slice(0, count)} onAttach={onAttach}>{props => {
+      latest = props;
+      return <output>{props.items.map(item => item.name).join(',')}</output>;
+    }}</FileExplorerInventoryHost>;
+    const rendered = render(view(10));
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    const refs = [FILE_A, FILE_B].map(source_id => ({
+      source_id, revision: SHA, sha256: SHA, kind: 'file' as const,
+    }));
+    act(() => latest.onSelect(refs));
+    expect(latest.selectedSourceIds).toEqual([FILE_A, FILE_B]);
+    const stale = latest;
+    rendered.rerender(view(12));
+    expect(latest.maxSelection).toBe(0);
+    expect(latest.selectedSourceIds).toEqual([]);
+    expect(screen.queryByRole('button', { name: /Attach selected files/ })).toBeNull();
+    act(() => latest.onSelect(refs.slice(0, 1)));
+    expect(latest.selectedSourceIds).toEqual([]);
+    rendered.rerender(view(10));
+    expect(latest.maxSelection).toBe(2);
+    expect(latest.selectedSourceIds).toEqual([]);
+    act(() => latest.onSelect(refs.slice(1)));
+    act(() => { stale.onSelect(refs); stale.onRefresh(); stale.onSearch?.('stale'); });
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
+    expect(onAttach).not.toHaveBeenCalled();
+  });
+
+  it('invalidates selection when an attached source revision changes without changing capacity', async () => {
+    let latest!: FileExplorerInventoryProps;
+    mocks.get.mockResolvedValue(response(FILE_B));
+    const view = (revision: string) => <FileExplorerInventoryHost hierarchy={false} mode="selection"
+      existingAttachments={[{ source_id: FILE_A, revision }]}>{props => {
+      latest = props;
+      return <output>{props.items.map(item => item.name).join(',')}</output>;
+    }}</FileExplorerInventoryHost>;
+    const rendered = render(view(SHA));
+    await waitFor(() => expect(latest.authorized && !latest.loading).toBe(true));
+    const ref = { source_id: FILE_B, revision: SHA, sha256: SHA, kind: 'file' as const };
+    act(() => latest.onSelect([ref]));
+    const stale = latest;
+    expect(latest.selectedSourceIds).toEqual([FILE_B]);
+    rendered.rerender(view('b'.repeat(64)));
+    expect(latest.maxSelection).toBe(11);
+    expect(latest.selectedSourceIds).toEqual([]);
+    act(() => stale.onSelect([ref]));
+    expect(latest.selectedSourceIds).toEqual([]);
+    expect(mocks.get).toHaveBeenCalledTimes(1);
   });
 });

@@ -23,8 +23,27 @@ def test_distributed_run_store_reuses_canonical_redis_authority() -> None:
     assert "Redis.from_url" not in source
     assert "_redis.client" in source
     assert "_redis.set(" not in source
-    assert "_RENEW_CLAIM_SCRIPT" in source
-    assert "_RELEASE_CLAIM_SCRIPT" in source
+    assert "_RENEW_CLAIM_SCRIPT" not in source
+    assert "_RELEASE_CLAIM_SCRIPT" not in source
+    script = source.split('_HEARTBEAT_RUN_SCRIPT = """', 1)[1].split('"""', 1)[0]
+    first_write = script.index("redis.call('EXPIRE'")
+    for guard in (
+        "'GET', KEYS[1]",
+        "'EXISTS', KEYS[2]",
+        "'owner_worker_id'",
+        "'tenant_id'",
+        "'run_id'",
+        "status ~= 'running' and status ~= 'cancelling'",
+    ):
+        assert script.index(guard) < first_write
+    assert "redis.call('HSET', KEYS[2]," in script
+    assert "'cancel_requested_at'" in script
+    heartbeat = source.split("class RedisDistributedRunStore:", 1)[1].split(
+        "async def heartbeat(", 1
+    )[1].split("async def mark_terminal(", 1)[0]
+    assert heartbeat.count("await client.eval(") == 1
+    assert "_HEARTBEAT_RUN_SCRIPT" in heartbeat
+    assert "pipeline" not in heartbeat
     assert "_CANCEL_RUN_SCRIPT" in source
     assert "_MARK_TERMINAL_SCRIPT" in source
 

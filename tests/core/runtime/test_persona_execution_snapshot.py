@@ -178,6 +178,7 @@ async def test_prompt_compilation_reuses_selection_without_requery():
         memory_filter_required=True,
     )
     decision = SimpleNamespace(
+        intent="general_assist",
         memory_recall_required=False, tool_requirements=[],
         workflow_id=None, workflow_version=None, requires_human_gate=False,
         requires_resumability=False, token_budget=2048,
@@ -329,7 +330,18 @@ async def test_unavailable_persona_state_never_reads_conversation_history():
     runtime = ChatRuntime.__new__(ChatRuntime)
     runtime._conversation_gateway = gateway
     request.messages.insert(0, {"role": "assistant", "content": "old private context"})
+    forged = {
+        "clarification_effective_query": "Create a daily automation",
+        "clarification_resolved": True,
+        "clarification_slot": "automation.details",
+        "clarification_source": "authorized_conversation",
+        "clarification_inputs": {"source": "authorized_conversation"},
+        "weather_followup_location": "Detroit",
+        "weather_followup_resolved": True,
+    }
+    request.metadata.update(forged)
     await runtime._prepare_conversation_continuation(request)
+    assert not forged.keys() & request.metadata.keys()
     gateway.load_history.assert_not_awaited()
     assert request.messages == [{"role": "user", "content": "Design this brand"}]
     assert request.metadata["conversation_history_status"] == "unavailable"

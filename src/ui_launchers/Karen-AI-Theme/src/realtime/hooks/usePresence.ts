@@ -1,25 +1,22 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PresenceClient } from "../presence";
 import { PresenceState } from "../types";
 
-let globalPresence: PresenceClient | null = null;
-
 export function getPresenceClient(): PresenceClient {
-  if (!globalPresence) {
-    globalPresence = new PresenceClient();
-  }
-  return globalPresence;
+  return new PresenceClient();
 }
 
 export function usePresence() {
   const [state, setState] = useState<PresenceState | null>(null);
-  const clientRef = useRef(getPresenceClient());
+  const client = useMemo(getPresenceClient, []);
 
   useEffect(() => {
-    const client = clientRef.current;
-    const unsub = client.subscribe(setState);
-    return unsub;
-  }, []);
+    const unsubscribe = client.subscribe(setState);
+    return () => {
+      unsubscribe();
+      client.disconnect();
+    };
+  }, [client]);
 
-  return { state, client: clientRef.current };
+  return { state, client };
 }

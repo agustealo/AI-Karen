@@ -12,6 +12,10 @@ from typing import Any, Dict, List, Optional
 import asyncpg
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
+from ai_karen_engine.auth.rbac_middleware import (
+    Permission,
+    require_platform_tenant_permission,
+)
 from ai_karen_engine.database.integration_manager import (
     DatabaseIntegrationManager,
     get_database_manager,
@@ -21,8 +25,8 @@ from ai_karen_engine.utils.dependency_checks import import_fastapi, import_pydan
 APIRouter, Body, Depends, HTTPException, Path, Query = import_fastapi(
     "APIRouter", "Body", "Depends", "HTTPException", "Path", "Query"
 )
-BaseModel, Field, field_validator = import_pydantic(
-    "BaseModel", "Field", "field_validator"
+BaseModel, Field, SecretStr, field_validator = import_pydantic(
+    "BaseModel", "Field", "SecretStr", "field_validator"
 )
 
 logger = logging.getLogger(__name__)
@@ -40,6 +44,8 @@ class TenantCreateRequest(BaseModel):
     name: str = Field(..., min_length=1, max_length=255, description="Tenant name")
     slug: str = Field(..., min_length=1, max_length=100, description="Tenant slug")
     admin_email: str = Field(..., description="Admin user email")
+    admin_password: SecretStr = Field(..., description="Initial administrator password")
+    admin_full_name: str = Field(..., min_length=1, max_length=255)
     subscription_tier: str = Field("basic", description="Subscription tier")
     settings: Optional[Dict[str, Any]] = Field(None, description="Additional settings")
 
@@ -186,14 +192,20 @@ async def schema_status(
 @router.post("/tenants", response_model=Dict[str, Any], status_code=201)
 async def create_tenant(
     request: TenantCreateRequest,
+    current_user: Dict[str, Any] = Depends(
+        require_platform_tenant_permission(Permission.ADMIN_TENANTS_MANAGE)
+    ),
     db_manager: DatabaseIntegrationManager = Depends(get_db_manager),
 ):
-    """Create a new tenant."""
+    """Create a new tenant through the governed administration service."""
     try:
         td = await db_manager.create_tenant(
             name=request.name,
             slug=request.slug,
             admin_email=request.admin_email,
+            admin_password=request.admin_password.get_secret_value(),
+            admin_full_name=request.admin_full_name,
+            operator_id=current_user["user_id"],
             subscription_tier=request.subscription_tier,
             settings=request.settings,
         )
@@ -204,15 +216,14 @@ async def create_tenant(
         ProgrammingError,
         OperationalError,
         asyncpg.exceptions.UndefinedTableError,
-    ) as e:
-        logger.critical(f"Missing DB schema/table: {e}")
-        raise HTTPException(500, "Database schema/table missing. Run migrations.")
-    except ValueError as ve:
-        raise HTTPException(400, str(ve))
-    except Exception as e:
-        logger.error(f"Failed to create tenant: {e}")
-        msg = str(e) if DEV_MODE else "Internal server error"
-        raise HTTPException(500, msg)
+    ):
+        logger.error("Tenant creation database unavailable")
+        raise HTTPException(500, "Database unavailable") from None
+    except ValueError:
+        raise HTTPException(400, "Tenant or administrator creation rejected") from None
+    except Exception as exc:
+        logger.error("Tenant creation failed", extra={"error_type": type(exc).__name__})
+        raise HTTPException(500, "Tenant creation failed") from None
 
 
 @router.get("/tenants/{tenant_id}", response_model=Dict[str, Any])

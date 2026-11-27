@@ -13,8 +13,13 @@ import ipaddress
 import os
 import time
 from dataclasses import dataclass
-from typing import Any, Dict
+from typing import TYPE_CHECKING, Any, Dict
 from urllib.parse import urlsplit
+
+if TYPE_CHECKING:
+    from ai_karen_engine.platform.memory.redis.redis_connection_manager import (
+        RedisDurabilityObservation,
+    )
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on", "enabled"}
@@ -96,7 +101,25 @@ class OperationalHealthService:
         checks["configuration"] = self._configuration_check(production=production)
         checks["database"] = await self._database_check()
 
-        checks["redis"] = await self._redis_check(required=self.redis_required())
+        try:
+            durability_required = self.redis_durability_required(
+                environment=normalized_environment,
+            )
+        except Exception:
+            # Invalid coordination configuration must never waive readiness.
+            checks["configuration"]["ready"] = False
+            checks["configuration"]["violations"] = [
+                *checks["configuration"].get("violations", []),
+                "medusa_runtime_settings=invalid_or_unavailable",
+            ]
+            durability_required = True
+
+        if durability_required:
+            checks["redis"] = await self._redis_check(
+                required=True, durability_required=True,
+            )
+        else:
+            checks["redis"] = await self._redis_check(required=self.redis_required())
 
         ready = all(bool(check.get("ready")) for check in checks.values())
         return OperationalHealthResult(
@@ -155,23 +178,61 @@ class OperationalHealthService:
             }
 
     @staticmethod
-    async def _redis_check(*, required: bool) -> Dict[str, Any]:
-        if not required:
+    def _redis_durability_result(
+        observation: RedisDurabilityObservation,
+    ) -> Dict[str, Any]:
+        """Classify configuration evidence, not crash-proof persistence.
+
+        Public readiness exposes fixed reason codes, never raw INFO or
+        memory statistics. Memory-pressure admission is a separate guard.
+        """
+        if observation.status != "observed":
+            reason = "redis_durability_evidence_incomplete"
+        elif observation.maxmemory_policy != "noeviction":
+            reason = "redis_eviction_policy_unsafe"
+        elif observation.aof_enabled is not True:
+            reason = "redis_aof_disabled"
+        elif observation.appendfsync != "always":
+            reason = "redis_fsync_policy_unsafe"
+        elif observation.aof_write_ok is not True:
+            reason = "redis_aof_write_unhealthy"
+        else:
+            return {
+                "ready": True,
+                "status": "healthy",
+                "durability_status": "configuration_verified",
+            }
+        return {
+            "ready": False,
+            "status": (
+                "durability_unverified" if observation.status != "observed"
+                else "durability_unsafe"
+            ),
+            "reason": reason,
+        }
+
+    @staticmethod
+    async def _redis_check(
+        *, required: bool, durability_required: bool = False,
+    ) -> Dict[str, Any]:
+        if not required and not durability_required:
             return {"ready": True, "status": "not_required"}
 
         try:
             from ai_karen_engine.platform.memory.redis import get_redis_manager
 
-            # Do not infer readiness from the manager's initial degraded flag:
-            # it starts False before any connection has been established.
-            # The canonical manager actively checks the existing connection.
-            healthy = await asyncio.wait_for(
-                get_redis_manager().is_healthy(), timeout=3.0,
-            )
-            return {
-                "ready": bool(healthy),
-                "status": "healthy" if healthy else "degraded",
-            }
+            async def inspect() -> Dict[str, Any]:
+                manager = get_redis_manager()
+                if not await manager.is_healthy():
+                    return {"ready": False, "status": "degraded"}
+                if durability_required:
+                    return OperationalHealthService._redis_durability_result(
+                        await manager.observe_durability(),
+                    )
+                return {"ready": True, "status": "healthy"}
+
+            # Share one total deadline across PING and configuration evidence.
+            return await asyncio.wait_for(inspect(), timeout=3.0)
         except Exception as exc:
             return {
                 "ready": False,
@@ -231,6 +292,35 @@ class OperationalHealthService:
             cls._env_bool("ENABLE_RATE_LIMITING", default=True),
             cls._env_bool("AUTH_ENABLE_RATE_LIMITING", default=True),
         ))
+
+    @staticmethod
+    def redis_durability_required(*, environment: str) -> bool:
+        """Production distributed Medusa authority requires safe Redis evidence."""
+        if (environment or "").strip().lower() not in {"production", "prod"}:
+            return False
+        from ai_karen_engine.config.agent_medusa import get_agent_medusa_runtime_settings
+
+        return get_agent_medusa_runtime_settings().distributed_run_control_enabled is True
+
+    @classmethod
+    def redis_lifecycle_enabled(cls, *, environment: str = "development") -> bool:
+        """Attach the canonical pool for required or optional Redis consumers.
+
+        Best-effort Communications hints must not turn an otherwise optional
+        broker into a global readiness dependency. The transport independently
+        verifies the actual connection and fails closed; polling still works.
+        """
+        if cls.redis_required():
+            return True
+        try:
+            if cls.redis_durability_required(environment=environment):
+                return True
+        except Exception:
+            # Readiness rejects invalid configuration; retain pool lifecycle.
+            return True
+        from ai_karen_engine.config.runtime import get_runtime_settings
+
+        return get_runtime_settings().features.enable_communications_invalidation is True
 
     @staticmethod
     def _env_bool(name: str, *, default: bool) -> bool:

@@ -32,11 +32,13 @@ from ai_karen_engine.core.runtime.contracts import (
     AuthorizedExecutionPlan,
 )
 from ai_karen_engine.core.runtime.policy import PolicyEvaluationRequest, RuntimePolicyEnforcer
+from ai_karen_engine.core.runtime.policy.runtime_policy import FileExplorerOperationScope
 from ai_karen_engine.extensions.contracts import (
     ExtensionExecutionContext,
     ExtensionExecutionRequest,
     ExtensionExecutionResult,
 )
+from ai_karen_engine.extensions.content_intelligence_sources import MAX_CONTENT_SOURCE_REFERENCES
 from ai_karen_engine.extensions.plugin_kernel import PluginKernel
 from ai_karen_engine.services.identity_vault.credential_vault_service import (
     get_credential_vault_service,
@@ -153,25 +155,25 @@ class PluginService:
             raise RuntimeError("Plugin kernel is not initialized")
         return self.kernel
 
-    async def list_file_explorer_owner_page(
-        self,
-        *,
-        user_id: str,
-        tenant_id: str,
-        roles: List[str],
-        permissions: List[str],
-        request_id: str,
-        correlation_id: str,
-        limit: int = 100,
-        cursor: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """Authorize a fresh read through RuntimePolicy and the canonical kernel.
+    async def _prepare_file_explorer(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        mutation: Optional[str] = None, resource_scope: Optional[FileExplorerOperationScope] = None,
+    ):
+        """Shared fresh policy admission for the trusted Explorer host."""
+        from ai_karen_engine.auth.rbac_middleware import (
+            FILE_EXPLORER_MUTATION_PERMISSIONS, Permission,
+        )
 
-        This is the only application entrypoint for the File Explorer owner
-        inventory. Authentication/RBAC belongs to ingress; this boundary also
-        rejects missing data-read entitlement rather than accepting a plugin
-        identifier as a grant.
-        """
+        required_permissions = [Permission.DATA_READ.value]
+        if mutation is not None:
+            entitlement = FILE_EXPLORER_MUTATION_PERMISSIONS.get(mutation)
+            if entitlement is None:
+                raise ValueError("file_explorer_operation_invalid")
+            required_permissions.append(entitlement.value)
+        capabilities = ["file-explorer", *required_permissions]
+        if mutation:
+            capabilities.append(mutation)
         from ai_karen_engine.database.factory import get_database_client
         from ai_karen_engine.extensions.owner_inventory import ArtifactSourceAdapter
         from ai_karen_engine.extensions.file_explorer_inventory import (
@@ -183,17 +185,10 @@ class PluginService:
 
         if (
             not user_id or not tenant_id
-            or "data:read" not in permissions
+            or not set(required_permissions).issubset(permissions)
             or not request_id or not correlation_id
         ):
             raise PermissionError("file_explorer_read_permission_required")
-        if type(limit) is not int or not 1 <= limit <= 200:
-            raise ValueError("file_explorer_page_limit_invalid")
-        if cursor is not None and (
-            not isinstance(cursor, str) or not 1 <= len(cursor) <= 768
-        ):
-            raise ValueError("file_explorer_cursor_invalid")
-
         await self._ensure_initialized()
         kernel = self._get_kernel()
         record = kernel.get_record("file-explorer")
@@ -213,16 +208,19 @@ class PluginService:
                 permissions=list(permissions),
                 action="plugin_execution",
                 plugin_id="file-explorer",
-                requested_capabilities=["file-explorer", "data:read"],
+                requested_capabilities=capabilities,
+                resource_scope=resource_scope,
             )
         )
-        if not decision.allowed:
+        if not decision.allowed or decision.requires_human_gate:
             raise PermissionError("file_explorer_policy_denied")
         plan = decision.to_authorized_plan()
         if (
             "file-explorer" not in plan.allowed_plugins
             or "file-explorer" not in plan.allowed_capabilities
-            or "data:read" not in plan.allowed_capabilities
+            or not set(capabilities).issubset(plan.allowed_capabilities)
+            or plan.approval_requirements
+            or (resource_scope is not None and plan.resource_scope != resource_scope)
             or not plan.matches_execution_scope(
                 user_id=user_id,
                 tenant_id=tenant_id,
@@ -231,11 +229,14 @@ class PluginService:
         ):
             raise PermissionError("file_explorer_policy_scope_denied")
 
+        from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
+
         database = get_database_client()
         if database is None or not callable(getattr(database, "get_async_session", None)):
             raise RuntimeError("file_explorer_database_unavailable")
         repository = RepositoryFactory(
             session_factory=database.get_async_session,
+            hierarchy_transaction=async_transaction_scope,
         ).create_artifact_store()
 
         # Shared metadata adapter; the File Explorer host still owns admission.
@@ -249,18 +250,179 @@ class PluginService:
             allowed_capabilities=list(plan.allowed_capabilities),
             resource_scope={},
             audit_context={
-                "origin": "authenticated_file_explorer_inventory",
+                "origin": "authenticated_file_explorer",
                 "user_roles": list(roles),
                 "permissions": list(permissions),
             },
         )
-        return await FileExplorerInventoryHost(
-            kernel=kernel, source=source
-        ).list_owner_page(
+        return FileExplorerInventoryHost(kernel=kernel, source=source), context, plan
+
+    async def get_file_explorer_capabilities(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+    ) -> Dict[str, Any]:
+        """Report preflight eligibility, never a reusable authorization grant."""
+        from ai_karen_engine.auth.rbac_middleware import FILE_EXPLORER_MUTATION_PERMISSIONS
+
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles,
+            permissions=permissions, request_id=request_id, correlation_id=correlation_id,
+        )
+        browse = await host.probe_owner_capability(context=context, plan=plan)
+        operations = {}
+        for operation, permission in FILE_EXPLORER_MUTATION_PERMISSIONS.items():
+            if permission.value not in permissions:
+                operations[operation] = "denied"
+            elif not browse:
+                operations[operation] = "unavailable"
+            else:
+                try:
+                    mutation_host, mutation_context, mutation_plan = await self._prepare_file_explorer(
+                        user_id=user_id, tenant_id=tenant_id, roles=roles,
+                        permissions=permissions, request_id=request_id,
+                        correlation_id=correlation_id, mutation=operation,
+                        resource_scope={"operation": operation, "availability_only": True},
+                    )
+                    admitted = await mutation_host.probe_owner_capability(
+                        context=mutation_context, plan=mutation_plan, operation=operation,
+                    )
+                    operations[operation] = "available" if admitted else "unavailable"
+                except PermissionError:
+                    operations[operation] = "denied"
+                except Exception:
+                    logger.warning("file_explorer_capability_probe_failed", extra={
+                        "request_id": request_id, "correlation_id": correlation_id,
+                        "tenant_id": tenant_id, "user_id": user_id, "operation": operation,
+                    })
+                    operations[operation] = "unavailable"
+        return {
+            "browse": "available" if browse else "unavailable",
+            "operations": operations,
+            "semantics": "preflight_not_resource_authorization",
+            "request_id": request_id, "correlation_id": correlation_id,
+        }
+
+    async def create_file_explorer_folder(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        name: str, parent_folder_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Explicit user-initiated host mutation; plugin remains read-only."""
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
+            request_id=request_id, correlation_id=correlation_id, mutation="file_explorer.folder.create",
+            resource_scope={"operation": "file_explorer.folder.create",
+                            "name": name, "parent_folder_id": parent_folder_id},
+        )
+        return await host.create_owner_folder(
+            context=context, plan=plan, name=name, parent_folder_id=parent_folder_id,
+        )
+
+    async def rename_file_explorer_folder(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        folder_id: str, name: str, expected_revision: int,
+    ) -> Dict[str, Any]:
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
+            request_id=request_id, correlation_id=correlation_id,
+            mutation="file_explorer.folder.rename",
+            resource_scope={"operation": "file_explorer.folder.rename",
+                            "folder_id": folder_id, "name": name,
+                            "expected_revision": expected_revision},
+        )
+        return await host.rename_owner_folder(
+            context=context, plan=plan, folder_id=folder_id,
+            name=name, expected_revision=expected_revision,
+        )
+
+    async def move_file_explorer_item(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        kind: str, source_id: str, destination_id: Optional[str],
+        expected_revision: int,
+    ) -> Dict[str, Any]:
+        if kind not in ("folder", "artifact"):
+            raise ValueError("file_explorer_move_kind_invalid")
+        operation = f"file_explorer.{kind}.move"
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
+            request_id=request_id, correlation_id=correlation_id,
+            mutation=operation,
+            resource_scope={"operation": operation, "source_id": source_id,
+                            "destination_id": destination_id,
+                            "expected_revision": expected_revision},
+        )
+        return await host.move_owner_item(
+            context=context, plan=plan, kind=kind, source_id=source_id,
+            destination_id=destination_id, expected_revision=expected_revision,
+        )
+
+    async def delete_file_explorer_folder(
+        self, *, user_id: str, tenant_id: str, roles: List[str],
+        permissions: List[str], request_id: str, correlation_id: str,
+        folder_id: str, expected_revision: int,
+    ) -> Dict[str, Any]:
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
+            request_id=request_id, correlation_id=correlation_id,
+            mutation="file_explorer.folder.delete",
+            resource_scope={"operation": "file_explorer.folder.delete",
+                            "folder_id": folder_id, "expected_revision": expected_revision},
+        )
+        return await host.delete_empty_owner_folder(
+            context=context, plan=plan, folder_id=folder_id,
+            expected_revision=expected_revision,
+        )
+
+    async def list_file_explorer_owner_page(
+        self,
+        *,
+        user_id: str,
+        tenant_id: str,
+        roles: List[str],
+        permissions: List[str],
+        request_id: str,
+        correlation_id: str,
+        limit: int = 100,
+        cursor: Optional[str] = None,
+        hierarchy: bool = False,
+        parent_folder_id: Optional[str] = None,
+        after_folder_id: Optional[str] = None,
+        file_cursor: Optional[str] = None,
+        search: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Authorize a fresh read through RuntimePolicy and the canonical kernel.
+
+        This is the only application entrypoint for the File Explorer owner
+        inventory. Authentication/RBAC belongs to ingress; this boundary also
+        rejects missing data-read entitlement rather than accepting a plugin
+        identifier as a grant.
+        """
+        if type(limit) is not int or not 1 <= limit <= 200:
+            raise ValueError("file_explorer_page_limit_invalid")
+        if cursor is not None and (
+            not isinstance(cursor, str) or not 1 <= len(cursor) <= 768
+        ):
+            raise ValueError("file_explorer_cursor_invalid")
+
+        host, context, plan = await self._prepare_file_explorer(
+            user_id=user_id, tenant_id=tenant_id, roles=roles, permissions=permissions,
+            request_id=request_id, correlation_id=correlation_id,
+        )
+        if hierarchy:
+            return await host.list_owner_hierarchy(
+                context=context, plan=plan, limit=limit,
+                parent_folder_id=parent_folder_id, after_folder_id=after_folder_id,
+                file_cursor=file_cursor,
+                **({"search": search} if search is not None else {}),
+            )
+        return await host.list_owner_page(
             context=context,
             plan=plan,
             limit=limit,
             cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
 
     async def _authorize_content_owner_access(
@@ -314,6 +476,7 @@ class PluginService:
         self, *, user_id: str, tenant_id: str, roles: List[str],
         permissions: List[str], request_id: str, correlation_id: str,
         limit: int = 100, cursor: Optional[str] = None,
+        search: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Read metadata independently of File Explorer lifecycle state."""
         from ai_karen_engine.database.factory import get_database_client
@@ -350,13 +513,17 @@ class PluginService:
         ).create_artifact_store()
         page = await ArtifactSourceAdapter(repository).list_owner_sources_page(
             tenant_id=tenant_id, user_id=user_id, limit=limit, cursor=cursor,
+            **({"search": search} if search is not None else {}),
         )
         logger.info("content_owner_inventory_page", extra={
             "request_id": request_id, "correlation_id": correlation_id,
             "user_id": user_id, "tenant_id": tenant_id,
             "item_count": len(page["items"]), "status": "success",
         })
-        return {**page, "request_id": request_id, "correlation_id": correlation_id}
+        return {
+            **page, "request_id": request_id, "correlation_id": correlation_id,
+            "max_selection": MAX_CONTENT_SOURCE_REFERENCES,
+        }
 
     async def analyze_content_owner_sources(
         self,
@@ -383,8 +550,18 @@ class PluginService:
             RepositoryFactory,
         )
 
-        if not isinstance(references, list) or not 1 <= len(references) <= 12:
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            validate_draft_attachment_references,
+        )
+
+        if not isinstance(references, list) or not 1 <= len(references) <= MAX_CONTENT_SOURCE_REFERENCES:
             raise ValueError("content_source_reference_count_invalid")
+        # Preserve the admitted selection and principal projection across
+        # initialization and asynchronous policy evaluation. Do not pass
+        # caller-owned mutable containers into the later host invocation.
+        references = validate_draft_attachment_references(references)
+        roles = list(roles)
+        permissions = list(permissions)
         kernel, decision, plan = await self._authorize_content_owner_access(
             user_id=user_id, tenant_id=tenant_id, roles=roles,
             permissions=permissions, request_id=request_id, correlation_id=correlation_id,
@@ -1656,6 +1833,31 @@ class PluginService:
                 )
                 if bool(getattr(capabilities, flag, False))
             ]
+            # Describe closed, required operation enums from the canonical
+            # invocation contract. These labels are metadata, never input
+            # defaults, task matches, or permission to invoke an operation.
+            invocation = getattr(manifest, "execution_input_schema", None)
+            properties = getattr(invocation, "properties", None)
+            required = getattr(invocation, "required", None)
+            operation = properties.get("operation") if isinstance(properties, dict) else None
+            operations = operation.get("enum") if isinstance(operation, dict) else None
+            if (
+                validated and role_eligible and not blocked
+                and getattr(invocation, "type", None) == "object"
+                and getattr(invocation, "additional_properties", None) is False
+                and isinstance(required, list) and "operation" in required
+                and isinstance(operation, dict) and operation.get("type") == "string"
+                and isinstance(operations, list) and 1 <= len(operations) <= 12
+                and all(
+                    isinstance(name, str)
+                    and re.fullmatch(r"[a-z][a-z0-9_.-]{0,47}", name)
+                    for name in operations
+                )
+                and len(set(operations)) == len(operations)
+            ):
+                declared_generic_features.extend(
+                    f"plugin.operation.{name}" for name in operations
+                )
             voice = getattr(capabilities, "voice_modality", None)
             if voice is not None:
                 declared_generic_features.extend(
