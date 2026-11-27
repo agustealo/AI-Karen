@@ -1383,6 +1383,21 @@ async def _redis_server_failure_acceptance(
             "maxmemory-policy"
         ] == "volatile-lru"
 
+        async def observed_policy(policy: str, limit: int) -> None:
+            observation = await redis.observe_durability()
+            assert observation.status == "observed"
+            assert observation.maxmemory_policy == policy
+            assert observation.maxmemory_bytes == limit
+            assert observation.used_memory_bytes is not None
+            assert observation.used_memory_bytes > 0
+            assert observation.mem_not_counted_for_evict_bytes is not None
+            assert observation.aof_enabled is True
+            assert observation.appendfsync == "always"
+            assert observation.aof_write_ok is True
+            assert observation.evicted_keys is not None
+
+        await observed_policy("volatile-lru", 0)
+
         async def pressure(*, policy: str, run_key: str, pending_key: str) -> None:
             client = redis.client
             assert client is not None
@@ -1392,6 +1407,7 @@ async def _redis_server_failure_acceptance(
             ] == policy
             assert await client.set(f"{prefix}:disposable-cache", "x", ex=60)
             before = (await client.info("stats"))["evicted_keys"]
+            await observed_policy(policy, 0)
             try:
                 # Deliberately below baseline: exhaust eligible keys and
                 # force a bounded write failure. This is not a load test.
@@ -1399,6 +1415,10 @@ async def _redis_server_failure_acceptance(
                 with pytest.raises(OutOfMemoryError):
                     await client.set(f"{prefix}:pressure", "x")
                 assert (await client.info("stats"))["evicted_keys"] > before
+                await observed_policy(policy, 1)
+                pressure_observation = await redis.observe_durability()
+                assert pressure_observation.evicted_keys is not None
+                assert pressure_observation.evicted_keys > before
                 assert not await client.exists(f"{prefix}:disposable-cache")
                 if policy == "volatile-lru":
                     assert await client.exists(run_key, pending_key) == 2
@@ -1408,6 +1428,7 @@ async def _redis_server_failure_acceptance(
                     assert await client.exists(run_key, pending_key) == 0
             finally:
                 assert await client.config_set("maxmemory", 0)
+            await observed_policy(policy, 0)
 
         async def restart_and_pressure() -> None:
             assert redis.client is not None
@@ -1435,6 +1456,7 @@ async def _redis_server_failure_acceptance(
             assert (await redis.client.info("server"))["run_id"] != old_server_id
             assert (await redis.client.config_get("appendonly"))["appendonly"] == "yes"
             assert (await redis.client.config_get("appendfsync"))["appendfsync"] == "always"
+            await observed_policy("volatile-lru", 0)
             assert await redis.client.hgetall(run_key) == before
             assert await redis.client.zrange(pending_key, 0, -1) == pending
             assert not await redis.client.exists(
