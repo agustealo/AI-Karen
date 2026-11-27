@@ -8,14 +8,17 @@ Provides graceful Redis connection handling with:
 - Proper connection cleanup and resource management
 """
 
+import asyncio
 import os
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Literal, Optional
 
 try:
     import redis.asyncio as redis
     from redis.asyncio import ConnectionPool, Redis
+    from redis.exceptions import RedisError, ResponseError
 
     REDIS_AVAILABLE = True
 except ImportError:
@@ -27,9 +30,7 @@ except ImportError:
     class _RedisExc(Exception):
         pass
 
-    ConnectionError = TimeoutError = RedisError = _RedisExc
-else:
-    pass
+    ConnectionError = TimeoutError = RedisError = ResponseError = _RedisExc
 
 from ai_karen_engine.core.logging import get_logger
 from ai_karen_engine.core.runtime.resilience.connection_health_manager import (
@@ -38,6 +39,89 @@ from ai_karen_engine.core.runtime.resilience.connection_health_manager import (
 )
 
 logger = get_logger(__name__)
+
+
+@dataclass(frozen=True)
+class RedisDurabilityObservation:
+    """Allowlisted Redis observations, not a guarantee of durability or admission."""
+
+    status: Literal["observed", "partial", "unavailable"]
+    maxmemory_policy: str | None = None
+    maxmemory_bytes: int | None = None
+    used_memory_bytes: int | None = None
+    mem_not_counted_for_evict_bytes: int | None = None
+    aof_enabled: bool | None = None
+    appendfsync: str | None = None
+    aof_write_ok: bool | None = None
+    evicted_keys: int | None = None
+
+    @staticmethod
+    def _nonnegative_int(value: Any) -> int | None:
+        # INFO is expected to return parsed integers; never coerce strings,
+        # booleans, negatives or other malformed values into evidence.
+        return value if type(value) is int and value >= 0 else None
+
+    @classmethod
+    def from_observations(
+        cls,
+        memory: Any,
+        persistence: Any,
+        stats: Any,
+        config: Any,
+    ) -> "RedisDurabilityObservation":
+        memory = memory if isinstance(memory, dict) else {}
+        persistence = persistence if isinstance(persistence, dict) else {}
+        stats = stats if isinstance(stats, dict) else {}
+        config = config if isinstance(config, dict) else {}
+        policy = memory.get("maxmemory_policy")
+        if not isinstance(policy, str) or policy not in {
+            "noeviction",
+            "allkeys-lru",
+            "allkeys-lfu",
+            "allkeys-random",
+            "allkeys-lrm",
+            "volatile-lru",
+            "volatile-lfu",
+            "volatile-random",
+            "volatile-ttl",
+            "volatile-lrm",
+        }:
+            policy = None
+        fsync = config.get("appendfsync")
+        if not isinstance(fsync, str) or fsync not in {"always", "everysec", "no"}:
+            fsync = None
+        enabled = persistence.get("aof_enabled")
+        write = persistence.get("aof_last_write_status")
+        maxmemory = cls._nonnegative_int(memory.get("maxmemory"))
+        used = cls._nonnegative_int(memory.get("used_memory"))
+        excluded = cls._nonnegative_int(memory.get("mem_not_counted_for_evict"))
+        aof_enabled = (
+            bool(enabled) if type(enabled) is int and enabled in (0, 1) else None
+        )
+        aof_write_ok = (
+            write == "ok"
+            if isinstance(write, str) and write in {"ok", "err"}
+            else None
+        )
+        evicted = cls._nonnegative_int(stats.get("evicted_keys"))
+        complete = all(
+            value is not None
+            for value in (
+                policy, maxmemory, used, excluded, aof_enabled, fsync,
+                aof_write_ok, evicted,
+            )
+        )
+        return cls(
+            status="observed" if complete else "partial",
+            maxmemory_policy=policy,
+            maxmemory_bytes=maxmemory,
+            used_memory_bytes=used,
+            mem_not_counted_for_evict_bytes=excluded,
+            aof_enabled=aof_enabled,
+            appendfsync=fsync,
+            aof_write_ok=aof_write_ok,
+            evicted_keys=evicted,
+        )
 
 
 class RedisConnectionManager:
@@ -565,6 +649,40 @@ class RedisConnectionManager:
     def is_degraded(self) -> bool:
         """Check if Redis is in degraded mode."""
         return self._degraded_mode
+
+    async def observe_durability(self) -> RedisDurabilityObservation:
+        """Read bounded, sanitized server facts through the existing live pool.
+
+        No reconnect, mutation, fallback cache, admission decision or raw
+        server response is exposed. Managed Redis may deny CONFIG GET; that
+        field remains unknown instead of inferring a persistence guarantee.
+        """
+        client = self._client
+        if client is None or self._degraded_mode:
+            return RedisDurabilityObservation(status="unavailable")
+
+        async def observe() -> RedisDurabilityObservation:
+            memory = await client.info("memory")
+            persistence = await client.info("persistence")
+            stats = await client.info("stats")
+            try:
+                config = await client.config_get("appendfsync")
+            except ResponseError:
+                config = None
+            return RedisDurabilityObservation.from_observations(
+                memory, persistence, stats, config
+            )
+
+        try:
+            # Same bounded dependency observation budget as operational health.
+            observation = await asyncio.wait_for(observe(), timeout=3.0)
+        except (RedisError, asyncio.TimeoutError):
+            return RedisDurabilityObservation(status="unavailable")
+        # A concurrent close/reconnect or degradation invalidates evidence
+        # collected from a client that no longer represents the live pool.
+        if self._client is not client or self._degraded_mode:
+            return RedisDurabilityObservation(status="unavailable")
+        return observation
 
     async def is_healthy(self) -> bool:
         """Actively verify Redis without returning connection URLs or secrets."""
