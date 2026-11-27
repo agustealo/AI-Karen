@@ -42,6 +42,7 @@ async def test_live_record_revision_and_event_consent_gate_selected_source():
     event_id, assertion_id, fact_id, scope_id = (
         uuid.uuid4(), uuid.uuid4(), uuid.uuid4(), uuid.uuid4()
     )
+    profile_event_id = uuid.uuid4()
     gate = PostgresEventSource()
     try:
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
@@ -60,8 +61,18 @@ async def test_live_record_revision_and_event_consent_gate_selected_source():
                 tenant_id=tenant, user_id=user,
                 content="verified test memory", consent_state="granted",
             ))
+            session.add(MemoryEvent(
+                event_id=profile_event_id, tenant_id=tenant, user_id=user,
+                event_type="memory_persisted", source_type="chat_user",
+                payload_hash=uuid.uuid4().hex, consent_state="granted",
+                payload={
+                    "content": "My preferred theme is dark.",
+                    "vault": {"consent_scope": "sensitive-test"},
+                },
+            ))
+            await session.flush()
             session.add(ProfileFact(
-                fact_id=fact_id, event_id=event_id, tenant_id=tenant,
+                fact_id=fact_id, event_id=profile_event_id, tenant_id=tenant,
                 user_id=user, category="preference", attribute="theme",
                 value={"value": "dark"}, source_type="chat_user",
             ))
@@ -78,7 +89,7 @@ async def test_live_record_revision_and_event_consent_gate_selected_source():
             ))).scalar_one()
             selected = [
                 _origin("memory_assertion", assertion_id, event_id, assertion.updated_at),
-                _origin("profile_fact", fact_id, event_id, fact.updated_at),
+                _origin("profile_fact", fact_id, profile_event_id, fact.updated_at),
             ]
 
         assert await gate.authorize_selected_records(
@@ -228,6 +239,40 @@ async def test_live_record_revision_and_event_consent_gate_selected_source():
             tenant_id=str(tenant), user_id=str(user), origins=selected,
         ) is True
 
+        # A previously selected generic assertion/event may acquire profile
+        # ownership before dispatch. Its immutable revision and consent alone
+        # can no longer authorize the alternate representation.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            event = (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.event_id == event_id,
+            ))).scalar_one()
+            raw_origin = _origin("memory_event", event_id, event_id, event.updated_at)
+        assert await gate.authorize_selected_records(
+            tenant_id=str(tenant), user_id=str(user), origins=[raw_origin],
+        ) is True
+        late_fact_id = uuid.uuid4()
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(ProfileFact(
+                fact_id=late_fact_id, event_id=event_id, tenant_id=tenant,
+                user_id=user, category="preference", attribute="late_theme",
+                value={"value": "light"}, source_type="chat_user",
+            ))
+        try:
+            assert await gate.authorize_selected_records(
+                tenant_id=str(tenant), user_id=str(user), origins=[selected[0]],
+            ) is False
+            assert await gate.authorize_selected_records(
+                tenant_id=str(tenant), user_id=str(user), origins=[raw_origin],
+            ) is False
+            assert await gate.authorize_selected_records(
+                tenant_id=str(tenant), user_id=str(user), origins=[selected[1]],
+            ) is True
+        finally:
+            async with async_transaction_scope(tenant_id=str(tenant)) as session:
+                await session.execute(delete(ProfileFact).where(
+                    ProfileFact.fact_id == late_fact_id,
+                ))
+
         # Record tombstoning after the same selection must fail closed.
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             assertion = (await session.execute(select(MemoryAssertion).where(
@@ -246,7 +291,7 @@ async def test_live_record_revision_and_event_consent_gate_selected_source():
                 MemoryAssertion.assertion_id == assertion_id,
             ))
             await session.execute(delete(MemoryEvent).where(
-                MemoryEvent.event_id == event_id,
+                MemoryEvent.event_id.in_((event_id, profile_event_id)),
             ))
             await session.execute(delete(ConsentScope).where(
                 ConsentScope.scope_id == scope_id,
