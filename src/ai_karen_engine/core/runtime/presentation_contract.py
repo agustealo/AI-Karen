@@ -75,6 +75,50 @@ CARD_TEMPLATE_COMPONENT_TYPES = frozenset(
 )
 
 
+def is_public_source_url(url: Any) -> bool:
+    """Existing DNS-only source-link admission shared by read-only surfaces."""
+    import re
+    from urllib.parse import urlsplit
+
+    if (
+        not isinstance(url, str) or not 1 <= len(url) <= 1200
+        or any(ch.isspace() or ord(ch) < 32 or ch == chr(92) for ch in url)
+    ):
+        return False
+    try:
+        parsed = urlsplit(url)
+        host = parsed.hostname
+        if (
+            parsed.scheme not in ("http", "https")
+            or not host or not parsed.netloc or parsed.username is not None
+            or parsed.password is not None or parsed.port == 0
+            or host.lower() == "localhost"
+            or host.lower().endswith((".localhost", ".local", ".internal"))
+        ):
+            return False
+        # Require a DNS hostname, not a numeric/alternate IP
+        # notation that Python and browser URL parsers may interpret
+        # differently (hex, octal, shortened, or IPv6 addresses).
+        # Public IP links are intentionally omitted from UI.
+        if parsed.fragment:
+            return False
+        labels = host.split(".")
+        if (
+            len(labels) < 2
+            or any(
+                not label or len(label) > 63
+                or label.startswith("-") or label.endswith("-")
+                or not re.fullmatch(r"[a-zA-Z0-9-]+", label)
+                for label in labels
+            )
+            or not any(ch.isalpha() for ch in labels[-1])
+        ):
+            return False
+    except ValueError:
+        return False
+    return True
+
+
 def validate_presentation(raw: Any) -> dict[str, Any] | None:
     """Allow only bounded, JSON-native, evidence-referenced UI envelopes.
 
@@ -354,9 +398,6 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
     if component_type == "search.results":
         # Search results are extracted only from authorized source receipts by
         # ChatRuntime. Do not accept model-authored HTML, URLs, or claims here.
-        import re
-        from urllib.parse import urlsplit
-
         if not isinstance(data, dict) or set(data) != {"results"}:
             return None
         entries = data["results"]
@@ -371,42 +412,11 @@ def validate_presentation(raw: Any) -> dict[str, Any] | None:
                 return None
             url, snippet = entry.get("url"), entry.get("snippet")
             if (
-                not isinstance(url, str) or not 1 <= len(url) <= 1200
-                or any(ch.isspace() or ord(ch) < 32 or ch == chr(92) for ch in url)
-                or not isinstance(snippet, str)
+                not isinstance(snippet, str)
                 or not 1 <= len(snippet.strip()) <= 600
             ):
                 return None
-            try:
-                parsed = urlsplit(url)
-                host = parsed.hostname
-                if (
-                    parsed.scheme not in ("http", "https")
-                    or not host or not parsed.netloc or parsed.username is not None
-                    or parsed.password is not None or parsed.port == 0
-                    or host.lower() == "localhost"
-                    or host.lower().endswith((".localhost", ".local", ".internal"))
-                ):
-                    return None
-                # Require a DNS hostname, not a numeric/alternate IP
-                # notation that Python and browser URL parsers may interpret
-                # differently (hex, octal, shortened, or IPv6 addresses).
-                # Public IP links are intentionally omitted from UI.
-                if parsed.fragment:
-                    return None
-                labels = host.split(".")
-                if (
-                    len(labels) < 2
-                    or any(
-                        not label or len(label) > 63
-                        or label.startswith("-") or label.endswith("-")
-                        or not re.fullmatch(r"[a-zA-Z0-9-]+", label)
-                        for label in labels
-                    )
-                    or not any(ch.isalpha() for ch in labels[-1])
-                ):
-                    return None
-            except ValueError:
+            if not is_public_source_url(url):
                 return None
             if url in seen_urls:
                 return None

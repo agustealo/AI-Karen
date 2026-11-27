@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 import pytest
 
 from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
@@ -748,3 +750,99 @@ def test_attested_degraded_direct_search_restores_without_409_and_withholds_raw_
     # Without completed-run attestation, degraded search metadata still fails closed.
     with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
         project_owned_history(saved([assistant]), attestations={})
+
+
+def _citation_message():
+    url = "https://example.org/history"
+    message = assistant({
+        **receipt(),
+        "response_source": "grounded_search_model",
+        "answer_composition_status": "grounded_model",
+        "provider_attempts": [{"type": "tool", "id": "internet_search", "status": "success"}],
+        "sources": [{"url": url, "evidence_level": "fetched_page",
+                     "content": "private source excerpt"}],
+        "citations": [{"url": url, "private": "raw citation"}],
+        "structured_content": {"query": "history", "status": "ok"},
+    })
+    message.content = "Source: " + url
+    message.metadata["verified_citation_receipt_v1"] = {
+        "schema_version": 1, "request_id": REQUEST_ID,
+        "answer_sha256": hashlib.sha256(message.content.encode()).hexdigest(),
+        "source_kind": "tool", "source_id": "internet_search", "urls": [url],
+    }
+    return message
+
+
+def test_verified_standalone_citations_restore_only_attested_urls():
+    message = _citation_message()
+    result = project_attested(saved([message]))
+    assert result["replayEvents"][0] == {
+        "type": "CUSTOM", "name": "karen.verified_citations.v1",
+        "messageId": ASSISTANT_ID,
+        "value": {"urls": ["https://example.org/history"]},
+    }
+    assert "private source excerpt" not in str(result)
+    assert "raw citation" not in str(result)
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_source", "discovery_only", "wrong_request", "wrong_digest",
+    "wrong_attempt", "unknown_url", "duplicate", "unsafe_url", "extra",
+    "bad_version", "degraded", "unsupported_structure", "missing_receipt",
+])
+def test_verified_citations_cannot_expand_committed_evidence(mutation):
+    message = _citation_message()
+    meta = message.metadata
+    proof = meta["verified_citation_receipt_v1"]
+    if mutation == "missing_source":
+        meta["sources"] = []
+    elif mutation == "discovery_only":
+        meta["sources"][0]["evidence_level"] = "search_snippet"
+    elif mutation == "wrong_request":
+        proof["request_id"] = "foreign"
+    elif mutation == "wrong_digest":
+        proof["answer_sha256"] = "0" * 64
+    elif mutation == "wrong_attempt":
+        meta["provider_attempts"][0]["status"] = "failed"
+    elif mutation == "unknown_url":
+        proof["urls"] = ["https://foreign.example/history"]
+    elif mutation == "duplicate":
+        proof["urls"] *= 2
+    elif mutation == "unsafe_url":
+        url = "http://127.0.0.1/private"
+        message.content = "Source: " + url
+        proof["answer_sha256"] = hashlib.sha256(message.content.encode()).hexdigest()
+        proof["urls"] = [url]
+        meta["sources"][0]["url"] = url
+    elif mutation == "extra":
+        proof["access_granted"] = True
+    elif mutation == "bad_version":
+        proof["schema_version"] = True
+    elif mutation == "degraded":
+        meta["degraded_mode"] = True
+    elif mutation == "unsupported_structure":
+        meta["structured_content"]["arbitrary"] = "private"
+    elif mutation == "missing_receipt":
+        meta.pop("verified_citation_receipt_v1")
+    with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
+        project_attested(saved([message]))
+
+
+def test_verified_citation_receipt_requires_completed_digest():
+    message = _citation_message()
+    snapshot = saved([message])
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(snapshot, attestations={})
+    proof = attested(snapshot)
+    message.metadata["private_mutation"] = "changed after commit"
+    with pytest.raises(UnreplayableHistory, match="modified_attested_message"):
+        project_owned_history(snapshot, attestations=proof)
+
+
+def test_text_continuation_withholds_verified_citation_event():
+    snapshot = saved([_citation_message()])
+    result = project_owned_history(
+        snapshot, attestations=attested(snapshot), text_continuation=True,
+    )
+    assert result["replayEvents"] == []
+    assert result["omitted_rich_message_count"] == 1
