@@ -587,3 +587,23 @@ def test_local_storage_rejects_remote_docker_context(monkeypatch):
             verifier.require_local_docker()
         monkeypatch.delenv(key)
     assert len(calls) == 2
+
+
+def test_owner_text_acceptance_reuses_local_isolation_and_live_storage_digest():
+    source = SPEC.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "KAREN_FILE_EXPLORER_OWNER_TEXT_ACCEPTANCE" not in workflow
+    assert "ownerTextAcceptance && (!enabled ||" in source
+    assert 'process.env.KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE !== "true"' in source
+    trial = source.split('test("KFILE-ISOLATION-LOCAL:', 1)[1].split("Opt-in real selection-to-analysis evidence", 1)[0]
+    assert 'process.env.GITHUB_ACTIONS === "true"' in trial
+    assert 'process.env.KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED !== "true"' in trial
+    assert 'endpoint("/api/artifacts/" + sourceId + "/text")' in trial
+    assert 'createHash("sha256").update(text, "utf8").digest("hex") === actor.file.sha256' in trial
+    assert 'size <= 65536 && size === actor.file.size_bytes' in trial
+    assert 'includes("no-store")' in trial
+    assert 'await replay.clearCookies();\n    const response = await replay.request.get(textUrl(sourceId), actor.options)' in trial
+    assert 'Object.keys(body).length === 1 && typeof body.detail === "string"' in trial
+    assert trial.index("await verifyOwnText(owner)") < trial.index('name: "Sign out"') < trial.index("await denyOwnerText(aSource!, owner, [401, 403])")
+    assert trial.index("await verifyOwnText(other)") < trial.index("await denyOwnerText(aSource!, other, [404])")
+    assert trial.index("await verifyOwnText(restored)") < trial.rindex("await denyOwnerText(aSource!, owner, [401, 403])")

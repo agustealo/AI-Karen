@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { type Page, type Request, type TestInfo } from "@playwright/test";
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
@@ -20,6 +20,11 @@ import { signInApprovedKaren } from "./fixtures/approved-karen-login";
  * No fixture is created by this read-only test.
  */
 const enabled = process.env.KAREN_FILE_EXPLORER_ACCEPTANCE === "true";
+const ownerTextAcceptance = process.env.KAREN_FILE_EXPLORER_OWNER_TEXT_ACCEPTANCE === "true";
+if (ownerTextAcceptance && (!enabled ||
+    process.env.KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE !== "true")) {
+  throw new Error("Owner text acceptance requires the existing local isolation trial");
+}
 const requireSecondPage =
   process.env.KAREN_FILE_EXPLORER_REQUIRE_SECOND_PAGE === "true";
 const email = process.env.KAREN_UX_EMAIL;
@@ -974,6 +979,34 @@ test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session de
     await expect(explorer.getByRole("button", { name: "Rename " + folder.name, exact: true })).toBeEnabled();
     return { file, folder, identity, options };
   }
+  // Optional read-only extension: both existing source fixtures must be
+  // nonempty bounded UTF-8 text. Never log or attach actual source bytes.
+  const textUrl = (sourceId: string) => endpoint("/api/artifacts/" + sourceId + "/text");
+  async function verifyOwnText(actor: Awaited<ReturnType<typeof inspectActor>>) {
+    await replay.clearCookies();
+    const response = await replay.request.get(textUrl(actor.file.source_id), actor.options);
+    expect(response.status(), "Current owner text read must succeed").toBe(200);
+    expect((response.headers()["cache-control"] || "").includes("no-store")).toBe(true);
+    const body = await response.json() as Record<string, unknown>;
+    const text = body.text;
+    expect(typeof text === "string" && text.length > 0).toBe(true);
+    if (typeof text !== "string") throw new Error("Owner text read returned no text");
+    const size = Buffer.byteLength(text, "utf8");
+    expect(size > 0 && size <= 65536 && size === actor.file.size_bytes).toBe(true);
+    expect(body.artifact_id === actor.file.source_id &&
+      body.sha256 === actor.file.sha256 && body.size_bytes === size &&
+      createHash("sha256").update(text, "utf8").digest("hex") === actor.file.sha256,
+      "Returned bytes must match the current owner inventory digest").toBe(true);
+  }
+  async function denyOwnerText(sourceId: string, actor: Awaited<ReturnType<typeof inspectActor>>, statuses: number[]) {
+    await replay.clearCookies();
+    const response = await replay.request.get(textUrl(sourceId), actor.options);
+    expect(statuses.includes(response.status()), "Unauthorized owner text read must fail closed").toBe(true);
+    const body = await response.json() as Record<string, unknown>;
+    expect(Object.keys(body).length === 1 && typeof body.detail === "string" &&
+      body.detail.length <= 256 && !body.detail.includes(sourceId),
+      "Denied text response must not contain source metadata or bytes").toBe(true);
+  }
   async function verifyOwnDraft(id: string, actor: Awaited<ReturnType<typeof inspectActor>>, foreignId: string) {
     const response = await replay.request.get(draftUrl(id), actor.options);
     expect(response.status()).toBe(200);
@@ -987,6 +1020,7 @@ test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session de
     await signInApprovedKaren(page, email, password, { allowLocalLoopback: true });
     const owner = await inspectActor(aSource!, aFolder!, bSource!, bFolder!);
     await verifyOwnDraft(aDraft!, owner, bSource!);
+    if (ownerTextAcceptance) await verifyOwnText(owner);
     await explorer.getByRole("checkbox", { name: "Select " + owner.file.name, exact: true }).check();
     await expect(explorer.getByText(/\b1 selected\b/)).toBeVisible();
 
@@ -1008,6 +1042,7 @@ test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session de
     await replay.clearCookies();
     const revokedDraft = await replay.request.get(draftUrl(aDraft!), owner.options);
     expect([401, 403]).toContain(revokedDraft.status());
+    if (ownerTextAcceptance) await denyOwnerText(aSource!, owner, [401, 403]);
     await replay.clearCookies();
     const revokedRename = await replay.request.patch(endpoint(prefix + "/folders/" + owner.folder.folder_id), {
       ...owner.options, data: { name: owner.folder.name, expected_revision: owner.folder.revision },
@@ -1024,6 +1059,10 @@ test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session de
     await expect(explorer.getByRole("button", { name: "Open folder " + owner.folder.name, exact: true })).toHaveCount(0);
     await expect(explorer.getByText(/\b0 selected\b/)).toBeVisible();
     await verifyOwnDraft(bDraft!, other, aSource!);
+    if (ownerTextAcceptance) {
+      await verifyOwnText(other);
+      await denyOwnerText(aSource!, other, [404]);
+    }
 
     await replay.clearCookies();
     const foreignDraft = await replay.request.get(draftUrl(aDraft!), other.options);
@@ -1048,6 +1087,10 @@ test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session de
     await replay.clearCookies();
     const stillRevoked = await replay.request.get(endpoint(prefix + "/hierarchy"), owner.options);
     expect([401, 403]).toContain(stillRevoked.status());
+    if (ownerTextAcceptance) {
+      await verifyOwnText(restored);
+      await denyOwnerText(aSource!, owner, [401, 403]);
+    }
   } finally {
     await replay.close();
   }
