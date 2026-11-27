@@ -8,6 +8,7 @@ from ai_karen_engine.core.intelligence import get_intelligence_runtime
 from ai_karen_engine.core.cortex.routing_intents import (
     GENERATED_TEXT_ARTIFACT_CAPABILITY,
     parse_owner_generated_text_request,
+    parse_research_handoff_question,
     resolve_capability_decision,
 )
 from ai_karen_engine.core.reasoning.contracts import normalize_reasoning_modes
@@ -89,7 +90,20 @@ class CortexExecutionDecider:
             str(meta.get("clarification_effective_query") or self._extract_user_content(request.messages))
         )
         has_search_options = getattr(request, "search_retrieval_options", None) is not None
-        analysis = await self._analyze_request(user_content, ctx, has_search_options=has_search_options)
+        routing_text = user_content
+        research_continuation = getattr(request, "research_continuation_question", None)
+        analysis = await self._analyze_request(
+            routing_text, ctx, has_search_options=has_search_options,
+            **({"research_continuation": True} if research_continuation is not None else {}),
+        )
+        if research_continuation is not None:
+            reason_codes.append(
+                "research_continuation" if research_continuation
+                else "research_continuation_retrieval_contract_unverified"
+            )
+        handoff_question = parse_research_handoff_question(routing_text)
+        if handoff_question is not None:
+            user_content = handoff_question
         if explicit_artifact:
             # Keep observed risk and explicit graph/approval restrictions.
             # Incidental ML tools, workflow and recall hints are not consent.
@@ -214,7 +228,9 @@ class CortexExecutionDecider:
         # authorizes any access through policy and tenant-scoped memory.
         # A live weather request without a named place needs user context,
         # regardless of whether Intelligence supplied a memory hint.
-        capability_route = resolve_capability_decision(user_content)
+        capability_route = resolve_capability_decision(
+            routing_text, research_continuation=research_continuation is not None,
+        )
         needs_location_recall = (
             analysis.get("intent") == "search.weather"
             and "location.current" in capability_route.missing_requirements
@@ -436,12 +452,20 @@ class CortexExecutionDecider:
         return str(messages[-1].get("content", ""))
 
     async def _analyze_request(
-        self, text: str, ctx: ChatExecutionContext, has_search_options: bool = False
+        self, text: str, ctx: ChatExecutionContext, has_search_options: bool = False,
+        research_continuation: bool = False,
     ) -> Dict[str, Any]:
         if not text or not text.strip():
             return self._default_analysis()
 
-        capability_decision = resolve_capability_decision(text, has_search_options=has_search_options)
+        routing_text = text
+        capability_decision = resolve_capability_decision(
+            routing_text, has_search_options=has_search_options,
+            research_continuation=research_continuation,
+        )
+        handoff_question = parse_research_handoff_question(routing_text)
+        if handoff_question is not None:
+            text = handoff_question
 
         try:
             analysis = await self._intelligence.analyze(
@@ -473,9 +497,10 @@ class CortexExecutionDecider:
             risk_level = self._assess_risk_level(analysis)
 
             capability_decision = resolve_capability_decision(
-                text,
+                routing_text,
                 confidence=float(confidence),
                 has_search_options=has_search_options,
+                research_continuation=research_continuation,
             )
             direct_capability = self._apply_direct_capability_route(
                 capability_decision,

@@ -1065,6 +1065,45 @@ describe("CopilotKit canonical conversation hydration", () => {
     ]);
   });
 
+  it("uses the same committed citation links after first completion and reopen", async () => {
+    const firstMessage = "a-citations";
+    const urls = ["https://example.org/history", "https://example.org/archive"];
+    const committed = {
+      threadId: CONVERSATION_A,
+      messages: [
+        { id: "u-citations", role: "user", content: "Research history" },
+        { id: firstMessage, role: "assistant", content: "Saved research answer" },
+      ],
+      replayEvents: [{
+        type: "CUSTOM", name: "karen.verified_citations.v1",
+        messageId: firstMessage, value: { urls },
+      }],
+    };
+    const component = () => (
+      <KarenCopilotHistoryGate conversationId={CONVERSATION_A}>
+        <KarenCopilotAssistantMessage message={{
+          id: firstMessage, role: "assistant", content: "Saved research answer",
+        } as never} />
+      </KarenCopilotHistoryGate>
+    );
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A, messages: [], replayEvents: [],
+    }).mockResolvedValueOnce(committed).mockResolvedValueOnce(committed);
+    const first = render(component());
+    await waitFor(() => expect(backend.agent.subscribe).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("region", { name: "Previously verified citations" })).toBeNull();
+    act(() => backend.callbacks?.onRunFinalized());
+    await waitFor(() => expect(screen.getByRole("region", { name: "Previously verified citations" })).toBeTruthy());
+    const links = () => screen.getAllByRole("link").map(link => link.getAttribute("href"));
+    expect(links()).toEqual(urls);
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
+    first.unmount();
+    render(component());
+    await waitFor(() => expect(screen.getByRole("region", { name: "Previously verified citations" })).toBeTruthy());
+    expect(links()).toEqual(urls);
+    expect(backend.fetchConversation).toHaveBeenCalledTimes(3);
+  });
+
   it("coalesces a second SDK completion during a pending canonical refresh", async () => {
     let resolvePending!: (value: unknown) => void;
     backend.fetchConversation.mockResolvedValueOnce({

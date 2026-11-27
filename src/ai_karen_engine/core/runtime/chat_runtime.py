@@ -2620,10 +2620,14 @@ class ChatRuntime:
                 error_type="AttachmentAdmissionDenied",
             )
 
+        user_text = self._extract_user_message_for_persistence(request)
+        research_handoff_receipt = self._research_handoff_default_retrieval_receipt(
+            request, user_text, provider_meta,
+        )
         citation_receipt = self._durable_citation_receipt(request, response_text, durable_meta)
         result = await gateway.persist_completed_turn(
             ctx,
-            user_text=self._extract_user_message_for_persistence(request),
+            user_text=user_text,
             assistant_text=response_text,
             persona_scope_id=persona_scope_id,
             response_metadata={
@@ -2644,6 +2648,8 @@ class ChatRuntime:
                    } else {}),
                 **({"pending_clarification": provider_meta["pending_clarification"]}
                    if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
+                **({"research_handoff_default_retrieval_v1": True}
+                   if research_handoff_receipt else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
                 **({"verified_citation_receipt_v1": citation_receipt}
                    if citation_receipt is not None else {}),
@@ -3399,6 +3405,73 @@ class ChatRuntime:
     # Routing
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _research_handoff_default_retrieval_receipt(
+        request: ChatExecutionRequest, user_text: str, provider_meta: Dict[str, Any],
+    ) -> bool:
+        """Record only an observed research handoff with default retrieval.
+
+        This is not a permission grant, a source attestation, or a claim that
+        every requested source was fetched. Restricted or attachment-bearing
+        requests require a future typed continuation contract.
+        """
+        from ai_karen_engine.core.cortex.routing_intents import (
+            parse_research_handoff_question, resolve_capability_decision,
+        )
+
+        return bool(
+            getattr(request, "search_retrieval_options", None) is None
+            and not getattr(request, "attachment_references", None)
+            and provider_meta.get("answer_composition_status") in {
+                "grounded_model", "retrieved_evidence", "capability_unavailable",
+            }
+            and parse_research_handoff_question(user_text)
+            and resolve_capability_decision(user_text).intent == "search.general"
+        )
+
+    @staticmethod
+    def _resolve_research_paper_continuation(
+        request: ChatExecutionRequest, prior: List[Dict[str, Any]],
+    ) -> None:
+        """Derive a narrowly scoped refinement from runtime-loaded history only."""
+        from ai_karen_engine.core.cortex.routing_intents import (
+            is_research_paper_followup, parse_research_handoff_question,
+            resolve_capability_decision,
+        )
+
+        if (
+            len(prior) < 2
+            or not is_research_paper_followup(str(request.messages[-1].get("content") or ""))
+        ):
+            return
+        anchor, reply = prior[-2:]
+        if anchor.get("role") != "user" or reply.get("role") != "assistant":
+            return
+        original = str(anchor.get("content") or "")
+        question = parse_research_handoff_question(original)
+        if question is None or resolve_capability_decision(original).intent != "search.general":
+            return
+        # Recognized historical intent is not proof of previous retrieval
+        # preferences. Fail closed instead of silently expanding search scope.
+        request.research_continuation_question = ""
+        anchor_meta = anchor.get("metadata") or {}
+        reply_meta = reply.get("metadata") or {}
+        request_id = anchor_meta.get("request_id")
+        if (
+            question and request_id
+            and request_id == reply_meta.get("request_id")
+            and request_id != request.context.request_id
+            and anchor_meta.get("source") == reply_meta.get("source") == "chat_runtime"
+            and anchor_meta.get("authorized_user_id") == reply_meta.get("authorized_user_id")
+                == request.context.user_id
+            and anchor_meta.get("conversation_id") == reply_meta.get("conversation_id")
+                == request.context.conversation_id
+            and reply_meta.get("research_handoff_default_retrieval_v1") is True
+            and request.search_retrieval_options is None
+            and not request.attachment_references
+        ):
+            request.research_continuation_question = question
+
     async def _prepare_conversation_continuation(self, request: ChatExecutionRequest) -> None:
         """Restore only canonically owned, persona-compatible history.
 
@@ -3406,6 +3479,9 @@ class ChatRuntime:
         thread. Client-provided prior turns are not authoritative continuity;
         they are reloaded from the tenant/user-owned canonical repository.
         """
+        request.research_continuation_question = None
+        # Scrub before any early exit, including an unavailable persona.
+        self._discard_untrusted_clarification_metadata(request)
         if not request.messages:
             return
         current = request.messages[-1]
@@ -3466,6 +3542,7 @@ class ChatRuntime:
                     request.metadata["conversation_history_materialized"] = True
                     request.metadata["conversation_history_status"] = "materialized"
                     request.metadata["history_message_count"] = len(prior)
+                    self._resolve_research_paper_continuation(request, prior)
                 else:
                     request.metadata["conversation_history_status"] = "empty"
                     request.metadata["history_message_count"] = 0
@@ -3492,8 +3569,8 @@ class ChatRuntime:
             request.metadata["conversation_history_status"] = "unavailable"
             request.metadata["conversation_history_reason"] = type(exc).__name__
             request.metadata["history_message_count"] = 0
-        # Caller metadata must not choose a new effective mutation query.
-        self._discard_untrusted_clarification_metadata(request)
+        if request.research_continuation_question is not None:
+            return
         if not self._resolve_typed_pending_clarification(request):
             self._resolve_pending_weather_followup(request)
 
@@ -3510,6 +3587,8 @@ class ChatRuntime:
             "clarification_slot",
             "clarification_source",
             "clarification_inputs",
+            "weather_followup_location",
+            "weather_followup_resolved",
         ):
             request.metadata.pop(key, None)
 
@@ -3656,8 +3735,11 @@ class ChatRuntime:
         slot = str(pending.get("slot") or "").strip()
         original = str(pending.get("original_request") or "").strip()
         answer = str(latest.get("content") or "").strip()
+        from ai_karen_engine.core.cortex.routing_intents import is_delegated_choice_reply
+
         if (
-            not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", slot)
+            is_delegated_choice_reply(answer)
+            or not re.fullmatch(r"[a-z][a-z0-9_.-]{0,63}", slot)
             or not original or len(original) > 4000
             or not answer or len(answer) > 500
             or answer.casefold() in {"cancel", "never mind", "nevermind", "stop"}
@@ -3761,6 +3843,10 @@ class ChatRuntime:
         if prompt != "Which city or location should I check the weather for?":
             return
         location = str(current.get("content", "")).strip()
+        from ai_karen_engine.core.cortex.routing_intents import is_delegated_choice_reply
+
+        if is_delegated_choice_reply(location):
+            return
         if not re.fullmatch(r"[A-Za-z][A-Za-z .,'-]{0,79}", location):
             return
         if location.casefold() in {"yes", "no", "thanks", "thank you", "cancel", "nevermind"}:
@@ -5126,10 +5212,23 @@ class ChatRuntime:
             if not evidence:
                 return None
             sources = [{"observation": evidence}]
-        if not sources or not await meter.consume_model_call():
-            return None
         query = next((str(m.get("content") or "") for m in reversed(request.messages)
                       if m.get("role") == "user"), "")
+        if decision.intent == "search.general":
+            from ai_karen_engine.core.cortex.routing_intents import parse_research_handoff_question
+
+            handoff_question = parse_research_handoff_question(query)
+            if handoff_question is not None:
+                if not handoff_question:
+                    return None
+                query = handoff_question
+            continuation = getattr(request, "research_continuation_question", None)
+            if continuation is not None:
+                if not continuation:
+                    return None
+                query = f"{query}\nResearch topic: {continuation}"
+        if not sources or not await meter.consume_model_call():
+            return None
         contract = ResponseContract(
             purpose="chat" if is_observation else "tool_synthesis",
             intent=decision.intent,
@@ -6758,6 +6857,10 @@ class ChatRuntime:
                 if k not in _CANONICAL_META_KEYS
             }
         )
+        # This is private transcript evidence, not a public response extension.
+        # Strip it after both memory and provider metadata merges, including
+        # nonleased, failed and unverified persistence paths.
+        md.extra.pop("verified_citation_receipt_v1", None)
         md.extra["consumer_insights"] = build_consumer_insights(
             prompt_telemetry=normalized.get("prompt_telemetry"),
             provider_usage=normalized.get("usage"),
