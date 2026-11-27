@@ -62,6 +62,7 @@ services:
       EXTENSION_API_KEY: ${EXTENSION_API_KEY:?EXTENSION_API_KEY is required for production}
       REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}
       REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}@redis:6379/0
+      KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES: ${KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES:-16777216}
 
       DATABASE_URL: ${DATABASE_URL:?DATABASE_URL is required for production}
       POSTGRES_URL: ${POSTGRES_URL:?POSTGRES_URL is required for production}
