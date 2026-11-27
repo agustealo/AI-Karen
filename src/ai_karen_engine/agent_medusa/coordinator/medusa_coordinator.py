@@ -261,6 +261,8 @@ class MedusaCoordinator:
                     "medusa_run_failure_transition_failed",
                     extra={"run_id": request.request_id},
                 )
+            if resolved_failure is ExecutionRunStatus.CANCELLED:
+                raise asyncio.CancelledError from exc
             if resolved_failure is ExecutionRunStatus.ORPHANED:
                 raise OutcomeStoreError(
                     "Medusa worker ownership could not be confirmed"

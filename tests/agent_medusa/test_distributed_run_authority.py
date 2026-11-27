@@ -73,17 +73,33 @@ class SharedFakeRunStore:
         self,
         *,
         run_id: str,
+        tenant_id: str,
         worker_id: str,
         status: str,
         completed_at: datetime,
         error_type: str | None,
-    ) -> None:
-        record = self.records[run_id]
-        if record["worker_id"] != worker_id:
-            raise RuntimeError("ownership changed")
+        outcome_status: str | None = None,
+        durable_arbitrated: bool = False,
+    ) -> str:
+        record = self.records.get(run_id)
+        if record is None:
+            raise DistributedRunNotFound(run_id)
+        if (
+            record["worker_id"] != worker_id
+            or record["tenant_id"] != tenant_id
+            or self._snapshot(record)["status"] not in {"running", "cancelling"}
+        ):
+            raise DistributedRunOwnershipLost(run_id)
+        if record["status"] == "cancelling" and status != "orphaned":
+            status, error_type, outcome_status = "cancelled", None, "cancelled"
         record["status"] = status
         record["completed_at"] = completed_at.isoformat()
         record["error_type"] = error_type
+        record["outcome_status"] = outcome_status
+        record["terminal_authority"] = (
+            "durable_arbitrated" if durable_arbitrated else "shared_only"
+        )
+        return status
 
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         record = self.records.get(run_id)
@@ -134,6 +150,9 @@ class SharedFakeRunStore:
             "correlation_id": record["correlation_id"],
             "tenant_id": record["tenant_id"],
             "user_id": record["user_id"],
+            "owner_worker_id": record["worker_id"],
+            "outcome_status": record.get("outcome_status"),
+            "terminal_authority": record.get("terminal_authority"),
             "status": status,
             "started_at": record["started_at"],
             "completed_at": record["completed_at"],
@@ -832,12 +851,11 @@ async def test_observed_lease_loss_fences_local_terminal_results(
                 raise failure("injected definitive lease loss")
             return await super().heartbeat(run_id=run_id, worker_id=worker_id)
 
-        async def mark_terminal(self, **kwargs: Any) -> None:
+        async def mark_terminal(self, **kwargs: Any) -> str:
             self.terminal_writes += 1
-            await super().mark_terminal(**kwargs)
-
-        async def set_outcome_status(self, **kwargs: Any) -> None:
-            self.outcome_writes += 1
+            if kwargs.get("outcome_status") is not None:
+                self.outcome_writes += 1
+            return await super().mark_terminal(**kwargs)
 
     class ObservedLedger:
         terminal_writes = 0
@@ -925,6 +943,370 @@ async def test_observed_lease_loss_fences_local_terminal_results(
         )
     finally:
         release_cleanup.set()
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [-3, -2, -1, 0, 1, 2])
+async def test_terminal_store_publishes_one_scoped_receipt(result: int) -> None:
+    from types import SimpleNamespace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        _MARK_TERMINAL_SCRIPT,
+    )
+
+    class ScriptClient:
+        def __init__(self) -> None:
+            self.calls: list[tuple[Any, ...]] = []
+
+        async def ping(self) -> bool:
+            return True
+
+        async def eval(self, *args: Any) -> int:
+            self.calls.append(args)
+            return result
+
+    client = ScriptClient()
+    settings = _settings("worker-a")
+    store = RedisDistributedRunStore(
+        settings=settings,
+        redis_manager=SimpleNamespace(client=client, is_degraded=lambda: False),
+    )
+    completed_at = datetime.now(timezone.utc)
+    args = dict(
+        run_id="terminal-run",
+        tenant_id="tenant-a",
+        worker_id="worker-a",
+        status="completed",
+        completed_at=completed_at,
+        error_type=None,
+        outcome_status="success",
+    )
+    errors = {
+        -3: ValueError,
+        -2: DistributedRunNotFound,
+        -1: DistributedRunOwnershipLost,
+        0: DistributedRunStoreUnavailable,
+    }
+    if result in errors:
+        with pytest.raises(errors[result]):
+            await store.mark_terminal(**args)
+    else:
+        assert await store.mark_terminal(**args) == (
+            "cancelled" if result == 2 else "completed"
+        )
+    assert client.calls == [
+        (
+            _MARK_TERMINAL_SCRIPT,
+            4,
+            store._claim_key("terminal-run"),
+            store._run_key("terminal-run"),
+            store._tenant_index("tenant-a"),
+            store._pending_terminal_index("tenant-a"),
+            "worker-a",
+            "tenant-a",
+            "terminal-run",
+            "completed",
+            store._iso(completed_at),
+            "",
+            "success",
+            str(settings.run_terminal_retention_seconds),
+            "shared_only",
+        )
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["cancel", "lost", "unavailable"])
+async def test_terminal_publication_waits_for_shared_authority(mode: str) -> None:
+    entered = asyncio.Event()
+    release = asyncio.Event()
+
+    class BlockingTerminalStore(SharedFakeRunStore):
+        async def mark_terminal(self, **kwargs: Any) -> str:
+            entered.set()
+            await release.wait()
+            if mode == "lost":
+                raise DistributedRunOwnershipLost("injected")
+            if mode == "unavailable":
+                raise DistributedRunStoreUnavailable("injected")
+            return await super().mark_terminal(**kwargs)
+
+    store = BlockingTerminalStore()
+    manager = MedusaRunManager(settings=_settings("owner"), distributed_store=store)
+    task = asyncio.create_task(asyncio.sleep(60))
+    finalizer = None
+    scope = dict(run_id="terminal-race", tenant_id="tenant-a")
+    try:
+        run = await manager.register(
+            **scope, correlation_id="corr", user_id="owner", task=task
+        )
+        if mode == "cancel":
+            await store.request_cancel(**scope)
+        finalizer = asyncio.create_task(manager.mark_response(run.run_id, "success"))
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        snapshot = await manager.get(**scope)
+        assert snapshot["status"] == "running"
+        assert snapshot["outcome_status"] is None
+        assert not snapshot["cancellable"]
+        with pytest.raises(DistributedRunStoreUnavailable):
+            await manager.mark_response(run.run_id, "success")
+        release.set()
+        expected = (
+            ExecutionRunStatus.CANCELLED
+            if mode == "cancel"
+            else ExecutionRunStatus.ORPHANED
+        )
+        assert await asyncio.wait_for(finalizer, timeout=2) is expected
+        snapshot = await manager.get(**scope)
+        assert snapshot["status"] == expected.value
+        assert snapshot["outcome_status"] == (
+            "cancelled" if mode == "cancel" else None
+        )
+        assert await manager.mark_response(run.run_id, "success") is expected
+        if mode != "cancel":
+            assert snapshot["completed_at"] is None
+            assert store.records[run.run_id]["status"] == "running"
+    finally:
+        release.set()
+        if finalizer is not None:
+            await asyncio.gather(finalizer, return_exceptions=True)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result", [0, 1])
+async def test_durable_receipt_retention_acknowledgement_is_exact(result: int) -> None:
+    from types import SimpleNamespace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        _ACK_DURABLE_TERMINAL_SCRIPT,
+    )
+
+    class Client:
+        calls: list[tuple[Any, ...]] = []
+
+        async def ping(self) -> bool:
+            return True
+
+        async def eval(self, *args: Any) -> int:
+            self.calls.append(args)
+            return result
+
+    client = Client()
+    settings = _settings("observer")
+    store = RedisDistributedRunStore(
+        settings=settings,
+        redis_manager=SimpleNamespace(client=client, is_degraded=lambda: False),
+    )
+    receipt = {
+        "run_id": "receipt",
+        "tenant_id": "tenant-a",
+        "owner_worker_id": "owner",
+        "correlation_id": "corr",
+        "user_id": "user",
+        "status": "completed",
+        "completed_at": "2026-11-26T10:00:00+00:00",
+        "error_type": None,
+        "outcome_status": "success",
+    }
+    assert await store.acknowledge_durable_terminal(
+        tenant_id="tenant-a", receipt=receipt
+    ) is bool(result)
+    assert client.calls == [
+        (
+            _ACK_DURABLE_TERMINAL_SCRIPT,
+            3,
+            store._claim_key("receipt"),
+            store._run_key("receipt"),
+            store._pending_terminal_index("tenant-a"),
+            "run_id", "receipt",
+            "tenant_id", "tenant-a",
+            "owner_worker_id", "owner",
+            "correlation_id", "corr",
+            "user_id", "user",
+            "status", "completed",
+            "completed_at", receipt["completed_at"],
+            "error_type", "",
+            "outcome_status", "success",
+            str(settings.run_terminal_retention_seconds),
+        )
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("operation", "stage", "reason"),
+    [
+        ("get", "transaction", "shared_run_observation_unavailable"),
+        ("list", "index", "shared_run_index_unavailable"),
+        ("list", "transaction", "shared_run_observation_unavailable"),
+        ("list", "cleanup", "shared_run_index_cleanup_unavailable"),
+        ("cancel", "read", "shared_cancel_read_unavailable"),
+        ("cancel", "signal", "shared_cancel_signal_unconfirmed"),
+        ("cancel", "transaction", "shared_run_observation_unavailable"),
+    ],
+)
+async def test_redis_disconnect_after_health_check_is_typed(
+    operation: str, stage: str, reason: str
+) -> None:
+    from types import SimpleNamespace
+
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    failure = RedisConnectionError("private connection diagnostic")
+
+    class Client:
+        async def ping(self) -> bool:
+            return True
+
+        def pipeline(self, *, transaction: bool):
+            assert transaction
+
+            class Pipeline:
+                async def __aenter__(self):
+                    return self
+
+                async def __aexit__(self, *_args: Any) -> None:
+                    pass
+
+                def hgetall(self, _key: str) -> None:
+                    pass
+
+                def get(self, _key: str) -> None:
+                    pass
+
+                async def execute(self):
+                    if stage == "transaction":
+                        raise failure
+                    return {}, None
+
+            return Pipeline()
+
+        async def smembers(self, _key: str):
+            if stage == "index":
+                raise failure
+            return {"run-a"}
+
+        async def srem(self, *_args: Any):
+            assert stage == "cleanup"
+            raise failure
+
+        async def eval(self, *_args: Any) -> int:
+            if stage == "signal":
+                raise failure
+            return 1
+
+        async def hgetall(self, _key: str):
+            if stage == "read":
+                raise failure
+            return {"run_id": "run-a", "tenant_id": "tenant-a"}
+
+    store = RedisDistributedRunStore(
+        settings=_settings("owner"),
+        redis_manager=SimpleNamespace(client=Client(), is_degraded=lambda: False),
+    )
+    with pytest.raises(DistributedRunStoreUnavailable, match=reason) as exc:
+        if operation == "get":
+            await store.get(run_id="run-a", tenant_id="tenant-a")
+        elif operation == "list":
+            await store.list_runs(tenant_id="tenant-a", include_terminal=True)
+        else:
+            await store.request_cancel(run_id="run-a", tenant_id="tenant-a")
+    assert exc.value.__cause__ is failure
+    assert "private connection diagnostic" not in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_owner_read_preserves_uncertain_terminal_during_redis_disconnect() -> None:
+    from types import SimpleNamespace
+
+    from redis.exceptions import ConnectionError as RedisConnectionError
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        _MARK_TERMINAL_SCRIPT,
+        _REGISTER_RUN_SCRIPT,
+    )
+
+    class Pipeline:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *_args: Any) -> None:
+            pass
+
+        def hgetall(self, _key: str) -> None:
+            pass
+
+        def get(self, _key: str) -> None:
+            pass
+
+        async def execute(self):
+            raise RedisConnectionError("injected post-ping disconnect")
+
+    class Client:
+        terminal_attempts = 0
+        observations = 0
+
+        async def ping(self) -> bool:
+            return True
+
+        async def eval(self, script: str, *_args: Any) -> int:
+            if script == _REGISTER_RUN_SCRIPT:
+                return 1
+            assert script == _MARK_TERMINAL_SCRIPT
+            self.terminal_attempts += 1
+            raise RedisConnectionError("injected lost terminal acknowledgement")
+
+        def pipeline(self, *, transaction: bool):
+            assert transaction
+            self.observations += 1
+            return Pipeline()
+
+    client = Client()
+    settings = _settings("owner")
+    store = RedisDistributedRunStore(
+        settings=settings,
+        redis_manager=SimpleNamespace(client=client, is_degraded=lambda: False),
+    )
+    manager = MedusaRunManager(settings=settings, distributed_store=store)
+    scope = {"run_id": "uncertain-outage", "tenant_id": "tenant-a"}
+    task = asyncio.create_task(asyncio.sleep(0))
+    run = None
+    try:
+        run = await manager.register(
+            **scope, correlation_id="corr", user_id="owner", task=task
+        )
+        await task
+        assert run.shared_registered
+        assert (
+            await manager.mark_response(run.run_id, "success")
+            is ExecutionRunStatus.ORPHANED
+        )
+        assert run.terminal_unconfirmed
+        for _ in range(2):
+            snapshot = await manager.get(**scope)
+            assert snapshot["status"] == "orphaned"
+            assert snapshot["error_type"] == "TerminalCommitUnconfirmed"
+            assert snapshot["completed_at"] is None
+            assert snapshot["outcome_status"] is None
+            assert not snapshot["cancellable"]
+        assert client.observations == 2
+        assert (
+            await manager.mark_response(run.run_id, "success")
+            is ExecutionRunStatus.ORPHANED
+        )
+        assert client.terminal_attempts == 1
+        with pytest.raises(RunTenantMismatchError):
+            await manager.get(run_id=run.run_id, tenant_id="foreign")
+        assert client.observations == 2
+    finally:
         if run is not None and run.heartbeat_task is not None:
             run.heartbeat_task.cancel()
             await asyncio.gather(run.heartbeat_task, return_exceptions=True)

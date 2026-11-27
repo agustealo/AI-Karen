@@ -108,6 +108,27 @@ async def test_attachment_draft_atomic_cas_and_owner_scope():
         assert not (await write(0, [ref, ref])).success
         saved = await write(0, [ref])
         assert saved.success and saved.data == {"text": "draft", "revision": 1, "attachment_references": [ref]}
+        # A persisted selection is not an admitted chat run. Until the
+        # attachment-aware execution contract is wired, even the exact
+        # submitted revision and text must fail the text-only run fence.
+        async with async_sessionmaker(engine)() as session:
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": tenant},
+                )
+                await session.execute(
+                    text("SELECT set_config('app.current_user_id', :owner, true)"),
+                    {"owner": owner},
+                )
+                assert not await repo.lock_matching_submission_draft(
+                    session, tenant_id=tenant, user_id=owner,
+                    conversation_id=conversation, revision=1, submitted_text="draft",
+                )
+        retained = await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )
+        assert retained.success and retained.data == saved.data
         assert not (await repo.get_composer_draft(conversation, tenant, user_id=owner)).success
         assert not (await repo.put_composer_draft(
             conversation, tenant, user_id=owner, content="legacy", expected_revision=1,
@@ -128,6 +149,33 @@ async def test_attachment_draft_atomic_cas_and_owner_scope():
         assert cleared.success and cleared.data["revision"] == 3
         legacy = await repo.get_composer_draft(conversation, tenant, user_id=owner)
         assert legacy.success and legacy.data == {"text": "cleared", "revision": 3}
+        # Removing the selection through the canonical CAS makes only the
+        # new text-only revision eligible; the previously attached revision
+        # cannot be replayed as an ordinary chat submission.
+        async with async_sessionmaker(engine)() as session:
+            async with session.begin():
+                await session.execute(
+                    text("SELECT set_config('app.current_tenant_id', :tenant, true)"),
+                    {"tenant": tenant},
+                )
+                await session.execute(
+                    text("SELECT set_config('app.current_user_id', :owner, true)"),
+                    {"owner": owner},
+                )
+                for revision, submitted_text, expected in (
+                    (1, "draft", False),
+                    (2, current.data["text"], False),
+                    # Matching current text isolates the stale revision fence.
+                    (1, "cleared", False),
+                    (2, "cleared", False),
+                    (3, "different text", False),
+                    (3, "cleared", True),
+                ):
+                    assert await repo.lock_matching_submission_draft(
+                        session, tenant_id=tenant, user_id=owner,
+                        conversation_id=conversation, revision=revision,
+                        submitted_text=submitted_text,
+                    ) is expected
     finally:
         if engine is not None:
             await engine.dispose()

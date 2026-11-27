@@ -23,7 +23,13 @@ from ai_karen_engine.persistence.postgres import get_postgres_engine
 from ai_karen_engine.platform.memory.redis import RedisConnectionManager
 
 
-async def main(run_id: str, tenant_id: str, worker_id: str, prefix: str) -> None:
+async def main(
+    run_id: str,
+    tenant_id: str,
+    worker_id: str,
+    prefix: str,
+    mode: str = "owner",
+) -> None:
     redis = RedisConnectionManager(redis_url=os.environ["REDIS_URL"])
     assert await redis.initialize(), "Child process requires real Redis"
     postgres = get_postgres_engine()
@@ -45,6 +51,25 @@ async def main(run_id: str, tenant_id: str, worker_id: str, prefix: str) -> None
         ),
         durable_ledger=PostgresDurableRunLedger(postgres=postgres),
     )
+    if mode == "recover_terminal":
+        try:
+            receipt = await manager.get(run_id=run_id, tenant_id=tenant_id)
+            print(
+                json.dumps(
+                    {
+                        "event": "recovered_terminal",
+                        "pid": os.getpid(),
+                        "receipt": receipt,
+                    }
+                ),
+                flush=True,
+            )
+        finally:
+            await redis.close()
+            await postgres.cleanup()
+        return
+    if mode != "owner":
+        raise ValueError("Unknown Medusa acceptance worker mode")
     task = asyncio.create_task(asyncio.sleep(120))
     run = None
     try:
