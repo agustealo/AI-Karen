@@ -489,6 +489,16 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
                 attachment_references=refs,
             )
 
+        async def retry_eligibility(lease, *, principal=owner, tid=tenant):
+            return await runs.read_failed_draft_revision(
+                tenant_id=tid, user_id=principal, conversation_id=conversation,
+                submission_id=lease.submission_id,
+            )
+
+        assert await retry_eligibility(completing) is None
+        assert await retry_eligibility(cancelled, principal=other_owner) is None
+        assert await retry_eligibility(cancelled, tid=other_tenant) is None
+        assert await retry_eligibility(cancelled) == 7
         assert await retry(completing, attached.data["text"], [active_ref]) is None
         assert await retry(cancelled, newer.data["text"], [active_ref], principal=other_owner) is None
         assert await retry(cancelled, newer.data["text"], [active_ref], tid=other_tenant) is None
@@ -500,6 +510,7 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
             retry(cancelled, newer.data["text"], [active_ref]),
         )
         assert retried.count(8) == 1 and retried.count(None) == 1
+        assert await retry_eligibility(cancelled) is None
         assert await retry(cancelled, newer.data["text"], [active_ref]) is None
         assert await observe(cancelled) == ("cancelled", 0)
         assert (await repo.get_composer_draft_with_attachments(
@@ -508,7 +519,9 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         failed_retry = await admit("retry-fails", 8, [active_ref], newer.data["text"])
         assert failed_retry is not None
         assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
+        assert await retry_eligibility(failed_retry) is None
         assert await runs.finish(failed_retry, status="failed", error_code="CHAT_TEST_TERMINAL")
+        assert await retry_eligibility(failed_retry) == 8
         assert await retry(failed_retry, newer.data["text"], [active_ref]) == 9
         assert await observe(failed_retry) == ("failed", 0)
         assert await admit("retry-original-replay", 8, [active_ref], newer.data["text"]) is None

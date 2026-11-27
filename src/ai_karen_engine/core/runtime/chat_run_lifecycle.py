@@ -106,6 +106,32 @@ class ChatRunCoordinator:
             transport_run_id=run_id,
         )
 
+    async def read_failed_draft_revision(
+        self, context: ChatExecutionContext, *, submission_id: str,
+    ) -> Optional[int]:
+        """Read eligibility, never execute or authorize a future retry."""
+        context.require_authenticated_user()
+        await get_conversation_runtime_gateway().require_owned_conversation(context)
+        return await self._repository.read_failed_draft_revision(
+            tenant_id=context.tenant_id, user_id=context.user_id,
+            conversation_id=context.require_conversation_id(),
+            submission_id=submission_id,
+        )
+
+    async def advance_failed_draft_revision(
+        self, context: ChatExecutionContext, *, submission_id: str,
+        submitted_text: str, attachment_references: list[dict[str, str]],
+    ) -> Optional[int]:
+        """Reauthorize explicit retry and delegate the exact revision CAS."""
+        context.require_authenticated_user()
+        await get_conversation_runtime_gateway().require_owned_conversation(context)
+        return await self._repository.advance_failed_draft_revision(
+            tenant_id=context.tenant_id, user_id=context.user_id,
+            conversation_id=context.require_conversation_id(),
+            submission_id=submission_id, submitted_text=submitted_text,
+            attachment_references=attachment_references,
+        )
+
     @staticmethod
     def _journal_safe_event(event: dict[str, Any]) -> dict[str, Any]:
         """Persist a source-free observation for revocable code presentations.
