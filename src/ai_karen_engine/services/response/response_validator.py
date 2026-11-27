@@ -13,6 +13,9 @@ class ValidationResult:
     valid: bool
     reason: Optional[str] = None
     message: Optional[str] = None
+    # Ordered, deduplicated fetched URL identities from an entirely valid
+    # grounded answer; no claim-level entailment or current-access grant.
+    verified_citation_urls: tuple[str, ...] = ()
 
 # Generic menu detection
 MENU_LIKE_PATTERNS = [
@@ -72,6 +75,7 @@ class ResponseValidator:
         if not text or not text.strip():
             return ValidationResult(valid=False, reason="empty_response")
 
+        verified_citations: dict[str, None] = {}
         # Citation URLs must be backed by authorized tool evidence.
         if getattr(contract, "purpose", None) == "tool_synthesis" and getattr(contract, "requires_live_data", False):
             allowed: set[str] = set()
@@ -105,11 +109,14 @@ class ResponseValidator:
             for url in cited:
                 # Prefer the exact URL. Only sentence punctuation may be
                 # removed, and only when the resulting URL is authorized.
-                if (
-                    _citation_url_identity(url) not in allowed
-                    and _citation_url_identity(url.rstrip(".,;")) not in allowed
-                ):
+                identity = _citation_url_identity(url)
+                if identity is None or identity not in allowed:
+                    identity = _citation_url_identity(url.rstrip(".,;"))
+                if identity is None or identity not in allowed:
                     return ValidationResult(valid=False, reason="unverified_citation_url")
+                verified_citations[identity] = None
+                if len(verified_citations) > 50:
+                    return ValidationResult(valid=False, reason="citation_limit_exceeded")
 
         # 1. Check for debug/provider prefixes
         if getattr(contract, "disallow_debug_prefixes", True):
@@ -128,7 +135,8 @@ class ResponseValidator:
             if self._looks_like_prompt_echo(text, contract):
                 return ValidationResult(valid=False, reason="prompt_echo_detected")
 
-        return ValidationResult(valid=True)
+        # No partial result escapes if any later response check fails.
+        return ValidationResult(valid=True, verified_citation_urls=tuple(verified_citations))
 
     def validate_observation(self, text: str, intent: str, evidence: dict[str, Any]) -> ValidationResult:
         """Conservative second gate for model-authored live observations.
