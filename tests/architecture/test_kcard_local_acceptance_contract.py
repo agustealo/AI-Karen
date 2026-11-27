@@ -148,11 +148,15 @@ def test_disposable_provisioning_generates_all_compose_inputs_without_real_docke
     assert sum("createdb" in args for args in calls) == 1
     assert sum(args[:3] == ["docker", "exec", "-i"] for args in calls) == 1
     assert output.stat().st_mode & 0o777 == 0o700
+    assert values["KCARD_STORAGE_CA_DIR"] == str(output / "storage-tls")
+    assert (output / "storage-tls").is_dir()
+    assert not list((output / "storage-tls").iterdir())
 
     calls.clear()
     with pytest.raises(SystemExit, match="state directory already exists"):
         exec(code, {})
     assert calls == []
+    (output / "storage-tls").rmdir()
     for path in output.iterdir():
         path.unlink()
     output.rmdir()

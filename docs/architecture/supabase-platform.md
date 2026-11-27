@@ -103,6 +103,7 @@ The existing deployment runner copies only the public CA into private state
 and binds it read-only into the isolated API. The canonical verifier checks
 the actual Kong 8443 mapping, exact CA bytes, and a hostname-verified TLS
 handshake from the API container at every Storage acceptance checkpoint.
+The peer leaf digest must also match the identified Kong public certificate.
 The recorded peer certificate and CA digests must remain unchanged.
 Standalone host-loopback HTTP proof remains separate; generic Explorer
 does not certify Storage. Unsupported local gateway layouts fail closed.

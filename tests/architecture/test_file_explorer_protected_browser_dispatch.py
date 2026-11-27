@@ -673,7 +673,7 @@ def test_owner_text_mode_requires_real_local_storage_provenance(tmp_path, monkey
     env_file = tmp_path / "local.env"
     env_file.write_text("")
     env_file.chmod(0o600)
-    storage_origin = "http://host.docker.internal:54341"
+    storage_origin = "https://host.docker.internal:54341"
     calls = []
 
     def inspect(project_arg, sha_arg, service, **kwargs):
@@ -683,12 +683,14 @@ def test_owner_text_mode_requires_real_local_storage_provenance(tmp_path, monkey
         result = {"service": service}
         if service == "api" and kwargs.get("require_local_storage"):
             result["storage_origin"] = storage_origin
+            result["storage_tls"] = {"peer_sha256": "a" * 64}
         return result
 
     def storage(container, origin):
         assert container == "db-id" and origin == storage_origin
         calls.append(("storage", True))
-        return {"container_id": "gateway-id", "origin": origin}
+        return {"container_id": "gateway-id", "origin": origin,
+                "transport": "https", "peer_sha256": "a" * 64}
 
     monkeypatch.setattr(verifier, "require_local_docker", lambda: None)
     monkeypatch.setattr(verifier, "inspect_container", inspect)
@@ -723,6 +725,13 @@ def test_owner_text_mode_requires_real_local_storage_provenance(tmp_path, monkey
             [("storage", True)] if required else []
         )
 
+    def wrong_peer(*_):
+        return {"transport": "https", "peer_sha256": "b" * 64}
+
+    monkeypatch.setattr(verifier, "verify_local_storage_gateway", wrong_peer)
+    status, output = invoke("--owner-text", "wrong-peer.json")
+    assert status == 1 and not output.exists()
+
     def unavailable(*_):
         raise verifier.GuardError("Local Storage gateway unavailable")
 
@@ -754,7 +763,23 @@ def test_native_local_tls_gateway_requires_https_listener(monkeypatch):
     gateway["NetworkSettings"]["Ports"]["8443/tcp"] = [
         {"HostIp": "0.0.0.0", "HostPort": "54341"}
     ]
-    assert verifier.verify_local_storage_gateway("db-id", origin)["transport"] == "https"
+    import certifi
+    import hashlib
+    import ssl
+    import subprocess
+    from pathlib import Path
+
+    pem = Path(certifi.where()).read_text().split("-----BEGIN CERTIFICATE-----", 1)[1]
+    pem = "-----BEGIN CERTIFICATE-----" + pem.split("-----END CERTIFICATE-----", 1)[0]
+    pem += "-----END CERTIFICATE-----"
+    def read_public_cert(args, **kwargs):
+        assert args == ["docker", "exec", "b" * 64, "cat", "/home/kong/localhost.crt"]
+        return subprocess.CompletedProcess(args, 0, pem, "")
+
+    monkeypatch.setattr(verifier.subprocess, "run", read_public_cert)
+    evidence = verifier.verify_local_storage_gateway("db-id", origin)
+    assert evidence["transport"] == "https"
+    assert evidence["peer_sha256"] == hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
 
 
 def test_storage_tls_provenance_binds_mount_ca_and_peer(tmp_path, monkeypatch):

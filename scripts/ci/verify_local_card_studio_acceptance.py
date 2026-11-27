@@ -181,7 +181,21 @@ def verify_local_storage_gateway(
         raise GuardError("Configured local Storage gateway does not match the running project")
     evidence = {"authority": "local_supabase_gateway", "container_id": gateway_id, "port": port}
     if tls:
+        # Read only the public leaf certificate from the identified Kong.
+        # Compare it to the peer actually seen by the isolated API namespace.
+        result = subprocess.run(
+            ["docker", "exec", gateway_id, "cat", "/home/kong/localhost.crt"],
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+        try:
+            pem = result.stdout.split("-----END CERTIFICATE-----", 1)[0]
+            der = ssl.PEM_cert_to_DER_cert(pem.strip() + "\n-----END CERTIFICATE-----")
+            if result.returncode != 0 or not der or "PRIVATE KEY" in result.stdout:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise GuardError("Local Kong public TLS certificate unavailable") from None
         evidence["transport"] = "https"
+        evidence["peer_sha256"] = hashlib.sha256(der).hexdigest()
     return evidence
 
 
@@ -495,6 +509,11 @@ def main() -> int:
             evidence["supabase_storage"] = verify_local_storage_gateway(
                 supabase_database["container_id"], api["storage_origin"],
             )
+            if (evidence["supabase_storage"].get("transport") != "https"
+                    or not api.get("storage_tls")
+                    or evidence["supabase_storage"].get("peer_sha256")
+                    != api["storage_tls"].get("peer_sha256")):
+                raise GuardError("API Storage peer differs from the verified local Kong certificate")
         evidence_path = Path(args.evidence)
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
