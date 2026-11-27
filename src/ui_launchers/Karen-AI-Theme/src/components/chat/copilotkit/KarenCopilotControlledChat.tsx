@@ -17,7 +17,7 @@ import { KarenComposerFileExplorer } from "../KarenComposerFileExplorer";
 import { KarenComposerAgentDiscovery } from "../KarenComposerAgentDiscovery";
 import type { KarenVoiceDraftPort } from "../KarenVoiceDraftPort";
 import { apiClient } from "@/lib/api";
-import { getCopilotRunFailureMessage, isCopilotRunFinalityUnverified } from "../const/getDegradedResponseMessage";
+import { getCopilotRunFailureMessage, isCopilotRunAdmissionConflict, isCopilotRunFinalityUnverified } from "../const/getDegradedResponseMessage";
 
 import { useKarenScopedAgent } from "./KarenCopilotHistoryGate";
 import {
@@ -92,9 +92,12 @@ export function KarenCopilotControlledChat({
   const checkingFinalityRef = useRef(false);
   const observedRunId = useRef<string | null>(null);
   const holdUnverifiedRun = useCallback((failure: unknown, runId: string | null) => {
-    if (!isCopilotRunFinalityUnverified(failure)) return false;
-    if (finalityHoldRef.current?.conversationId !== conversationId) {
-      const hold = { conversationId, runId };
+    const admissionConflict = isCopilotRunAdmissionConflict(failure);
+    if (!admissionConflict && !isCopilotRunFinalityUnverified(failure)) return false;
+    if (finalityHoldRef.current?.conversationId !== conversationId || admissionConflict) {
+      // A conflict may refer to a different unresolved transport or the
+      // original submission. Never use the rejected attempt's ID for recovery.
+      const hold = { conversationId, runId: admissionConflict ? null : runId };
       finalityHoldRef.current = hold;
       setFinalityHold(hold);
       setFinalityFeedback(null);
@@ -604,7 +607,7 @@ export function KarenCopilotControlledChat({
               {checkingFinality ? "Checking…" : "Check run status and saved history"}
             </button>
           ) : <p className="text-xs text-muted-foreground">
-            No verified run identity was received. Review saved conversation history and contact support if the outcome remains unclear.
+            No verified run identity was received. Reopen the conversation to check saved history and recovery status. Contact support if the outcome remains unclear.
           </p>}
         </section>
       )}

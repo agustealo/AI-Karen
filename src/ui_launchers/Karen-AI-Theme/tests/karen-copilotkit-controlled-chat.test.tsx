@@ -1150,6 +1150,53 @@ describe("KUI uncertain finality recovery", () => {
     await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
   });
 
+  it.each([
+    new Error('HTTP 409: {"detail":"Chat execution has already been admitted"}'),
+    { response: { status: 409, data: { detail: "Chat execution has already been admitted" } } },
+  ])("holds a rejected duplicate admission without resending or guessing its run ID", async (failure) => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(failure);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => {
+      input().onChange("Original governed question");
+      input().onSubmitMessage("Original governed question");
+    });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    expect(screen.getByRole("alert").textContent).toContain("already exists");
+    expect(screen.getByText(/No verified run identity was received/)).toBeTruthy();
+    expect(input().value).toBe("Original governed question");
+    act(() => input().onSubmitMessage("Another question"));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(sdk.prepareRevision).toHaveBeenCalledTimes(1);
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.get).not.toHaveBeenCalled();
+  });
+
+  it("does not recover against the rejected attempt's observed run ID", async () => {
+    sdk.runAgent.mockImplementationOnce(async () => {
+      sdk.lifecycle?.onRunStartedEvent({ event: { threadId: THREAD, runId: "attempt-id" } });
+      sdk.lifecycle?.onRunFailed({
+        error: new Error('HTTP 409: {"detail":"Chat execution has already been admitted"}'),
+      });
+    });
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onSubmitMessage("Original question"));
+    await waitFor(() => expect(screen.getByText(/No verified run identity was received/)).toBeTruthy());
+    expect(screen.queryByRole("button", { name: "Check run status and saved history" })).toBeNull();
+    act(() => input().onSubmitMessage("Another question"));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.get).not.toHaveBeenCalled();
+  });
+
+  it("does not classify a distinct saved-draft conflict as duplicate admission", async () => {
+    sdk.runAgent.mockRejectedValueOnce(new Error('HTTP 409: {"detail":"Saved draft changed before execution admission"}'));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onSubmitMessage("Original question"));
+    await waitFor(() => expect(screen.getByRole("alert")).toBeTruthy());
+    expect(screen.queryByRole("region", { name: "Unverified run recovery" })).toBeNull();
+  });
+
   it("does not invent a run identity or resend after a pre-start uncertainty error", async () => {
     sdk.runAgent.mockRejectedValueOnce({ code: "CHAT_TRANSCRIPT_FINALITY_UNVERIFIED" });
     render(<KarenCopilotControlledChat conversationId={THREAD} />);
