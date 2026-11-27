@@ -765,3 +765,26 @@ async def test_bounded_read_accepts_exact_legacy_file_row_path(monkeypatch):
     assert bucket.signatures == [
         (f"{_TENANT}/{_ARTIFACT}/author.txt", 60),
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ["0" * 64, "A" * 64, "invalid", ""])
+async def test_revision_pinned_read_denies_before_signing(monkeypatch, revision):
+    store, bucket, _ = bounded_store(monkeypatch)
+    result = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER, expected_sha256=revision,
+    )
+    assert not result.success and result.data is None
+    assert bucket.signatures == []
+
+
+@pytest.mark.asyncio
+async def test_revision_pinned_read_preserves_exact_current_bytes(monkeypatch):
+    store, bucket, _ = bounded_store(monkeypatch)
+    digest = hashlib.sha256(_BODY).hexdigest()
+    result = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER, expected_sha256=digest,
+    )
+    assert result.success and result.data.sha256 == digest
+    assert result.data.text == _BODY.decode()
+    assert len(bucket.signatures) == 1

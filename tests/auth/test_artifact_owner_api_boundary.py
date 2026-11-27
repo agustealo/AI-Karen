@@ -164,3 +164,61 @@ def test_archived_route_precedes_dynamic_artifact_id_route():
     assert get_paths.index("/artifacts/archived") < get_paths.index(
         "/artifacts/{artifact_id}"
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["match", "wrong", "invalid", "revoked", "legacy"])
+async def test_revision_pinned_text_route_enforces_current_access(monkeypatch, case):
+    from unittest.mock import AsyncMock
+    from fastapi import Request, Response
+    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
+
+    artifact_id = "11111111-1111-4111-8111-111111111111"
+    revision = "a" * 64
+    principal = SimpleNamespace(
+        tenant_id="22222222-2222-4222-8222-222222222222",
+        user_id="33333333-3333-4333-8333-333333333333",
+    )
+    monkeypatch.setattr(routes, "coerce_tenant_id", str)
+    monkeypatch.setattr(routes, "coerce_user_id", str)
+    rbac = SimpleNamespace(has_permission=lambda *args: True,
+                           audit_access_attempt=lambda *args, **kwargs: None)
+    monkeypatch.setattr(routes, "get_rbac_manager", lambda: rbac)
+    revalidate = AsyncMock(side_effect=[None, PermissionError()] if case == "revoked" else None)
+    monkeypatch.setattr(routes, "ChatExecutionContext",
+                        lambda **kwargs: SimpleNamespace(revalidate_runtime_attachment_session=revalidate))
+    value = VerifiedArtifactText(
+        artifact_id=artifact_id, tenant_id=principal.tenant_id, user_id=principal.user_id,
+        filename="example.txt", mime_type="text/plain",
+        sha256="b" * 64 if case == "wrong" else revision, text="private test text",
+    )
+    read = AsyncMock(return_value=RepositoryResult(success=True, data=value))
+    if case == "legacy":
+        read.side_effect = TypeError("unsupported revision")
+    monkeypatch.setattr(routes, "_get_artifact_store",
+                        lambda: SimpleNamespace(read_owner_active_text_bounded=read))
+    request = Request({"type": "http", "path": "/artifacts/" + artifact_id + "/text",
+                       "scheme": "http", "server": ("test", 80), "headers": []})
+    response = Response()
+    if case == "match":
+        result = await routes.read_artifact_text(
+            artifact_id, request, response, current_user=principal, revision=revision,
+        )
+        assert result["sha256"] == revision
+        assert response.headers["Cache-Control"] == "private, no-store"
+        assert revalidate.await_count == 2
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await routes.read_artifact_text(
+                artifact_id, request, response, current_user=principal,
+                revision="invalid" if case == "invalid" else revision,
+            )
+        assert exc.value.status_code == (403 if case == "revoked" else 404)
+        assert "private test text" not in str(exc.value.detail)
+    if case == "invalid":
+        read.assert_not_awaited()
+    else:
+        read.assert_awaited_once_with(
+            artifact_id, principal.tenant_id, principal.user_id,
+            max_bytes=65536, expected_sha256=revision,
+        )
