@@ -58,6 +58,7 @@ class ChatRunCoordinator:
         self, context: ChatExecutionContext, run_id: str, *,
         submission_id: Optional[str] = None,
         submitted_text: Optional[str] = None,
+        submitted_attachment_references: Optional[list[dict[str, str]]] = None,
     ) -> ChatRunLease:
         context.require_authenticated_user()
         # Reauthorize against the canonical repository at run-admission time.
@@ -72,6 +73,8 @@ class ChatRunCoordinator:
             correlation_id=context.correlation_id,
             **({"submission_id": submission_id} if submission_id is not None else {}),
             **({"submitted_text": submitted_text} if submitted_text is not None else {}),
+            **({"submitted_attachment_references": submitted_attachment_references}
+               if submitted_attachment_references is not None else {}),
         )
         if lease is None:
             raise ChatRunConflict("chat_run_already_exists")
