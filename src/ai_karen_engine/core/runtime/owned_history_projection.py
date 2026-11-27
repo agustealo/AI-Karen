@@ -126,6 +126,42 @@ def _is_degraded_direct_search_context(metadata: Mapping[str, Any]) -> bool:
     )
 
 
+def _verified_document_receipt(metadata: Mapping[str, Any]) -> bool:
+    """Recognize the generated-text producer's duplicate creation receipt.
+
+    The canonical presentation validator owns the receipt schema. Both
+    persisted copies and the captured live presentation must describe the
+    same immutable receipt. This grants no current artifact access; the
+    ordinary completed-run attestation and authorized artifact read remain
+    mandatory at their respective boundaries.
+    """
+    artifacts = metadata.get("artifacts")
+    structured = metadata.get("structured_content")
+    captured = metadata.get("verified_presentations_v1")
+    if (
+        not isinstance(artifacts, list) or len(artifacts) != 1
+        or not isinstance(structured, Mapping) or set(structured) != {"presentation"}
+        or not isinstance(captured, list) or len(captured) != 1
+    ):
+        return False
+    part = validate_presentation(captured[0])
+    if (
+        part is None or part != captured[0]
+        or part["component_type"] != "document.artifact"
+    ):
+        return False
+    # Validate each copy independently: Python equality alone accepts
+    # boolean/integer and integer/float substitutions for size_bytes.
+    structured_part = validate_presentation(structured["presentation"])
+    receipt_part = validate_presentation({**part, "data": artifacts[0]})
+    return (
+        structured_part is not None
+        and structured_part == structured["presentation"] == part
+        and receipt_part is not None
+        and receipt_part == part
+    )
+
+
 def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
     """Allow *withheld* provider source metadata only with an attested UI part.
 
@@ -250,7 +286,9 @@ def project_owned_history(
         if not isinstance(metadata, Mapping):
             raise UnreplayableHistory("invalid_message_metadata")
         has_unknown_rich = any(
-            _carries_value(metadata.get(key)) for key in _UNSUPPORTED_RICH
+            _carries_value(metadata.get(key))
+            and not (key == "artifacts" and _verified_document_receipt(metadata))
+            for key in _UNSUPPORTED_RICH
         )
         has_source_context = any(
             _carries_value(metadata.get(key)) for key in ("sources", "citations")
