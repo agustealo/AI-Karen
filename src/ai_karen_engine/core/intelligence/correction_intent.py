@@ -31,14 +31,20 @@ _EMBEDDED_SUBJECT = re.compile(
     re.IGNORECASE,
 )
 
+_NEGATED_VALUE = re.compile(r"^\s*(?:not|never|no|neither)\b", re.IGNORECASE)
+
 
 def is_atomic_correction_value(value: str) -> bool:
-    """Conservatively reject clause-like subject markers inside a matched value.
+    """Reject embedded clauses and negative values as positive corrections.
 
     Only used for the narrow correction admission path. Ordinary fact
     classification retains its existing treatment of names and locations.
     """
-    return bool(value.strip() and not _EMBEDDED_SUBJECT.search(value))
+    return bool(
+        value.strip()
+        and not _EMBEDDED_SUBJECT.search(value)
+        and not _NEGATED_VALUE.match(value)
+    )
 
 
 def explicit_self_correction_clause(text: str) -> str | None:
