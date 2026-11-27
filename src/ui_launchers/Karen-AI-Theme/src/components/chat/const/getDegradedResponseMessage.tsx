@@ -349,7 +349,7 @@ export function isCopilotRunFinalityUnverified(failure: unknown): boolean {
 export function getCopilotRunFailureMessage(failure: unknown): string {
   const { code, status } = runFailureDetail(failure);
   if (code === ADMISSION_CONFLICT_CODE) {
-    return 'Karen rejected another execution because a submission or conversation run already exists. Reopen the conversation to check its saved history and recovery status before sending again. (HTTP 409)';
+    return 'Karen rejected another execution because a submission or conversation run already exists. Check the original submission status and saved history before sending again. If no recovery identity is available, reopen the conversation. (HTTP 409)';
   }
   if (code !== null) {
     return `${RUN_FAILURE_GUIDANCE[code]} (Code: ${code})`;
