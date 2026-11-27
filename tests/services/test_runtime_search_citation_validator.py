@@ -1,3 +1,5 @@
+import pytest
+
 from ai_karen_engine.services.response.response_contracts import ResponseContract
 from ai_karen_engine.services.response.response_validator import ResponseValidator
 
@@ -129,3 +131,73 @@ def test_explicit_unrequested_menu_remains_rejected():
     )
     assert not result.valid
     assert result.reason == "unrequested_menu"
+
+
+@pytest.mark.parametrize("link", [
+    "HTTPS://unverified.example/facts",
+    "hTtPs://unverified.example/facts",
+    "https://example.org/history/",
+    "https://example.org/history?other=true",
+    "https://example.org/history#different",
+    "https://example.org/history\\@unverified.example",
+    "https://example.org:invalid/history",
+])
+def test_authorized_citation_cannot_mask_another_unverified_url(link):
+    result = ResponseValidator().validate(
+        f"Source: https://example.org/history. Another source: {link}",
+        contract(),
+    )
+    assert not result.valid
+    assert result.reason == "unverified_citation_url"
+
+
+@pytest.mark.parametrize("link", [
+    "HTTPS://example.org/history",
+    "hTtPs://example.org/history.",
+    "https://example.org/history;",
+])
+def test_scheme_case_and_sentence_punctuation_preserve_fetched_identity(link):
+    result = ResponseValidator().validate(f"Source: {link}", contract())
+    assert result.valid, result.reason
+
+
+@pytest.mark.parametrize("source", [
+    "https://[invalid",
+    "https://example.org:invalid/history",
+    "https://example.org:0/history",
+    "https://user:password@example.org/history",
+    "https://example.org/white space",
+    "https://example.org/history\\other",
+])
+def test_malformed_fetched_url_does_not_authorize_citations_or_raise(source):
+    evidence = ResponseContract(
+        purpose="tool_synthesis", requires_live_data=True,
+        tool_results=[{"sources": [{"url": source, "evidence_level": "fetched_page"}]}],
+    )
+    result = ResponseValidator().validate(f"Source: {source}", evidence)
+    assert not result.valid
+    assert result.reason == "missing_authorized_source_evidence"
+
+
+def test_fetched_trailing_slash_is_not_authority_for_different_path():
+    evidence = ResponseContract(
+        purpose="tool_synthesis", requires_live_data=True,
+        tool_results=[{"sources": [{
+            "url": "https://example.org/history/", "evidence_level": "fetched_page",
+        }]}],
+    )
+    result = ResponseValidator().validate("Source: https://example.org/history", evidence)
+    assert not result.valid
+    assert result.reason == "unverified_citation_url"
+
+
+def test_exact_fetched_url_with_terminal_punctuation_is_preserved():
+    evidence = ResponseContract(
+        purpose="tool_synthesis", requires_live_data=True,
+        tool_results=[{"sources": [{
+            "url": "https://example.org/history;", "evidence_level": "fetched_page",
+        }]}],
+    )
+    assert ResponseValidator().validate(
+        "Source: https://example.org/history;", evidence,
+    ).valid
