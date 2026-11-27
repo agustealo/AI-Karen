@@ -23,3 +23,19 @@ def test_greeting_and_visible_answer_hygiene_is_canonical():
     assert "speculating about the user's motives" in prompt
     assert "never private planning, internal monologue" in prompt
     assert "this instruction does not authorize a tool" in prompt
+
+
+def test_task_continuation_and_delegated_agency_are_canonical():
+    prompt = _EVIDENCE_FIRST_INSTRUCTION.lower()
+    for requirement in (
+        "resolve short follow-ups against the relevant preceding conversation",
+        "carry forward the established subject, requested deliverable, and constraints",
+        "do not ask for an already established topic",
+        "when the user delegates a low-risk choice, make a reasonable choice and proceed",
+        "produce it within available capabilities rather than merely offering to help",
+        "never claim execution without runtime evidence",
+        "preserve explicit research and citation requirements",
+        "do not present discovery leads as verified sources",
+        "this instruction does not authorize a tool",
+    ):
+        assert requirement in prompt

@@ -97,3 +97,35 @@ def test_observation_without_url_remains_valid():
     assert validator.validate_observation(
         "The timezone is America/Detroit.", "time.current", {"timezone": "America/Detroit"}
     ).valid
+
+
+def test_numbered_direct_deliverables_are_not_unrequested_menus():
+    validator = ResponseValidator()
+    response = ResponseContract(latest_user_message="Build a simple card game.")
+    for answer in (
+        "1. Shuffle the deck.\n2. Deal five cards.\n3. Take turns.",
+        "## Implementation\n1. Create the game state.",
+        "1) Introduction\n2) Methods\n3) Results",
+    ):
+        result = validator.validate(answer, response)
+        assert result.valid, result.reason
+
+
+def test_numbered_research_answer_still_requires_authorized_citations():
+    validator = ResponseValidator()
+    result = validator.validate(
+        "1. Independence in 1962 (https://example.org/history).", contract()
+    )
+    assert result.valid, result.reason
+    result = validator.validate("1. Independence in 1962.", contract())
+    assert not result.valid
+    assert result.reason == "missing_evidence_citation"
+
+
+def test_explicit_unrequested_menu_remains_rejected():
+    result = ResponseValidator().validate(
+        "Which option would you like?",
+        ResponseContract(latest_user_message="Choose a simple card game."),
+    )
+    assert not result.valid
+    assert result.reason == "unrequested_menu"
