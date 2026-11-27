@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
-import { webcrypto, createHash } from "node:crypto";
+import { webcrypto } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { apiClient } from "@/lib/api";
@@ -210,9 +210,9 @@ describe("staged attachment-bound draft preparation", () => {
   it("builds the exact ordered immutable v2 snapshot without preclearing", async () => {
     const { result } = renderHook(() => useKarenPersistedDraft(conversationId));
     await flush();
-    const digest = createHash("sha256").update(JSON.stringify(references.map(
-      ({ revision, source_id }) => ({ revision, source_id }),
-    )), "utf8").digest("hex");
+    // Fixed Python json.dumps(sort_keys=True, separators=(",", ":"))
+    // SHA-256 vector; do not recalculate using the browser's serialization.
+    const digest = "e1e0621b3a710eb63db47864a9d9b89ec137ad424320a2f939681831e3e1c23b";
     await act(async () => {
       const snapshot = await result.current.prepareAttachmentSubmission(text, references);
       expect(snapshot?.submissionId).toBe("draft-v2-7-" + digest);
