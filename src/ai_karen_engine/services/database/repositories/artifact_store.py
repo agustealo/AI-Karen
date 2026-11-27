@@ -113,7 +113,7 @@ class ArtifactStore(Repository):
 
     async def read_owner_active_text_bounded(
         self, artifact_id: str, tenant_id: str, user_id: str, *,
-        max_bytes: int = 65536,
+        max_bytes: int = 65536, expected_sha256: str | None = None,
     ) -> RepositoryResult[VerifiedArtifactText]:
         """Read current owner-authenticated inert UTF-8 text without buffering.
 
@@ -121,6 +121,8 @@ class ArtifactStore(Repository):
         storage bytes are materialized, while also verifying the live canonical
         owner, active state, expected digest and actual digest. This base method
         explicitly denies until the storage backend proves that capability.
+        An optional expected_sha256 pins the requested historical revision before
+        any Storage read; a mismatch must return no bytes or signed URL.
         Neither download() nor read_owner_active_code() satisfies the bound.
         """
         return RepositoryResult(

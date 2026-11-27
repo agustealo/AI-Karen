@@ -8,6 +8,7 @@ and purge operations through the canonical ArtifactStore contract.
 from __future__ import annotations
 
 import logging
+import re
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
@@ -252,8 +253,9 @@ async def read_artifact_text(
     request: Request,
     response: Response,
     current_user=Depends(get_chat_execution_context),
+    revision: str | None = None,
 ):
-    """Return only currently authorized, bounded and byte-verified owner text."""
+    """Return currently authorized owner text, optionally pinned to a revision."""
     from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
     from uuid import UUID
 
@@ -270,6 +272,10 @@ async def read_artifact_text(
     try:
         if str(UUID(artifact_id)) != artifact_id:
             raise ValueError("noncanonical artifact ID")
+        if revision is not None and (
+            not isinstance(revision, str) or re.fullmatch(r"[a-f0-9]{64}", revision) is None
+        ):
+            raise ValueError("noncanonical artifact revision")
     except ValueError:
         raise HTTPException(status_code=404, detail="Artifact text unavailable") from None
     # The existing witness-based private-data boundary rejects development
@@ -282,13 +288,21 @@ async def read_artifact_text(
         await context.revalidate_runtime_attachment_session()
     except PermissionError:
         raise HTTPException(status_code=403, detail="Artifact access denied") from None
-    result = await _get_artifact_store().read_owner_active_text_bounded(
-        artifact_id, tenant_id, user_id, max_bytes=65536,
-    )
+    store = _get_artifact_store()
+    # Preserve the existing unpinned read contract. A legacy adapter that
+    # cannot enforce the revision must never fall back to an unpinned read.
+    try:
+        result = await store.read_owner_active_text_bounded(
+            artifact_id, tenant_id, user_id, max_bytes=65536,
+            **({"expected_sha256": revision} if revision is not None else {}),
+        )
+    except TypeError:
+        raise HTTPException(status_code=404, detail="Artifact text unavailable") from None
     value = result.data
     if (
         not result.success or not isinstance(value, VerifiedArtifactText)
         or (value.artifact_id, value.tenant_id, value.user_id) != (artifact_id, tenant_id, user_id)
+        or (revision is not None and value.sha256 != revision)
     ):
         raise HTTPException(status_code=404, detail="Artifact text unavailable")
     try:
