@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import uuid
 from copy import deepcopy
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import Enum
 from typing import Any, Dict, List, Optional, TYPE_CHECKING
@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from ai_karen_engine.auth.models import UserData
     from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
 
 from ai_karen_engine.utils.chat_helpers import normalize_session_id
 
@@ -382,9 +383,13 @@ class ChatExecutionContext:
         self.__dict__["_runtime_attachment_scope"] = (plan, meter, scope)
 
     def bind_runtime_attachment_documents(
-        self, plan: Any, meter: Any, documents: list[dict[str, str]],
+        self, plan: Any, meter: Any, documents: list[VerifiedArtifactText],
     ) -> None:
-        """Publish verified document content atomically after every source passes."""
+        """Publish the exact verified owner records atomically, once per scope."""
+        from ai_karen_engine.services.database.repositories.artifact_store import (
+            VerifiedArtifactText,
+        )
+
         self.require_runtime_attachment_read_permission()
         current = self.__dict__.get("_runtime_attachment_scope")
         if (
@@ -392,44 +397,59 @@ class ChatExecutionContext:
             or current[0] is not plan or current[1] is not meter
             or not self.is_runtime_model_plan_authorized(plan, meter)
             or len(documents) != len(current[2])
-            or any(
-                not isinstance(item, dict)
-                or item.get("source_id") != source_id
-                or item.get("revision") != revision
-                or not isinstance(item.get("text"), str)
-                or hashlib.sha256(item["text"].encode("utf-8")).hexdigest() != revision
-                for item, (source_id, revision) in zip(documents, current[2])
-            )
             or "_runtime_attachment_documents" in self.__dict__
         ):
             raise PermissionError("runtime_attachment_authority_invalid")
-        self.__dict__["_runtime_attachment_documents"] = tuple(
-            (item["source_id"], item["revision"], item["text"])
-            for item in documents
-        )
+        records: list[VerifiedArtifactText] = []
+        for item, (source_id, revision) in zip(documents, current[2]):
+            if type(item) is not VerifiedArtifactText:
+                raise PermissionError("runtime_attachment_authority_invalid")
+            record = replace(item)
+            if (
+                record.artifact_id != source_id
+                or record.sha256 != revision
+                or record.tenant_id != self.tenant_id
+                or record.user_id != self.user_id
+                or record.mime_type != "text/plain"
+                or not isinstance(record.filename, str)
+                or not 1 <= len(record.filename) <= 256
+                or not isinstance(record.text, str)
+                or not record.text.strip()
+                or hashlib.sha256(record.text.encode("utf-8")).hexdigest() != revision
+            ):
+                raise PermissionError("runtime_attachment_authority_invalid")
+            records.append(record)
+        self.__dict__["_runtime_attachment_documents"] = tuple(records)
 
     def has_runtime_attachment_scope(self) -> bool:
         """Retain the attachment restriction even if request selection is cleared."""
         return "_runtime_attachment_scope" in self.__dict__
 
-    def runtime_attachment_documents(self) -> list[dict[str, str]]:
-        """Release content only while the original policy plan/meter remain valid."""
+    def runtime_attachment_evidence(self) -> tuple[VerifiedArtifactText, ...]:
+        """Return detached owner records under the original grant.
+
+        This synchronous projection is not a new execution authorization.
+        Dispatchers must still revalidate the durable session and deadline.
+        """
         self.require_runtime_attachment_read_permission()
         current = self.__dict__.get("_runtime_attachment_scope")
         documents = self.__dict__.get("_runtime_attachment_documents")
         if current is None:
-            return []
+            return ()
         plan, meter, scope = current
         if (
             documents is None
             or not self.is_runtime_model_plan_authorized(plan, meter)
-            or tuple((source_id, revision) for source_id, revision, _ in documents)
-            != scope
+            or tuple((item.artifact_id, item.sha256) for item in documents) != scope
         ):
             raise PermissionError("runtime_attachment_authority_invalid")
+        return tuple(replace(item) for item in documents)
+
+    def runtime_attachment_documents(self) -> list[dict[str, str]]:
+        """Keep the existing untrusted prompt projection, without metadata expansion."""
         return [
-            {"source_id": source_id, "revision": revision, "text": text}
-            for source_id, revision, text in documents
+            {"source_id": item.artifact_id, "revision": item.sha256, "text": item.text}
+            for item in self.runtime_attachment_evidence()
         ]
 
     def require_authenticated_user(self) -> "UserData":
