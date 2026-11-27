@@ -453,3 +453,75 @@ def test_attachment_identity_digest_binds_order_and_validates_reserved_format():
     for value in ("draft-v2-0-" + "a" * 64, "draft-v2-1-short", "draft-v2-1-" + "A" * 64):
         with pytest.raises(ValueError, match="invalid_draft_submission_identity"):
             repository.draft_revision_from_submission_id(value)
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("eligible,matched,advanced,expected", [
+    (False, False, None, None),
+    (True, False, None, None),
+    (True, True, None, None),
+    (True, True, 8, 8),
+])
+async def test_retry_advances_only_verified_retained_revision(
+    monkeypatch, eligible, matched, advanced, expected,
+):
+    from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
+        PostgresConversationRepository,
+    )
+
+    calls = []
+    transaction = Transaction([str(uuid.uuid4()) if eligible else None, advanced])
+    scoped_transaction(monkeypatch, transaction)
+
+    async def match(session, **kwargs):
+        assert session is transaction
+        calls.append(kwargs)
+        return matched
+
+    monkeypatch.setattr(PostgresConversationRepository, "lock_matching_submission_draft", match)
+    result = await repository.SqlChatRunRepository().advance_failed_draft_revision(
+        tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+        submission_id="draft-v1-7", submitted_text="retained",
+        attachment_references=[],
+    )
+    assert result == expected
+    assert len(calls) == int(eligible)
+    assert len(transaction.sql) == (2 if eligible and matched else 1)
+    assert "FOR UPDATE" in transaction.sql[0]
+    assert "status IN ('failed', 'cancelled')" in transaction.sql[0]
+    assert "terminal_at IS NOT NULL" in transaction.sql[0]
+    assert "assistant_message_digest IS NULL" in transaction.sql[0]
+    assert "submission_id = :submission_id" in transaction.sql[0]
+    if eligible and matched:
+        assert "NOT EXISTS" in transaction.sql[1]
+        assert "r.status IN ('running', 'cancelling', 'orphaned')" in transaction.sql[1]
+        assert "d.revision = :revision" in transaction.sql[1]
+        assert "SET revision = d.revision + 1" in transaction.sql[1]
+        assert "draft_text =" not in transaction.sql[1]
+        assert "attachment_references =" not in transaction.sql[1]
+    for params in transaction.parameters:
+        assert params["tenant"] == TENANT and params["owner"] == OWNER
+        assert params["conversation"] == THREAD and params["revision"] == 7
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity,refs", [
+    ("random-id", []),
+    ("draft-v1-9007199254740990", []),
+    ("draft-v1-7", [{"source_id": THREAD, "revision": "a" * 64}]),
+    ("draft-v2-7-" + "a" * 64, []),
+    ("draft-v2-7-" + "a" * 64, [{"source_id": THREAD, "revision": "a" * 64}]),
+])
+async def test_invalid_retry_identity_never_opens_transaction(monkeypatch, identity, refs):
+    @asynccontextmanager
+    async def unreachable(*args, **kwargs):
+        raise AssertionError("invalid retry must not open a transaction")
+        yield
+
+    monkeypatch.setattr(repository, "async_transaction_scope", unreachable)
+    with pytest.raises(ValueError):
+        await repository.SqlChatRunRepository().advance_failed_draft_revision(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            submission_id=identity, submitted_text="retained", attachment_references=refs,
+        )
