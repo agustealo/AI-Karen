@@ -5,7 +5,7 @@ import { getBackendBaseUrl } from "../../_lib/backend-proxy";
 import { sanitizeBackendCookies } from "../../_lib/backend-cookies";
 import { ownedThreadHistoryId, readKarenOwnedThreadMessages } from "../../copilotkit/_lib/owned-thread-history";
 import { connectKarenOwnedThread, readKarenConnectThreadId } from "../../copilotkit/_lib/owned-thread-reconnect";
-import { readKarenScopedStopRunId, stopKarenOwnedRun, readKarenOwnedRunStatus } from "../../copilotkit/_lib/owned-run-stop";
+import { readKarenScopedStopRunId, stopKarenOwnedRun, readKarenOwnedRunStatus, ownedDraftRetryTarget, relayKarenOwnedDraftRetry } from "../../copilotkit/_lib/owned-run-stop";
 import { ownedRunEventTarget, readKarenOwnedRunEvents } from "../../copilotkit/_lib/owned-run-events";
 import { verifyKarenCopilotSession } from "../../copilotkit/_lib/verify-session";
 
@@ -36,6 +36,10 @@ function validateCopilotRoute(request: NextRequest): NextResponse | null {
   if (request.method === "GET" && path === "/api/copilotkit/info") return null;
   if (request.method === "GET" && ownedThreadHistoryId(request)) return null;
   if (request.method === "GET" && ownedRunEventTarget(request)) return null;
+  const retry = ownedDraftRetryTarget(request);
+  if (retry && CONVERSATION_UUID.test(retry.threadId) &&
+      (request.method === "GET" || (request.method === "POST" &&
+       request.headers.get("content-type")?.toLowerCase().startsWith("application/json")))) return null;
   const statusMatch = RUN_STATUS_ROUTE.exec(path);
   if (request.method === "GET" && statusMatch &&
       CONVERSATION_UUID.test(statusMatch[1])) return null;
@@ -219,6 +223,16 @@ async function handle(request: NextRequest): Promise<Response> {
 
   const capabilities = await readKarenAgUiCapabilities(request, backendBaseUrl, auth.headers);
   if (capabilities instanceof NextResponse) return capabilities;
+
+  const retryTarget = ownedDraftRetryTarget(request);
+  if (retryTarget && CONVERSATION_UUID.test(retryTarget.threadId)) {
+    if (!capabilities.governedHistory ||
+        (retryTarget.submissionId.startsWith("draft-v2-") &&
+         capabilities.attachmentDraftSubmission !== true)) {
+      return NextResponse.json({ detail: "Draft retry unavailable" }, { status: 404 });
+    }
+    return relayKarenOwnedDraftRetry(request, backendBaseUrl, auth.headers, retryTarget);
+  }
 
   const statusTarget = request.method === "GET"
     ? RUN_STATUS_ROUTE.exec(request.nextUrl.pathname) : null;
