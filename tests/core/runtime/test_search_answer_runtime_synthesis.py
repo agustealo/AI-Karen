@@ -1,5 +1,6 @@
 """Grounded live search must not bypass execution budgets or source provenance."""
 
+import hashlib
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -76,6 +77,12 @@ async def test_fetched_source_can_generate_cited_model_answer():
     assert "https://example.org/history" in answer
     assert metadata["actual_provider"] == "local-test"
     assert metadata["response_source"] == "grounded_search_model"
+    assert metadata["verified_citation_receipt_v1"] == {
+        "schema_version": 1, "request_id": "request",
+        "answer_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+        "source_kind": "tool", "source_id": "internet_search",
+        "urls": ("https://example.org/history",),
+    }
     gateway.generate.assert_awaited_once()
 
 
@@ -203,3 +210,72 @@ async def test_final_gateway_output_with_forged_citation_is_rejected_even_with_a
     ) is None
     gateway.generate.assert_awaited_once()
     meter.consume_model_call.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_durable_citation_receipt_requires_exact_synthesized_answer_and_lease():
+    runtime, _, meter, request, decision, plan, retrieved = _synthesis_inputs(
+        model_text="Jamaica became independent in 1962 (https://example.org/history)."
+    )
+    answer, metadata = await runtime._synthesize_search_evidence(
+        request, decision, plan, meter, retrieved,
+    )
+    metadata["answer_composition_status"] = "grounded_model"
+    request.runtime_run_lease = None
+    assert runtime._durable_citation_receipt(request, answer, metadata) is None
+    request.runtime_run_lease = object()
+    persisted = runtime._durable_citation_receipt(request, answer, metadata)
+    assert persisted == {
+        **metadata["verified_citation_receipt_v1"],
+        "urls": ["https://example.org/history"],
+    }
+    assert runtime._durable_citation_receipt(request, answer + " edited", metadata) is None
+    request.context.request_id = "another-request"
+    assert runtime._durable_citation_receipt(request, answer, metadata) is None
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_receipt", "wrong_origin", "not_grounded", "degraded",
+    "wrong_request", "wrong_digest", "duplicate_urls", "mutable_urls",
+    "extra_field", "wrong_version",
+])
+def test_durable_citation_receipt_fails_closed_on_changed_runtime_evidence(mutation):
+    answer = "Source: https://example.org/history"
+    request = SimpleNamespace(
+        runtime_run_lease=object(), context=SimpleNamespace(request_id="request"),
+    )
+    receipt = {
+        "schema_version": 1,
+        "request_id": "request",
+        "answer_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+        "source_kind": "tool",
+        "source_id": "internet_search",
+        "urls": ("https://example.org/history",),
+    }
+    metadata = {
+        "response_source": "grounded_search_model",
+        "answer_composition_status": "grounded_model",
+        "degraded_mode": False,
+        "verified_citation_receipt_v1": receipt,
+    }
+    if mutation == "missing_receipt":
+        metadata.pop("verified_citation_receipt_v1")
+    elif mutation == "wrong_origin":
+        metadata["response_source"] = "local_inference"
+    elif mutation == "not_grounded":
+        metadata["answer_composition_status"] = "retrieved_evidence"
+    elif mutation == "degraded":
+        metadata["degraded_mode"] = True
+    elif mutation == "wrong_request":
+        receipt["request_id"] = "foreign"
+    elif mutation == "wrong_digest":
+        receipt["answer_sha256"] = "0" * 64
+    elif mutation == "duplicate_urls":
+        receipt["urls"] *= 2
+    elif mutation == "mutable_urls":
+        receipt["urls"] = list(receipt["urls"])
+    elif mutation == "extra_field":
+        receipt["content"] = "private tool payload"
+    elif mutation == "wrong_version":
+        receipt["schema_version"] = True
+    assert ChatRuntime._durable_citation_receipt(request, answer, metadata) is None

@@ -2497,6 +2497,49 @@ class ChatRuntime:
         return durable
 
     @staticmethod
+    def _durable_citation_receipt(
+        request: ChatExecutionRequest, response_text: str, provider_meta: Dict[str, Any],
+    ) -> Optional[Dict[str, Any]]:
+        """Bind runtime-validated citations to the exact durable answer.
+
+        This private field is not a provider/graph metadata allowlist entry.
+        Only the grounded synthesis boundary constructs it. Historical
+        projection must independently verify the completed message digest.
+        """
+        receipt = provider_meta.get("verified_citation_receipt_v1")
+        if (
+            request.runtime_run_lease is None
+            or provider_meta.get("response_source") != "grounded_search_model"
+            or provider_meta.get("answer_composition_status") != "grounded_model"
+            or provider_meta.get("degraded_mode") is not False
+            or not isinstance(receipt, dict)
+            or set(receipt) != {
+                "schema_version", "request_id", "answer_sha256",
+                "source_kind", "source_id", "urls",
+            }
+            or type(receipt["schema_version"]) is not int
+            or receipt["schema_version"] != 1
+            or not request.context.request_id
+            or receipt["request_id"] != request.context.request_id
+            or receipt["source_kind"] not in ("tool", "plugin")
+            or not isinstance(receipt["source_id"], str)
+            or not 1 <= len(receipt["source_id"]) <= 128
+            or not isinstance(receipt["urls"], tuple)
+            or not 1 <= len(receipt["urls"]) <= 50
+            or any(not isinstance(url, str) or not 1 <= len(url) <= 2000
+                   for url in receipt["urls"])
+            or len(set(receipt["urls"])) != len(receipt["urls"])
+        ):
+            return None
+        try:
+            answer_digest = hashlib.sha256(response_text.encode("utf-8")).hexdigest()
+        except UnicodeError:
+            return None
+        if receipt["answer_sha256"] != answer_digest:
+            return None
+        return {**receipt, "urls": list(receipt["urls"])}
+
+    @staticmethod
     async def _private_persistence_authorized(request: ChatExecutionRequest) -> bool:
         """Revalidate private evidence against the original execution authority."""
         if not ChatRuntime._attachment_restriction_required(request):
@@ -2576,6 +2619,7 @@ class ChatRuntime:
                 error_type="AttachmentAdmissionDenied",
             )
 
+        citation_receipt = self._durable_citation_receipt(request, response_text, durable_meta)
         result = await gateway.persist_completed_turn(
             ctx,
             user_text=self._extract_user_message_for_persistence(request),
@@ -2600,6 +2644,8 @@ class ChatRuntime:
                 **({"pending_clarification": provider_meta["pending_clarification"]}
                    if isinstance(provider_meta.get("pending_clarification"), dict) else {}),
                 **({"trajectory_id": trajectory_id} if trajectory_id else {}),
+                **({"verified_citation_receipt_v1": citation_receipt}
+                   if citation_receipt is not None else {}),
                 **({"verified_presentations_v1": durable_meta["verified_presentations_v1"]}
                    if request.runtime_run_lease is not None
                    and isinstance(durable_meta.get("verified_presentations_v1"), list)
@@ -5165,6 +5211,14 @@ class ChatRuntime:
                 "response_source": "grounded_observation_model" if is_observation else "grounded_search_model",
                 "degraded_mode": result.degraded,
                 "degradation_reason": result.degradation_reason if result.degraded else None,
+                **({"verified_citation_receipt_v1": {
+                    "schema_version": 1,
+                    "request_id": request.context.request_id,
+                    "answer_sha256": hashlib.sha256(answer.encode("utf-8")).hexdigest(),
+                    "source_kind": source_kind,
+                    "source_id": source_id,
+                    "urls": verdict.verified_citation_urls,
+                }} if not is_observation and verdict.verified_citation_urls else {}),
             }
         except Exception as exc:
             logger.warning("search_answer_synthesis_failed", extra={
