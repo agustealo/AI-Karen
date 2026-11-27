@@ -27,17 +27,21 @@ _REPORTED_SPEECH = re.compile(
 )
 
 
-def is_explicit_self_correction(text: str) -> bool:
-    """True only for clear correction framing of a first-person clause."""
+def explicit_self_correction_clause(text: str) -> str | None:
+    """Return a correction-framed clause, not proof that its claim is direct."""
     normalized = " ".join(str(text or "").replace("’", "'").split())
     match = _CORRECTION_PREAMBLE.match(normalized)
     if not match or any(quote in normalized for quote in ('"', "“", "”")):
-        return False
+        return None
     clause = normalized[match.end():]
-    return bool(
-        _SELF_AUTHORED_CLAUSE.match(clause)
-        and not _REPORTED_SPEECH.search(clause)
-    )
+    if not _SELF_AUTHORED_CLAUSE.match(clause) or _REPORTED_SPEECH.search(clause):
+        return None
+    return clause
 
 
-__all__ = ["is_explicit_self_correction"]
+def is_explicit_self_correction(text: str) -> bool:
+    """True only for clear correction framing of a first-person clause."""
+    return explicit_self_correction_clause(text) is not None
+
+
+__all__ = ["is_explicit_self_correction", "explicit_self_correction_clause"]

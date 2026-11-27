@@ -238,3 +238,103 @@ def test_conversation_change_without_explicit_correction_remains_unresolved():
     answer, _ = response("favorite_color", dialogue)
     assert "conflicting" in answer.casefold()
     assert "blue" not in answer.casefold()
+
+
+@pytest.mark.parametrize("attribute,earlier,correction,expected", [
+    ("preferred_name", "My name is Alice.", "Actually my name is Alex.", "Alex"),
+    ("employer", "I work at GM.", "Correction: I work at Ford.", "Ford"),
+    ("residence_location", "I live in Chicago.", "To correct myself, I live in Detroit.", "Detroit"),
+])
+def test_canonical_nonfavorite_correction_is_not_lost_at_conversation_admission(
+    attribute, earlier, correction, expected,
+):
+    from ai_karen_engine.core.memory.signals.semantic_classifier import (
+        classify_explicit_user_memory,
+    )
+
+    signals = [
+        signal for signal in classify_explicit_user_memory(correction)
+        if signal.metadata.get("attribute") == attribute
+    ]
+    assert len(signals) == 1
+    assert signals[0].metadata.get("explicit_correction") is True
+    dialogue = ctx(("user", earlier), ("user", correction))
+    resolved = evaluate_conversation_personal_evidence(
+        dialogue, tenant_id="tenant", user_id="user", attribute=attribute,
+    )
+    assert resolved.status is EvidenceSufficiencyStatus.SUPPORTED
+    assert resolved.value == expected
+    assert resolved.evidence_ids == ("1",)
+    answer, meta = response(attribute, dialogue)
+    assert expected in answer
+    assert meta["response_source"] == "authorized_conversation_evidence"
+    assert meta["evidence_count"] == 1
+
+
+@pytest.mark.parametrize("utterance", [
+    "Actually she said my name is Alex.",
+    "Actually my manager said my name is Alex.",
+    "Actually I said my name is Alex.",
+    "Actually my colleague told me my name is Alex.",
+    "Actually I wonder if my name is Alex.",
+    "Actually my name is Alex?",
+    'Actually "my name is Alex" is the quote.',
+    "Correction: they say my name is Alex.",
+])
+def test_untrusted_correction_preambles_do_not_replace_identity(utterance):
+    dialogue = ctx(("user", "My name is Alice."), ("user", utterance))
+    resolved = evaluate_conversation_personal_evidence(
+        dialogue, tenant_id="tenant", user_id="user", attribute="preferred_name",
+    )
+    assert resolved.status is EvidenceSufficiencyStatus.SUPPORTED
+    assert resolved.value == "Alice"
+    assert resolved.evidence_ids == ("0",)
+
+
+def test_explicit_identity_correction_does_not_silently_override_saved_conflict():
+    dialogue = ctx(("user", "My name is Alice."), ("user", "Actually my name is Alex."))
+    dialogue.authorized_sources.append("memory")
+    dialogue.evidence.append(ContextEvidence(
+        evidence_id="saved-name", source=EvidenceSource.MEMORY,
+        content="preferred_name: Alice",
+        scope=EvidenceScope(tenant_id="tenant", user_id="user"),
+    ))
+    answer, meta = response("preferred_name", dialogue)
+    assert meta["evidence_sufficiency"] == "contradictory"
+    assert meta["evidence_reason"] == "saved_and_conversation_disagree"
+    assert "Alice" not in answer and "Alex" not in answer
+
+    # Once the canonical saved projection agrees, current recall may assert it.
+    dialogue.evidence[-1].content = "preferred_name: Alex"
+    answer, meta = response("preferred_name", dialogue)
+    assert "Alex" in answer and "Alice" not in answer
+    assert meta["evidence_sufficiency"] == "supported"
+
+
+@pytest.mark.parametrize("attribute,earlier,utterance,expected", [
+    ("employer", "I work at GM.", "Correction: I wonder if I work at Ford.", "GM"),
+    ("residence_location", "I live in Chicago.", "Actually my colleague told me I live in Detroit.", "Chicago"),
+])
+def test_nested_nonfavorite_correction_cannot_override_direct_fact(attribute, earlier, utterance, expected):
+    resolved = evaluate_conversation_personal_evidence(
+        ctx(("user", earlier), ("user", utterance)),
+        tenant_id="tenant", user_id="user", attribute=attribute,
+    )
+    assert resolved.status is EvidenceSufficiencyStatus.SUPPORTED
+    assert resolved.value == expected
+    assert resolved.evidence_ids == ("0",)
+
+
+@pytest.mark.parametrize("utterance", [
+    "Actually I live in Detroit. My colleague told me I live in Boston.",
+    "Actually I live in Detroit; my colleague told me I live in Boston.",
+    "Actually I live in Detroit and my colleague told me I live in Boston.",
+])
+def test_compound_correction_cannot_admit_nested_location_claim(utterance):
+    resolved = evaluate_conversation_personal_evidence(
+        ctx(("user", "I live in Chicago."), ("user", utterance)),
+        tenant_id="tenant", user_id="user", attribute="residence_location",
+    )
+    assert resolved.status is EvidenceSufficiencyStatus.SUPPORTED
+    assert resolved.value == "Chicago"
+    assert resolved.evidence_ids == ("0",)
