@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import re
 
-from ai_karen_engine.core.intelligence.correction_intent import is_explicit_self_correction
+from ai_karen_engine.core.intelligence.correction_intent import (
+    is_atomic_correction_value, is_explicit_self_correction,
+)
 
 from .signal_models import MemorySignal
 
@@ -125,7 +127,13 @@ def is_direct_general_correction_claim(clause: str, attribute: str) -> bool:
         else tuple(pattern for key, _, pattern in _LOCATION_PATTERNS if key == attribute)
     )
     statement = clause.rstrip(".!").strip()
-    return bool(statement and any(pattern.fullmatch(statement) for pattern in patterns))
+    if not statement:
+        return False
+    return any(
+        is_atomic_correction_value(match.group(1))
+        for pattern in patterns
+        if (match := pattern.fullmatch(statement)) is not None
+    )
 
 
 def classify_general_user_facts(text: str) -> list[MemorySignal]:

@@ -278,6 +278,7 @@ def test_canonical_nonfavorite_correction_is_not_lost_at_conversation_admission(
     "Actually my colleague told me my name is Alex.",
     "Actually I wonder if my name is Alex.",
     "Actually my name is Alex?",
+    "Actually my name is Alex my colleague told me my name is Bob.",
     'Actually "my name is Alex" is the quote.',
     "Correction: they say my name is Alex.",
 ])
@@ -313,6 +314,7 @@ def test_explicit_identity_correction_does_not_silently_override_saved_conflict(
 
 @pytest.mark.parametrize("attribute,earlier,utterance,expected", [
     ("employer", "I work at GM.", "Correction: I wonder if I work at Ford.", "GM"),
+    ("employer", "I work at GM.", "Actually I work at Ford my colleague told me I work at Tesla.", "GM"),
     ("residence_location", "I live in Chicago.", "Actually my colleague told me I live in Detroit.", "Chicago"),
 ])
 def test_nested_nonfavorite_correction_cannot_override_direct_fact(attribute, earlier, utterance, expected):
@@ -329,6 +331,9 @@ def test_nested_nonfavorite_correction_cannot_override_direct_fact(attribute, ea
     "Actually I live in Detroit. My colleague told me I live in Boston.",
     "Actually I live in Detroit; my colleague told me I live in Boston.",
     "Actually I live in Detroit and my colleague told me I live in Boston.",
+    "Actually I live in Detroit my colleague told me I'm based in Boston.",
+    "Actually I live in Detroit\nmy colleague told me I'm based in Boston.",
+    "Actually I live in Detroit I reside in Boston.",
 ])
 def test_compound_correction_cannot_admit_nested_location_claim(utterance):
     resolved = evaluate_conversation_personal_evidence(

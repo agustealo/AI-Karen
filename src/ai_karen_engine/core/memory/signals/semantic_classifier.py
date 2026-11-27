@@ -13,7 +13,8 @@ import re
 
 from ai_karen_engine.core.intelligence.profile_attribute import (normalize_personal_query, requested_profile_attribute, is_profile_summary_request)
 from ai_karen_engine.core.intelligence.correction_intent import (
-    explicit_self_correction_clause, is_explicit_self_correction,
+    explicit_self_correction_clause, is_atomic_correction_value,
+    is_explicit_self_correction,
 )
 from ai_karen_engine.core.intelligence.preference_relation import extract_favorite_assertion
 from ai_karen_engine.core.intelligence.personal_relation import extract_personal_relation
@@ -231,7 +232,8 @@ def is_direct_profile_correction(text: str, attribute: str) -> bool:
     if not statement or re.search(r"[.!?;:,]|\b(?:and|but|or)\b", statement, re.I):
         return False
     if attribute == "preferred_name":
-        return _NAME.fullmatch(statement) is not None
+        match = _NAME.fullmatch(statement)
+        return match is not None and is_atomic_correction_value(match.group(1))
     return is_direct_general_correction_claim(statement, attribute)
 
 
