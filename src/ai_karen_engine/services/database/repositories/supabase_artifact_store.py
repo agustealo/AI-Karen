@@ -818,7 +818,7 @@ class SupabaseArtifactStore(ArtifactStore):
     @instrument_repository(operation="read_owner_active_text_bounded", repository="SupabaseArtifactStore")
     async def read_owner_active_text_bounded(
         self, artifact_id: str, tenant_id: str, user_id: str, *,
-        max_bytes: int = 65536,
+        max_bytes: int = 65536, expected_sha256: str | None = None,
     ) -> RepositoryResult[VerifiedArtifactText]:
         """Read owner text from the exact file-row-attested Storage object key.
 
@@ -832,6 +832,10 @@ class SupabaseArtifactStore(ArtifactStore):
         unavailable = "bounded_artifact_read_unavailable"
         if (
             type(max_bytes) is not int or not 1 <= max_bytes <= 65536
+            or (expected_sha256 is not None and (
+                not isinstance(expected_sha256, str)
+                or re.fullmatch(r"[a-f0-9]{64}", expected_sha256) is None
+            ))
             or any(
                 not isinstance(value, str)
                 or not self._canonical_uuid_value(value)
@@ -871,6 +875,8 @@ class SupabaseArtifactStore(ArtifactStore):
                     or not 1 <= size <= max_bytes
                     or not isinstance(digest, str)
                     or re.fullmatch(r"[a-f0-9]{64}", digest) is None
+                    or (expected_sha256 is not None
+                        and not hmac.compare_digest(digest, expected_sha256))
                     or object_key is None
                 ):
                     return RepositoryResult(success=False, error=unavailable)
