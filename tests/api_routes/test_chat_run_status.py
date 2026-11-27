@@ -359,3 +359,106 @@ async def test_invalid_exact_submission_is_rejected_before_database(monkeypatch,
             tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
             submission_id=submission_id,
         )
+
+
+@pytest.mark.asyncio
+async def test_submission_coordinator_reauthorizes_before_ledger_read(monkeypatch):
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+    calls = []
+    context = ChatExecutionContext(
+        user_id=OWNER, tenant_id=TENANT, session_id=THREAD,
+        conversation_id=THREAD, request_id="request-submission",
+        correlation_id="correlation-submission",
+        authenticated_user=UserData(
+            user_id=OWNER, tenant_id=TENANT, is_active=True, is_verified=True,
+        ),
+    )
+
+    class Gateway:
+        async def require_owned_conversation(self, execution_context):
+            assert execution_context is context
+            calls.append("authorize")
+
+    class Ledger:
+        async def read_submission_status(self, **kwargs):
+            calls.append("read")
+            assert kwargs == {
+                "tenant_id": TENANT, "user_id": OWNER,
+                "conversation_id": THREAD, "submission_id": "original-turn",
+            }
+            return {"runId": "original-run"}
+
+    monkeypatch.setattr(
+        chat_run_lifecycle, "get_conversation_runtime_gateway", lambda: Gateway(),
+    )
+    coordinator = chat_run_lifecycle.ChatRunCoordinator(Ledger())
+    assert await coordinator.read_submission_status(
+        context, submission_id="original-turn",
+    ) == {"runId": "original-run"}
+    assert calls == ["authorize", "read"]
+
+    class Denied:
+        async def require_owned_conversation(self, execution_context):
+            raise PermissionError("foreign owner")
+
+    monkeypatch.setattr(
+        chat_run_lifecycle, "get_conversation_runtime_gateway", lambda: Denied(),
+    )
+    with pytest.raises(PermissionError):
+        await coordinator.read_submission_status(context, submission_id="original-turn")
+    assert calls == ["authorize", "read"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case,expected", [
+    ("valid", 200), ("missing", 404), ("denied", 404),
+    ("invalid_identity", 422), ("disabled", 404),
+    ("foreign_identity", 503), ("unverified", 503),
+])
+async def test_submission_status_endpoint_is_scoped_and_minimal(monkeypatch, case, expected):
+    calls = []
+
+    class Coordinator:
+        async def read_submission_status(self, context, *, submission_id):
+            calls.append(submission_id)
+            assert (context.tenant_id, context.user_id, context.conversation_id) == (
+                TENANT, OWNER, THREAD,
+            )
+            if case == "missing":
+                return None
+            if case == "denied":
+                raise PermissionError("private foreign user detail")
+            if case == "unverified":
+                raise RuntimeError("private ledger error")
+            return {
+                "runId": "original-run",
+                "submissionId": "foreign-turn" if case == "foreign_identity" else submission_id,
+                "status": "completed", "cancel_requested": False,
+                "cancellation_confirmed": False,
+                "lease_token": "must-never-leave-ledger",
+            }
+
+    monkeypatch.setattr(ingress, "get_runtime_settings", lambda: SimpleNamespace(
+        features=SimpleNamespace(
+            enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=case != "disabled",
+        ),
+    ))
+    monkeypatch.setattr(ingress, "get_chat_run_coordinator", lambda: Coordinator())
+    args = (THREAD, "bad identity" if case == "invalid_identity" else "original-turn")
+    user = {"user_id": OWNER, "tenant_id": TENANT}
+    if expected == 200:
+        response = await ingress.get_ag_ui_chat_submission_status(*args, user=user)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "private, no-store"
+        assert b'"runId":"original-run"' in response.body
+        assert b'"submissionId":"original-turn"' in response.body
+        assert b"lease_token" not in response.body
+    else:
+        with pytest.raises(HTTPException) as error:
+            await ingress.get_ag_ui_chat_submission_status(*args, user=user)
+        assert error.value.status_code == expected
+        assert "private" not in error.value.detail
+    assert calls == ([] if case in {"invalid_identity", "disabled"} else ["original-turn"])
