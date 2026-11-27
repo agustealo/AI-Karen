@@ -480,6 +480,80 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         assert (await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
         )).data == newer.data
+        # Exact reconciliation must return the original committed submission,
+        # not the most recent run. Exercise the real ledger under a temporary
+        # non-bypass PostgreSQL role, not the fixture's database creator.
+        # Role creation and grants are rolled back with the transaction.
+        role = "submission_reader_" + uuid4().hex
+        async with factory() as session:
+            await session.begin()
+            try:
+                await session.execute(text(
+                    f'CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOBYPASSRLS'
+                ))
+                await session.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+                await session.execute(text(
+                    'GRANT SELECT ON public.runtime_chat_runs, public.conversations, '
+                    f'public.messages TO "{role}"'
+                ))
+                await session.execute(text(f'SET LOCAL ROLE "{role}"'))
+                role_evidence = (await session.execute(text(
+                    "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles "
+                    "WHERE rolname = current_user"
+                ))).one()
+                assert tuple(role_evidence) == (role, False, False)
+
+                @asynccontextmanager
+                async def restricted_scope(tenant_id, *, user_id):
+                    await session.execute(text(
+                        "SELECT set_config('app.current_tenant_id', :tenant, true)"
+                    ), {"tenant": tenant_id})
+                    await session.execute(text(
+                        "SELECT set_config('app.current_user_id', :owner, true)"
+                    ), {"owner": user_id})
+                    yield session
+
+                async def submission_status(run, *, tid=tenant, uid=owner, cid=conversation):
+                    return await runs.read_submission_status(
+                        tenant_id=tid, user_id=uid, conversation_id=cid,
+                        submission_id=run.submission_id,
+                    )
+
+                with monkeypatch.context() as restricted:
+                    restricted.setattr(
+                        chat_run_repository, "async_transaction_scope", restricted_scope,
+                    )
+                    assert await submission_status(completing) == {
+                        "runId": "complete-private", "submissionId": completing.submission_id,
+                        "status": "completed", "cancel_requested": False,
+                        "cancellation_confirmed": False,
+                    }
+                    assert (await submission_status(older))["runId"] == "older-completion"
+                    assert (await submission_status(cancelled))["status"] == "cancelled"
+                    assert (await submission_status(lease))["status"] == "failed"
+                    assert await submission_status(completing, uid=other_owner) is None
+                    assert await submission_status(completing, tid=other_tenant) is None
+                    assert await submission_status(completing, cid=str(uuid4())) is None
+                    assert await runs.read_submission_status(
+                        tenant_id=tenant, user_id=owner, conversation_id=conversation,
+                        submission_id="unknown-submission",
+                    ) is None
+                    # Verify that RLS itself denies foreign rows even without
+                    # the repository's redundant explicit owner predicates.
+                    for tid, uid in ((tenant, other_owner), (other_tenant, owner)):
+                        async with restricted_scope(tid, user_id=uid) as scoped:
+                            count = (await scoped.execute(text(
+                                "SELECT count(*) FROM public.runtime_chat_runs "
+                                "WHERE submission_id = :submission"
+                            ), {"submission": completing.submission_id})).scalar_one()
+                            assert count == 0
+            finally:
+                await session.rollback()
+        assert await observe(completing) == ("completed", 2)
+        assert await observe(cancelled) == ("cancelled", 0)
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == newer.data
         assert issuer.revalidate_issued_session_in_transaction.await_count >= 5
         for call in issuer.revalidate_issued_session_in_transaction.await_args_list:
             assert isinstance(call.args[3], AsyncSession)
