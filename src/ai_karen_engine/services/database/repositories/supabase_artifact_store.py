@@ -38,7 +38,7 @@ from ai_karen_engine.services.database.repositories.artifact_store import (
 from ai_karen_engine.services.database.repositories.observability import instrument_repository
 from ai_karen_engine.services.database.repositories.upload_session import UploadSessionRepository
 from ai_karen_engine.core.logging.redaction import install_signed_storage_httpx_log_filter
-from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig, StorageTLSPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -818,7 +818,7 @@ class SupabaseArtifactStore(ArtifactStore):
     @instrument_repository(operation="read_owner_active_text_bounded", repository="SupabaseArtifactStore")
     async def read_owner_active_text_bounded(
         self, artifact_id: str, tenant_id: str, user_id: str, *,
-        max_bytes: int = 65536,
+        max_bytes: int = 65536, expected_sha256: str | None = None,
     ) -> RepositoryResult[VerifiedArtifactText]:
         """Read owner text from the exact file-row-attested Storage object key.
 
@@ -832,6 +832,10 @@ class SupabaseArtifactStore(ArtifactStore):
         unavailable = "bounded_artifact_read_unavailable"
         if (
             type(max_bytes) is not int or not 1 <= max_bytes <= 65536
+            or (expected_sha256 is not None and (
+                not isinstance(expected_sha256, str)
+                or re.fullmatch(r"[a-f0-9]{64}", expected_sha256) is None
+            ))
             or any(
                 not isinstance(value, str)
                 or not self._canonical_uuid_value(value)
@@ -871,6 +875,8 @@ class SupabaseArtifactStore(ArtifactStore):
                     or not 1 <= size <= max_bytes
                     or not isinstance(digest, str)
                     or re.fullmatch(r"[a-f0-9]{64}", digest) is None
+                    or (expected_sha256 is not None
+                        and not hmac.compare_digest(digest, expected_sha256))
                     or object_key is None
                 ):
                     return RepositoryResult(success=False, error=unavailable)
@@ -896,6 +902,11 @@ class SupabaseArtifactStore(ArtifactStore):
                     )
                 ):
                     return RepositoryResult(success=False, error=unavailable)
+
+                policy = getattr(self._storage, "storage_tls_policy", None)
+                if policy is not None and not isinstance(policy, StorageTLSPolicy):
+                    return RepositoryResult(success=False, error=unavailable)
+                verify = True if policy is None else policy.verify_for_origin(origin)
 
                 # Keep the PostgreSQL FOR SHARE lease bounded even when a
                 # hostile Storage endpoint trickles bytes without violating
@@ -937,7 +948,7 @@ class SupabaseArtifactStore(ArtifactStore):
                     chunks = bytearray()
                     async with httpx.AsyncClient(
                         timeout=httpx.Timeout(10.0, connect=3.0),
-                        trust_env=False, follow_redirects=False,
+                        verify=verify, trust_env=False, follow_redirects=False,
                     ) as client:
                         async with client.stream(
                             "GET", url,
