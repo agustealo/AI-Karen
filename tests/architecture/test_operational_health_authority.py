@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -245,3 +247,118 @@ def test_redis_remains_required_when_rate_limit_enforcement_is_enabled(
 
     monkeypatch.setenv("ENABLE_RATE_LIMITING", "false")
     assert OperationalHealthService.redis_required() is False
+
+
+
+@pytest.mark.parametrize(("changes", "expected_reason"), [
+    ({}, None),
+    ({"status": "partial"}, "redis_durability_evidence_incomplete"),
+    ({"status": "unavailable"}, "redis_durability_evidence_incomplete"),
+    ({"maxmemory_policy": "volatile-lru"}, "redis_eviction_policy_unsafe"),
+    ({"maxmemory_policy": "allkeys-lru"}, "redis_eviction_policy_unsafe"),
+    ({"aof_enabled": False}, "redis_aof_disabled"),
+    ({"appendfsync": "everysec"}, "redis_fsync_policy_unsafe"),
+    ({"appendfsync": "no"}, "redis_fsync_policy_unsafe"),
+    ({"aof_write_ok": False}, "redis_aof_write_unhealthy"),
+])
+def test_redis_durability_readiness_classification(changes, expected_reason):
+    evidence = {
+        "status": "observed",
+        "maxmemory_policy": "noeviction",
+        "aof_enabled": True,
+        "appendfsync": "always",
+        "aof_write_ok": True,
+        "used_memory_bytes": 123456789,
+    }
+    evidence.update(changes)
+    result = OperationalHealthService._redis_durability_result(
+        SimpleNamespace(**evidence),
+    )
+    assert result["ready"] is (expected_reason is None)
+    if expected_reason is None:
+        assert result["durability_status"] == "configuration_verified"
+    else:
+        assert result["reason"] == expected_reason
+    assert "123456789" not in repr(result)
+
+
+@pytest.mark.asyncio
+async def test_production_distributed_readiness_requires_redis_even_without_memory(
+    monkeypatch,
+):
+    _set_safe_production_environment(monkeypatch)
+    for name in ("KARI_ENABLE_MEMORY_SERVICE", "ENABLE_RATE_LIMITING", "AUTH_ENABLE_RATE_LIMITING"):
+        monkeypatch.setenv(name, "false")
+    from ai_karen_engine.config import agent_medusa
+
+    monkeypatch.setattr(
+        agent_medusa, "get_agent_medusa_runtime_settings",
+        lambda: SimpleNamespace(distributed_run_control_enabled=True),
+    )
+    service = OperationalHealthService()
+    redis_check = AsyncMock(return_value={"ready": False, "status": "durability_unsafe"})
+    monkeypatch.setattr(service, "_database_check", AsyncMock(return_value={"ready": True}))
+    monkeypatch.setattr(service, "_redis_check", redis_check)
+    result = await service.readiness(environment="production")
+    assert result.ready is False
+    assert result.as_dict()["components"]["redis"] == "not_ready"
+    redis_check.assert_awaited_once_with(required=True, durability_required=True)
+    assert service.redis_lifecycle_enabled(environment="production") is True
+
+    monkeypatch.setattr(
+        agent_medusa, "get_agent_medusa_runtime_settings",
+        lambda: SimpleNamespace(distributed_run_control_enabled=False),
+    )
+    redis_check.reset_mock()
+    redis_check.return_value = {"ready": True, "status": "not_required"}
+    assert (await service.readiness(environment="production")).ready is True
+    redis_check.assert_awaited_once_with(required=False)
+
+
+@pytest.mark.asyncio
+async def test_invalid_medusa_configuration_never_waives_durability(monkeypatch):
+    _set_safe_production_environment(monkeypatch)
+    service = OperationalHealthService()
+    from ai_karen_engine.config import agent_medusa
+
+    def invalid():
+        raise ValueError("private configuration content")
+
+    monkeypatch.setattr(agent_medusa, "get_agent_medusa_runtime_settings", invalid)
+    monkeypatch.setattr(service, "_database_check", AsyncMock(return_value={"ready": True}))
+    redis_check = AsyncMock(return_value={"ready": True, "status": "healthy"})
+    monkeypatch.setattr(service, "_redis_check", redis_check)
+    result = await service.readiness(environment="production")
+    assert not result.ready
+    assert "medusa_runtime_settings=invalid_or_unavailable" in result.checks["configuration"]["violations"]
+    assert "private configuration content" not in repr(result)
+    redis_check.assert_awaited_once_with(required=True, durability_required=True)
+
+
+@pytest.mark.asyncio
+async def test_required_durability_uses_live_manager_and_propagates_cancellation(monkeypatch):
+    import sys
+    from types import ModuleType
+
+    module = ModuleType("ai_karen_engine.platform.memory.redis")
+    manager = SimpleNamespace(
+        is_healthy=AsyncMock(return_value=True),
+        observe_durability=AsyncMock(return_value=SimpleNamespace(status="partial")),
+    )
+    module.get_redis_manager = lambda: manager
+    monkeypatch.setitem(sys.modules, module.__name__, module)
+
+    result = await OperationalHealthService._redis_check(required=False, durability_required=True)
+    assert not result["ready"]
+    manager.is_healthy.assert_awaited_once()
+    manager.observe_durability.assert_awaited_once()
+    manager.is_healthy.return_value = False
+    manager.observe_durability.reset_mock()
+    assert not (await OperationalHealthService._redis_check(
+        required=True, durability_required=True,
+    ))["ready"]
+    manager.observe_durability.assert_not_awaited()
+    manager.is_healthy.return_value = True
+    manager.observe_durability.side_effect = asyncio.CancelledError
+    with pytest.raises(asyncio.CancelledError):
+        await OperationalHealthService._redis_check(required=True, durability_required=True)
