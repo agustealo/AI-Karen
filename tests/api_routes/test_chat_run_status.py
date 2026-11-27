@@ -243,3 +243,119 @@ async def test_completed_status_requires_exact_transcript_binding(monkeypatch, r
             await ledger.read_recovery_run(**identity)
         else:
             await ledger.read_status(**identity, transport_run_id="run-exact")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state,live,terminal,bound,expected,error",
+    [
+        ("running", True, False, True, "running", None),
+        ("cancelling", True, False, True, "cancelling", None),
+        ("running", False, False, True, "interrupted", None),
+        ("orphaned", None, True, True, "orphaned", None),
+        ("completed", None, True, True, "completed", None),
+        ("failed", None, True, True, "failed", None),
+        ("cancelled", None, True, True, "cancelled", None),
+        ("completed", None, True, False, None, "unverified_chat_run_completion_binding"),
+        ("failed", None, False, True, None, "unverified_chat_run_terminal"),
+    ],
+)
+async def test_exact_submission_status_reuses_scoped_terminal_evidence(
+    monkeypatch, state, live, terminal, bound, expected, error,
+):
+    queries = []
+
+    class Session:
+        async def execute(self, statement, params):
+            queries.append((str(statement), params))
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(
+                one_or_none=lambda: {
+                    "transport_run_id": "original-run",
+                    "submission_id": "original-turn",
+                    "status": state,
+                    "stop_requested": state in {"cancelling", "cancelled"},
+                    "terminal_recorded": terminal,
+                    "lease_live": live,
+                    "completion_bound": bound,
+                },
+            ))
+
+    @asynccontextmanager
+    async def scope(tenant, *, user_id=None):
+        assert (tenant, user_id) == (TENANT, OWNER)
+        yield Session()
+
+    monkeypatch.setattr(repo, "async_transaction_scope", scope)
+    ledger = repo.SqlChatRunRepository()
+    args = dict(tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+                submission_id="original-turn")
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            await ledger.read_submission_status(**args)
+    else:
+        result = await ledger.read_submission_status(**args)
+        assert result == {
+            "runId": "original-run",
+            "submissionId": "original-turn",
+            "status": expected,
+            "cancel_requested": state in {"cancelling", "cancelled"},
+            "cancellation_confirmed": state == "cancelled",
+        }
+    assert len(queries) == 1
+    sql, params = queries[0]
+    assert sql.lstrip().startswith("SELECT")
+    assert "UPDATE" not in sql and "INSERT" not in sql
+    assert "lease_token" not in sql
+    assert "tenant_id = CAST(:tenant AS uuid)" in sql
+    assert "user_id = CAST(:owner AS uuid)" in sql
+    assert "conversation_id = CAST(:conversation AS uuid)" in sql
+    assert "submission_id = :submission_id" in sql
+    assert "ORDER BY" not in sql and "LIMIT 1" not in sql
+    assert "JOIN messages u" in sql and "JOIN messages a" in sql
+    assert params == {
+        "tenant": TENANT, "owner": OWNER, "conversation": THREAD,
+        "submission_id": "original-turn",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", [
+    None,
+    {"transport_run_id": "foreign run", "submission_id": "original-turn"},
+    {"transport_run_id": "other-run", "submission_id": "other-turn"},
+])
+async def test_exact_submission_absence_or_mismatch_never_falls_back(monkeypatch, row):
+    class Session:
+        async def execute(self, statement, params):
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(
+                one_or_none=lambda: row,
+            ))
+
+    @asynccontextmanager
+    async def scope(tenant, *, user_id=None):
+        assert (tenant, user_id) == (TENANT, OWNER)
+        yield Session()
+
+    monkeypatch.setattr(repo, "async_transaction_scope", scope)
+    ledger = repo.SqlChatRunRepository()
+    args = dict(tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+                submission_id="original-turn")
+    if row is None:
+        assert await ledger.read_submission_status(**args) is None
+    else:
+        with pytest.raises(RuntimeError, match="unverified_chat_run_recovery_identity"):
+            await ledger.read_submission_status(**args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("submission_id", ["", "bad id", "x" * 101, None])
+async def test_invalid_exact_submission_is_rejected_before_database(monkeypatch, submission_id):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Invalid selector entered the database")
+
+    monkeypatch.setattr(repo, "async_transaction_scope", unexpected)
+    with pytest.raises(ValueError, match="invalid_chat_submission_id"):
+        await repo.SqlChatRunRepository().read_submission_status(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            submission_id=submission_id,
+        )
