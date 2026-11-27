@@ -390,6 +390,83 @@ def test_search_sources_cannot_authorize_new_or_malformed_replay(mutation):
         project_owned_history(snapshot, attestations=attested(snapshot))
 
 
+
+def composed_source_metadata():
+    search = _search_surface()
+    weather = {
+        "schema_version": 1,
+        "presentation_id": "weather-verified",
+        "component_type": "weather.observation",
+        "evidence_ref": REQUEST_ID + ":weather",
+        "data": {"location": "Detroit", "temperature": "61°F",
+                 "conditions": "light rain"},
+    }
+    surface = {
+        "schema_version": 1,
+        "presentation_id": "surface-" + REQUEST_ID,
+        "component_type": "surface.composition",
+        "evidence_ref": "bundle:" + REQUEST_ID,
+        "data": {
+            "layout": "grid", "items": [search, weather],
+            "evidence_refs": [search["evidence_ref"], weather["evidence_ref"]],
+        },
+    }
+    return {
+        **receipt(),
+        "structured_content": {"presentation": surface},
+        "verified_presentations_v1": [surface],
+        "sources": [_search_source(), {"url": "https://open-meteo.com/data"}],
+        "citations": [{"url": "https://example.org/report", "id": "private-citation-id"}],
+    }
+
+
+def test_attested_source_composition_restores_original_layout_without_raw_citations():
+    meta = composed_source_metadata()
+    snapshot = saved([assistant(meta)])
+    result = project_attested(snapshot)
+    assert result["replayEvents"][0]["name"] == "karen.presentation.v1"
+    assert result["replayEvents"][0]["messageId"] == ASSISTANT_ID
+    assert result["replayEvents"][0]["value"] == meta["verified_presentations_v1"][0]
+    assert "CANONICAL-PRIVATE-CONTENT" not in str(result)
+    assert "private-citation-id" not in str(result)
+    assert "https://open-meteo.com/data" not in str(result)
+
+
+@pytest.mark.parametrize("mutation", [
+    "missing_source", "forged_snippet", "foreign_child", "wrong_bundle",
+    "duplicate_id", "unsupported_child", "missing_manifest", "empty_request",
+])
+def test_source_composition_cannot_expand_saved_evidence(mutation):
+    meta = composed_source_metadata()
+    surface = meta["verified_presentations_v1"][0]
+    items = surface["data"]["items"]
+    if mutation == "missing_source":
+        meta["sources"] = meta["sources"][1:]
+    elif mutation == "forged_snippet":
+        items[0]["data"]["results"][0]["snippet"] = "invented"
+    elif mutation == "foreign_child":
+        items[1]["evidence_ref"] = "foreign:weather"
+        surface["data"]["evidence_refs"][1] = "foreign:weather"
+    elif mutation == "wrong_bundle":
+        surface["evidence_ref"] = "bundle:foreign"
+    elif mutation == "duplicate_id":
+        items[1]["presentation_id"] = items[0]["presentation_id"]
+    elif mutation == "unsupported_child":
+        items[1] = {**presentation(), "evidence_ref": items[1]["evidence_ref"]}
+    elif mutation == "missing_manifest":
+        surface["data"].pop("evidence_refs")
+    elif mutation == "empty_request":
+        meta["request_id"] = ""
+    with pytest.raises(UnreplayableHistory, match="unsupported_rich_history"):
+        project_attested(saved([assistant(meta)]))
+
+
+def test_source_composition_requires_completed_run_attestation():
+    snapshot = saved([assistant(composed_source_metadata())])
+    with pytest.raises(UnreplayableHistory, match="unattested_runtime_metadata"):
+        project_owned_history(snapshot, attestations={})
+
+
 def test_unattested_source_rich_search_remains_closed():
     part = _search_surface()
     snap = saved([assistant({

@@ -203,25 +203,47 @@ def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
     ):
         return False
     part = validate_presentation(captured[0])
-    if part is None or part != captured[0] or part["component_type"] not in {
+    if part is None or part != captured[0]:
+        return False
+    # The runtime may arrange its already verified observations in a bounded
+    # composition. Only source-backed search/weather children are supported
+    # here; do not treat a layout plan as independent evidence authority.
+    parts = (
+        part["data"]["items"]
+        if part["component_type"] == "surface.composition"
+        else [part]
+    )
+    if any(child["component_type"] not in {
         "search.results", "weather.observation", "weather.comparison",
-    }:
+    } for child in parts):
+        return False
+    if len({child["presentation_id"] for child in parts}) != len(parts):
         return False
     # A source/citation-bearing capability must carry the original completed
     # request receipt; unpaired metadata from historical/legacy messages
     # cannot be silently admitted as if it were verified.
     if metadata.get("source") != "chat_runtime" or not isinstance(metadata.get("request_id"), str):
         return False
-    evidence = part.get("evidence_ref")
-    if not isinstance(evidence, str) or not evidence.startswith(metadata["request_id"] + ":"):
+    request_id = metadata["request_id"]
+    if not request_id:
+        return False
+    prefix = request_id + ":"
+    references = {child["evidence_ref"] for child in parts}
+    if any(not ref.startswith(prefix) or len(ref) <= len(prefix) for ref in references):
+        return False
+    expected = (
+        next(iter(references)) if len(references) == 1
+        else f"bundle:{request_id}"
+    )
+    if part["evidence_ref"] != expected:
         return False
 
-    if part["component_type"] == "search.results":
-        # Every *displayed* result must have been in the saved source receipts.
-        # Other source/citation records may be retained by the canonical
-        # repository but must not be shipped to the renderer.
-        records = part["data"]["results"]
-        for displayed in records:
+    for child in parts:
+        if child["component_type"] != "search.results":
+            continue
+        # Every displayed search result, including nested source cards, must
+        # match saved source receipts. Raw citations remain withheld.
+        for displayed in child["data"]["results"]:
             if not any(
                 row["url"] == displayed["url"]
                 and str(row.get("snippet") or row.get("content") or "").strip()
