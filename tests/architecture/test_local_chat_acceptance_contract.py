@@ -392,6 +392,15 @@ def test_research_continuity_requires_attested_grounded_turns_and_exact_citation
     assert "new Set(urls).size !== urls.length" in helper
     assert 'url.includes("example.invalid")' in helper
     assert ".toEqual(exactProof.urls)" in helper
+    assert helper.index("await expectRenderedResearchAnswer(bubble, exactProof.answer)") < helper.index("const links = bubble.getByRole")
+    rendered = source.split("async function expectRenderedResearchAnswer(", 1)[1].split("async function expectResearchTurnProof(", 1)[0]
+    assert "bubble.evaluate" in rendered and "parent.closest(excluded)" in rendered
+    assert "karen-copilot-assistant-speaker" in rendered
+    assert "karen-copilot-verified-part" in rendered
+    assert "window.getComputedStyle(current)" in rendered
+    assert "researchProseTokens(answer)" in rendered and "researchProseTokens(prose)" in rendered
+    assert '(" " + rendered + " ").includes(" " + expected + " ")' in rendered
+    assert "expected.split" in rendered
     branch = source.split("if (researchContinuityAcceptance) {", 1)[1].split("// Synthetic, inert task.", 1)[0]
     assert 'runPersonalTurn(handoff, true)' in branch
     assert 'runPersonalTurn("Write a full research paper.", true)' in branch

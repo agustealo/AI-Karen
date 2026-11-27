@@ -199,6 +199,54 @@ type ResearchTurnProof = {
   urls: string[];
 };
 
+function researchProseTokens(text: string): string {
+  return (text
+    .normalize("NFKC")
+    // Markdown links render their labels, not their destinations. Standalone
+    // URLs are verified independently by the citation receipt assertion.
+    .replace(/!?\[([^\]\n]*)\]\([^\n)]*\)/g, "$1")
+    .replace(/https?:\/\/[^\s<>]+/gi, " ")
+    .replace(/^\s*\d+[.)]\s+/gm, "")
+    .replace(/^\s*`{3,}[^\n]*$/gm, "")
+    .toLocaleLowerCase("en-US")
+    .match(/[\p{L}\p{N}]+/gu) || []).join(" ");
+}
+
+async function expectRenderedResearchAnswer(
+  bubble: ReturnType<Page["getByTestId"]>, answer: string,
+): Promise<void> {
+  const expected = researchProseTokens(answer);
+  // Empty or citation-only text is not a substantive rendered answer.
+  expect(expected.split(" ").length >= 12, "Research answer must contain substantive prose").toBe(true);
+  await expect.poll(async () => {
+    const prose = await bubble.evaluate(element => {
+      // Read visible text nodes from the actual SDK message, never the speaker,
+      // independent verified parts (including citations), or control labels.
+      const excluded = '[data-testid="karen-copilot-assistant-speaker"], [data-testid="karen-copilot-verified-part"], button, [role="button"], [hidden], [aria-hidden="true"], script, style';
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      const chunks: string[] = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest(excluded)) continue;
+        let visible = true;
+        for (let current: Element | null = parent; current && current !== element; current = current.parentElement) {
+          const style = window.getComputedStyle(current);
+          if (style.display === "none" || style.visibility !== "visible" || style.opacity === "0") {
+            visible = false;
+            break;
+          }
+        }
+        if (visible) chunks.push(node.textContent || "");
+      }
+      return chunks.join(" ");
+    });
+    const rendered = researchProseTokens(prose);
+    // Require the entire normalized answer in order, not a matching topic,
+    // first paragraph, or subset of keywords. Keep raw text out of diagnostics.
+    return (" " + rendered + " ").includes(" " + expected + " ");
+  }, { timeout: 30_000, message: "Exact research bubble must visibly render the complete saved answer independently of citations" }).toBe(true);
+}
+
 async function expectResearchTurnProof(
   page: Page, conversationId: string, utterance: string, answer: string,
 ): Promise<ResearchTurnProof> {
@@ -244,6 +292,7 @@ async function expectResearchTurnProof(
   const bubble = page.getByTestId("karen-copilot-consumer-chat")
     .getByTestId("karen-copilot-assistant-message").nth(assistantIndex);
   await expect(bubble).toBeVisible();
+  await expectRenderedResearchAnswer(bubble, exactProof.answer);
   const links = bubble.getByRole("region", { name: "Previously verified citations", exact: true }).getByRole("link");
   await expect.poll(() => links.evaluateAll(nodes => nodes.map(node => node.getAttribute("href"))),
     { timeout: 30_000, message: "Visible citations must match the exact assistant-bound saved URLs" }).toEqual(exactProof.urls);
