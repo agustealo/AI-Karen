@@ -81,6 +81,7 @@ def _test_governed_admission():
             "authorized_session_id": context.session_id,
             "correlation_id": context.correlation_id,
             "max_model_calls": plan.budget.max_model_calls,
+            "max_tool_calls": plan.budget.max_tool_calls,
         },
     )
     issuer._record_issued_model_decision(issued_decision)

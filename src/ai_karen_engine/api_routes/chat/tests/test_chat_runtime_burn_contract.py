@@ -83,6 +83,7 @@ class _DecisionPipeline:
                 "authorized_session_id": ctx.session_id,
                 "correlation_id": ctx.correlation_id,
                 "max_model_calls": self._decision.max_model_calls,
+                "max_tool_calls": len(self._decision.tool_requirements) + 5,
                 "allowed_tools": list(self._decision.tool_requirements),
                 "allowed_plugins": list(self._decision.plugin_candidates),
                 "allowed_agents": list(
