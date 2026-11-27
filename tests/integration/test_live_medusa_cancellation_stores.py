@@ -11,6 +11,8 @@ import asyncio
 import os
 import json
 import sys
+import subprocess
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -284,6 +286,8 @@ async def _run_acceptance() -> None:
             redis=redis, ledger=ledger, prefix=prefix,
             tenant_id=tenant_a, marker=marker,
         )
+        if os.getenv("KAREN_MEDUSA_REDIS_RESTART_ACCEPTANCE") == "1":
+            await _redis_server_failure_acceptance(ledger=ledger, tenant_id=str(uuid4()))
     finally:
         # Failure before the first cancellation must not strand workload cleanup.
         release_retirement.set()
@@ -727,6 +731,7 @@ async def _terminal_rollback_recovery_acceptance(
     prefix: str,
     tenant_id: str,
     marker: str,
+    before_recovery: Callable[[], Awaitable[None]] | None = None,
 ) -> None:
     """Commit Redis, roll back real SQL, admit late intent, then reconcile."""
     class RollbackLedger(PostgresDurableRunLedger):
@@ -772,6 +777,12 @@ async def _terminal_rollback_recovery_acceptance(
         assert await client.pttl(run_key) == -1
         pending = await ledger.get(**scope)
         assert pending is not None and pending["status"] == "running"
+        if before_recovery is not None:
+            await before_recovery()
+            client = redis.client
+            assert client is not None
+            assert await store.get(**scope) == shared
+            assert await client.pttl(run_key) == -1
         await ledger.mark_cancelling(
             **scope,
             requested_at=datetime.now(timezone.utc),
@@ -794,7 +805,7 @@ async def _terminal_rollback_recovery_acceptance(
             "recover_terminal",
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
-            env=os.environ.copy(),
+            env={**os.environ, "REDIS_URL": redis.redis_url},
         )
         try:
             event = await _read_worker_event(process, "recovered_terminal")
@@ -1292,3 +1303,191 @@ def test_real_redis_observation_cannot_tear_terminal_receipt(
             await redis.close()
 
     asyncio.run(scenario())
+
+
+async def _redis_server_failure_acceptance(
+    *, ledger: PostgresDurableRunLedger, tenant_id: str
+) -> None:
+    """Fault only a private Docker Redis, never the shared fixture server."""
+    from redis.asyncio import Redis
+    from redis.exceptions import OutOfMemoryError, RedisError
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunNotFound,
+    )
+
+    marker = uuid4().hex
+    name = f"medusa-redis-proof-{marker}"
+    prefix = f"ci:medusa:restart:{marker}"
+
+    async def docker(*args: str, check: bool = True) -> str:
+        result = await asyncio.to_thread(
+            subprocess.run,
+            ["docker", *args],
+            check=check,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        return result.stdout.strip()
+
+    async def ready() -> None:
+        for _ in range(100):
+            if await docker("exec", name, "redis-cli", "ping", check=False) == "PONG":
+                return
+            await asyncio.sleep(0.1)
+        raise AssertionError("Disposable Redis did not become ready")
+
+    async def host_endpoint() -> str:
+        # Docker can reassign an automatically published host port after
+        # stop/start. An internal PING alone does not prove host reachability.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 15
+        while loop.time() < deadline:
+            address = await docker("port", name, "6379/tcp", check=False)
+            if address:
+                host, port = address.rsplit(":", 1)
+                assert host == "127.0.0.1" and port.isdigit()
+                url = f"redis://{host}:{port}/0"
+                probe = Redis.from_url(
+                    url, socket_connect_timeout=1, socket_timeout=1,
+                )
+                try:
+                    if await asyncio.wait_for(probe.ping(), timeout=2):
+                        return url
+                except (RedisError, asyncio.TimeoutError):
+                    pass
+                finally:
+                    await probe.aclose()
+            await asyncio.sleep(0.2)
+        raise AssertionError("Disposable Redis host endpoint unavailable after restart")
+
+    redis = None
+    created = False
+    try:
+        await docker(
+            "run", "-d", "--pull=never", "--name", name,
+            "--publish", "127.0.0.1::6379", "redis:7-alpine",
+            "redis-server", "--protected-mode", "no",
+            "--appendonly", "yes", "--appendfsync", "always",
+            "--save", "", "--maxmemory-policy", "volatile-lru",
+        )
+        created = True
+        await ready()
+        redis = RedisConnectionManager(redis_url=await host_endpoint())
+        assert await redis.initialize()
+        assert redis.client is not None
+        assert (await redis.client.config_get("appendfsync"))["appendfsync"] == "always"
+        assert (await redis.client.config_get("appendonly"))["appendonly"] == "yes"
+        assert (await redis.client.config_get("maxmemory-policy"))[
+            "maxmemory-policy"
+        ] == "volatile-lru"
+
+        async def pressure(*, policy: str, run_key: str, pending_key: str) -> None:
+            client = redis.client
+            assert client is not None
+            assert await client.config_set("maxmemory-policy", policy)
+            assert (await client.config_get("maxmemory-policy"))[
+                "maxmemory-policy"
+            ] == policy
+            assert await client.set(f"{prefix}:disposable-cache", "x", ex=60)
+            before = (await client.info("stats"))["evicted_keys"]
+            try:
+                # Deliberately below baseline: exhaust eligible keys and
+                # force a bounded write failure. This is not a load test.
+                assert await client.config_set("maxmemory", 1)
+                with pytest.raises(OutOfMemoryError):
+                    await client.set(f"{prefix}:pressure", "x")
+                assert (await client.info("stats"))["evicted_keys"] > before
+                assert not await client.exists(f"{prefix}:disposable-cache")
+                if policy == "volatile-lru":
+                    assert await client.exists(run_key, pending_key) == 2
+                    assert await client.pttl(run_key) == -1
+                    assert await client.pttl(pending_key) == -1
+                else:
+                    assert await client.exists(run_key, pending_key) == 0
+            finally:
+                assert await client.config_set("maxmemory", 0)
+
+        async def restart_and_pressure() -> None:
+            assert redis.client is not None
+            run_key = f"{prefix}:run:{marker}-terminal-rollback"
+            pending_key = f"{prefix}:terminal-pending:{tenant_id}"
+            before = await redis.client.hgetall(run_key)
+            pending = await redis.client.zrange(pending_key, 0, -1)
+            assert before["status"] == "completed"
+            assert f"{marker}-terminal-rollback" in pending
+            old_server_id = (await redis.client.info("server"))["run_id"]
+            container_id = await docker("inspect", "--format", "{{.Id}}", name)
+            await docker("kill", "--signal=KILL", name)
+            assert await docker(
+                "inspect", "--format", "{{.State.Running}}", name
+            ) == "false"
+            await redis.close()
+            await docker("start", name)
+            await ready()
+            assert await docker("inspect", "--format", "{{.Id}}", name) == container_id
+            # Refresh only the test manager's endpoint; do not replace the
+            # store, owner, namespace or SQL ledger.
+            redis.redis_url = await host_endpoint()
+            assert await redis.initialize(), "Canonical Redis reconnect failed"
+            assert redis.client is not None
+            assert (await redis.client.info("server"))["run_id"] != old_server_id
+            assert (await redis.client.config_get("appendonly"))["appendonly"] == "yes"
+            assert (await redis.client.config_get("appendfsync"))["appendfsync"] == "always"
+            assert await redis.client.hgetall(run_key) == before
+            assert await redis.client.zrange(pending_key, 0, -1) == pending
+            assert not await redis.client.exists(
+                f"{prefix}:claim:{marker}-terminal-rollback"
+            )
+            await pressure(
+                policy="volatile-lru", run_key=run_key, pending_key=pending_key
+            )
+
+        # Reuse the real SQL rollback and independent-process recovery proof.
+        await _terminal_rollback_recovery_acceptance(
+            redis=redis,
+            ledger=ledger,
+            prefix=prefix,
+            tenant_id=tenant_id,
+            marker=marker,
+            before_recovery=restart_and_pressure,
+        )
+
+        # Negative store-level control: PERSIST is not an allkeys eviction fence.
+        settings = _settings(worker=f"negative-{marker}", prefix=prefix)
+        store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+        run_id = f"{marker}-negative"
+        await store.register(
+            run_id=run_id,
+            correlation_id=f"corr-{marker}",
+            tenant_id=tenant_id,
+            user_id="ci-owner",
+            worker_id=settings.worker_id,
+            started_at=datetime.now(timezone.utc),
+        )
+        assert await store.mark_terminal(
+            run_id=run_id,
+            tenant_id=tenant_id,
+            worker_id=settings.worker_id,
+            status="completed",
+            completed_at=datetime.now(timezone.utc),
+            error_type=None,
+            outcome_status="success",
+            durable_arbitrated=True,
+        ) == "completed"
+        await pressure(
+            policy="allkeys-lru",
+            run_key=store._run_key(run_id),
+            pending_key=store._pending_terminal_index(tenant_id),
+        )
+        with pytest.raises(DistributedRunNotFound):
+            await store.get(run_id=run_id, tenant_id=tenant_id)
+        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == []
+    finally:
+        try:
+            if redis is not None:
+                await redis.close()
+        finally:
+            if created:
+                await docker("rm", "-fv", name)
