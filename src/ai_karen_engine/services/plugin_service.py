@@ -550,8 +550,18 @@ class PluginService:
             RepositoryFactory,
         )
 
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            validate_draft_attachment_references,
+        )
+
         if not isinstance(references, list) or not 1 <= len(references) <= MAX_CONTENT_SOURCE_REFERENCES:
             raise ValueError("content_source_reference_count_invalid")
+        # Preserve the admitted selection and principal projection across
+        # initialization and asynchronous policy evaluation. Do not pass
+        # caller-owned mutable containers into the later host invocation.
+        references = validate_draft_attachment_references(references)
+        roles = list(roles)
+        permissions = list(permissions)
         kernel, decision, plan = await self._authorize_content_owner_access(
             user_id=user_id, tenant_id=tenant_id, roles=roles,
             permissions=permissions, request_id=request_id, correlation_id=correlation_id,
