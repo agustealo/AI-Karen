@@ -107,6 +107,7 @@ def _scope(
             "authorized_session_id": context.session_id,
             "correlation_id": context.correlation_id,
             "max_model_calls": plan.budget.max_model_calls,
+            "max_tool_calls": plan.budget.max_tool_calls,
             "allowed_tools": list(allowed_tools),
         },
     )

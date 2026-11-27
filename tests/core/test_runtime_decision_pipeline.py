@@ -530,6 +530,7 @@ def test_chat_plan_uses_issuer_tool_quota_not_mutable_cognitive_hint() -> None:
 
     async def run() -> None:
         request = _request()
+        request.context.request_id = "tool-quota-request"
         issuer = RuntimePolicyEnforcer()
         pipeline = RuntimeDecisionPipeline(
             cortex=FakeCortex(ExecutionDecision(

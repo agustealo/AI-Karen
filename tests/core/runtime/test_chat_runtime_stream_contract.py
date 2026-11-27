@@ -147,6 +147,7 @@ def _make_request() -> ChatExecutionRequest:
             "authorized_session_id": ctx.session_id,
             "correlation_id": ctx.correlation_id,
             "max_model_calls": 5,
+            "max_tool_calls": 5,
         },
     )
     issuer._record_issued_model_decision(issued)
