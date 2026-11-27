@@ -1440,3 +1440,69 @@ async def test_only_uncertain_commit_receipts_trigger_readback(case) -> None:
     assert receipt.success is (case == "committed")
     if case in {"missing", "unavailable"}:
         assert receipt.reason == "transcript_commit_outcome_unverified"
+
+
+
+@pytest.mark.asyncio
+async def test_attachment_receipt_built_before_uncertain_commit_digest(monkeypatch):
+    from ai_karen_engine.persistence.repositories.chat_run_repository import ChatRunLease
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        COMPLETED_ATTACHMENT_RECEIPT_KEY, canonical_message_digest,
+        draft_attachment_selection_digest, verify_completed_attachment_receipt,
+    )
+    from ai_karen_engine.auth.models import UserData
+
+    tenant = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+    user = "11111111-1111-1111-1111-111111111111"
+    context = _context(tenant_id=tenant, user_id=user)
+    context.authenticated_user = UserData(user_id=user, tenant_id=tenant)
+    refs = [{"source_id": "33333333-3333-4333-8333-333333333333", "revision": "a" * 64}]
+    submission = "draft-v2-4-" + draft_attachment_selection_digest(refs)
+    lease = ChatRunLease(
+        execution_id="44444444-4444-4444-8444-444444444444",
+        lease_token="55555555-5555-4555-8555-555555555555",
+        tenant_id=tenant, user_id=user, conversation_id=context.conversation_id,
+        transport_run_id="run-private", request_id=context.request_id,
+        correlation_id=context.correlation_id, submission_id=submission,
+    )
+    monkeypatch.setattr(ChatExecutionContext, "has_runtime_attachment_scope", lambda self: True)
+    monkeypatch.setattr(ChatExecutionContext, "runtime_attachment_documents",
+                        lambda self: [{**refs[0], "text": "PRIVATE_DOCUMENT_SENTINEL"}])
+
+    class PrivateRepository(_Repository):
+        digest = ""
+
+        async def add_completed_turn(self, user_message, assistant_message, **kwargs):
+            assert kwargs == {"run_lease": lease, "private_execution": context}
+            private = assistant_message.metadata[COMPLETED_ATTACHMENT_RECEIPT_KEY]
+            assert verify_completed_attachment_receipt(private, user_message, submission, refs)
+            assert "PRIVATE_DOCUMENT_SENTINEL" not in repr(private)
+            self.digest = canonical_message_digest(assistant_message)
+            return RepositoryResult(success=False, error="completed_turn_write_failed",
+                                    metadata={"commit_outcome_uncertain": True})
+
+        async def read_committed_turn(self, **kwargs):
+            assert kwargs["expected_assistant_digest"] == self.digest
+            assert kwargs["private_execution"] is context
+            return RepositoryResult(success=True, data=True)
+
+    result = await ConversationRuntimeGateway(repository=PrivateRepository()).persist_completed_turn(
+        context, user_text="question", assistant_text="answer", run_lease=lease,
+        response_metadata={COMPLETED_ATTACHMENT_RECEIPT_KEY: {"forged": True}},
+    )
+    assert result.status == "already_persisted"
+
+
+@pytest.mark.asyncio
+async def test_unleased_turn_cannot_mint_private_attachment_receipt():
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        COMPLETED_ATTACHMENT_RECEIPT_KEY,
+    )
+
+    repository = _Repository()
+    result = await ConversationRuntimeGateway(repository=repository).persist_completed_turn(
+        _context(), user_text="question", assistant_text="answer",
+        response_metadata={COMPLETED_ATTACHMENT_RECEIPT_KEY: {"forged": True}},
+    )
+    assert result.success
+    assert COMPLETED_ATTACHMENT_RECEIPT_KEY not in repository.messages[-1].metadata

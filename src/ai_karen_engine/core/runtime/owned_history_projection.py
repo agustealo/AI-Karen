@@ -29,7 +29,12 @@ from ai_karen_engine.core.runtime.presentation_contract import (
 from ai_karen_engine.core.runtime.plugin_management_contract import (
     validate_plugin_management_preflight,
 )
-from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
+from ai_karen_engine.services.database.repositories.conversation_repository import (
+    COMPLETED_ATTACHMENT_RECEIPT_KEY,
+    Message,
+    canonical_message_digest,
+    verify_completed_attachment_receipt,
+)
 from ai_karen_engine.services.response.response_contracts import ResponseContract
 from ai_karen_engine.services.response.response_validator import ResponseValidator
 
@@ -363,6 +368,8 @@ def project_owned_history(
     events: list[dict[str, Any]] = []
     seen_message_ids: set[str] = set()
     omitted_rich_message_count = 0
+    previous_users: dict[str, Message] = {}
+    restored_attachment_users: set[str] = set()
 
     for message in records:
         role = str(message.role)
@@ -380,6 +387,9 @@ def project_owned_history(
         metadata = message.metadata
         if not isinstance(metadata, Mapping):
             raise UnreplayableHistory("invalid_message_metadata")
+        has_attachment_receipt = COMPLETED_ATTACHMENT_RECEIPT_KEY in metadata
+        if role == "user":
+            previous_users[identifier] = message
         has_unknown_rich = any(
             _carries_value(metadata.get(key))
             and not (key == "artifacts" and _verified_document_receipt(metadata))
@@ -494,6 +504,7 @@ def project_owned_history(
         rich = (
             observed is not None
             or has_citation_receipt
+            or has_attachment_receipt
             or any(_carries_value(metadata.get(key)) for key in _RUNTIME_RECEIPT)
             or _carries_value(metadata.get("verified_presentations_v1"))
             or (
@@ -593,6 +604,45 @@ def project_owned_history(
                 events.append({
                     "type": "CUSTOM", "name": "karen.verified_citations.v1",
                     "messageId": identifier, "value": {"urls": citation_urls},
+                })
+            if has_attachment_receipt:
+                private_receipt = metadata[COMPLETED_ATTACHMENT_RECEIPT_KEY]
+                if not isinstance(private_receipt, dict):
+                    raise UnreplayableHistory("unsupported_rich_history")
+                user_id = private_receipt.get("user_message_id")
+                submission_id = private_receipt.get("submission_id")
+                references = private_receipt.get("references")
+                original = previous_users.get(user_id) if isinstance(user_id, str) else None
+                if (
+                    original is None
+                    or original.id in restored_attachment_users
+                    or original.conversation_id != thread_id
+                    or message.conversation_id != thread_id
+                    or original.tenant_id != str(snapshot.conversation.tenant_id)
+                    or message.tenant_id != original.tenant_id
+                    or not isinstance(original.metadata, Mapping)
+                    or original.metadata.get("source") != "chat_runtime"
+                    or original.metadata.get("transcript_actor") != "user"
+                    or metadata.get("transcript_actor") != "assistant"
+                    or original.metadata.get("authorized_user_id") != str(snapshot.conversation.user_id)
+                    or metadata.get("authorized_user_id") != str(snapshot.conversation.user_id)
+                    or any(original.metadata.get(key) != metadata.get(key)
+                           for key in ("request_id", "correlation_id", "session_id", "conversation_id"))
+                    or metadata.get("conversation_id") != thread_id
+                    or not isinstance(submission_id, str)
+                    or not isinstance(references, list)
+                    or not verify_completed_attachment_receipt(
+                        private_receipt, original, submission_id, references,
+                    )
+                ):
+                    raise UnreplayableHistory("unsupported_rich_history")
+                restored_attachment_users.add(original.id)
+                # Historical selection only. No source IDs, hashes, document
+                # content, names or current access claims cross this boundary.
+                events.append({
+                    "type": "CUSTOM", "name": "karen.verified_attachment_history.v1",
+                    "messageId": identifier,
+                    "value": {"user_message_id": original.id, "attachment_count": len(references)},
                 })
             for event in projector.project(ChatStreamChunk(
                 type="complete", content="",
