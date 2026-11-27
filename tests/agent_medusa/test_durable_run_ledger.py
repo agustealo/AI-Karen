@@ -936,3 +936,200 @@ def test_late_cancellation_requires_arbitrated_terminal_receipt(
             assert len(ledger.transitions) == 1
 
     asyncio.run(scenario())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", ["unavailable", "pressure"])
+async def test_guarded_admission_cannot_fall_back_to_durable_only(failure):
+    from dataclasses import replace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunAdmissionRejected,
+    )
+
+    ledger = InMemoryDurableLedger()
+    store = SharedTruthStore()
+    store.available_state = False
+    error = (
+        DistributedRunStoreUnavailable("private detail")
+        if failure == "unavailable"
+        else DistributedRunAdmissionRejected("redis_capacity_reserve_exhausted")
+    )
+    store.register = AsyncMock(side_effect=error)
+    manager = MedusaRunManager(
+        settings=replace(
+            _settings(distributed=True), run_redis_admission_reserve_bytes=30
+        ),
+        distributed_store=store,
+        durable_ledger=ledger,
+    )
+    task = asyncio.create_task(asyncio.sleep(0))
+    try:
+        reason = (
+            "redis_capacity_unverified"
+            if failure == "unavailable"
+            else "redis_capacity_reserve_exhausted"
+        )
+        with pytest.raises(DistributedRunAdmissionRejected, match=reason):
+            await manager.register(
+                run_id="blocked",
+                correlation_id="corr",
+                tenant_id="11111111-1111-1111-1111-111111111111",
+                user_id="user-1",
+                task=task,
+            )
+        store.register.assert_awaited_once()
+        assert "blocked" not in manager._runs
+        assert ledger.records["blocked"]["status"] == "failed"
+        assert (
+            ledger.records["blocked"]["error_type"] == "DistributedRunAdmissionRejected"
+        )
+        assert [t["to_status"] for t in ledger.transitions] == ["created", "failed"]
+    finally:
+        await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("repeat_cancel", [False, True])
+@pytest.mark.parametrize("phase", ["availability", "capacity", "eval"])
+async def test_admission_cancellation_retires_owned_registration(repeat_cancel, phase):
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        RedisDistributedRunStore,
+    )
+
+    observing = asyncio.Event()
+    cleanup_started = asyncio.Event()
+    release_cleanup = asyncio.Event()
+
+    class Ledger(InMemoryDurableLedger):
+        async def mark_terminal(self, **kwargs):
+            cleanup_started.set()
+            await release_cleanup.wait()
+            return await super().mark_terminal(**kwargs)
+
+    from ai_karen_engine.platform.memory.redis.redis_connection_manager import (
+        RedisDurabilityObservation,
+    )
+
+    async def pause():
+        observing.set()
+        await asyncio.Future()
+
+    async def observe():
+        if phase == "capacity":
+            await pause()
+        return RedisDurabilityObservation(
+            status="observed",
+            maxmemory_bytes=100,
+            used_memory_bytes=10,
+            mem_not_counted_for_evict_bytes=0,
+        )
+
+    ledger = Ledger()
+    settings = replace(
+        _settings(distributed=True),
+        run_redis_admission_reserve_bytes=0 if phase == "availability" else 30,
+    )
+    client = SimpleNamespace(
+        ping=AsyncMock(return_value=True),
+        eval=AsyncMock(),
+    )
+    if phase == "availability":
+        client.ping.side_effect = pause
+
+    async def eval_register(*args):
+        await pause()
+
+    client.eval.side_effect = eval_register
+    redis = SimpleNamespace(
+        client=client, is_degraded=lambda: False, observe_durability=observe
+    )
+    store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+    manager = MedusaRunManager(
+        settings=settings, distributed_store=store, durable_ledger=ledger
+    )
+
+    async def register():
+        await manager.register(
+            run_id="interrupted",
+            correlation_id="corr",
+            tenant_id="11111111-1111-1111-1111-111111111111",
+            user_id="user-1",
+            task=asyncio.current_task(),
+        )
+        pytest.fail("Cancelled admission returned execution authority")
+
+    task = asyncio.create_task(register())
+    try:
+        await asyncio.wait_for(observing.wait(), 2)
+        task.cancel()
+        await asyncio.wait_for(cleanup_started.wait(), 2)
+        if repeat_cancel:
+            task.cancel()
+            await asyncio.sleep(0)
+        release_cleanup.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 2)
+        if phase == "eval":
+            client.eval.assert_awaited_once()
+        else:
+            client.eval.assert_not_awaited()
+        assert "interrupted" not in manager._runs
+        assert ledger.records["interrupted"]["status"] == "failed"
+        assert ledger.records["interrupted"]["error_type"] == (
+            "AdmissionCancelledRegistrationUnconfirmed"
+            if phase == "eval"
+            else "AdmissionCancelledBeforeRegistration"
+        )
+        assert [t["to_status"] for t in ledger.transitions] == ["created", "failed"]
+    finally:
+        release_cleanup.set()
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_admission_denial_survives_durable_cleanup_failure():
+    from dataclasses import replace
+
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        DistributedRunAdmissionRejected,
+    )
+    from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
+
+    ledger = InMemoryDurableLedger()
+    ledger.mark_terminal = AsyncMock(
+        side_effect=DurableRunLedgerUnavailable("unavailable")
+    )
+    store = SharedTruthStore()
+    store.register = AsyncMock(
+        side_effect=DistributedRunAdmissionRejected("redis_capacity_reserve_exhausted"),
+    )
+    manager = MedusaRunManager(
+        settings=replace(
+            _settings(distributed=True), run_redis_admission_reserve_bytes=30
+        ),
+        distributed_store=store,
+        durable_ledger=ledger,
+    )
+    task = asyncio.create_task(asyncio.sleep(0))
+    try:
+        with pytest.raises(
+            ExecutionAdmissionRejected, match="redis_capacity_reserve_exhausted"
+        ):
+            await manager.register(
+                run_id="denied",
+                correlation_id="corr",
+                tenant_id="11111111-1111-1111-1111-111111111111",
+                user_id="user-1",
+                task=task,
+            )
+        assert "denied" not in manager._runs
+        # Persistence failure must not be represented as a confirmed closure.
+        assert ledger.records["denied"]["status"] == "created"
+    finally:
+        await task
