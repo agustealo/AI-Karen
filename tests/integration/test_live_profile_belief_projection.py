@@ -12,9 +12,11 @@ from ai_karen_engine.core.memory.signals import MemorySignal
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 from ai_karen_engine.platform.memory.postgres.derived_projector import PostgresDerivedMemoryProjector
 from ai_karen_engine.platform.memory.postgres.ledger_models import (
-    ConsentScope, MemoryEvent, ProfileFact,
+    ConsentScope, MemoryAssertion, MemoryEvent, ProfileFact,
 )
 from ai_karen_engine.platform.memory.postgres.profile_retriever import PostgresProfileRecallRetriever
+from ai_karen_engine.platform.memory.postgres.recall_retriever import PostgresRecallRetriever
+from ai_karen_engine.core.memory.types import MemoryQuery
 
 
 pytestmark = [
@@ -46,7 +48,7 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
 
     async def observe(
         value: str, *, correction=False, modality="asserted",
-        source_type="chat_user",
+        source_type="chat_user", legacy=False,
     ):
         event = uuid.uuid4()
         event_ids.append(event)
@@ -74,8 +76,17 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
                 source_type=source_type, payload_hash=uuid.uuid4().hex,
                 event_type="memory_persisted",
                 payload={"content": statement,
-                         "metadata": {"custom": {"signal_semantics": metadata}},
+                         "metadata": {"custom": {
+                             "signal_semantics": metadata,
+                             **({} if legacy else {"signal_type": "preference"}),
+                         }},
                          "vault": {"consent_scope": "memory.write"}},
+                consent_state="granted",
+            ))
+            await session.flush()
+            session.add(MemoryAssertion(
+                assertion_id=uuid.uuid4(), event_id=event, tenant_id=tenant,
+                user_id=user, content=statement, confidence=0.98,
                 consent_state="granted",
             ))
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
@@ -96,7 +107,7 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
         )
 
     try:
-        first = await observe("reggae")
+        first = await observe("reggae", legacy=True)
         rows = await state()
         assert len(rows) == 1
         assert rows[0].value["belief_operation"] == "create"
@@ -175,6 +186,38 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
             "favorite_genre: soul",
         ]
 
+        # The immutable assertion ledger still contains every observation,
+        # including the legacy superseded row and quarantined disagreement.
+        # Generic retrieval must not bypass the current profile authority.
+        ordinary_event = uuid.uuid4()
+        event_ids.append(ordinary_event)
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            session.add(MemoryEvent(
+                event_id=ordinary_event, tenant_id=tenant, user_id=user,
+                source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                event_type="memory_persisted",
+                payload={"content": "favorite genre research notes",
+                         "vault": {"consent_scope": "memory.write"}},
+                consent_state="granted",
+            ))
+            await session.flush()
+            session.add(MemoryAssertion(
+                assertion_id=uuid.uuid4(), event_id=ordinary_event,
+                tenant_id=tenant, user_id=user,
+                content="favorite genre research notes", confidence=0.1,
+                consent_state="granted",
+            ))
+        ledger_rows = await PostgresRecallRetriever().recall(MemoryQuery(
+            tenant_id=str(tenant), user_id=str(user),
+            text="favorite genre", top_k=1,
+        ))
+        assert [row.content for row in ledger_rows] == ["favorite genre research notes"]
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            preserved = (await session.execute(select(MemoryAssertion.event_id).where(
+                MemoryAssertion.event_id.in_(event_ids),
+            ))).scalars().all()
+            assert set(preserved) == set(event_ids)
+
         assert await retriever.recall(query(acting_user=uuid.uuid4())) == []
 
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
@@ -185,6 +228,9 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
         assert await retriever.recall(query()) == []
     finally:
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(delete(MemoryAssertion).where(
+                MemoryAssertion.event_id.in_(event_ids)
+            ))
             await session.execute(delete(ProfileFact).where(
                 ProfileFact.event_id.in_(event_ids)
             ))
