@@ -336,7 +336,10 @@ def test_communications_failure_diagnostics_do_not_disclose_private_report(capsy
                             {"type": "kcomm-hint-http", "description": "503"},
                             {"type": "kcomm-hint-http", "description": "private-secret"},
                             {"type": "kcomm-hint-failure", "description": "invalidation_unavailable"},
-                            {"type": "kcomm-hint-failure", "description": "private-secret"}],
+                            {"type": "kcomm-hint-failure", "description": "private-secret"},
+                            {"type": "kcomm-revoked-http", "description": "401"},
+                            {"type": "kcomm-revoked-body", "description": "json"},
+                            {"type": "kcomm-revoked-body", "description": "private-secret"}],
             "results": [{"status": "failed", "errors": [{
                 "message": "private-secret", "stack": "private-secret /tmp/comms-visual-acceptance.spec.ts:123:45",
                 "location": {"file": "/tmp/private-secret/comms-visual-acceptance.spec.ts", "line": 124, "column": 5},
@@ -347,6 +350,8 @@ def test_communications_failure_diagnostics_do_not_disclose_private_report(capsy
     assert "scenario=KCOMM-03G status=unexpected stage=revoke" in output
     assert "KCOMM_BROWSER_RESULT status=failed" in output
     assert "KCOMM_BROWSER_HINT_HTTP status=503" in output
+    assert "KCOMM_BROWSER_REVOKED_HTTP status=401" in output
+    assert "KCOMM_BROWSER_REVOKED_BODY state=json" in output
     assert "KCOMM_BROWSER_HINT_FAILURE kind=invalidation_unavailable" in output
     assert "line=123 column=45" in output
     assert "line=124 column=5" in output

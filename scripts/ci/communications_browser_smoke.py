@@ -111,6 +111,10 @@ def report_failure_summary(report):
                             print("KCOMM_BROWSER_HINT_FAILURE kind=" + value)
                         if item.get("type") == "kcomm-hint-body-state" and isinstance(value, str) and value in _BODY_STATES:
                             print("KCOMM_BROWSER_HINT_BODY state=" + value)
+                        if scenario == "KCOMM-03G" and item.get("type") == "kcomm-revoked-http" and isinstance(value, str) and re.fullmatch(r"[1-5][0-9]{2}", value):
+                            print("KCOMM_BROWSER_REVOKED_HTTP status=" + value)
+                        if scenario == "KCOMM-03G" and item.get("type") == "kcomm-revoked-body" and isinstance(value, str) and value in {"json", "read_failed"}:
+                            print("KCOMM_BROWSER_REVOKED_BODY state=" + value)
                         if item.get("type") == "kcomm-hint-request-failed" and value == "yes":
                             print("KCOMM_BROWSER_HINT_REQUEST_FAILED observed=yes")
                         if scenario == "KCOMM-03G" and item.get("type") == "kcomm-hint-correlation":

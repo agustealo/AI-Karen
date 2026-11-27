@@ -182,6 +182,7 @@ class ChatRuntime:
     ) -> None:
         """All-or-nothing selection and bounded content admission before inference."""
         references = request.attachment_references
+        self._require_draft_attachment_binding(request)
         if references == []:
             if (
                 plan.resource_scope.get("attachment_references")
@@ -294,10 +295,46 @@ class ChatRuntime:
             raise AttachmentAdmissionDenied("attachment_admission_denied") from None
 
     @staticmethod
+    def _require_draft_attachment_binding(request: ChatExecutionRequest) -> None:
+        """Enforce the admitted draft selection before any private content read."""
+        lease = request.runtime_run_lease
+        if lease is None:
+            return
+        from ai_karen_engine.persistence.repositories.chat_run_repository import (
+            draft_attachment_digest_from_submission_id,
+            draft_revision_from_submission_id,
+        )
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            draft_attachment_selection_digest,
+        )
+
+        try:
+            if draft_revision_from_submission_id(lease.submission_id) is None:
+                return
+            digest = draft_attachment_digest_from_submission_id(lease.submission_id)
+            if digest is None:
+                if request.attachment_references:
+                    raise ValueError("text_only_draft")
+                return
+            ctx = request.context
+            if (
+                (lease.tenant_id, lease.user_id, lease.conversation_id,
+                 lease.request_id, lease.correlation_id)
+                != (ctx.tenant_id, ctx.user_id, ctx.conversation_id,
+                    ctx.request_id, ctx.correlation_id)
+                or draft_attachment_selection_digest(request.attachment_references) != digest
+            ):
+                raise ValueError("draft_attachment_binding_changed")
+        except (ValueError, TypeError, AttributeError):
+            raise AttachmentAdmissionDenied("draft_attachment_binding_denied") from None
+
+    @staticmethod
     def _attachment_restriction_required(request: ChatExecutionRequest) -> bool:
+        lease = request.runtime_run_lease
         return bool(
             request.attachment_references
             or request.context.has_runtime_attachment_scope()
+            or (lease is not None and (lease.submission_id or "").startswith("draft-v2-"))
         )
 
     def _require_supported_attachment_execution(
@@ -326,6 +363,7 @@ class ChatRuntime:
         request: ChatExecutionRequest,
     ) -> List[Dict[str, Any]]:
         messages = [dict(message) for message in request.messages]
+        ChatRuntime._require_draft_attachment_binding(request)
         if not ChatRuntime._attachment_restriction_required(request):
             return messages
         from ai_karen_engine.services.database.repositories.conversation_repository import (

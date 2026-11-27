@@ -646,10 +646,26 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
 
     mark("reopen");
     const reopened = page.waitForRequest(waitRequest, { timeout: 30_000 });
+    // Observe the exact request from its creation and read the denial as soon
+    // as it arrives, before unrelated fixture or UI actions can discard it.
+    const denied = reopened.then(async revokedRequest => {
+      const rejection = await revokedRequest.response();
+      if (!rejection) throw new Error("Revoked wait ended without an HTTP response");
+      test.info().annotations.push({ type: "kcomm-revoked-http", description: String(rejection.status()) });
+      let body: unknown;
+      try {
+        body = await rejection.json();
+        test.info().annotations.push({ type: "kcomm-revoked-body", description: "json" });
+      } catch {
+        test.info().annotations.push({ type: "kcomm-revoked-body", description: "read_failed" });
+        throw new Error("Revoked wait denial body unavailable");
+      }
+      return { rejection, body };
+    });
+    void denied.catch(() => {});
     await openCommunications(page);
     await root.getByRole("tab", { name: "Inbox", exact: true }).click();
-    const revokedRequest = await reopened;
-    const denied = page.waitForResponse(res => res.request() === revokedRequest, { timeout: 25_000 });
+    await reopened;
     await witness([ownerB], 1);
     // Revoke the browser's exact active credentials via the real logout API,
     // without resetting its UI state. Never expose tokens to the test runner.
@@ -679,10 +695,9 @@ test("KCOMM-03G: committed change delivery, cancellation and live session revoca
     });
     expect(ack.status()).toBe(200);
     expect(readReceipt(await ack.json(), read.entry, "acknowledge").changed).toBe(true);
-    const rejection = await denied;
+    const { rejection, body: rejectionBody } = await denied;
     expect([401, 403]).toContain(rejection.status());
     expect(rejection.headers()["cache-control"]).toBe("no-store");
-    const rejectionBody = await rejection.json();
     expect(rejectionBody).not.toHaveProperty("changed");
     mark("cleanup");
     await witness([ownerB], 0);
