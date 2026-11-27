@@ -535,12 +535,12 @@ async def test_attachment_publication_rejects_substituted_text_with_authorized_r
     context.bind_runtime_attachment_scope(plan, meter, request.attachment_references)
     with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
         context.bind_runtime_attachment_documents(
-            plan, meter, [{**selected(), "text": "Substituted document."}],
+            plan, meter, [replace(verified(context), text="Substituted document.")],
         )
     with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
         context.runtime_attachment_documents()
     context.bind_runtime_attachment_documents(
-        plan, meter, [{**selected(), "text": BODY}],
+        plan, meter, [verified(context)],
     )
     assert context.runtime_attachment_documents() == [{**selected(), "text": BODY}]
 
@@ -591,7 +591,7 @@ async def test_attachment_read_permission_revocation_at_context_boundaries(monke
         return original(principal, permission)
 
     monkeypatch.setattr(manager, "has_permission", check)
-    documents = [{**selected(), "text": BODY}]
+    documents = [verified(context)]
     if boundary == "scope":
         revoked = True
         with pytest.raises(PermissionError, match="runtime_attachment_read_permission_denied"):
@@ -611,7 +611,8 @@ async def test_attachment_read_permission_revocation_at_context_boundaries(monke
         return
 
     context.bind_runtime_attachment_documents(plan, meter, documents)
-    assert context.runtime_attachment_documents() == documents
+    assert context.runtime_attachment_evidence() == tuple(documents)
+    assert context.runtime_attachment_documents() == [{**selected(), "text": BODY}]
     revoked = True
     assert ChatRuntime._attachment_restriction_required(request)
     with pytest.raises(PermissionError, match="runtime_attachment_read_permission_denied"):
@@ -1296,3 +1297,58 @@ async def test_durable_draft_attachment_binding_preserves_authorized_read(monkey
     request.attachment_references = []
     with pytest.raises(AttachmentAdmissionDenied, match="draft_attachment_binding_denied"):
         runtime._prompt_messages_with_admitted_attachments(request)
+
+
+@pytest.mark.asyncio
+async def test_attachment_evidence_preserves_owner_filename_without_another_read(monkeypatch):
+    request, plan, meter = await authority()
+    record = verified(request.context, filename="owner-notes.md")
+    reader = BoundedReader({SOURCE: record})
+    runtime = runtime_with_reader(monkeypatch, reader)
+    await runtime._admit_attachments(request, plan, meter)
+
+    evidence = request.context.runtime_attachment_evidence()
+    assert evidence == (record,)
+    assert evidence[0] is not record
+    assert evidence[0].filename == "owner-notes.md"
+    projection = request.context.runtime_attachment_documents()
+    projection[0]["text"] = "mutated"
+    assert request.context.runtime_attachment_documents() == [
+        {**selected(), "text": BODY},
+    ]
+    # Detached immutable records cannot replace the retained snapshot.
+    assert request.context.runtime_attachment_evidence()[0] is not evidence[0]
+    assert request.context.runtime_attachment_evidence() == (record,)
+    assert len(reader.calls) == 1
+    prompt = runtime._prompt_messages_with_admitted_attachments(request)
+    assert "owner-notes.md" not in prompt[-2]["content"]
+    assert BODY in prompt[-2]["content"]
+    assert len(reader.calls) == 1
+    with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
+        request.context.bind_runtime_attachment_documents(plan, meter, [record])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("field,value", [
+    ("tenant_id", "foreign-tenant"),
+    ("user_id", "foreign-user"),
+    ("artifact_id", SECOND),
+    ("sha256", "0" * 64),
+    ("mime_type", "text/html"),
+    ("filename", ""),
+    ("filename", "x" * 257),
+    ("text", "changed bytes"),
+])
+async def test_attachment_evidence_publication_denies_substituted_record(field, value):
+    request, plan, meter = await authority()
+    context = request.context
+    context.bind_runtime_attachment_scope(plan, meter, request.attachment_references)
+    record = verified(context)
+    with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
+        context.bind_runtime_attachment_documents(
+            plan, meter, [replace(record, **{field: value})],
+        )
+    with pytest.raises(PermissionError, match="runtime_attachment_authority_invalid"):
+        context.runtime_attachment_evidence()
+    context.bind_runtime_attachment_documents(plan, meter, [record])
+    assert context.runtime_attachment_evidence() == (record,)

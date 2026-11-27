@@ -108,45 +108,15 @@ class RuntimeEvidenceResolver:
         evidence came through RuntimePolicy and NeuroRecall; fail closed on
         scope mismatches, denied or unresolved sources, and contradictions.
         """
-        if (
-            cognitive_context is None
-            or EvidenceSource.MEMORY.value not in cognitive_context.authorized_sources
-            or EvidenceSource.MEMORY.value in cognitive_context.denied_sources
-            or EvidenceSource.MEMORY.value in cognitive_context.unresolved_sources
-            or cognitive_context.tenant_id != tenant_id
-            or cognitive_context.user_id != user_id
-            or not attribute
-        ):
-            return None
-        prefix = f"{attribute}: "
-        for item in cognitive_context.evidence:
-            if (
-                item.source is not EvidenceSource.MEMORY
-                or item.scope is None
-                or item.scope.tenant_id != tenant_id
-                or item.scope.user_id != user_id
-                or item.contradiction.status
-                in {
-                    EvidenceContradictionStatus.CONFIRMED,
-                    EvidenceContradictionStatus.POSSIBLE,
-                }
-                or not item.content.startswith(prefix)
-            ):
-                continue
-            now = datetime.now(timezone.utc)
-            for expiry in (item.temporal.expires_at, item.temporal.effective_until):
-                if expiry is not None:
-                    scoped_expiry = (
-                        expiry.replace(tzinfo=timezone.utc)
-                        if expiry.tzinfo is None else expiry
-                    )
-                    if scoped_expiry <= now:
-                        break
-            else:
-                value = item.content[len(prefix):].strip()
-                if value and len(value) <= 120 and "\n" not in value:
-                    return value
-        return None
+        from ai_karen_engine.core.runtime.evidence_sufficiency import (
+            EvidenceSufficiencyStatus, evaluate_personal_evidence,
+        )
+
+        result = evaluate_personal_evidence(
+            cognitive_context, tenant_id=tenant_id, user_id=user_id,
+            attribute=attribute,
+        )
+        return result.value if result.status is EvidenceSufficiencyStatus.SUPPORTED else None
 
     @staticmethod
     def _memory_retrieval_query(
@@ -316,14 +286,38 @@ class RuntimeEvidenceResolver:
         if max_items:
             raw_items = raw_items[:max_items]
 
-        resolved = [
-            self._memory_item_to_evidence(
-                item,
-                request=request,
-                retrieved_at=now,
+        try:
+            resolved = [
+                self._memory_item_to_evidence(
+                    item,
+                    request=request,
+                    retrieved_at=now,
+                )
+                for item in raw_items
+            ]
+        except (TypeError, ValueError, OverflowError) as exc:
+            # A malformed canonical validity interval is not an unbounded
+            # fact. Keep memory unresolved; never publish a partial batch.
+            cognitive_context.metadata.update({
+                "memory_recall_status": "failed",
+                "memory_recall_count": 0,
+                "memory_degraded": True,
+                "memory_degradation_reason": "invalid_memory_evidence",
+                "memory_resolver_id": self.MEMORY_RESOLVER_ID,
+            })
+            logger.warning("Runtime memory evidence projection rejected", extra={
+                "correlation_id": ctx.correlation_id,
+                "error_type": type(exc).__name__,
+            })
+            self._emitter.emit(
+                RuntimeEventType.MEMORY_RECALL_COMPLETED,
+                policy_decision_id=cognitive_context.policy_decision_id,
+                memory_recall_count=0,
+                metadata={"context_id": cognitive_context.context_id,
+                          "resolver_id": self.MEMORY_RESOLVER_ID, "status": "failed",
+                          "error_type": type(exc).__name__},
             )
-            for item in raw_items
-        ]
+            return
         cognitive_context.evidence.extend(resolved)
         self._mark_resolved(cognitive_context, EvidenceSource.MEMORY)
 
@@ -804,6 +798,26 @@ class RuntimeEvidenceResolver:
         timestamp = cls._coerce_datetime(item.get("timestamp"))
         expires_at = cls._coerce_datetime(item.get("expires_at"))
         contradiction = cls._contradiction_from_metadata(item_metadata)
+        origin = cls._canonical_memory_event_origin(
+            item, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
+        )
+        effective_from = None
+        effective_until = None
+        # Only canonical, scope-bound PostgreSQL record provenance may
+        # supply these validity bounds. Arbitrary custom claims cannot.
+        if origin and origin["record_type"] in {"profile_fact", "memory_assertion"}:
+            custom = item_metadata["custom"]
+            for key in ("valid_from", "valid_to"):
+                raw = custom.get(key)
+                parsed = cls._coerce_datetime(raw) if isinstance(raw, (str, datetime)) else None
+                if raw is not None and parsed is None:
+                    raise ValueError("invalid_canonical_memory_validity")
+                if key == "valid_from":
+                    effective_from = parsed
+                else:
+                    effective_until = parsed
+            if effective_from is not None and effective_until is not None and effective_from >= effective_until:
+                raise ValueError("invalid_canonical_memory_validity")
 
         return ContextEvidence(
             evidence_id=evidence_id,
@@ -824,6 +838,8 @@ class RuntimeEvidenceResolver:
             temporal=EvidenceTemporalContext(
                 observed_at=timestamp,
                 as_of=retrieved_at,
+                effective_from=effective_from,
+                effective_until=effective_until,
                 expires_at=expires_at,
             ),
             contradiction=contradiction,
@@ -838,9 +854,7 @@ class RuntimeEvidenceResolver:
                 "memory_metadata": item_metadata,
                 # A provenance candidate is not current consent authority.
                 # Runtime publication must recheck this event at the ledger.
-                "canonical_event_origin": cls._canonical_memory_event_origin(
-                    item, tenant_id=ctx.tenant_id, user_id=ctx.user_id,
-                ),
+                "canonical_event_origin": origin,
             },
             fact_semantics=cls._profile_fact_semantics(
                 item_metadata,

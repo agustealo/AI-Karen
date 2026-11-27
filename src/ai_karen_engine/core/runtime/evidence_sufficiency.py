@@ -94,6 +94,7 @@ def evaluate_personal_evidence(
     prefix = f"{attribute}: "
     live: list[tuple[str, str, EvidenceFactSemantics | None]] = []
     expired_ids: list[str] = []
+    future_ids: list[str] = []
     conflict_ids: list[str] = []
     excluded_scoped_ids: list[str] = []
 
@@ -133,6 +134,13 @@ def evaluate_personal_evidence(
         ):
             excluded_scoped_ids.append(evidence.evidence_id)
             continue
+        effective_from = evidence.temporal.effective_from
+        if effective_from is not None:
+            if effective_from.tzinfo is None:
+                effective_from = effective_from.replace(tzinfo=timezone.utc)
+            if effective_from > current:
+                future_ids.append(evidence.evidence_id)
+                continue
         expired = False
         for deadline in (evidence.temporal.expires_at, evidence.temporal.effective_until):
             if deadline is not None:
@@ -236,6 +244,11 @@ def evaluate_personal_evidence(
         return EvidenceSufficiency(
             EvidenceSufficiencyStatus.EXPIRED, attribute,
             evidence_ids=tuple(expired_ids), reason="no_current_evidence",
+        )
+    if future_ids:
+        return EvidenceSufficiency(
+            EvidenceSufficiencyStatus.MISSING, attribute,
+            evidence_ids=tuple(future_ids), reason="evidence_not_yet_effective",
         )
     return EvidenceSufficiency(
         EvidenceSufficiencyStatus.MISSING, attribute, reason="no_matching_evidence",
