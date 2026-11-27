@@ -80,6 +80,14 @@ def test_private_storage_tls_policy_rejects_incomplete_and_foreign_origin(monkey
         with pytest.raises(ValueError):
             policy.require_destination(foreign)
     policy.require_destination(origin + "/storage/v1/object/sign/artifacts/content")
+    with pytest.raises(ValueError):
+        policy.require_destination("https://storage.example.test:0")
+    context = policy.verify_for_origin(origin)
+    context.check_hostname = False
+    with pytest.raises(ValueError, match="certificate checks"):
+        policy.verify_for_origin(origin)
+    with pytest.raises(ValueError, match="certificate checks"):
+        policy.require_destination(origin)
 
 
 def test_private_storage_tls_real_sdk_uses_origin_bound_http_client(monkeypatch):

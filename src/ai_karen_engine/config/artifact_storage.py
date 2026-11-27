@@ -8,9 +8,9 @@ from __future__ import annotations
 
 import math
 import os
+import ssl
 from dataclasses import dataclass, field
 from pathlib import Path
-import ssl
 from urllib.parse import urlsplit
 
 
@@ -122,17 +122,19 @@ class StorageTLSPolicy:
     def _identity(raw: str, *, root_only: bool) -> tuple[str, str, int]:
         try:
             parts = urlsplit(raw)
+            port = parts.port
             if (
                 any(ord(ch) <= 32 or ord(ch) == 127 for ch in raw)
                 or parts.scheme != "https"
                 or not parts.hostname
+                or (port is not None and not 1 <= port <= 65535)
                 or parts.username is not None
                 or parts.password is not None
                 or parts.fragment
                 or (root_only and (parts.path not in ("", "/") or parts.query))
             ):
                 raise ValueError
-            return parts.scheme, parts.hostname, parts.port or 443
+            return parts.scheme, parts.hostname, 443 if port is None else port
         except (TypeError, ValueError) as exc:
             raise ValueError("Invalid private Storage TLS origin") from exc
 
@@ -152,11 +154,17 @@ class StorageTLSPolicy:
         context.load_verify_locations(cafile=ca_file)
         return cls(configured, context)
 
+    def _require_verified_context(self) -> None:
+        if self._context.verify_mode != ssl.CERT_REQUIRED or not self._context.check_hostname:
+            raise ValueError("Private Storage TLS certificate checks are required")
+
     def require_destination(self, url: str) -> None:
+        self._require_verified_context()
         if self._identity(url, root_only=False) != self._identity(self.origin, root_only=True):
             raise ValueError("Private Storage TLS destination differs from the configured origin")
 
     def verify_for_origin(self, origin: str) -> ssl.SSLContext:
+        self._require_verified_context()
         if self._identity(origin, root_only=True) != self._identity(self.origin, root_only=True):
             raise ValueError("Private Storage TLS origin changed")
         return self._context
