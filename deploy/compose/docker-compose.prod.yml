@@ -19,6 +19,13 @@ services:
       - /usr/local/etc/redis/redis.conf
       - --requirepass
       - ${REDIS_PASSWORD:?REDIS_PASSWORD is required for production}
+      # Medusa leases and unacknowledged terminal receipts are not cache entries.
+      - --maxmemory-policy
+      - noeviction
+      - --appendonly
+      - "yes"
+      - --appendfsync
+      - always
 
   api:
     build:

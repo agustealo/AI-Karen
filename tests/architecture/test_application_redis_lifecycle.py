@@ -248,3 +248,30 @@ async def test_required_redis_still_gates_readiness_with_invalidation_enabled(mo
     assert result.ready is False
     assert result.checks["redis"] == {"ready": False, "status": "degraded"}
     manager.is_healthy.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+async def test_production_distributed_coordination_attaches_canonical_redis_without_other_consumers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from ai_karen_engine.config import agent_medusa
+
+    _required(monkeypatch, False)
+    monkeypatch.setattr(
+        agent_medusa, "get_agent_medusa_runtime_settings",
+        lambda: SimpleNamespace(distributed_run_control_enabled=True),
+    )
+    manager = SimpleNamespace(
+        is_healthy=AsyncMock(return_value=False),
+        initialize=AsyncMock(return_value=True),
+    )
+    module = _redis_module(monkeypatch, manager)
+    app = SimpleNamespace(state=SimpleNamespace(
+        settings=SimpleNamespace(environment="production"),
+    ))
+    await application_runtime.initialize_application_redis(app)
+    assert app.state.redis_connection_manager is manager
+    manager.initialize.assert_awaited_once()
+    await application_runtime.shutdown_application_redis(app)
+    module.shutdown_redis_manager.assert_awaited_once()
