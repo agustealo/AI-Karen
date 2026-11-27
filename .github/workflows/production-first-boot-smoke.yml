@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       communications_browser:
-        description: "Disposable local Communications lifecycle browser proof"
+        description: "Disposable local Communications lifecycle and invalidation browser proof"
         type: boolean
         default: false
   push:
@@ -111,6 +111,51 @@ jobs:
             --build-arg KAREN_DEPLOYED_COMMIT_SHA="$GITHUB_SHA" \
             -t ai-karen-api:beta .
 
+      - name: Verify correlated logging sinks in production API image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --network none -e ENVIRONMENT=test -i ai-karen-api:beta python - <<'PY'
+          import contextlib
+          import io
+          import json
+          import logging
+          import os
+          import tempfile
+          from pathlib import Path
+
+          correlations = (
+              "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a6",
+              "fe95b316-10ac-42ee-92ce-0cdbe4c5a7a7",
+          )
+          marker = "KCOMM_CORRELATED_SINK_TEST"
+          console = io.StringIO()
+          with tempfile.TemporaryDirectory() as directory:
+              original = os.getcwd()
+              try:
+                  os.chdir(directory)
+                  with contextlib.redirect_stdout(console):
+                      from ai_karen_engine.server.logging_setup import configure_logging
+
+                      configure_logging()
+                      logger = logging.getLogger("kcomm.logging.integration")
+                      for value in correlations:
+                          logger.warning(marker, extra={"correlation_id": value})
+                          logger.warning(marker, extra={"correlation_id": value})
+                      logging.shutdown()
+                  assert console.getvalue().count(marker) == 2
+                  records = [
+                      json.loads(line)
+                      for line in Path("logs/kari.log").read_text(encoding="utf-8").splitlines()
+                      if marker in line
+                  ]
+                  assert len(records) == 2
+                  assert {entry["correlation_id"] for entry in records} == set(correlations)
+              finally:
+                  os.chdir(original)
+          print("PRODUCTION CORRELATED LOGGING SINK PROOF PASSED")
+          PY
+
       - name: Build production web image
         run: |
           [[ "$GITHUB_SHA" =~ ^[a-f0-9]{40}$ ]]
@@ -209,14 +254,14 @@ jobs:
           done
 
       - uses: actions/setup-node@v4
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.communications_browser == true }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:communications-browser'))) }}
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: src/ui_launchers/Karen-AI-Theme/package-lock.json
 
       - name: Install disposable browser proof dependencies
-        if: ${{ github.event_name == 'workflow_dispatch' && inputs.communications_browser == true }}
+        if: ${{ ((github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:communications-browser'))) }}
         working-directory: src/ui_launchers/Karen-AI-Theme
         run: |
           npm ci --no-audit --no-fund
@@ -225,7 +270,7 @@ jobs:
       - name: Execute real production first boot
         env:
           KAREN_SMOKE_API_IMAGE: ai-karen-api:beta
-          KAREN_SMOKE_COMMS_BROWSER_PROOF: ${{ (github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) && 'true' || 'false' }}
+          KAREN_SMOKE_COMMS_BROWSER_PROOF: ${{ (((github.event_name == 'workflow_dispatch' && inputs.communications_browser == true) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository && !github.event.pull_request.draft && contains(github.event.pull_request.labels.*.name, 'ci:communications-browser')))) && 'true' || 'false' }}
         run: bash scripts/ci/production-first-boot-smoke.sh
 
       - name: Execute real production web boot
