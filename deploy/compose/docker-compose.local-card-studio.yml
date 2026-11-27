@@ -12,6 +12,12 @@ services:
       - logs_data:/app/logs
       - backup_data:/app/backups
       - ./models:/app/models:rw
+      - type: bind
+        source: "${KCARD_STORAGE_CA_DIR:?Private acceptance CA directory required}"
+        target: /run/karen-local-storage-tls
+        read_only: true
+        bind:
+          create_host_path: false
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
@@ -26,6 +32,12 @@ services:
       # Only explicit local fixture credentials; never inherit a cloud project.
       SUPABASE_PROJECT_URL: "${KCARD_LOCAL_STORAGE_URL:-}"
       SUPABASE_SECRET_KEY: "${KCARD_LOCAL_STORAGE_SECRET_KEY:-}"
+      SUPABASE_URL: ""
+      SUPABASE_SERVICE_ROLE_KEY: ""
+      SUPABASE_PUBLISHABLE_KEY: ""
+      SUPABASE_ANON_KEY: ""
+      KAREN_SUPABASE_STORAGE_TLS_ORIGIN: "${KCARD_LOCAL_STORAGE_URL:-}"
+      KAREN_SUPABASE_STORAGE_TLS_CA_FILE: "/run/karen-local-storage-tls/ca.pem"
       DB_HOST: "host.docker.internal"
       DB_PORT: "${KCARD_DB_PORT:?KCARD_DB_PORT is required}"
       DB_USER: "${KCARD_DB_USER:?KCARD_DB_USER is required}"

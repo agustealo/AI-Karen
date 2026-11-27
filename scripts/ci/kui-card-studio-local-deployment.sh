@@ -34,7 +34,7 @@ from urllib.parse import quote
 
 from scripts.ci.verify_local_card_studio_acceptance import (
     GuardError, local_supabase_database_config, local_supabase_database_container,
-    require_local_docker, local_storage_origin, verify_local_storage_gateway,
+    require_local_docker, local_storage_origin, verify_local_storage_gateway, validate_storage_ca,
 )
 
 sha = sys.argv[2]
@@ -77,12 +77,18 @@ except GuardError as exc:
 # project. Validate before creating a disposable DB or copying credentials.
 local_storage_url = base.get("KCARD_LOCAL_STORAGE_URL", "")
 local_storage_key = base.get("KCARD_LOCAL_STORAGE_SECRET_KEY", "")
-if local_storage_url or local_storage_key:
-    if not local_storage_url or not local_storage_key:
-        raise SystemExit("Local Storage fixture URL and key must be supplied together")
+local_storage_ca = base.get("KCARD_LOCAL_STORAGE_CA_FILE", "")
+ca_bytes = None
+if local_storage_url or local_storage_key or local_storage_ca:
+    if not local_storage_url or not local_storage_key or not local_storage_ca:
+        raise SystemExit("Local Storage fixture HTTPS URL, key and CA must be supplied together")
     try:
-        local_storage_origin(local_storage_url)
+        local_storage_origin(local_storage_url, require_https=True)
         verify_local_storage_gateway(container, local_storage_url)
+        ca_path = Path(local_storage_ca)
+        if ca_path.resolve().is_relative_to(root):
+            raise GuardError("Local Storage CA must be outside checkout")
+        ca_bytes = validate_storage_ca(ca_path)
     except GuardError:
         raise SystemExit("Local Storage fixture target is not the running local Supabase gateway") from None
 
@@ -128,6 +134,7 @@ values = {
     'KAREN_TEST_CARD_STUDIO_AUTH_DATABASE_URL': database_urls['KCARD_AUTH_DATABASE_URL'],
     'KCARD_COMPOSE_PROJECT': f'kcard-{sha[:12]}',
     'KCARD_ACCEPTANCE_ENV_FILE': str(env_file),
+    'KCARD_STORAGE_CA_DIR': str(out / 'storage-tls'),
 }
 if local_storage_url:
     values["KCARD_LOCAL_STORAGE_URL"] = local_storage_url
@@ -163,6 +170,13 @@ try:
     out.mkdir(mode=0o700, parents=True, exist_ok=False)
 except OSError:
     raise SystemExit('Could not reserve fresh private acceptance state') from None
+ca_dir = out / "storage-tls"
+ca_dir.mkdir(mode=0o755)
+ca_dir.chmod(0o755)
+if ca_bytes is not None:
+    ca_file = ca_dir / "ca.pem"
+    ca_file.write_bytes(ca_bytes)
+    ca_file.chmod(0o444)
 created = subprocess.run(
     ['docker', 'exec', container, 'createdb', '-U', 'postgres', db_name],
     check=False, capture_output=True, text=True,

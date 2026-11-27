@@ -86,3 +86,24 @@ Redis
 - `docs/architecture/supabase-realtime-authorization.md`
 - `docs/architecture/supabase-jwt-bridge.md`
 - `docs/architecture/supabase-feature-rejection.md`
+
+## Disposable local Storage HTTPS acceptance
+
+Docker owner-text and Content Intelligence modes require the existing native
+Supabase Kong HTTPS listener, published on the canonical local API port from
+`supabase/config.toml`. On a compatible legacy Supabase CLI, configure
+`[api.tls]` with a certificate covering `host.docker.internal`, then start
+the local stack using the installed CLI's supported configuration. Do not
+change shared config or restart an existing database automatically. Supply
+`KCARD_LOCAL_STORAGE_URL=https://host.docker.internal:<configured-port>`,
+`KCARD_LOCAL_STORAGE_SECRET_KEY` (local fixtures only), and
+`KCARD_LOCAL_STORAGE_CA_FILE` (absolute external public CA bundle) together
+in private operator configuration. Never commit a CA private key or secret.
+The existing deployment runner copies only the public CA into private state
+and binds it read-only into the isolated API. The canonical verifier checks
+the actual Kong 8443 mapping, exact CA bytes, and a hostname-verified TLS
+handshake from the API container at every Storage acceptance checkpoint.
+The recorded peer certificate and CA digests must remain unchanged.
+Standalone host-loopback HTTP proof remains separate; generic Explorer
+does not certify Storage. Unsupported local gateway layouts fail closed.
+Real SDK signing and browser acceptance remain required.
