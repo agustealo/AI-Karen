@@ -111,8 +111,10 @@ describe("canonical CopilotKit chat ownership", () => {
       'const personalContextAcceptance = process.env.KAREN_PERSONAL_CONTEXT_ACCEPTANCE === "1";',
     );
     expect(liveBrowser).toContain(
-      'await test.step("KCON-490 real multi-turn personal context", async () => {',
+      'await test.step(taskContinuityAcceptance ? "KIQ-A01/A02 real delegated task continuity" :',
     );
+    expect(liveBrowser).toContain('"KCON-490 real multi-turn personal context", async () => {');
+    expect(liveBrowser).toContain('if (personalContextAcceptance || taskContinuityAcceptance) {');
     expect(liveBrowser).toContain('await runPersonalTurn("ANything else?")');
     expect(liveBrowser).toContain(
       '"Yeah like my favorite color, or whatever you can share"',
@@ -153,7 +155,7 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(liveBrowser).toContain('run_transport_failures:');
     expect(liveBrowser).toContain('persisted_assistant_confirmed: persistedAssistantConfirmed');
     const firstLiveFollowup = liveBrowser.indexOf(
-      'await test.step("KCON-490 real multi-turn personal context"',
+      'await test.step(taskContinuityAcceptance ? "KIQ-A01/A02 real delegated task continuity" :',
     );
     const firstReload = liveBrowser.indexOf(
       '    await page.reload();\n    const restored = page.getByTestId("karen-copilot-consumer-chat");',
@@ -198,7 +200,27 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(documentTrial.lastIndexOf("await requireLiveCanonicalBackend(page, target);")).toBeGreaterThan(
       documentTrial.indexOf("await archiveCreatedFile()"),
     );
-    const beforeCredentials = (liveBrowser.slice(0, documentStart) + liveBrowser.slice(documentEnd)).replace(postflight, "");
+    // The delegated-task postflight follows verified replay, not a new login.
+    // Exclude precisely that block's final revision/health pair, after proving
+    // its execution order and that there is no extra authentication call.
+    const taskStart = liveBrowser.indexOf("if (!taskContinuationProof)");
+    const taskEnd = liveBrowser.indexOf("if (approvedSpecialist)", taskStart);
+    expect(taskStart).toBeGreaterThanOrEqual(0);
+    expect(taskEnd).toBeGreaterThan(taskStart);
+    const taskPostflight = liveBrowser.slice(taskStart, taskEnd);
+    const taskReplay = taskPostflight.indexOf(".toEqual(taskContinuationProof.receipt)");
+    const taskNoResend = taskPostflight.indexOf("Task reload must not resubmit inference");
+    const taskRevision = taskPostflight.indexOf("await requireReviewedRevision(page, target);");
+    const taskHealth = taskPostflight.indexOf("await requireLiveCanonicalBackend(page, target);");
+    expect(taskReplay).toBeGreaterThanOrEqual(0);
+    expect(taskNoResend).toBeGreaterThan(taskReplay);
+    expect(taskRevision).toBeGreaterThan(taskNoResend);
+    expect(taskHealth).toBeGreaterThan(taskRevision);
+    expect(taskPostflight.match(/await requireLiveCanonicalBackend\(page, target\);/g)).toHaveLength(1);
+    expect(taskPostflight).not.toContain("await signInApprovedKaren(");
+    const beforeCredentials = (liveBrowser.slice(0, documentStart) + liveBrowser.slice(documentEnd))
+      .replace(postflight, "")
+      .replace(taskPostflight, taskPostflight.replace("await requireLiveCanonicalBackend(page, target);", ""));
     const preflights = [...beforeCredentials.matchAll(/await requireLiveCanonicalBackend\(page, target\);/g)]
       .map(match => match.index!);
     const signIns = [...beforeCredentials.matchAll(/await signInApprovedKaren\(page, (?:approvedEmail!, approvedPassword!|account\.email!, account\.password!), \{ allowLocalLoopback: localMode \}\);/g)]
