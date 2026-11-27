@@ -126,6 +126,42 @@ def _is_degraded_direct_search_context(metadata: Mapping[str, Any]) -> bool:
     )
 
 
+def _verified_document_receipt(metadata: Mapping[str, Any]) -> bool:
+    """Recognize the generated-text producer's duplicate creation receipt.
+
+    The canonical presentation validator owns the receipt schema. Both
+    persisted copies and the captured live presentation must describe the
+    same immutable receipt. This grants no current artifact access; the
+    ordinary completed-run attestation and authorized artifact read remain
+    mandatory at their respective boundaries.
+    """
+    artifacts = metadata.get("artifacts")
+    structured = metadata.get("structured_content")
+    captured = metadata.get("verified_presentations_v1")
+    if (
+        not isinstance(artifacts, list) or len(artifacts) != 1
+        or not isinstance(structured, Mapping) or set(structured) != {"presentation"}
+        or not isinstance(captured, list) or len(captured) != 1
+    ):
+        return False
+    part = validate_presentation(captured[0])
+    if (
+        part is None or part != captured[0]
+        or part["component_type"] != "document.artifact"
+    ):
+        return False
+    # Validate each copy independently: Python equality alone accepts
+    # boolean/integer and integer/float substitutions for size_bytes.
+    structured_part = validate_presentation(structured["presentation"])
+    receipt_part = validate_presentation({**part, "data": artifacts[0]})
+    return (
+        structured_part is not None
+        and structured_part == structured["presentation"] == part
+        and receipt_part is not None
+        and receipt_part == part
+    )
+
+
 def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
     """Allow *withheld* provider source metadata only with an attested UI part.
 
@@ -167,25 +203,47 @@ def _verified_source_context(metadata: Mapping[str, Any]) -> bool:
     ):
         return False
     part = validate_presentation(captured[0])
-    if part is None or part != captured[0] or part["component_type"] not in {
+    if part is None or part != captured[0]:
+        return False
+    # The runtime may arrange its already verified observations in a bounded
+    # composition. Only source-backed search/weather children are supported
+    # here; do not treat a layout plan as independent evidence authority.
+    parts = (
+        part["data"]["items"]
+        if part["component_type"] == "surface.composition"
+        else [part]
+    )
+    if any(child["component_type"] not in {
         "search.results", "weather.observation", "weather.comparison",
-    }:
+    } for child in parts):
+        return False
+    if len({child["presentation_id"] for child in parts}) != len(parts):
         return False
     # A source/citation-bearing capability must carry the original completed
     # request receipt; unpaired metadata from historical/legacy messages
     # cannot be silently admitted as if it were verified.
     if metadata.get("source") != "chat_runtime" or not isinstance(metadata.get("request_id"), str):
         return False
-    evidence = part.get("evidence_ref")
-    if not isinstance(evidence, str) or not evidence.startswith(metadata["request_id"] + ":"):
+    request_id = metadata["request_id"]
+    if not request_id:
+        return False
+    prefix = request_id + ":"
+    references = {child["evidence_ref"] for child in parts}
+    if any(not ref.startswith(prefix) or len(ref) <= len(prefix) for ref in references):
+        return False
+    expected = (
+        next(iter(references)) if len(references) == 1
+        else f"bundle:{request_id}"
+    )
+    if part["evidence_ref"] != expected:
         return False
 
-    if part["component_type"] == "search.results":
-        # Every *displayed* result must have been in the saved source receipts.
-        # Other source/citation records may be retained by the canonical
-        # repository but must not be shipped to the renderer.
-        records = part["data"]["results"]
-        for displayed in records:
+    for child in parts:
+        if child["component_type"] != "search.results":
+            continue
+        # Every displayed search result, including nested source cards, must
+        # match saved source receipts. Raw citations remain withheld.
+        for displayed in child["data"]["results"]:
             if not any(
                 row["url"] == displayed["url"]
                 and str(row.get("snippet") or row.get("content") or "").strip()
@@ -250,7 +308,9 @@ def project_owned_history(
         if not isinstance(metadata, Mapping):
             raise UnreplayableHistory("invalid_message_metadata")
         has_unknown_rich = any(
-            _carries_value(metadata.get(key)) for key in _UNSUPPORTED_RICH
+            _carries_value(metadata.get(key))
+            and not (key == "artifacts" and _verified_document_receipt(metadata))
+            for key in _UNSUPPORTED_RICH
         )
         has_source_context = any(
             _carries_value(metadata.get(key)) for key in ("sources", "citations")
