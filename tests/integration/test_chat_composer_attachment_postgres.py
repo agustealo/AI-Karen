@@ -35,6 +35,7 @@ from ai_karen_engine.core.runtime.policy.runtime_policy import (
     RuntimePolicyEnforcer,
 )
 from ai_karen_engine.persistence.repositories import chat_run_repository
+from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
 from ai_karen_engine.services.database.repositories.conversation_repository import (
     Message,
     canonical_message_digest,
@@ -343,7 +344,15 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
             ctx.bind_runtime_attachment_scope(plan, meter, [active_ref])
             await ctx.revalidate_runtime_attachment_session()
             ctx.bind_runtime_attachment_documents(
-                plan, meter, [{**active_ref, "text": body}],
+                plan, meter, [VerifiedArtifactText(
+                    artifact_id=active_ref["source_id"],
+                    tenant_id=tenant,
+                    user_id=owner,
+                    filename="controlled.txt",
+                    mime_type="text/plain",
+                    sha256=active_ref["revision"],
+                    text=body,
+                )],
             )
             return ctx
 
