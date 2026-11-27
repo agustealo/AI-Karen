@@ -133,6 +133,7 @@ api_env=(
   -e REDIS_HOST="${REDIS_CONTAINER}"
   -e REDIS_PORT=6379
   -e KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED=true
+  -e KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES=16777216
 )
 
 if [[ "${COMMS_BROWSER_PROOF}" == "true" ]]; then
@@ -233,7 +234,7 @@ docker run -d \
   --network "${NETWORK}" \
   "${REDIS_IMAGE}" \
   redis-server --requirepass "${REDIS_PASSWORD}" \
-    --maxmemory-policy noeviction --appendonly yes --appendfsync always >/dev/null
+    --maxmemory 512mb --maxmemory-policy noeviction --appendonly yes --appendfsync always >/dev/null
 
 if ! wait_for_command "Redis" 30 docker exec "${REDIS_CONTAINER}" redis-cli -a "${REDIS_PASSWORD}" ping; then
   docker logs "${REDIS_CONTAINER}" >&2 || true

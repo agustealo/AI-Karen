@@ -214,7 +214,10 @@ def test_untrusted_request_shapes_rejected(invalid):
 
 
 @pytest.mark.asyncio
-async def test_application_composes_real_source_host_and_uses_verified_text(monkeypatch):
+@pytest.mark.parametrize("mutate_during_policy", [False, True])
+async def test_application_composes_real_source_host_and_uses_verified_text(
+    monkeypatch, mutate_during_policy,
+):
     """Prove policy, repository, admission, and execution are connected."""
     import hashlib
 
@@ -249,11 +252,30 @@ async def test_application_composes_real_source_host_and_uses_verified_text(monk
         return result
 
     store.read_owner_active_code = read_verified
-    service = _service(kernel=kernel)
+    references = [{"source_id": FILE, "revision": digest}]
+    roles = ["user"]
+    permissions = ["data:read"]
+    policy = _policy()
+    service = _service(kernel=kernel, policy=policy)
+    if mutate_during_policy:
+        decision = policy.evaluate.return_value
+
+        async def evaluate_and_mutate(request):
+            assert request.roles == ["user"]
+            assert request.permissions == ["data:read"]
+            references[0]["source_id"] = "55555555-5555-4555-8555-000000000001"
+            references[0]["revision"] = "b" * 64
+            roles[:] = ["admin"]
+            permissions.append("data:write")
+            return decision
+
+        policy.evaluate.side_effect = evaluate_and_mutate
     response = await PluginService.analyze_content_owner_sources(
         service,
-        **_args(references=[{"source_id": FILE, "revision": digest}]),
+        **_args(references=references, roles=roles, permissions=permissions),
     )
+    assert kernel.admissions[0].context.audit_context["user_roles"] == ["user"]
+    assert kernel.admissions[0].context.audit_context["permissions"] == ["data:read"]
     assert response["operation"] == "analyze"
     assert response["persisted"] is False
     assert response["documents"] == [{
@@ -406,3 +428,19 @@ async def test_content_inventory_rejects_invalid_service_ceiling(monkeypatch, ce
     assert exc.value.status_code == 503
     assert exc.value.detail == "Content inventory is unavailable"
     service.list_content_owner_page.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("references", [
+    [{"source_id": FILE, "revision": SHA}] * 2,
+    [{"source_id": FILE, "revision": "invalid"}],
+    [{"source_id": "not-a-uuid", "revision": SHA}],
+    [{"source_id": FILE, "revision": SHA, "text": "caller content"}],
+])
+async def test_invalid_source_selection_is_denied_before_async_policy(references):
+    policy = _policy()
+    service = _service(policy=policy)
+    with pytest.raises(ValueError):
+        await service.analyze_content_owner_sources(**_args(references=references))
+    service._ensure_initialized.assert_not_awaited()
+    policy.evaluate.assert_not_awaited()

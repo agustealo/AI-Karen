@@ -169,8 +169,8 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     # Release SHA verification is centralized instead of duplicated at each
     # invocation; every release scenario still invokes the same exact check.
     assert 'async function requireReviewedRevision(page: Page, target: URL)' in consumer_source
-    assert 'if (!releaseMode && !localSpecialistMode && !generatedDocumentAcceptance) return;' in consumer_source
-    assert 'if (localSpecialistMode || generatedDocumentAcceptance) {' in consumer_source
+    assert 'if (!releaseMode && !localSpecialistMode && !generatedDocumentAcceptance && !taskContinuityAcceptance) return;' in consumer_source
+    assert 'if (localSpecialistMode || generatedDocumentAcceptance || taskContinuityAcceptance) {' in consumer_source
     assert 'process.env.KAREN_GENERATED_DOCUMENT_APPROVED !== "true"' in consumer_source
     assert 'process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined' in consumer_source
     assert 'approvedUrl !== "http://127.0.0.1:8010"' in consumer_source
@@ -185,7 +185,13 @@ def test_copilotkit_main_only_browser_dispatch_is_exact_revision_attested() -> N
     document = consumer_source.split('test("KIQ-03G6 local generated document download and revocation"', 1)[1].split(
         'test("boots, restores and loads assets without an inspector chunk failure"', 1
     )[0]
-    assert consumer_source.count("await requireReviewedRevision(page, target)") == 8
+    assert consumer_source.count("await requireReviewedRevision(page, target)") == 9
+    # Delegated-task mode adds a postflight after verifying identical replay.
+    task = consumer_source.split("if (!taskContinuationProof)", 1)[1].split("if (approvedSpecialist)", 1)[0]
+    assert task.count("await requireReviewedRevision(page, target)") == 1
+    assert task.count("await requireLiveCanonicalBackend(page, target)") == 1
+    assert task.index(".toEqual(taskContinuationProof.receipt)") < task.index("Task reload must not resubmit inference") < task.index("await requireReviewedRevision(page, target)") < task.index("await requireLiveCanonicalBackend(page, target)")
+    assert "await signInApprovedKaren(" not in task
     assert document.count("await requireReviewedRevision(page, target)") == 2
     assert document.count("await requireReviewedRevision(active, target)") == 1
     assert document.index("await requireReviewedRevision(page, target)") < document.index("await signInApprovedKaren(page, owner.email!")

@@ -4,7 +4,38 @@ from collections import defaultdict, deque
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 
+from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
 logger = logging.getLogger(__name__)
+
+_RETENTION_OUTCOMES = {
+    "acknowledgement": frozenset({
+        "acknowledged", "not_confirmed", "unavailable", "timeout",
+        "invalid", "cancelled",
+    }),
+    "repair_batch": frozenset({
+        "empty", "cycle", "batch_limit", "unavailable", "timeout", "cancelled",
+    }),
+    "repair_candidate": frozenset({
+        "durable_missing", "scope_skipped", "not_terminal",
+    }),
+}
+
+
+def record_retention_event(operation: str, outcome: str) -> None:
+    """Record bounded attempt outcomes, never tenant IDs or unique backlog."""
+    if outcome not in _RETENTION_OUTCOMES.get(operation, ()):
+        return
+    try:
+        get_metrics_collector().counter(
+            "kari_medusa_terminal_retention_events_total",
+            "Medusa terminal retention operation outcomes, not unique receipts or backlog",
+            ["operation", "outcome"],
+        ).labels(operation=operation, outcome=outcome).inc()
+    except Exception:
+        # Observability must never interrupt receipt recovery or cancellation.
+        logger.debug("Medusa retention metric unavailable")
+
 
 class MedusaMetrics:
     """Telemetry and metrics collection for AgentMedusa."""

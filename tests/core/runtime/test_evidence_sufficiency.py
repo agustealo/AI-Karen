@@ -320,3 +320,42 @@ def test_missing_upbringing_is_honest_without_ollama():
     assert "Jamaica" not in answer
     assert meta["actual_provider"] is None
     assert meta["evidence_sufficiency"] == "missing"
+
+
+@pytest.mark.parametrize("naive", [False, True])
+def test_future_effective_memory_is_not_current_or_a_conflict(naive):
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    future = evidence("residence_location", "Future City", conflict=True)
+    start = now + timedelta(days=1)
+    future.temporal = EvidenceTemporalContext(
+        effective_from=start.replace(tzinfo=None) if naive else start,
+    )
+    def evaluate(*items, at=now):
+        return evaluate_personal_evidence(
+            context(*items), tenant_id="tenant", user_id="user",
+            attribute="residence_location", now=at,
+        )
+    result = evaluate(future)
+    assert result.status is Status.MISSING
+    assert result.reason == "evidence_not_yet_effective"
+    assert not result.may_assert
+    assert evaluate(future, evidence("residence_location", "Current City")).value == "Current City"
+    future.contradiction = EvidenceContradiction(status=EvidenceContradictionStatus.NONE)
+    assert evaluate(future, at=start).value == "Future City"
+    future.temporal = EvidenceTemporalContext(effective_from=start, effective_until=start + timedelta(days=1))
+    assert evaluate(future, at=start + timedelta(days=1)).status is Status.EXPIRED
+
+
+def test_semantic_value_uses_same_temporal_and_conflict_authority():
+    from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolver
+    future = evidence("residence_location", "Future City")
+    future.temporal = EvidenceTemporalContext(
+        effective_from=datetime.now(timezone.utc) + timedelta(days=1),
+    )
+    def value(*items):
+        return RuntimeEvidenceResolver.authorized_semantic_value(
+            context(*items), tenant_id="tenant", user_id="user", attribute="residence_location",
+        )
+    assert value(future) is None
+    assert value(future, evidence("residence_location", "Current City")) == "Current City"
+    assert value(evidence("residence_location", "City A"), evidence("residence_location", "City B")) is None

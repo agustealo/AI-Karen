@@ -61,6 +61,26 @@ class RedisDurabilityObservation:
         # booleans, negatives or other malformed values into evidence.
         return value if type(value) is int and value >= 0 else None
 
+    def admission_headroom_bytes(self) -> int | None:
+        """Observed Redis maxmemory headroom, not host capacity or a reservation.
+
+        Redis excludes certain replication/AOF buffers from eviction accounting.
+        Unknown, unlimited or inconsistent memory observations cannot establish
+        a finite reserve. Negative headroom is preserved for an over-limit server.
+        """
+        if self.status != "observed":
+            return None
+        limit = self.maxmemory_bytes
+        used = self.used_memory_bytes
+        excluded = self.mem_not_counted_for_evict_bytes
+        if (
+            type(limit) is not int or limit <= 0
+            or type(used) is not int or used < 0
+            or type(excluded) is not int or not 0 <= excluded <= used
+        ):
+            return None
+        return limit - (used - excluded)
+
     @classmethod
     def from_observations(
         cls,

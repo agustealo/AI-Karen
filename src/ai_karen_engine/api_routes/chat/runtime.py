@@ -1695,13 +1695,29 @@ async def get_ag_ui_chat_run_status(
     user: Dict[str, Any] = Depends(bypass_user_context_func),
 ):
     """Read only an owned durable run's persisted state. Never reissue a stop."""
+    return await _read_ag_ui_status(thread_id, run_id, user, by_submission=False)
+
+
+@router.get("/chat/ag-ui/submissions/{thread_id}/{submission_id}/status")
+async def get_ag_ui_chat_submission_status(
+    thread_id: str,
+    submission_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Observe the exact original submission without starting another execution."""
+    return await _read_ag_ui_status(thread_id, submission_id, user, by_submission=True)
+
+
+async def _read_ag_ui_status(
+    thread_id: str, identity: str, user: Dict[str, Any], *, by_submission: bool,
+):
     features = get_runtime_settings().features
     if (
         not features.enable_ag_ui_bridge
         or not getattr(features, "enable_ag_ui_durable_runs", False)
     ):
         raise HTTPException(status_code=404, detail="Run status unavailable")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id):
+    if not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", identity):
         raise HTTPException(status_code=422, detail="Invalid run identity")
     try:
         thread = str(uuid.UUID(thread_id))
@@ -1713,7 +1729,11 @@ async def get_ag_ui_chat_run_status(
         request_id=request_id, correlation_id=request_id,
     )
     try:
-        result = await get_chat_run_coordinator().read_status(context, run_id=run_id)
+        coordinator = get_chat_run_coordinator()
+        result = (
+            await coordinator.read_submission_status(context, submission_id=identity)
+            if by_submission else await coordinator.read_status(context, run_id=identity)
+        )
     except PermissionError as exc:
         raise HTTPException(status_code=404, detail="Chat run unavailable") from exc
     except RuntimeError as exc:
@@ -1740,8 +1760,23 @@ async def get_ag_ui_chat_run_status(
         ))
     ):
         raise HTTPException(status_code=503, detail="Chat run status unavailable")
+    # Publish only the fixed observation fields, never internal ledger data.
+    public: Dict[str, Any] = {
+        "status": result["status"],
+        "cancel_requested": result["cancel_requested"],
+        "cancellation_confirmed": result["cancellation_confirmed"],
+    }
+    if by_submission:
+        run_id = result.get("runId")
+        if (
+            not isinstance(run_id, str)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,100}", run_id)
+            or result.get("submissionId") != identity
+        ):
+            raise HTTPException(status_code=503, detail="Chat run status unavailable")
+        public.update({"runId": run_id, "submissionId": identity})
     return JSONResponse(
-        content=result,
+        content=public,
         headers={"Cache-Control": "private, no-store"},
     )
 

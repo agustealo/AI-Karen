@@ -332,3 +332,222 @@ def test_draft_retry_request_rejects_untrusted_shapes(body):
     from pydantic import ValidationError
     with pytest.raises(ValidationError):
         ingress.AGUIDraftRetryRequest.model_validate(body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "state,live,terminal,bound,expected,error",
+    [
+        ("running", True, False, True, "running", None),
+        ("cancelling", True, False, True, "cancelling", None),
+        ("running", False, False, True, "interrupted", None),
+        ("orphaned", None, True, True, "orphaned", None),
+        ("completed", None, True, True, "completed", None),
+        ("failed", None, True, True, "failed", None),
+        ("cancelled", None, True, True, "cancelled", None),
+        ("completed", None, True, False, None, "unverified_chat_run_completion_binding"),
+        ("failed", None, False, True, None, "unverified_chat_run_terminal"),
+    ],
+)
+async def test_exact_submission_status_reuses_scoped_terminal_evidence(
+    monkeypatch, state, live, terminal, bound, expected, error,
+):
+    queries = []
+
+    class Session:
+        async def execute(self, statement, params):
+            queries.append((str(statement), params))
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(
+                one_or_none=lambda: {
+                    "transport_run_id": "original-run",
+                    "submission_id": "original-turn",
+                    "status": state,
+                    "stop_requested": state in {"cancelling", "cancelled"},
+                    "terminal_recorded": terminal,
+                    "lease_live": live,
+                    "completion_bound": bound,
+                },
+            ))
+
+    @asynccontextmanager
+    async def scope(tenant, *, user_id=None):
+        assert (tenant, user_id) == (TENANT, OWNER)
+        yield Session()
+
+    monkeypatch.setattr(repo, "async_transaction_scope", scope)
+    ledger = repo.SqlChatRunRepository()
+    args = dict(tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+                submission_id="original-turn")
+    if error:
+        with pytest.raises(RuntimeError, match=error):
+            await ledger.read_submission_status(**args)
+    else:
+        result = await ledger.read_submission_status(**args)
+        assert result == {
+            "runId": "original-run",
+            "submissionId": "original-turn",
+            "status": expected,
+            "cancel_requested": state in {"cancelling", "cancelled"},
+            "cancellation_confirmed": state == "cancelled",
+        }
+    assert len(queries) == 1
+    sql, params = queries[0]
+    assert sql.lstrip().startswith("SELECT")
+    assert "UPDATE" not in sql and "INSERT" not in sql
+    assert "lease_token" not in sql
+    assert "tenant_id = CAST(:tenant AS uuid)" in sql
+    assert "user_id = CAST(:owner AS uuid)" in sql
+    assert "conversation_id = CAST(:conversation AS uuid)" in sql
+    assert "submission_id = :submission_id" in sql
+    assert "ORDER BY" not in sql and "LIMIT 1" not in sql
+    assert "JOIN messages u" in sql and "JOIN messages a" in sql
+    assert params == {
+        "tenant": TENANT, "owner": OWNER, "conversation": THREAD,
+        "submission_id": "original-turn",
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("row", [
+    None,
+    {"transport_run_id": "foreign run", "submission_id": "original-turn"},
+    {"transport_run_id": "other-run", "submission_id": "other-turn"},
+])
+async def test_exact_submission_absence_or_mismatch_never_falls_back(monkeypatch, row):
+    class Session:
+        async def execute(self, statement, params):
+            return SimpleNamespace(mappings=lambda: SimpleNamespace(
+                one_or_none=lambda: row,
+            ))
+
+    @asynccontextmanager
+    async def scope(tenant, *, user_id=None):
+        assert (tenant, user_id) == (TENANT, OWNER)
+        yield Session()
+
+    monkeypatch.setattr(repo, "async_transaction_scope", scope)
+    ledger = repo.SqlChatRunRepository()
+    args = dict(tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+                submission_id="original-turn")
+    if row is None:
+        assert await ledger.read_submission_status(**args) is None
+    else:
+        with pytest.raises(RuntimeError, match="unverified_chat_run_recovery_identity"):
+            await ledger.read_submission_status(**args)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("submission_id", ["", "bad id", "x" * 101, None])
+async def test_invalid_exact_submission_is_rejected_before_database(monkeypatch, submission_id):
+    def unexpected(*args, **kwargs):
+        pytest.fail("Invalid selector entered the database")
+
+    monkeypatch.setattr(repo, "async_transaction_scope", unexpected)
+    with pytest.raises(ValueError, match="invalid_chat_submission_id"):
+        await repo.SqlChatRunRepository().read_submission_status(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            submission_id=submission_id,
+        )
+
+
+@pytest.mark.asyncio
+async def test_submission_coordinator_reauthorizes_before_ledger_read(monkeypatch):
+    from ai_karen_engine.auth.models import UserData
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+
+    calls = []
+    context = ChatExecutionContext(
+        user_id=OWNER, tenant_id=TENANT, session_id=THREAD,
+        conversation_id=THREAD, request_id="request-submission",
+        correlation_id="correlation-submission",
+        authenticated_user=UserData(
+            user_id=OWNER, tenant_id=TENANT, is_active=True, is_verified=True,
+        ),
+    )
+
+    class Gateway:
+        async def require_owned_conversation(self, execution_context):
+            assert execution_context is context
+            calls.append("authorize")
+
+    class Ledger:
+        async def read_submission_status(self, **kwargs):
+            calls.append("read")
+            assert kwargs == {
+                "tenant_id": TENANT, "user_id": OWNER,
+                "conversation_id": THREAD, "submission_id": "original-turn",
+            }
+            return {"runId": "original-run"}
+
+    monkeypatch.setattr(
+        chat_run_lifecycle, "get_conversation_runtime_gateway", lambda: Gateway(),
+    )
+    coordinator = chat_run_lifecycle.ChatRunCoordinator(Ledger())
+    assert await coordinator.read_submission_status(
+        context, submission_id="original-turn",
+    ) == {"runId": "original-run"}
+    assert calls == ["authorize", "read"]
+
+    class Denied:
+        async def require_owned_conversation(self, execution_context):
+            raise PermissionError("foreign owner")
+
+    monkeypatch.setattr(
+        chat_run_lifecycle, "get_conversation_runtime_gateway", lambda: Denied(),
+    )
+    with pytest.raises(PermissionError):
+        await coordinator.read_submission_status(context, submission_id="original-turn")
+    assert calls == ["authorize", "read"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case,expected", [
+    ("valid", 200), ("missing", 404), ("denied", 404),
+    ("invalid_identity", 422), ("disabled", 404),
+    ("foreign_identity", 503), ("unverified", 503),
+])
+async def test_submission_status_endpoint_is_scoped_and_minimal(monkeypatch, case, expected):
+    calls = []
+
+    class Coordinator:
+        async def read_submission_status(self, context, *, submission_id):
+            calls.append(submission_id)
+            assert (context.tenant_id, context.user_id, context.conversation_id) == (
+                TENANT, OWNER, THREAD,
+            )
+            if case == "missing":
+                return None
+            if case == "denied":
+                raise PermissionError("private foreign user detail")
+            if case == "unverified":
+                raise RuntimeError("private ledger error")
+            return {
+                "runId": "original-run",
+                "submissionId": "foreign-turn" if case == "foreign_identity" else submission_id,
+                "status": "completed", "cancel_requested": False,
+                "cancellation_confirmed": False,
+                "lease_token": "must-never-leave-ledger",
+            }
+
+    monkeypatch.setattr(ingress, "get_runtime_settings", lambda: SimpleNamespace(
+        features=SimpleNamespace(
+            enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=case != "disabled",
+        ),
+    ))
+    monkeypatch.setattr(ingress, "get_chat_run_coordinator", lambda: Coordinator())
+    args = (THREAD, "bad identity" if case == "invalid_identity" else "original-turn")
+    user = {"user_id": OWNER, "tenant_id": TENANT}
+    if expected == 200:
+        response = await ingress.get_ag_ui_chat_submission_status(*args, user=user)
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "private, no-store"
+        assert b'"runId":"original-run"' in response.body
+        assert b'"submissionId":"original-turn"' in response.body
+        assert b"lease_token" not in response.body
+    else:
+        with pytest.raises(HTTPException) as error:
+            await ingress.get_ag_ui_chat_submission_status(*args, user=user)
+        assert error.value.status_code == expected
+        assert "private" not in error.value.detail
+    assert calls == ([] if case in {"invalid_identity", "disabled"} else ["original-turn"])

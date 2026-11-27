@@ -290,3 +290,104 @@ describe("CopilotKit v2 canonical read-only run status", () => {
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+
+describe("CopilotKit exact submission status is an authenticated read only", () => {
+  const path = "/api/copilotkit/agent/default/submissions/" + THREAD + "/original-turn/status";
+  const upstream = "http://api:8000/api/chat/ag-ui/submissions/" + THREAD + "/original-turn/status";
+  const valid = {
+    runId: "original-run", submissionId: "original-turn", status: "completed",
+    cancel_requested: false, cancellation_confirmed: false,
+  };
+
+  function read(options: { cookie?: string; path?: string } = {}) {
+    return new NextRequest("http://localhost:3000" + (options.path ?? path), {
+      method: "GET",
+      headers: {
+        cookie: options.cookie ?? "kari_session=owner",
+        "x-user-id": "forged-owner", "x-tenant-id": "forged-tenant",
+      },
+    });
+  }
+
+  function setup(reply: () => Response, governed = true) {
+    const seen: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      seen.push(url);
+      expect(init?.method).toBe("GET");
+      expect(init?.body).toBeUndefined();
+      expect(init?.cache).toBe("no-store");
+      expect(init?.redirect).toBe("manual");
+      const headers = new Headers(init?.headers);
+      expect(headers.get("cookie")).toBe("kari_session=owner");
+      expect(headers.has("x-user-id")).toBe(false);
+      expect(headers.has("x-tenant-id")).toBe(false);
+      if (url === AUTH) return Response.json({
+        user_id: "user-owner", tenant_id: "tenant-A", is_active: true,
+      });
+      if (url === FLAGS) return Response.json({ enabled: true, governed_history: governed });
+      if (url === upstream) return reply();
+      throw new Error("Unexpected request: " + url);
+    }) as typeof fetch;
+    return seen;
+  }
+
+  it("returns only the verified original identity and status", async () => {
+    const seen = setup(() => Response.json({ ...valid, lease_token: "private" }));
+    const response = await GET(read());
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(await response.json()).toEqual(valid);
+    expect(seen).toEqual([AUTH, FLAGS, upstream]);
+  });
+
+  it.each([
+    { ...valid, submissionId: "another-turn" },
+    { ...valid, runId: "invalid id" },
+    { ...valid, runId: undefined },
+    { ...valid, status: ["completed"] },
+    { ...valid, cancellation_confirmed: true },
+  ])("rejects mismatched or malformed evidence: %j", async (receipt) => {
+    const seen = setup(() => Response.json(receipt));
+    expect((await GET(read())).status).toBe(503);
+    expect(seen).toEqual([AUTH, FLAGS, upstream]);
+  });
+
+  it.each([401, 403, 404])("does not distinguish foreign and missing submissions (%i)", async (status) => {
+    setup(() => Response.json({ detail: "private owner detail" }, { status }));
+    const response = await GET(read());
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ detail: "Chat run unavailable" });
+  });
+
+  it("rejects redirects and oversized upstream receipts", async () => {
+    setup(() => new Response(null, { status: 307, headers: { location: "https://bad.test" } }));
+    expect((await GET(read())).status).toBe(503);
+    const seen = setup(() => Response.json({ ...valid, extra: "x".repeat(4096) }));
+    expect((await GET(read())).status).toBe(503);
+    expect(seen).toEqual([AUTH, FLAGS, upstream]);
+  });
+
+  it("requires authenticated durable transport and valid identity before lookup", async () => {
+    const seen = setup(() => Response.json(valid), false);
+    expect((await GET(read())).status).toBe(404);
+    expect(seen).toEqual([AUTH, FLAGS]);
+    const spy = vi.fn();
+    globalThis.fetch = spy as typeof fetch;
+    expect((await GET(read({ cookie: "" }))).status).toBe(401);
+    expect((await GET(read({ path: path.replace("original-turn", "invalid%20id") }))).status).toBe(404);
+    expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("does not allow mutation on the status path", async () => {
+    const spy = vi.fn();
+    globalThis.fetch = spy as typeof fetch;
+    const response = await POST(new NextRequest("http://localhost:3000" + path, {
+      method: "POST", headers: { cookie: "kari_session=owner", "content-type": "application/json" },
+      body: "{}",
+    }));
+    expect(response.status).toBe(404);
+    expect(spy).not.toHaveBeenCalled();
+  });
+});
