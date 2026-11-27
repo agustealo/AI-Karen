@@ -8,7 +8,7 @@ import secrets
 from contextlib import asynccontextmanager
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -19,7 +19,16 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_asyn
 from ai_karen_engine.auth import auth_service
 from ai_karen_engine.auth.models import UserData
 from ai_karen_engine.services.auth.auth_service import AuthService
-from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext, ChatExecutionRequest
+from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+    ConversationRuntimeGateway,
+)
+from ai_karen_engine.core.runtime.owned_history_projection import (
+    UnreplayableHistory, project_owned_history,
+)
+from ai_karen_engine.services.response.response_contracts import ResponseContract
+from ai_karen_engine.services.response.response_validator import ResponseValidator
 from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
 from ai_karen_engine.core.runtime.policy.runtime_policy import (
     PolicyEvaluationRequest,
@@ -70,6 +79,9 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
                 """CREATE TABLE public.conversations (
                     conversation_id uuid PRIMARY KEY, tenant_id uuid NOT NULL,
                     user_id uuid NOT NULL,
+                    session_id text, title text, is_active boolean DEFAULT true,
+                    summary text, tags text[] DEFAULT '{}',
+                    created_at timestamptz DEFAULT NOW(), updated_at timestamptz DEFAULT NOW(),
                     conversation_metadata jsonb NOT NULL DEFAULT '{}'::jsonb
                 )""",
                 """CREATE TABLE public.messages (
@@ -554,6 +566,197 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         assert (await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
         )).data == newer.data
+        # Exercise actual runtime persistence and canonical history on a separate
+        # conversation without attachments. The source/model boundary is a
+        # controlled fixture; PostgreSQL writes, run attestation and reads are real.
+        citation_thread = str(uuid4())
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "INSERT INTO conversations (conversation_id, tenant_id, user_id) "
+                "VALUES (CAST(:c AS uuid), CAST(:t AS uuid), CAST(:u AS uuid))"
+            ), {"c": citation_thread, "t": tenant, "u": owner})
+        gateway = ConversationRuntimeGateway(repo)
+        runtime = object.__new__(ChatRuntime)
+        runtime._conversation_gateway = gateway
+        runtime._emitter = MagicMock()
+        runtime._freeze_persona_snapshot = AsyncMock(return_value=SimpleNamespace(
+            status="none", persona_id=None, memory_filter_required=False,
+        ))
+        url = "https://example.org/history"
+        answer = "Source: " + url
+        sources = [{"url": url, "evidence_level": "fetched_page",
+                    "content": "controlled source passage"}]
+        verdict = ResponseValidator().validate(answer, ResponseContract(
+            purpose="tool_synthesis", requires_live_data=True,
+            tool_results=[{"sources": sources}],
+        ))
+        assert verdict.valid and verdict.verified_citation_urls == (url,)
+
+        async def citation_run(run_id):
+            run = await runs.admit(
+                tenant_id=tenant, user_id=owner, conversation_id=citation_thread,
+                transport_run_id=run_id, request_id=run_id, correlation_id=run_id,
+            )
+            assert run is not None
+            context = ChatExecutionContext(
+                tenant_id=tenant, user_id=owner, session_id=citation_thread,
+                conversation_id=citation_thread, request_id=run_id, correlation_id=run_id,
+            )
+            context.authenticated_user = UserData(
+                user_id=owner, tenant_id=tenant, roles=["user"], permissions=[],
+                is_active=True, is_verified=True,
+            )
+            request = ChatExecutionRequest(
+                context=context, messages=[{"role": "user", "content": "Research history"}],
+                runtime_run_lease=run,
+            )
+            metadata = {
+                "actual_provider": "fixture-local", "actual_model": "fixture-model",
+                "runtime_engine": "fixture", "response_source": "grounded_search_model",
+                "answer_composition_status": "grounded_model", "degraded_mode": False,
+                "provider_attempts": [
+                    {"type": "tool", "id": "internet_search", "status": "success"},
+                ],
+                "sources": sources,
+                "verified_citation_receipt_v1": {
+                    "schema_version": 1, "request_id": run_id,
+                    "answer_sha256": hashlib.sha256(answer.encode()).hexdigest(),
+                    "source_kind": "tool", "source_id": "internet_search",
+                    "urls": verdict.verified_citation_urls,
+                },
+            }
+            return run, request, metadata
+
+        async def citation_attestations(*, tid=tenant, uid=owner):
+            return await runs.completed_replay_attestations(
+                tenant_id=tid, user_id=uid, conversation_id=citation_thread,
+            )
+
+        citation, request, metadata = await citation_run("citation-completion")
+        # Fail the assistant INSERT after the user INSERT. The nontransactional
+        # witness distinguishes a reached fault from unrelated setup failure.
+        async with engine.begin() as conn:
+            await conn.execute(text("CREATE SEQUENCE citation_fault_witness"))
+            await conn.execute(text("""
+                CREATE FUNCTION reject_citation_write() RETURNS trigger
+                LANGUAGE plpgsql AS $citation$
+                BEGIN
+                    PERFORM nextval('citation_fault_witness');
+                    RAISE EXCEPTION 'controlled citation write failure' USING ERRCODE = '23514';
+                END;
+                $citation$
+            """))
+            await conn.execute(text("""
+                CREATE TRIGGER reject_citation BEFORE INSERT ON public.messages
+                FOR EACH ROW WHEN (NEW.role = 'assistant'
+                    AND NEW.message_metadata ? 'verified_citation_receipt_v1')
+                EXECUTE FUNCTION reject_citation_write()
+            """))
+        failed = await runtime._persist_transcript(request, answer, metadata)
+        assert not failed.success
+        assert await observe(citation) == ("running", 0)
+        assert await citation_attestations() == {}
+        async with engine.begin() as conn:
+            witness = (await conn.execute(text(
+                "SELECT last_value, is_called FROM citation_fault_witness"
+            ))).one()
+            assert tuple(witness) == (1, True)
+            await conn.execute(text("DROP TRIGGER reject_citation ON public.messages"))
+
+        persisted = await runtime._persist_transcript(request, answer, metadata)
+        assert persisted.success and persisted.persisted_messages == 2
+        assert await observe(citation) == ("completed", 2)
+        snapshot = await gateway.get_owned_snapshot(request.context, message_limit=501)
+        assert len(snapshot.messages) == 2
+        assistant = snapshot.messages[-1]
+        assert assistant.role == "assistant"
+        assert assistant.metadata["verified_citation_receipt_v1"] == {
+            **metadata["verified_citation_receipt_v1"], "urls": [url],
+        }
+        proofs = await citation_attestations()
+        assert proofs == {assistant.id: (citation.request_id, canonical_message_digest(assistant))}
+        history = project_owned_history(snapshot, attestations=proofs)
+        assert [event for event in history["replayEvents"]
+                if event["name"] == "karen.verified_citations.v1"] == [{
+            "type": "CUSTOM", "name": "karen.verified_citations.v1",
+            "messageId": assistant.id, "value": {"urls": [url]},
+        }]
+        assert "controlled source passage" not in str(history)
+        assert project_owned_history(snapshot, attestations=proofs,
+                                     text_continuation=True)["replayEvents"] == []
+
+        # Change actual stored JSONB without updating the completed-run digest.
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                UPDATE public.messages
+                SET message_metadata = jsonb_set(message_metadata,
+                    '{verified_citation_receipt_v1,source_id}', '"other-tool"'::jsonb)
+                WHERE message_id = CAST(:id AS uuid)
+            """), {"id": assistant.id})
+        tampered = await gateway.get_owned_snapshot(request.context, message_limit=501)
+        with pytest.raises(UnreplayableHistory):
+            project_owned_history(tampered, attestations=await citation_attestations())
+        async with engine.begin() as conn:
+            await conn.execute(text("""
+                UPDATE public.messages
+                SET message_metadata = jsonb_set(message_metadata,
+                    '{verified_citation_receipt_v1,source_id}', '"internet_search"'::jsonb)
+                WHERE message_id = CAST(:id AS uuid)
+            """), {"id": assistant.id})
+        restored = await gateway.get_owned_snapshot(request.context, message_limit=501)
+        assert project_owned_history(restored, attestations=await citation_attestations()) == history
+
+        stopped, stopped_request, stopped_meta = await citation_run("citation-cancelled")
+        assert await runs.finish(stopped, status="cancelled")
+        assert not (await runtime._persist_transcript(stopped_request, answer, stopped_meta)).success
+        assert await observe(stopped) == ("cancelled", 0)
+        assert await citation_attestations() == proofs
+
+        # Reuse the existing restricted-role pattern: no creator-role bypass
+        # can make foreign ledger attestations appear legitimate.
+        role = "citation_reader_" + uuid4().hex
+        async with factory() as session:
+            await session.begin()
+            try:
+                await session.execute(text(
+                    f'CREATE ROLE "{role}" NOLOGIN NOSUPERUSER NOBYPASSRLS'
+                ))
+                await session.execute(text(f'GRANT USAGE ON SCHEMA public TO "{role}"'))
+                await session.execute(text(
+                    'GRANT SELECT ON public.runtime_chat_runs, public.conversations, '
+                    f'public.messages TO "{role}"'
+                ))
+                await session.execute(text(f'SET LOCAL ROLE "{role}"'))
+                assert tuple((await session.execute(text(
+                    "SELECT current_user, rolsuper, rolbypassrls FROM pg_roles "
+                    "WHERE rolname = current_user"
+                ))).one()) == (role, False, False)
+
+                @asynccontextmanager
+                async def citation_scope(tenant_id, *, user_id):
+                    await session.execute(text(
+                        "SELECT set_config('app.current_tenant_id', :tenant, true)"
+                    ), {"tenant": tenant_id})
+                    await session.execute(text(
+                        "SELECT set_config('app.current_user_id', :owner, true)"
+                    ), {"owner": user_id})
+                    yield session
+
+                with monkeypatch.context() as restricted:
+                    restricted.setattr(chat_run_repository, "async_transaction_scope", citation_scope)
+                    assert await citation_attestations() == proofs
+                    assert await citation_attestations(uid=other_owner) == {}
+                    assert await citation_attestations(tid=other_tenant) == {}
+                    for tid, uid in ((tenant, other_owner), (other_tenant, owner)):
+                        async with citation_scope(tid, user_id=uid) as scoped:
+                            count = (await scoped.execute(text(
+                                "SELECT count(*) FROM public.runtime_chat_runs "
+                                "WHERE request_id = :request"
+                            ), {"request": citation.request_id})).scalar_one()
+                            assert count == 0
+            finally:
+                await session.rollback()
+
         assert issuer.revalidate_issued_session_in_transaction.await_count >= 5
         for call in issuer.revalidate_issued_session_in_transaction.await_args_list:
             assert isinstance(call.args[3], AsyncSession)
