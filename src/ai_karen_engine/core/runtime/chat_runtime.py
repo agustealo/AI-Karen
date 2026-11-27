@@ -212,7 +212,7 @@ class ChatRuntime:
                 config.chat_attachment_integrity_total_timeout_seconds,
                 remaining_ms / 1000,
             )
-            documents: list[dict[str, str]] = []
+            documents: list[VerifiedArtifactText] = []
             used = 0
             async with asyncio.timeout(deadline):
                 await ctx.revalidate_runtime_attachment_session()
@@ -264,11 +264,7 @@ class ChatRuntime:
                     ):
                         raise AttachmentAdmissionDenied("attachment_integrity_denied")
                     used += len(raw)
-                    documents.append({
-                        "source_id": reference["source_id"],
-                        "revision": reference["revision"],
-                        "text": source.text,
-                    })
+                    documents.append(source)
                 await ctx.revalidate_runtime_attachment_session()
             if not await meter.check_duration():
                 raise AttachmentAdmissionDenied("attachment_execution_deadline")
