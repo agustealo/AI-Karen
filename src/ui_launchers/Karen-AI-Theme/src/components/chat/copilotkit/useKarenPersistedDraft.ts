@@ -10,6 +10,10 @@ import { apiClient, ApiError } from "@/lib/api";
 
 export const MAX_DRAFT_ATTACHMENTS = 12;
 export type DraftAttachment = { source_id: string; revision: string };
+export type AttachmentSubmissionSnapshot = Readonly<{
+  submissionId: string;
+  attachmentReferences: ReadonlyArray<Readonly<DraftAttachment>>;
+}>;
 type DraftRecord = { text: string; revision: number; attachment_references: DraftAttachment[] };
 
 function validAttachments(value: unknown): value is DraftAttachment[] {
@@ -53,7 +57,14 @@ export function useKarenPersistedDraft(conversationId: string) {
   const [draft, setDraft] = useState("");
   const [attachments, setAttachments] = useState<DraftAttachment[]>([]);
   const attachmentsRef = useRef<DraftAttachment[]>([]);
-  const [status, setStatus] = useState<DraftStatus>("loading");
+  const [status, setStatusState] = useState<DraftStatus>("loading");
+  // Async submit preparation must observe failure/conflict synchronously,
+  // rather than rely on a status value captured by an earlier render.
+  const statusRef = useRef<DraftStatus>("loading");
+  const setStatus = useCallback((next: DraftStatus) => {
+    statusRef.current = next;
+    setStatusState(next);
+  }, []);
   const [synced, setSynced] = useState(false);
   const [failureStatus, setFailureStatus] = useState<number | null>(null);
   const [version, setVersion] = useState(0);
@@ -155,7 +166,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       setFailureStatus(error instanceof ApiError ? error.status : null);
       setSynced(false);
     }
-  }, [endpoint]);
+  }, [endpoint, setStatus]);
 
   useEffect(() => {
     activeRef.current = true;
@@ -229,7 +240,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       revisionRef.current = null;
       dirtyRef.current = false;
     };
-  }, [conversationId, refresh]);
+  }, [conversationId, refresh, setStatus]);
 
   // A proxy 502 or network rejection does not prove a write failed:
   // PostgreSQL may have committed the CAS before its HTTP receipt was lost.
@@ -316,7 +327,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       if (abortRef.current === controller) abortRef.current = null;
       if (generationRef.current === generation) busyRef.current = false;
     }
-  }, [commitDraftWrite, announceRevision]);
+  }, [commitDraftWrite, announceRevision, setStatus]);
 
   const startSave = useCallback((): Promise<boolean> => {
     if (pendingSaveRef.current) return pendingSaveRef.current;
@@ -387,16 +398,18 @@ export function useKarenPersistedDraft(conversationId: string) {
       if (abortRef.current === controller) abortRef.current = null;
       if (generationRef.current === generation) busyRef.current = false;
     }
-  }, [commitDraftWrite, announceRevision]);
+  }, [commitDraftWrite, announceRevision, setStatus]);
 
   const flushSubmission = useCallback(async (
     submittedText: string, legacyOptimisticClear: boolean,
+    expectedAttachments: DraftAttachment[] = [],
   ): Promise<boolean> => {
     // Enter is a real user gesture, not permission to skip persistence.
     // Flush an edited draft immediately and await a verified CAS receipt
     // before deriving an original submission identity or the legacy clear.
     if (!activeRef.current || revisionRef.current === null ||
-        attachmentsRef.current.length > 0 || !submittedText.trim()) {
+        !sameAttachments(attachmentsRef.current, expectedAttachments) ||
+        !submittedText.trim()) {
       return false;
     }
     const generation = generationRef.current;
@@ -417,7 +430,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       if (!ok) return false;
     }
     if (!activeRef.current || generationRef.current !== generation ||
-        attachmentsRef.current.length > 0) return false;
+        !sameAttachments(attachmentsRef.current, expectedAttachments)) return false;
     if (textRef.current.trim() !== submittedText.trim()) {
       if (legacyOptimisticClear && textRef.current === "") {
         textRef.current = submittedText;
@@ -431,7 +444,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       if (!ok) return false;
     }
     if (!activeRef.current || generationRef.current !== generation ||
-        busyRef.current || attachmentsRef.current.length > 0) {
+        busyRef.current || !sameAttachments(attachmentsRef.current, expectedAttachments)) {
       return false;
     }
     // If startSave succeeded, but an optimistic clear arrived while startSave
@@ -468,6 +481,48 @@ export function useKarenPersistedDraft(conversationId: string) {
         textRef.current.trim() !== submittedText.trim() ||
         revision === null || revision < 1 || revision > Number.MAX_SAFE_INTEGER - 1) return null;
     return "draft-v1-" + revision;
+  }, [flushSubmission]);
+
+  // Staged v2 preparation only. The controller must separately establish
+  // explicit server protocol support before using this submission snapshot.
+  // Existing v1 and legacy methods remain text-only.
+  const prepareAttachmentSubmission = useCallback(async (
+    submittedText: string, expected: DraftAttachment[],
+  ): Promise<AttachmentSubmissionSnapshot | null> => {
+    if (statusRef.current !== "ready" || !validAttachments(expected) || expected.length === 0) {
+      return null;
+    }
+    const generation = generationRef.current;
+    const selection = expected.map(({ source_id, revision }) => ({ source_id, revision }));
+    if (!await flushSubmission(submittedText, false, selection)) return null;
+    const revision = revisionRef.current;
+    const savedText = textRef.current;
+    const sequence = readSequenceRef.current;
+    const stillCurrent = () => activeRef.current && generationRef.current === generation &&
+      statusRef.current === "ready" && !busyRef.current && !dirtyRef.current &&
+      revisionRef.current === revision && readSequenceRef.current === sequence &&
+      textRef.current === savedText && savedText.trim() === submittedText.trim() &&
+      sameAttachments(attachmentsRef.current, selection);
+    if (revision === null || revision < 1 || revision > Number.MAX_SAFE_INTEGER - 1 ||
+        !stillCurrent()) return null;
+    try {
+      // Python canonical digest uses sorted object keys, ASCII JSON and
+      // compact separators. UUID and lowercase hex validators ensure ASCII.
+      // The reference array's original order is part of the identity.
+      const bytes = new TextEncoder().encode(JSON.stringify(selection.map(
+        ({ revision: sourceRevision, source_id }) => ({ revision: sourceRevision, source_id }),
+      )));
+      const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+      if (digest.byteLength !== 32 || !stillCurrent()) return null;
+      const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      return Object.freeze({
+        submissionId: "draft-v2-" + revision + "-" + hex,
+        attachmentReferences: Object.freeze(selection.map(item => Object.freeze(item))),
+      });
+    } catch {
+      // No insecure or guessed digest fallback on an unsupported browser.
+      return null;
+    }
   }, [flushSubmission]);
 
   const refreshSubmittedDraft = useCallback(async () => {
@@ -535,7 +590,7 @@ export function useKarenPersistedDraft(conversationId: string) {
     // also needs an authenticated reread, never a pretend "saved" receipt.
     setStatus("loading");
     void refresh(false);
-  }, [refresh, status]);
+  }, [refresh, status, setStatus]);
 
   // Only retry temporary service outages. Never auto-resolve authorization
   // failures or CAS conflicts, and never replace unsaved local input.
@@ -556,11 +611,11 @@ export function useKarenPersistedDraft(conversationId: string) {
     dirtyRef.current = false;
     setStatus("loading");
     void refresh(true);
-  }, [refresh, status]);
+  }, [refresh, status, setStatus]);
 
   return {
     draft, setText, readText, attachments, updateAttachments, status, synced, failureStatus,
-    clearBeforeSubmit, prepareSubmission, prepareRevisionSubmission, refreshSubmittedDraft,
+    clearBeforeSubmit, prepareSubmission, prepareRevisionSubmission, prepareAttachmentSubmission, refreshSubmittedDraft,
     retry, discardAndReload,
   };
 }

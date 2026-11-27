@@ -1174,3 +1174,47 @@ it("restores an interrupted run observation and refreshes without starting infer
   expect(backend.fetchConversation).toHaveBeenCalledTimes(2);
   expect(screen.getByTestId("agent-chat")).toBeTruthy();
 });
+
+
+
+function AttachmentCapabilityConsumer() {
+  const { attachmentDraftSubmission } = useKarenScopedAgent();
+  return <div data-testid="attachment-capability">{String(attachmentDraftSubmission)}</div>;
+}
+
+describe("owned attachment protocol capability", () => {
+  it.each([
+    { governed: false, capability: true, expected: false },
+    { governed: true, capability: undefined, expected: false },
+    { governed: true, capability: false, expected: false },
+    { governed: true, capability: "true", expected: false },
+    { governed: true, capability: true, expected: true },
+  ])("requires literal capability in governed history: $expected", async ({ governed, capability, expected }) => {
+    backend.fetchConversation.mockResolvedValue({
+      threadId: CONVERSATION_A, messages: [], replayEvents: [],
+      ...(governed ? { recovery_run: null } : {}),
+      ...(capability !== undefined ? { attachment_draft_submission: capability } : {}),
+    });
+    render(<KarenCopilotHistoryGate conversationId={CONVERSATION_A}>
+      <AttachmentCapabilityConsumer />
+    </KarenCopilotHistoryGate>);
+    await waitFor(() => expect(screen.getByTestId("attachment-capability").textContent).toBe(String(expected)));
+  });
+
+  it("does not carry attachment capability into another conversation", async () => {
+    backend.fetchConversation.mockResolvedValueOnce({
+      threadId: CONVERSATION_A, messages: [], replayEvents: [], recovery_run: null,
+      attachment_draft_submission: true,
+    }).mockResolvedValueOnce({
+      threadId: CONVERSATION_B, messages: [], replayEvents: [], recovery_run: null,
+    });
+    const view = render(<KarenCopilotHistoryGate conversationId={CONVERSATION_A}>
+      <AttachmentCapabilityConsumer />
+    </KarenCopilotHistoryGate>);
+    await waitFor(() => expect(screen.getByTestId("attachment-capability").textContent).toBe("true"));
+    view.rerender(<KarenCopilotHistoryGate conversationId={CONVERSATION_B}>
+      <AttachmentCapabilityConsumer />
+    </KarenCopilotHistoryGate>);
+    await waitFor(() => expect(screen.getByTestId("attachment-capability").textContent).toBe("false"));
+  });
+});

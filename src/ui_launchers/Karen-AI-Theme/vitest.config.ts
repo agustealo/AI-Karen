@@ -21,6 +21,7 @@ export default defineConfig({
       'src/components/automation/AgentsPage.controlPlane.test.ts',
       'src/lib/card-studio-api.test.ts',
       'src/components/card-studio/CardStudioWorkspace.test.tsx',
+      'src/components/chat/copilotkit/useKarenPersistedDraft.test.tsx',
     ],
     environment: 'jsdom',
     setupFiles: ['./tests/setup.ts'],

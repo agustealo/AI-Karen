@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { act, cleanup, renderHook } from "@testing-library/react";
+import { webcrypto } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { apiClient } from "@/lib/api";
@@ -187,5 +188,110 @@ describe("authenticated persisted composer draft synchronization", () => {
       await vi.advanceTimersByTimeAsync(60_000);
     });
     expect(getDraft).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("staged attachment-bound draft preparation", () => {
+  const first = { source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) };
+  const second = { source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", revision: "b".repeat(64) };
+  const references = [first, second];
+  const text = "Saved private draft";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("crypto", webcrypto);
+    getDraft.mockResolvedValue({ text, revision: 7, attachment_references: references } as never);
+  });
+  afterEach(() => {
+    cleanup();
+    vi.unstubAllGlobals();
+  });
+
+  it("builds the exact ordered immutable v2 snapshot without preclearing", async () => {
+    const { result } = renderHook(() => useKarenPersistedDraft(conversationId));
+    await flush();
+    // Fixed Python json.dumps(sort_keys=True, separators=(",", ":"))
+    // SHA-256 vector; do not recalculate using the browser's serialization.
+    const digest = "e1e0621b3a710eb63db47864a9d9b89ec137ad424320a2f939681831e3e1c23b";
+    await act(async () => {
+      const snapshot = await result.current.prepareAttachmentSubmission(text, references);
+      expect(snapshot?.submissionId).toBe("draft-v2-7-" + digest);
+      expect(snapshot?.attachmentReferences).toEqual(references);
+      expect(Object.isFrozen(snapshot)).toBe(true);
+      expect(Object.isFrozen(snapshot?.attachmentReferences)).toBe(true);
+      expect(Object.isFrozen(snapshot?.attachmentReferences[0])).toBe(true);
+      expect(snapshot?.attachmentReferences[0]).not.toBe(first);
+      expect(await result.current.prepareRevisionSubmission(text)).toBeNull();
+      expect(await result.current.prepareSubmission(text)).toBe(false);
+    });
+    expect(putDraft).not.toHaveBeenCalled();
+    expect(result.current.draft).toBe(text);
+    expect(result.current.attachments).toEqual(references);
+  });
+
+  it("flushes an edited attached draft and binds the acknowledged next revision", async () => {
+    putDraft.mockImplementation(async (_path, payload) => {
+      const request = payload as { text: string; expected_revision: number; attachment_references: typeof references };
+      expect(request.expected_revision).toBe(7);
+      return { text: request.text, revision: 8, attachment_references: request.attachment_references } as never;
+    });
+    const { result } = renderHook(() => useKarenPersistedDraft(conversationId));
+    await flush();
+    act(() => result.current.setText("Edited private draft"));
+    await act(async () => {
+      const snapshot = await result.current.prepareAttachmentSubmission("Edited private draft", references);
+      expect(snapshot?.submissionId).toMatch(/^draft-v2-8-[a-f0-9]{64}$/);
+      expect(snapshot?.attachmentReferences).toEqual(references);
+    });
+    expect(putDraft).toHaveBeenCalledTimes(1);
+    expect(result.current.draft).toBe("Edited private draft");
+    expect(result.current.attachments).toEqual(references);
+  });
+
+  it("rejects missing, malformed or mismatched attachment selection", async () => {
+    const { result } = renderHook(() => useKarenPersistedDraft(conversationId));
+    await flush();
+    await act(async () => {
+      for (const selection of [[], [first], [second, first], [first, first]]) {
+        expect(await result.current.prepareAttachmentSubmission(text, selection)).toBeNull();
+      }
+    });
+    expect(putDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(["text", "selection", "unmount", "refresh"] as const)(
+    "refuses a stale snapshot if %s changes while SHA-256 is pending", async (change) => {
+      let finish!: (bytes: ArrayBuffer) => void;
+      const digest = vi.fn(() => new Promise<ArrayBuffer>(resolve => { finish = resolve; }));
+      vi.stubGlobal("crypto", { subtle: { digest } });
+      const { result, unmount } = renderHook(() => useKarenPersistedDraft(conversationId));
+      await flush();
+      const pending = result.current.prepareAttachmentSubmission(text, references);
+      await flush();
+      expect(digest).toHaveBeenCalledTimes(1);
+      if (change === "text") act(() => result.current.setText("Newer text"));
+      else if (change === "selection") act(() => result.current.updateAttachments([first]));
+      else if (change === "unmount") unmount();
+      else {
+        getDraft.mockRejectedValueOnce(new Error("Read failed"));
+        await act(async () => { await result.current.refreshSubmittedDraft(); });
+        expect(result.current.status).toBe("unavailable");
+      }
+      await act(async () => {
+        finish(new ArrayBuffer(32));
+        expect(await pending).toBeNull();
+      });
+      expect(putDraft).not.toHaveBeenCalled();
+    },
+  );
+
+  it("fails closed when WebCrypto rejects", async () => {
+    vi.stubGlobal("crypto", { subtle: { digest: vi.fn().mockRejectedValue(new Error("Unavailable")) } });
+    const { result } = renderHook(() => useKarenPersistedDraft(conversationId));
+    await flush();
+    await act(async () => {
+      expect(await result.current.prepareAttachmentSubmission(text, references)).toBeNull();
+    });
+    expect(putDraft).not.toHaveBeenCalled();
   });
 });

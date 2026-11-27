@@ -48,7 +48,11 @@ function ownedHistory(extra: Record<string, unknown> = {}) {
   };
 }
 
-function setup(lookup: () => Response = () => Response.json(ownedHistory()), governed = true) {
+function setup(
+  lookup: () => Response = () => Response.json(ownedHistory()),
+  governed = true,
+  attachmentCapability: Record<string, unknown> = {},
+) {
   const requests: string[] = [];
   globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const target = String(input);
@@ -60,7 +64,7 @@ function setup(lookup: () => Response = () => Response.json(ownedHistory()), gov
       user_id: "owner", tenant_id: "tenant-A", is_active: true,
     });
     if (target === FLAGS) return Response.json({
-      enabled: true, governed_history: governed,
+      enabled: true, governed_history: governed, ...attachmentCapability,
     });
     if (target === HISTORY || target === HISTORY + "?view=text_continuation") return lookup();
     if (target === legacyHistory) {
@@ -455,4 +459,43 @@ it("fails closed if governed recovery evidence is absent or malformed", async ()
     setup(() => Response.json(ownedHistory({ recovery_run })));
     expect((await GET(req("history"))).status).toBe(503);
   }
+});
+
+
+
+describe("attachment draft capability projection", () => {
+  it.each([undefined, false, true])("uses only explicit authenticated capability: %s", async (capability) => {
+    const called = setup(
+      () => Response.json(ownedHistory({ attachment_draft_submission: true })),
+      true,
+      capability === undefined ? {} : { attachment_draft_submission: capability },
+    );
+    const response = await GET(req("history"));
+    expect(response.status).toBe(200);
+    const body = await response.json();
+    if (capability === undefined) expect(body).not.toHaveProperty("attachment_draft_submission");
+    else expect(body.attachment_draft_submission).toBe(capability);
+    expect(called).toEqual([AUTH, FLAGS, HISTORY]);
+  });
+
+  it.each(["true", null, 1, {}])("rejects malformed capability: %s", async (value) => {
+    const called = setup(undefined, true, { attachment_draft_submission: value });
+    const response = await GET(req("history"));
+    expect(response.status).toBe(503);
+    expect(called).toEqual([AUTH, FLAGS]);
+  });
+
+  it("rejects capability without governed history", async () => {
+    const called = setup(undefined, false, { attachment_draft_submission: true });
+    expect((await GET(req("history"))).status).toBe(503);
+    expect(called).toEqual([AUTH, FLAGS]);
+  });
+
+  it("does not project capability for a foreign conversation", async () => {
+    setup(() => Response.json(ownedHistory({ owner_user_id: "foreign" })), true,
+      { attachment_draft_submission: true });
+    const response = await GET(req("history"));
+    expect(response.status).toBe(404);
+    expect(await response.json()).not.toHaveProperty("attachment_draft_submission");
+  });
 });
