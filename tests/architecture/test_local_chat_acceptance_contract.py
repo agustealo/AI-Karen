@@ -373,3 +373,40 @@ def test_task_continuity_reuses_approved_canonical_browser_and_receipt_contract(
     assert "Task reload must not resubmit inference" in replay
     assert ".toHaveLength(3)" in replay
     assert "await requireReviewedRevision(page, target)" in replay
+
+
+def test_research_continuity_requires_attested_grounded_turns_and_exact_citations() -> None:
+    source = SPEC.read_text(encoding="utf-8")
+    guard = source.split("if (researchContinuityAcceptance && (", 1)[1].split(")) throw", 1)[0]
+    for item in ("!taskContinuityAcceptance", "KAREN_SEARCH_ACCEPTANCE_REQUIRED",
+                 "KAREN_SEARCH_ACCEPTANCE_PLATFORM", "KAREN_LOCAL_SEARCH_ACCEPTANCE"):
+        assert item in guard
+    helper = source.split("async function expectResearchTurnProof(", 1)[1].split("async function readFreshSpecialistEvidence(", 1)[0]
+    assert "row.role === \"user\" && row.content === utterance" in helper
+    assert "positions.length !== 1" in helper
+    assert "event.messageId === assistant.id" in helper
+    assert 'metadata.response_source !== "grounded_search_model"' in helper
+    assert "validRuntimeRequestId(metadata.runtime_request_id)" in helper
+    assert "receipts.length !== 1 || citations.length !== 1" in helper
+    assert "karen.verified_citations.v1" in helper
+    assert "new Set(urls).size !== urls.length" in helper
+    assert 'url.includes("example.invalid")' in helper
+    assert ".toEqual(exactProof.urls)" in helper
+    assert helper.index("await expectRenderedResearchAnswer(bubble, exactProof.answer)") < helper.index("const links = bubble.getByRole")
+    rendered = source.split("async function expectRenderedResearchAnswer(", 1)[1].split("async function expectResearchTurnProof(", 1)[0]
+    assert "bubble.evaluate" in rendered and "parent.closest(excluded)" in rendered
+    assert "karen-copilot-assistant-speaker" in rendered
+    assert "karen-copilot-verified-part" in rendered
+    assert "window.getComputedStyle(current)" in rendered
+    assert "researchProseTokens(answer)" in rendered and "researchProseTokens(prose)" in rendered
+    assert '(" " + rendered + " ").includes(" " + expected + " ")' in rendered
+    assert "expected.split" in rendered
+    branch = source.split("if (researchContinuityAcceptance) {", 1)[1].split("// Synthetic, inert task.", 1)[0]
+    assert 'runPersonalTurn(handoff, true)' in branch
+    assert 'runPersonalTurn("Write a full research paper.", true)' in branch
+    assert "paper.runtimeRequestId !== first.runtimeRequestId" in branch
+    assert "paper.assistantId !== first.assistantId" in branch
+    assert "observedRunRequests.length - initialRunCount).toBe(2)" in branch
+    replay = source.split("if (!researchProof)", 1)[1].split("if (approvedSpecialist)", 1)[0]
+    assert ".toEqual(first)" in replay and ".toEqual(paper)" in replay
+    assert replay.index(".toEqual(paper)") < replay.index("Task reload must not resubmit inference")

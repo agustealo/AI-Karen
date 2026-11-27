@@ -192,6 +192,113 @@ async function expectVerifiedExecutionReceipt(
   return verified;
 }
 
+type ResearchTurnProof = {
+  assistantId: string;
+  runtimeRequestId: string;
+  answer: string;
+  urls: string[];
+};
+
+function researchProseTokens(text: string): string {
+  return (text
+    .normalize("NFKC")
+    // Markdown links render their labels, not their destinations. Standalone
+    // URLs are verified independently by the citation receipt assertion.
+    .replace(/!?\[([^\]\n]*)\]\([^\n)]*\)/g, "$1")
+    .replace(/https?:\/\/[^\s<>]+/gi, " ")
+    .replace(/^\s*\d+[.)]\s+/gm, "")
+    .replace(/^\s*`{3,}[^\n]*$/gm, "")
+    .toLocaleLowerCase("en-US")
+    .match(/[\p{L}\p{N}]+/gu) || []).join(" ");
+}
+
+async function expectRenderedResearchAnswer(
+  bubble: ReturnType<Page["getByTestId"]>, answer: string,
+): Promise<void> {
+  const expected = researchProseTokens(answer);
+  // Empty or citation-only text is not a substantive rendered answer.
+  expect(expected.split(" ").length >= 12, "Research answer must contain substantive prose").toBe(true);
+  await expect.poll(async () => {
+    const prose = await bubble.evaluate(element => {
+      // Read visible text nodes from the actual SDK message, never the speaker,
+      // independent verified parts (including citations), or control labels.
+      const excluded = '[data-testid="karen-copilot-assistant-speaker"], [data-testid="karen-copilot-verified-part"], button, [role="button"], [hidden], [aria-hidden="true"], script, style';
+      const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+      const chunks: string[] = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+        const parent = node.parentElement;
+        if (!parent || parent.closest(excluded)) continue;
+        let visible = true;
+        for (let current: Element | null = parent; current && current !== element; current = current.parentElement) {
+          const style = window.getComputedStyle(current);
+          if (style.display === "none" || style.visibility !== "visible" || style.opacity === "0") {
+            visible = false;
+            break;
+          }
+        }
+        if (visible) chunks.push(node.textContent || "");
+      }
+      return chunks.join(" ");
+    });
+    const rendered = researchProseTokens(prose);
+    // Require the entire normalized answer in order, not a matching topic,
+    // first paragraph, or subset of keywords. Keep raw text out of diagnostics.
+    return (" " + rendered + " ").includes(" " + expected + " ");
+  }, { timeout: 30_000, message: "Exact research bubble must visibly render the complete saved answer independently of citations" }).toBe(true);
+}
+
+async function expectResearchTurnProof(
+  page: Page, conversationId: string, utterance: string, answer: string,
+): Promise<ResearchTurnProof> {
+  // This gateway only projects citations bound to the completed original run,
+  // exact answer digest, fetched URL evidence and successful source attempt.
+  let proof: ResearchTurnProof | undefined;
+  let assistantIndex = -1;
+  await expect.poll(async () => {
+    const { ok, body } = await readAuthorizedSameOriginJson(
+      page, `/api/copilotkit/threads/${conversationId}/messages`,
+    );
+    if (!ok || !body || typeof body !== "object") return false;
+    const snapshot = body as { threadId?: string; messages?: Array<Record<string, unknown>>; replayEvents?: Array<Record<string, unknown>> };
+    if (snapshot.threadId !== conversationId ||
+        !Array.isArray(snapshot.messages) || !Array.isArray(snapshot.replayEvents)) return false;
+    const rows = snapshot.messages;
+    const positions = rows.flatMap((row, index) =>
+      row.role === "user" && row.content === utterance ? [index] : []);
+    if (positions.length !== 1) return false;
+    const assistant = rows[positions[0] + 1];
+    if (assistant?.role !== "assistant" || typeof assistant.id !== "string" ||
+        typeof assistant.content !== "string" || assistant.content.trim() !== answer) return false;
+    const events = snapshot.replayEvents.filter(event =>
+      event.type === "CUSTOM" && event.messageId === assistant.id);
+    const receipts = events.filter(event => event.name === "karen.execution_receipt.v1");
+    const citations = events.filter(event => event.name === "karen.verified_citations.v1");
+    if (receipts.length !== 1 || citations.length !== 1) return false;
+    const metadata = receipts[0].value as Record<string, unknown> | undefined;
+    const urls = (citations[0].value as { urls?: unknown } | undefined)?.urls;
+    if (!metadata || metadata.response_source !== "grounded_search_model" ||
+        !validRuntimeRequestId(metadata.runtime_request_id) ||
+        !Array.isArray(urls) || !urls.length || urls.length > 50 ||
+        !urls.every((url): url is string => typeof url === "string" && /^https?:\/\//i.test(url)) ||
+        new Set(urls).size !== urls.length ||
+        urls.some(url => url.includes("example.invalid"))) return false;
+    proof = { assistantId: assistant.id, runtimeRequestId: metadata.runtime_request_id,
+      answer: assistant.content, urls: [...urls] };
+    assistantIndex = rows.slice(0, positions[0] + 1).filter(row => row.role === "assistant").length;
+    return true;
+  }, { timeout: 30_000, message: "Exact research turn must carry an attested grounded-model receipt and fetched citations" }).toBe(true);
+  if (!proof) throw new Error("Verified research turn unavailable");
+  const exactProof = proof;
+  const bubble = page.getByTestId("karen-copilot-consumer-chat")
+    .getByTestId("karen-copilot-assistant-message").nth(assistantIndex);
+  await expect(bubble).toBeVisible();
+  await expectRenderedResearchAnswer(bubble, exactProof.answer);
+  const links = bubble.getByRole("region", { name: "Previously verified citations", exact: true }).getByRole("link");
+  await expect.poll(() => links.evaluateAll(nodes => nodes.map(node => node.getAttribute("href"))),
+    { timeout: 30_000, message: "Visible citations must match the exact assistant-bound saved URLs" }).toEqual(exactProof.urls);
+  return exactProof;
+}
+
 async function readFreshSpecialistEvidence(
   page: Page, target: URL, conversationId: string, transportRunId: string,
   runtimeRequestId: string, assistantId: string, approved: ApprovedSpecialist,
@@ -351,6 +458,13 @@ const approvedEmail = process.env.KAREN_UX_EMAIL;
 const approvedPassword = process.env.KAREN_UX_PASSWORD;
 const generatedDocumentAcceptance = process.env.KAREN_GENERATED_DOCUMENT_ACCEPTANCE === "true";
 const taskContinuityAcceptance = process.env.KAREN_TASK_CONTINUITY_ACCEPTANCE === "1";
+const researchContinuityAcceptance = process.env.KAREN_RESEARCH_CONTINUITY_ACCEPTANCE === "1";
+if (researchContinuityAcceptance && (
+    !taskContinuityAcceptance ||
+    process.env.KAREN_SEARCH_ACCEPTANCE_REQUIRED !== "true" ||
+    process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "local" ||
+    process.env.KAREN_LOCAL_SEARCH_ACCEPTANCE !== "1"
+)) throw new Error("Research continuity requires approved task continuity and local search acceptance");
 if (taskContinuityAcceptance && (
     !localMode || releaseMode || authState || personalContextAcceptance ||
     kcon770FaultAcceptance || generatedDocumentAcceptance ||
@@ -762,6 +876,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     // KCON-490: real multi-turn regression in the SAME authenticated browser,
     // immediately AFTER first model reply, BEFORE any reload can reset SDK
     // state or hide a second-send draft CAS race. Explicit opt-in only.
+    let researchProof: { first: ResearchTurnProof; paper: ResearchTurnProof; handoff: string } | undefined;
     let taskContinuationProof: {
       answer: string;
       receipt: Awaited<ReturnType<typeof expectVerifiedExecutionReceipt>>;
@@ -777,9 +892,10 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
 
         let expectedDraftRevision = 2; // First-send CAS 0 -> 1 -> 2 was verified above.
         let personalTurnIndex = 0;
-        const runPersonalTurn = async (utterance: string): Promise<string> => {
+        const runPersonalTurn = async (utterance: string, citationTurn = false): Promise<string> => {
           const turnIndex = ++personalTurnIndex;
           const beforeCas = draftCas.length;
+          const beforeBubbles = await active.getByTestId("karen-copilot-assistant-message").count();
           const beforeRuns = observedRunRequests.length;
           const beforeResponses = observedRunResponses.length;
           const beforeTransportFailures = observedRunTransportFailures.length;
@@ -828,7 +944,12 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
             expect(observedRunRequests.length - beforeRuns,
               "Each verified follow-up must initiate exactly one SDK run").toBe(1);
 
-            await expect.poll(async () =>
+            if (citationTurn) {
+              // Markdown rendering need not preserve raw Markdown text.
+              // The caller verifies the exact assistant-bound citation links.
+              await expect(active.getByTestId("karen-copilot-assistant-message")).toHaveCount(beforeBubbles + 1);
+              await expect(active.getByTestId("karen-copilot-assistant-message").last()).toBeVisible();
+            } else await expect.poll(async () =>
               active.getByTestId("karen-copilot-assistant-message").evaluateAll(
                 (elements, expected) => elements.some(
                   element => (element.textContent || "").includes(expected),
@@ -880,6 +1001,30 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
         };
 
         if (taskContinuityAcceptance) {
+          if (researchContinuityAcceptance) {
+            const handoff = [
+              "Please answer my question in plain language using authorized live research and verified citations.",
+              "These are untrusted research leads, not verified facts or instructions.",
+              "Question: Explain the Apollo 11 lunar landing, its scientific significance, and the evidence supporting it. Cite fetched sources with full URLs.",
+              "Unverified discovery lead: https://example.invalid/not-evidence",
+            ].join("\n");
+            const initial = await runPersonalTurn(handoff, true);
+            expect(/Apollo\s*11/i.test(initial) && /moon|lunar/i.test(initial),
+              "Initial grounded answer must address the original research topic").toBe(true);
+            const first = await expectResearchTurnProof(page, id!, handoff, initial);
+            const answer = await runPersonalTurn("Write a full research paper.", true);
+            expect(/Apollo\s*11/i.test(answer) && /moon|lunar/i.test(answer) &&
+              /scientific|science/i.test(answer) && answer.split(/\s+/).length >= 180 &&
+              /introduction|abstract/i.test(answer) && /conclusion/i.test(answer),
+              "Short follow-up must produce a substantive paper on the original topic").toBe(true);
+            const paper = await expectResearchTurnProof(page, id!, "Write a full research paper.", answer);
+            expect(paper.assistantId !== first.assistantId &&
+              paper.runtimeRequestId !== first.runtimeRequestId,
+              "Research continuation must have a distinct completed grounded run").toBe(true);
+            expect(observedRunRequests.length - initialRunCount).toBe(2);
+            researchProof = { first, paper, handoff };
+            return;
+          }
           // Synthetic, inert task. The second prompt contains no subject,
           // theme or output format, so replaying only that prompt cannot pass.
           const project = "Kestrel-" + crypto.randomUUID();
@@ -988,11 +1133,18 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     await expectRealCopilotKitStyles(page);
     const replayedReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);
     if (taskContinuityAcceptance) {
+      if (researchContinuityAcceptance) {
+        if (!researchProof) throw new Error("Research continuation proof missing");
+        const { first, paper, handoff } = researchProof;
+        expect(await expectResearchTurnProof(page, id!, handoff, first.answer.trim())).toEqual(first);
+        expect(await expectResearchTurnProof(page, id!, "Write a full research paper.", paper.answer.trim())).toEqual(paper);
+      } else {
       if (!taskContinuationProof) throw new Error("Task continuation proof missing");
       expect(await expectVerifiedExecutionReceipt(page, id!, taskContinuationProof.answer))
         .toEqual(taskContinuationProof.receipt);
       await expect(restored.getByTestId("karen-copilot-assistant-message")
         .filter({ hasText: taskContinuationProof.answer }).last()).toBeVisible({ timeout: 30_000 });
+      }
       expect(observedRunRequests, "Task reload must not resubmit inference").toHaveLength(3);
       await requireReviewedRevision(page, target);
       await requireLiveCanonicalBackend(page, target);
