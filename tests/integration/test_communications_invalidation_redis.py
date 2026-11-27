@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 import pytest
+from fastapi import Request
 
 from ai_karen_engine.config.runtime import get_runtime_settings
 from ai_karen_engine.core.realtime.inbox_invalidation import (
@@ -262,6 +263,90 @@ async def test_real_optional_redis_application_lifecycle(monkeypatch):
         await shutdown_application_redis(app)
     assert app.state.redis_connection_manager is None
     assert manager is not None and manager.client is None
+
+
+@pytest.mark.asyncio
+async def test_real_redis_wait_releases_on_asgi_disconnect_through_http_middleware():
+    """Exercise the real broker under layered ASGI receive boundaries."""
+    if os.environ.get("KAREN_TEST_DISPOSABLE_REDIS") != "1":
+        pytest.skip("Explicit disposable Redis opt-in required")
+    _target()
+
+    from fastapi import FastAPI
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.responses import JSONResponse
+
+    from ai_karen_engine.server.middleware import observe_bodyless_request_disconnect
+
+    prefix = "kcomm-disconnect-" + uuid.uuid4().hex
+    tenant, owner = str(uuid.uuid4()), str(uuid.uuid4())
+    manager = await _initialize(prefix)
+    client = manager.client
+    assert client is not None
+    channel = inbox_invalidation_channel(prefix=prefix, tenant_id=tenant, user_id=owner)
+    app = FastAPI()
+    incoming = asyncio.Queue()
+    disconnect_observed = asyncio.Event()
+    running = None
+    replacement = None
+
+    async def passthrough(request: Request, call_next):
+        return await call_next(request)
+
+    # Real Starlette middleware crosses the receive checkpoints that immediate
+    # Request.is_disconnected() polling can miss.
+    for _ in range(3):
+        app.add_middleware(BaseHTTPMiddleware, dispatch=passthrough)
+
+    @app.get("/wait")
+    async def wait(request: Request):
+        async with observe_bodyless_request_disconnect(request) as disconnected:
+            try:
+                await wait_for_inbox_invalidation(
+                    tenant_id=tenant, user_id=owner, disconnected=disconnected,
+                )
+            except InboxInvalidationUnavailable:
+                assert await disconnected()
+                disconnect_observed.set()
+                return JSONResponse({"detail": "unavailable"}, status_code=503)
+        pytest.fail("Disconnected wait must not return a successful hint")
+
+    scope = {
+        "type": "http", "asgi": {"version": "3.0", "spec_version": "2.4"},
+        "http_version": "1.1", "method": "GET", "scheme": "http",
+        "path": "/wait", "raw_path": b"/wait", "query_string": b"",
+        "root_path": "", "headers": [], "client": ("127.0.0.1", 12345),
+        "server": ("127.0.0.1", 8000),
+    }
+
+    async def send(_message):
+        pass
+
+    try:
+        incoming.put_nowait({"type": "http.request", "body": b"", "more_body": False})
+        running = asyncio.create_task(app(scope, incoming.get, send))
+        await _wait_for_counts(client, [channel], 1)
+        incoming.put_nowait({"type": "http.disconnect"})
+
+        # The configured wait is ten seconds. Cleanup must happen well before
+        # idle expiry, without publishing a hint or waiting out that deadline.
+        await asyncio.wait_for(disconnect_observed.wait(), timeout=3)
+        await asyncio.wait_for(running, timeout=3)
+        await _wait_for_counts(client, [channel], 0)
+
+        replacement = asyncio.create_task(wait_for_inbox_invalidation(
+            tenant_id=tenant, user_id=owner, disconnected=_connected,
+        ))
+        await _wait_for_counts(client, [channel], 1)
+        await publish_inbox_invalidation(tenant_id=tenant, user_id=owner)
+        assert await asyncio.wait_for(replacement, timeout=3) is True
+        await _wait_for_counts(client, [channel], 0)
+    finally:
+        for task in (running, replacement):
+            if task is not None and not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+        await shutdown_redis_manager()
 
 
 if __name__ == "__main__":

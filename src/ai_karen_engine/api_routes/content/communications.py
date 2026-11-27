@@ -22,6 +22,7 @@ from ai_karen_engine.core.realtime.inbox_invalidation import InboxInvalidationUn
 from ai_karen_engine.auth.session import get_current_user
 from ai_karen_engine.core.services.dependencies import get_user_context
 from ai_karen_engine.middleware.correlation_middleware import get_request_correlation_id
+from ai_karen_engine.server.middleware import observe_bodyless_request_disconnect
 from ai_karen_engine.persistence.repositories.communications_inbox_repository import (
     InboxConflict, InboxCursor, InboxEntry, InboxFilter, InboxNotFound, InboxOperation,
 )
@@ -341,10 +342,11 @@ async def wait_communications_inbox(
         return await get_current_user(request, credentials=None)
 
     try:
-        changed = await service.wait_owned(
-            user=user, correlation_id=correlation_id,
-            reauthenticate=reauthenticate, disconnected=request.is_disconnected,
-        )
+        async with observe_bodyless_request_disconnect(request) as disconnected:
+            changed = await service.wait_owned(
+                user=user, correlation_id=correlation_id,
+                reauthenticate=reauthenticate, disconnected=disconnected,
+            )
         response.headers.update(headers)
         return InboxInvalidationResponse(changed=changed)
     except AuthenticationError as exc:
