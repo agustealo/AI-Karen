@@ -36,15 +36,15 @@ def _target() -> str:
     return url
 
 
-async def _initialize(prefix: str):
+async def _initialize(prefix: str, *, pool_size: int = 6, wait_limit: int = 2, wait_seconds: int = 10):
     settings = get_runtime_settings()
     settings.features.enable_communications_invalidation = True
     settings.features.enable_communications_invalidation_wait = True
     settings.timeouts.communications_invalidation_timeout_ms = 1000
-    settings.timeouts.communications_invalidation_wait_seconds = 10
-    settings.timeouts.communications_invalidation_max_waiters = 2
+    settings.timeouts.communications_invalidation_wait_seconds = wait_seconds
+    settings.timeouts.communications_invalidation_max_waiters = wait_limit
     manager = await initialize_redis_manager(
-        redis_url=_target(), max_connections=6, prefix=prefix,
+        redis_url=_target(), max_connections=pool_size, prefix=prefix,
         retry_on_timeout=False,
     )
     if not await manager.is_healthy():
@@ -349,7 +349,148 @@ async def test_real_redis_wait_releases_on_asgi_disconnect_through_http_middlewa
         await shutdown_redis_manager()
 
 
+async def _capacity_worker(prefix: str, tenant: str, first: str, second: str, third: str) -> None:
+    """Saturate one worker's actual shared pool without using private counters."""
+    tasks = []
+    try:
+        # The configured limit is four, but the pool-minus-two bound must
+        # admit only two waits. Keep two real connections simultaneously usable.
+        manager = await _initialize(prefix, pool_size=4, wait_limit=4, wait_seconds=15)
+        client = manager.client
+        assert client is not None
+        channels = [
+            inbox_invalidation_channel(prefix=prefix, tenant_id=tenant, user_id=owner)
+            for owner in (first, second, third)
+        ]
+
+        async def wait(owner: str) -> bool:
+            return await wait_for_inbox_invalidation(
+                tenant_id=tenant, user_id=owner, disconnected=_connected,
+            )
+
+        tasks.extend(asyncio.create_task(wait(owner)) for owner in (first, second))
+        await _wait_for_counts(client, channels[:2], 1)
+        # Fail immediately, rather than silently queuing or allocating a
+        # third subscriber. Duplicate ownership must also fail at saturation.
+        for owner in (first, third):
+            with pytest.raises(InboxInvalidationUnavailable):
+                await asyncio.wait_for(wait(owner), timeout=2)
+        await _wait_for_counts(client, [channels[2]], 0)
+        assert all(not task.done() for task in tasks)
+
+        # Both clients pin distinct physical connections from the existing
+        # manager pool. Sequential ordinary PINGs alone could reuse one slot.
+        async with client.client() as left, client.client() as right:
+            assert await left.client_id() != await right.client_id()
+            assert await left.ping() is True
+            assert await right.ping() is True
+
+        sys.stdout.write("KCOMM_CAPACITY_READY\n")
+        sys.stdout.flush()
+
+        assert await asyncio.wait_for(tasks[0], timeout=12) is True
+        # The previously rejected owner must now be able to acquire the freed
+        # slot while the second original owner is still subscribed.
+        assert not tasks[1].done()
+        tasks.append(asyncio.create_task(wait(third)))
+        await _wait_for_counts(client, channels[1:], 1)
+        sys.stdout.write("KCOMM_CAPACITY_REPLACEMENT_READY\n")
+        sys.stdout.flush()
+        assert await asyncio.wait_for(tasks[2], timeout=10) is True
+        assert await asyncio.wait_for(tasks[1], timeout=10) is True
+        await _wait_for_counts(client, channels, 0)
+        assert await client.ping() is True
+        sys.stdout.write("KCOMM_CAPACITY_RESULT=passed\n")
+        sys.stdout.flush()
+    finally:
+        for task in tasks:
+            if not task.done():
+                task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        await shutdown_redis_manager()
+
+
+async def _capacity_ready(process: asyncio.subprocess.Process, marker: bytes) -> None:
+    assert process.stdout is not None
+    async with asyncio.timeout(10):
+        while True:
+            line = await process.stdout.readline()
+            if not line:
+                raise AssertionError("Capacity worker exited before readiness")
+            if line.strip() == marker:
+                return
+
+
+@pytest.mark.asyncio
+async def test_real_redis_independent_worker_capacity_and_reserved_connections():
+    """Two independently saturated workers, real pool and broker observations."""
+    if os.environ.get("KAREN_TEST_DISPOSABLE_REDIS") != "1":
+        pytest.skip("Explicit disposable Redis opt-in required")
+    _target()
+    prefix = "kcomm-capacity-" + uuid.uuid4().hex
+    tenant = str(uuid.uuid4())
+    owners = [tuple(str(uuid.uuid4()) for _ in range(3)) for _ in range(2)]
+    channels = [
+        [inbox_invalidation_channel(prefix=prefix, tenant_id=tenant, user_id=owner) for owner in group]
+        for group in owners
+    ]
+    processes = []
+    try:
+        manager = await _initialize(prefix)
+        client = manager.client
+        assert client is not None
+        for group in owners:
+            processes.append(await asyncio.create_subprocess_exec(
+                sys.executable, str(Path(__file__).resolve()), "--capacity", prefix, tenant, *group,
+                stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
+            ))
+        await asyncio.gather(*(_capacity_ready(proc, b"KCOMM_CAPACITY_READY") for proc in processes))
+        await _wait_for_counts(client, [ch for group in channels for ch in group[:2]], 1)
+        await _wait_for_counts(client, [group[2] for group in channels], 0)
+
+        for group in owners:
+            await publish_inbox_invalidation(tenant_id=tenant, user_id=group[0])
+        await asyncio.gather(*(
+            _capacity_ready(proc, b"KCOMM_CAPACITY_REPLACEMENT_READY") for proc in processes
+        ))
+        await _wait_for_counts(client, [group[0] for group in channels], 0)
+        await _wait_for_counts(client, [ch for group in channels for ch in group[1:]], 1)
+
+        # Publish to the replacements only, prove the second original owner
+        # stays subscribed until its own signal, then release all reservations.
+        for group in owners:
+            await publish_inbox_invalidation(tenant_id=tenant, user_id=group[2])
+        await _wait_for_counts(client, [group[2] for group in channels], 0)
+        await _wait_for_counts(client, [group[1] for group in channels], 1)
+        for group in owners:
+            await publish_inbox_invalidation(tenant_id=tenant, user_id=group[1])
+
+        results = await asyncio.wait_for(
+            asyncio.gather(*(proc.communicate() for proc in processes)), timeout=12,
+        )
+        for index, (proc, (stdout, _stderr)) in enumerate(zip(processes, results)):
+            assert proc.returncode == 0, f"Capacity worker {index} failed"
+            markers = [
+                line for line in stdout.decode("utf-8").splitlines()
+                if line.startswith("KCOMM_CAPACITY_RESULT=")
+            ]
+            assert markers == ["KCOMM_CAPACITY_RESULT=passed"]
+        await _wait_for_counts(client, [ch for group in channels for ch in group], 0)
+    finally:
+        for proc in processes:
+            if proc.returncode is None:
+                try:
+                    proc.kill()
+                except ProcessLookupError:
+                    pass
+        await asyncio.gather(*(proc.wait() for proc in processes), return_exceptions=True)
+        await shutdown_redis_manager()
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 5 or sys.argv[1] != "--wait":
+    if len(sys.argv) == 5 and sys.argv[1] == "--wait":
+        asyncio.run(_worker(*sys.argv[2:]))
+    elif len(sys.argv) == 7 and sys.argv[1] == "--capacity":
+        asyncio.run(_capacity_worker(*sys.argv[2:]))
+    else:
         raise SystemExit("Expected isolated Redis worker arguments")
-    asyncio.run(_worker(*sys.argv[2:]))

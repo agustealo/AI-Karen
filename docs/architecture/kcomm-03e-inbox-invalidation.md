@@ -52,7 +52,7 @@ Redis connection lifecycle is introduced. A process-local admission set
 limits concurrent waits (one per owner per worker, at most the configured
 limit, with at least two pool connections reserved). This is not a global
 capacity or rate-limit guarantee; real multiworker load/revocation tests
-remain required. The proxy and UI are not yet wired to call this route.
+remain required for activation. See KCOMM-03E3B and KCOMM-03G below for the subsequently wired proxy and UI.
 
 - KARI_ENABLE_COMMUNICATIONS_INVALIDATION_WAIT=false (requires invalidation)
 - KARI_COMMUNICATIONS_INVALIDATION_WAIT_SECONDS=10 (1–15)
@@ -99,8 +99,8 @@ mutations; only an exact boolean change hint may request the canonical
 principal-fenced GET. Malformed/unavailable hints back off to normal polling.
 A coalesced/missed hint is recovered by periodic reconciliation. No persistent
 connection badge, broker payload, optimistic data, or automatic mutation.
-Browser-to-backend disconnect and signed-session revocation acceptance remain
-required; both server flags stay default-off.
+Browser-to-backend disconnect and signed-session revocation acceptance were
+subsequently verified in KCOMM-03G. Both server flags stay default-off.
 
 
 ## KCOMM-04A: optional Redis lifecycle dependency
@@ -116,3 +116,49 @@ Global Redis readiness remains required only under the existing mandatory
 memory/rate-limit policy. A healthy global readiness response does not
 certify optional notification transport. Existing production Redis URL
 security validation remains unchanged. Both invalidation flags stay default-off.
+
+
+## KCOMM-03G: signed browser certification
+
+PR #1367 was squash-merged at `71e0696b1cb30cac57f58b24a0fcd0df1a5684f6`.
+Its reviewed candidate `3a028b4831ab662a37c0894d94b6db87554ed3fa`
+passed all eight GitHub workflows and Vercel. The disposable production-image
+first-boot job [45917582983](https://github.com/agustealo/AI-Karen/actions/runs/45917582983/job/140240404550)
+reported both signed-session browser scenarios passed, zero skips or retries.
+This includes prior-owner cleanup, independent durable mutation, authorized
+change hint, canonical reread, foreign-owner idle, workspace exit and reopen,
+exact-session revocation, denial without a change hint, and zero subscribers.
+A persistent bodyless ASGI receiver owns disconnect observation through layered
+HTTP middleware. The bounded client consumes the full response before
+settling and rechecks principal scope. Neither path bypasses authentication.
+This certifies the disposable single-stack browser flow, not fleet load,
+cross-worker HTTP revocation, deployment activation, or lossless delivery.
+
+## KCOMM-04B1: capacity acceptance contract
+
+Extend the existing disposable real Redis gate, not the application runtime.
+Two independent subscriber processes each use one canonical manager with
+four pool connections and configured waiter limit four. Effective admission
+must be two per process, leaving two actual physical connections usable
+simultaneously. Each process must reject its duplicate owner and a third
+owner without queuing, accept that third owner after a slot is released,
+and clean up all subscriptions after owner-specific signals. Independent
+broker counts and two pinned, distinct Redis client IDs witness the
+connection boundary. The parent uses its own canonical manager and
+publishes only versioned internal signals on isolated fixture channels.
+
+This is a bounded broker/pool acceptance test, not an authenticated API
+worker load test. The limit is per process, so fleet planning must budget
+each worker's full pool and other Redis clients against broker capacity.
+The reserve protects against waits exhausting their own pool; it does not
+guarantee unused capacity under unrelated workloads. Duplicate owner
+protection is also per process, not a distributed lease.
+
+Do not activate based on this test alone. Require exact-head real execution,
+cross-worker signed HTTP revocation, interruption/recovery evidence,
+capacity and rejection monitoring, and a controlled rollback plan.
+Keep both flags default-off and canonical polling available. To roll back
+optional waits, disable the wait flag through the existing deployment
+configuration, reconcile worker configuration, and verify authenticated
+inbox reads; disable publishing separately if required. No live settings
+changes or global capacity claims are authorized by this contract.
