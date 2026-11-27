@@ -227,3 +227,53 @@ def test_request_limit_logging_does_not_include_body_or_query_material() -> None
     assert {"body", "content", "query", "query_string", "headers"}.isdisjoint(
         log_extra_keys
     )
+
+
+@pytest.mark.parametrize(("method", "path", "body"), [
+    ("POST", "/execute", {
+        "code": "print('private source')", "language": "python",
+        "conversation_id": "test-conversation",
+    }),
+    ("GET", "/languages", None),
+    ("GET", "/history", None),
+    ("DELETE", "/execution/unknown", None),
+    ("POST", "/tools/execute", {
+        "tool_name": "calculator", "parameters": {"expression": "1 + 1"},
+        "conversation_id": "test-conversation",
+    }),
+    ("GET", "/tools", None),
+    ("GET", "/tools/history", None),
+    ("GET", "/tools/weather", None),
+    ("GET", "/stats", None),
+    ("GET", "/security-levels", None),
+])
+@pytest.mark.asyncio
+async def test_legacy_execution_http_contract_is_authenticated_and_unavailable(method, path, body):
+    import httpx
+    from fastapi import FastAPI, HTTPException
+    from ai_karen_engine.api_routes.tools.code_execution import (
+        get_current_user, router,
+    )
+
+    app = FastAPI()
+    app.include_router(router, prefix="/api/code")
+
+    async def denied():
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    async def allowed():
+        return {"user_id": "test-owner", "tenant_id": "test-tenant"}
+
+    kwargs = {"json": body} if body is not None else {}
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test",
+    ) as client:
+        app.dependency_overrides[get_current_user] = denied
+        rejected = await client.request(method, "/api/code" + path, **kwargs)
+        assert rejected.status_code == 401
+        app.dependency_overrides[get_current_user] = allowed
+        unavailable = await client.request(method, "/api/code" + path, **kwargs)
+        assert unavailable.status_code == 503
+        assert unavailable.json()["detail"]["code"] == "LEGACY_EXECUTION_UNAVAILABLE"
+        assert unavailable.json()["detail"]["execution_performed"] is False
+        assert "private source" not in unavailable.text
