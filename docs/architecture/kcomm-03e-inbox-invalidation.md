@@ -140,8 +140,10 @@ Extend the existing disposable real Redis gate, not the application runtime.
 Two independent subscriber processes each use one canonical manager with
 four pool connections and configured waiter limit four. Effective admission
 must be two per process, leaving two actual physical connections usable
-simultaneously. Each process must reject its duplicate owner and a third
-owner without queuing, accept that third owner after a slot is released,
+simultaneously. Each process must reject a duplicate owner while a second
+slot is still available, then admit a distinct second owner and separately
+reject a third owner at capacity without queuing. It must accept that third
+owner after a slot is released,
 and clean up all subscriptions after owner-specific signals. Independent
 broker counts and two pinned, distinct Redis client IDs witness the
 connection boundary. The parent uses its own canonical manager and

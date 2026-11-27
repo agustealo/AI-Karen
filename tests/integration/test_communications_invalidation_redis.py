@@ -368,13 +368,23 @@ async def _capacity_worker(prefix: str, tenant: str, first: str, second: str, th
                 tenant_id=tenant, user_id=owner, disconnected=_connected,
             )
 
-        tasks.extend(asyncio.create_task(wait(owner)) for owner in (first, second))
+        tasks.append(asyncio.create_task(wait(first)))
+        await _wait_for_counts(client, [channels[0]], 1)
+        await _wait_for_counts(client, channels[1:], 0)
+        # Exercise duplicate ownership while capacity is still available.
+        # Without the owner guard this call can subscribe and will not return
+        # the required typed rejection before the two-second assertion.
+        with pytest.raises(InboxInvalidationUnavailable):
+            await asyncio.wait_for(wait(first), timeout=2)
+        await _wait_for_counts(client, [channels[0]], 1)
+        assert not tasks[0].done()
+
+        # A different owner must still be admitted after the duplicate
+        # rejection; only then is a third, distinct owner capacity-limited.
+        tasks.append(asyncio.create_task(wait(second)))
         await _wait_for_counts(client, channels[:2], 1)
-        # Fail immediately, rather than silently queuing or allocating a
-        # third subscriber. Duplicate ownership must also fail at saturation.
-        for owner in (first, third):
-            with pytest.raises(InboxInvalidationUnavailable):
-                await asyncio.wait_for(wait(owner), timeout=2)
+        with pytest.raises(InboxInvalidationUnavailable):
+            await asyncio.wait_for(wait(third), timeout=2)
         await _wait_for_counts(client, [channels[2]], 0)
         assert all(not task.done() for task in tasks)
 
