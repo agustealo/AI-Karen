@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
-from types import SimpleNamespace
+import importlib.util
+import sys
+from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
@@ -17,7 +20,27 @@ _REQUIRED_SECRET_ENV = {
 }
 
 
-def _set_safe_production_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+def _load_medusa_config_for_contract(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
+    """Execute the actual stdlib-only owner in the lean deployment test.
+
+    The configuration package initializer imports optional application
+    dependencies. Isolate that package boundary, not the Medusa loader or
+    its validation. Restore the canonical module after each test.
+    """
+    name = "ai_karen_engine.config.agent_medusa"
+    path = (
+        Path(__file__).resolve().parents[2]
+        / "src/ai_karen_engine/config/agent_medusa.py"
+    )
+    spec = importlib.util.spec_from_file_location(name, path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, name, module)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _set_safe_production_environment(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
     for name, value in _REQUIRED_SECRET_ENV.items():
         monkeypatch.setenv(name, value)
 
@@ -36,6 +59,12 @@ def _set_safe_production_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KARI_ENABLE_MEMORY_SERVICE", "true")
     monkeypatch.setenv("REDIS_URL", "redis://red-private:6379/0")
     monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    monkeypatch.setenv("KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("KAREN_MEDUSA_DURABLE_RUN_LEDGER_ENABLED", "true")
+    monkeypatch.setenv("KAREN_MEDUSA_DURABLE_RUN_LEDGER_REQUIRED", "true")
+    monkeypatch.setenv("KAREN_MEDUSA_DEEPAGENTS_RESEARCH_ENABLED", "false")
+    monkeypatch.setenv("KAREN_MEDUSA_DEEPAGENTS_CHECKPOINT_ENABLED", "false")
+    return _load_medusa_config_for_contract(monkeypatch)
 
 
 def test_liveness_has_no_dependency_requirements() -> None:
@@ -66,6 +95,7 @@ async def test_readiness_accepts_safe_production_configuration(
     assert result.ready is True
     assert result.status == "ready"
     assert result.checks["configuration"]["ready"] is True
+    service._redis_check.assert_awaited_once_with(required=True, durability_required=True)
 
 
 @pytest.mark.asyncio
@@ -286,15 +316,9 @@ def test_redis_durability_readiness_classification(changes, expected_reason):
 async def test_production_distributed_readiness_requires_redis_even_without_memory(
     monkeypatch,
 ):
-    _set_safe_production_environment(monkeypatch)
+    agent_medusa = _set_safe_production_environment(monkeypatch)
     for name in ("KARI_ENABLE_MEMORY_SERVICE", "ENABLE_RATE_LIMITING", "AUTH_ENABLE_RATE_LIMITING"):
         monkeypatch.setenv(name, "false")
-    from ai_karen_engine.config import agent_medusa
-
-    monkeypatch.setattr(
-        agent_medusa, "get_agent_medusa_runtime_settings",
-        lambda: SimpleNamespace(distributed_run_control_enabled=True),
-    )
     service = OperationalHealthService()
     redis_check = AsyncMock(return_value={"ready": False, "status": "durability_unsafe"})
     monkeypatch.setattr(service, "_database_check", AsyncMock(return_value={"ready": True}))
@@ -305,10 +329,8 @@ async def test_production_distributed_readiness_requires_redis_even_without_memo
     redis_check.assert_awaited_once_with(required=True, durability_required=True)
     assert service.redis_lifecycle_enabled(environment="production") is True
 
-    monkeypatch.setattr(
-        agent_medusa, "get_agent_medusa_runtime_settings",
-        lambda: SimpleNamespace(distributed_run_control_enabled=False),
-    )
+    monkeypatch.setenv("KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", "false")
+    monkeypatch.setattr(agent_medusa, "_SETTINGS", None)
     redis_check.reset_mock()
     redis_check.return_value = {"ready": True, "status": "not_required"}
     assert (await service.readiness(environment="production")).ready is True
@@ -319,12 +341,9 @@ async def test_production_distributed_readiness_requires_redis_even_without_memo
 async def test_invalid_medusa_configuration_never_waives_durability(monkeypatch):
     _set_safe_production_environment(monkeypatch)
     service = OperationalHealthService()
-    from ai_karen_engine.config import agent_medusa
-
-    def invalid():
-        raise ValueError("private configuration content")
-
-    monkeypatch.setattr(agent_medusa, "get_agent_medusa_runtime_settings", invalid)
+    monkeypatch.setenv(
+        "KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", "private configuration content",
+    )
     monkeypatch.setattr(service, "_database_check", AsyncMock(return_value={"ready": True}))
     redis_check = AsyncMock(return_value={"ready": True, "status": "healthy"})
     monkeypatch.setattr(service, "_redis_check", redis_check)
