@@ -1309,7 +1309,8 @@ async def _redis_server_failure_acceptance(
     *, ledger: PostgresDurableRunLedger, tenant_id: str
 ) -> None:
     """Fault only a private Docker Redis, never the shared fixture server."""
-    from redis.exceptions import OutOfMemoryError
+    from redis.asyncio import Redis
+    from redis.exceptions import OutOfMemoryError, RedisError
 
     from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
         DistributedRunNotFound,
@@ -1337,6 +1338,30 @@ async def _redis_server_failure_acceptance(
             await asyncio.sleep(0.1)
         raise AssertionError("Disposable Redis did not become ready")
 
+    async def host_endpoint() -> str:
+        # Docker can reassign an automatically published host port after
+        # stop/start. An internal PING alone does not prove host reachability.
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + 15
+        while loop.time() < deadline:
+            address = await docker("port", name, "6379/tcp", check=False)
+            if address:
+                host, port = address.rsplit(":", 1)
+                assert host == "127.0.0.1" and port.isdigit()
+                url = f"redis://{host}:{port}/0"
+                probe = Redis.from_url(
+                    url, socket_connect_timeout=1, socket_timeout=1,
+                )
+                try:
+                    if await asyncio.wait_for(probe.ping(), timeout=2):
+                        return url
+                except (RedisError, asyncio.TimeoutError):
+                    pass
+                finally:
+                    await probe.aclose()
+            await asyncio.sleep(0.2)
+        raise AssertionError("Disposable Redis host endpoint unavailable after restart")
+
     redis = None
     created = False
     try:
@@ -1349,10 +1374,7 @@ async def _redis_server_failure_acceptance(
         )
         created = True
         await ready()
-        address = await docker("port", name, "6379/tcp")
-        host, port = address.rsplit(":", 1)
-        assert host == "127.0.0.1" and port.isdigit()
-        redis = RedisConnectionManager(redis_url=f"redis://{host}:{port}/0")
+        redis = RedisConnectionManager(redis_url=await host_endpoint())
         assert await redis.initialize()
         assert redis.client is not None
         assert (await redis.client.config_get("appendfsync"))["appendfsync"] == "always"
@@ -1395,12 +1417,24 @@ async def _redis_server_failure_acceptance(
             pending = await redis.client.zrange(pending_key, 0, -1)
             assert before["status"] == "completed"
             assert f"{marker}-terminal-rollback" in pending
+            old_server_id = (await redis.client.info("server"))["run_id"]
+            container_id = await docker("inspect", "--format", "{{.Id}}", name)
             await docker("kill", "--signal=KILL", name)
+            assert await docker(
+                "inspect", "--format", "{{.State.Running}}", name
+            ) == "false"
             await redis.close()
             await docker("start", name)
             await ready()
-            assert await redis.initialize()
+            assert await docker("inspect", "--format", "{{.Id}}", name) == container_id
+            # Refresh only the test manager's endpoint; do not replace the
+            # store, owner, namespace or SQL ledger.
+            redis.redis_url = await host_endpoint()
+            assert await redis.initialize(), "Canonical Redis reconnect failed"
             assert redis.client is not None
+            assert (await redis.client.info("server"))["run_id"] != old_server_id
+            assert (await redis.client.config_get("appendonly"))["appendonly"] == "yes"
+            assert (await redis.client.config_get("appendfsync"))["appendfsync"] == "always"
             assert await redis.client.hgetall(run_key) == before
             assert await redis.client.zrange(pending_key, 0, -1) == pending
             assert not await redis.client.exists(
