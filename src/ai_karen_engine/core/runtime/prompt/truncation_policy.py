@@ -291,9 +291,18 @@ class HierarchicalTruncationPolicy:
         The latest user and anything after it belong to the active turn.
         """
         messages = request.messages
+
+        def is_conversational_user(message: Dict[str, object]) -> bool:
+            # Verified attachment bytes use the user role for trust isolation,
+            # not because they represent a conversational objective.
+            return (
+                str(message.get("role", "")).lower() == "user"
+                and message.get("source") != "verified_attachment_data"
+            )
+
         latest_user_index = next(
             (i for i in range(len(messages) - 1, -1, -1)
-             if str(messages[i].get("role", "")).lower() == "user"),
+             if is_conversational_user(messages[i])),
             None,
         )
         if latest_user_index is None:
@@ -302,7 +311,7 @@ class HierarchicalTruncationPolicy:
         turns: List[List[int]] = []
         for index, message in enumerate(messages[:latest_user_index]):
             role = str(message.get("role", "")).lower()
-            if role == "user":
+            if is_conversational_user(message):
                 turns.append([index])
             elif role == "assistant":
                 if not turns:

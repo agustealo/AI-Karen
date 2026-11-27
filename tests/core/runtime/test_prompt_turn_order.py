@@ -165,3 +165,52 @@ def test_budget_never_detaches_protected_history_record():
     events = HierarchicalTruncationPolicy().enforce(request, _budget_estimate)
     assert request.messages == messages
     assert events == []
+
+
+@pytest.mark.parametrize("attachment_count", [1, 2])
+@pytest.mark.parametrize("tight_budget", [False, True])
+def test_verified_user_attachments_do_not_replace_recent_objective(
+    attachment_count: int, tight_budget: bool,
+) -> None:
+    objective = {"role": "user", "content": "Research Jamaica and cite verified sources."}
+    reply = {"role": "assistant", "content": "Research outline " * 30}
+    active = {"role": "user", "content": "Write the full research paper."}
+    messages = PromptAssembler.build_verified_attachment_messages(
+        [objective, reply, active],
+        [
+            {"source_id": f"doc-{i}", "revision": "1", "text": "Untrusted document"}
+            for i in range(attachment_count)
+        ],
+    )
+    expected = (
+        [message for message in messages if message != reply]
+        if tight_budget else messages
+    )
+    request = PromptAssemblyRequest(
+        messages=list(messages),
+        memory_items=[{"content": "Unrelated memory"}],
+        token_budget=sum(len(message["content"]) for message in expected),
+    )
+
+    events = HierarchicalTruncationPolicy().enforce(request, _budget_estimate)
+
+    assert request.messages == expected
+    assert request.memory_items == []
+    assert [event.section for event in events] == (
+        ["memory", "history"] if tight_budget else ["memory"]
+    )
+    assert sum(event.items_removed for event in events if event.section == "history") == (
+        1 if tight_budget else 0
+    )
+    assert _budget_estimate(request).total_tokens <= request.token_budget
+
+
+def test_attachment_only_user_records_do_not_define_active_turn() -> None:
+    messages = [
+        {"role": "assistant", "content": "Prior reply"},
+        {"role": "user", "content": "Verified attachment", "source": "verified_attachment_data"},
+    ]
+    request = PromptAssemblyRequest(messages=list(messages), token_budget=1)
+
+    assert HierarchicalTruncationPolicy().enforce(request, _budget_estimate) == []
+    assert request.messages == messages
