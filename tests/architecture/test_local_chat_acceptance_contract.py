@@ -27,14 +27,14 @@ def test_release_requires_https_and_reviewed_commit() -> None:
     source = SPEC.read_text(encoding="utf-8")
     assert 'target.protocol !== "https:" || target.port !== ""' in source
     assert '/^[0-9a-f]{40}$/i.test(expectedRevision)' in source
-    assert 'if (!releaseMode && !localSpecialistMode && !generatedDocumentAcceptance) return;' in source
-    assert 'if (localSpecialistMode || generatedDocumentAcceptance) {' in source
+    assert 'if (!releaseMode && !localSpecialistMode && !generatedDocumentAcceptance && !taskContinuityAcceptance) return;' in source
+    assert 'if (localSpecialistMode || generatedDocumentAcceptance || taskContinuityAcceptance) {' in source
     assert 'const localSpecialistMode = ordinarySpecialistAcceptance && localMode && !releaseMode &&' in source
     assert 'approvedUrl === "http://127.0.0.1:8010"' in source
     assert 'expect(body).toEqual({ status: "ok", revision: expectedRevision });' in source
     assert 'new URL("/api/deployment-revision", target)' in source
     assert "await requireReviewedRevision(page, target)" in source
-    assert source.count("await requireReviewedRevision(page, target)") == 8
+    assert source.count("await requireReviewedRevision(page, target)") == 9
     assert source.count("await requireReviewedRevision(active, target)") == 1
     isolation = source.index("await expectFreshSpecialistIsolation(page, target, id!")
     postflight = source.index("if (localSpecialistMode) {", isolation)
@@ -342,3 +342,34 @@ def test_arm05c5b_private_participation_acceptance_suppresses_failure_context() 
     reporter = config.split("reporter:", 1)[1].split("use:", 1)[0]
     assert "privateLifecycleAcceptance" in reporter.split("?", 1)[0]
     assert "? [['list']]" in reporter
+
+
+def test_task_continuity_reuses_approved_canonical_browser_and_receipt_contract() -> None:
+    source = SPEC.read_text(encoding="utf-8")
+    assert 'process.env.KAREN_TASK_CONTINUITY_ACCEPTANCE === "1"' in source
+    guard = source.split("if (taskContinuityAcceptance && (", 1)[1].split(")) throw", 1)[0]
+    for required in (
+        "!localMode", "releaseMode", "authState", "personalContextAcceptance",
+        "kcon770FaultAcceptance", "generatedDocumentAcceptance",
+        'process.env.KAREN_SANITIZED_ACCOUNT !== "true"',
+        'approvedUrl !== "http://127.0.0.1:8010"',
+        "!expectedRevision", "!approvedEmail", "!approvedPassword",
+        "KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE", "VERCEL_AUTOMATION_BYPASS_SECRET",
+    ):
+        assert required in guard
+    branch = source.split("if (taskContinuityAcceptance) {", 1)[1].split("const repeatsOldBiography", 1)[0]
+    assert 'const answer = await runPersonalTurn("You choose.");' in branch
+    assert 'const project = "Kestrel-" + crypto.randomUUID();' in branch
+    assert "lines.length === 4" in branch
+    assert "lines[0] === `Project: ${project}`" in branch
+    assert "Theme: (forest|ocean)" in branch
+    assert 'expectVerifiedExecutionReceipt(page, id!, clarification)' in branch
+    assert 'expectVerifiedExecutionReceipt(page, id!, answer)' in branch
+    assert "observedRunRequests.length - initialRunCount).toBe(2)" in branch
+    assert 'taskContinuationProof = { answer, receipt };' in branch
+    replay = source.split("if (!taskContinuationProof)", 1)[1].split("if (approvedSpecialist)", 1)[0]
+    assert "expectVerifiedExecutionReceipt(page, id!, taskContinuationProof.answer)" in replay
+    assert ".toEqual(taskContinuationProof.receipt)" in replay
+    assert "Task reload must not resubmit inference" in replay
+    assert ".toHaveLength(3)" in replay
+    assert "await requireReviewedRevision(page, target)" in replay
