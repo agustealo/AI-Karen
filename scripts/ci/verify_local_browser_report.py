@@ -21,7 +21,8 @@ CONTENT_INTELLIGENCE_PREFIXES = (
 
 
 def validate_report(
-    report: dict, prefixes: tuple[str, ...], filename: str, *, list_only: bool = False
+    report: dict, prefixes: tuple[str, ...], filename: str, *, list_only: bool = False,
+    owner_text: bool = False,
 ) -> None:
     """Require the exact scenario set; a discovery report is never a pass."""
     if not isinstance(report, dict) or report.get("errors") != []:
@@ -34,6 +35,9 @@ def validate_report(
             for key, value in required.items()
         ):
             raise ValueError("Browser statistics are incomplete or unsuccessful")
+
+    if owner_text and prefixes != EXPLORER_PREFIXES:
+        raise ValueError("Owner text proof belongs only to Explorer")
 
     observed = set()
 
@@ -83,6 +87,24 @@ def validate_report(
                     or attempts[0]["retry"] != 0
                 ):
                     raise ValueError("Scenario did not pass exactly once")
+                if owner_text and not list_only:
+                    attachments = attempts[0].get("attachments", [])
+                    if not isinstance(attachments, list) or any(
+                        not isinstance(item, dict) for item in attachments
+                    ):
+                        raise ValueError("Invalid owner text evidence")
+                    markers = [
+                        item for item in attachments if item.get("name") == "karen.owner_text.v1"
+                    ]
+                    if matches[0] == "KFILE-ISOLATION-LOCAL:":
+                        if markers != [{
+                            "name": "karen.owner_text.v1",
+                            "contentType": "text/plain",
+                            "body": "cGFzc2Vk",
+                        }]:
+                            raise ValueError("Missing exact owner text proof marker")
+                    elif markers:
+                        raise ValueError("Owner text evidence on unrelated scenario")
                 observed.add(matches[0])
             collect(suite.get("suites", []))
 
@@ -95,13 +117,15 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("report", type=Path)
     parser.add_argument("--list-only", action="store_true")
-    parser.add_argument("--content-intelligence", action="store_true")
+    modes = parser.add_mutually_exclusive_group()
+    modes.add_argument("--content-intelligence", action="store_true")
+    modes.add_argument("--owner-text", action="store_true")
     args = parser.parse_args()
     prefixes = CONTENT_INTELLIGENCE_PREFIXES if args.content_intelligence else EXPLORER_PREFIXES
     name = "Content Intelligence" if args.content_intelligence else "Explorer"
     try:
         report = json.loads(args.report.read_text(encoding="utf-8"))
-        validate_report(report, prefixes, EXPLORER_SPEC, list_only=args.list_only)
+        validate_report(report, prefixes, EXPLORER_SPEC, list_only=args.list_only, owner_text=args.owner_text)
     except (OSError, ValueError):
         # Reports may include private metadata and request or assertion details.
         print("CONTENT_INTELLIGENCE_BROWSER_EVIDENCE_REJECTED" if args.content_intelligence
@@ -111,6 +135,8 @@ def main() -> int:
         print(f"{len(prefixes)} intended {name} scenarios discovered; NOT_RUN")
     else:
         print(f"{len(prefixes)} {name} scenarios passed exactly once; zero skips, retries or failures")
+        if args.owner_text:
+            print("Owner text acceptance marker verified")
     return 0
 
 

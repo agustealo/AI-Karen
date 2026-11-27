@@ -36,6 +36,7 @@ from ai_karen_engine.core.cortex.context_stages import (
 from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
 from ai_karen_engine.core.cortex.memory_formation import request_memory_formation
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
+from ai_karen_engine.core.runtime.policy.runtime_policy import chat_tool_call_limit
 from ai_karen_engine.core.runtime.evidence_resolver import RuntimeEvidenceResolver
 from ai_karen_engine.core.runtime.execution_decision import (
     ExecutionDecision,
@@ -497,6 +498,9 @@ class RuntimeDecisionPipeline:
             policy_constraints={
                 **cognitive.policy_constraints,
                 "memory_write_authorized": memory_write_allowed,
+                "max_tool_calls": policy.runtime_constraints.get(
+                    "max_tool_calls", chat_tool_call_limit(cognitive.tool_requirements),
+                ),
                 "requested_reasoning_modes": requested_modes,
                 "allowed_reasoning_modes": allowed_modes,
                 "denied_reasoning_modes": list(policy.denied_reasoning_modes),

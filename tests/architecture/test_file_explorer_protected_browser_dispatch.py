@@ -607,3 +607,50 @@ def test_owner_text_acceptance_reuses_local_isolation_and_live_storage_digest():
     assert trial.index("await verifyOwnText(owner)") < trial.index('name: "Sign out"') < trial.index("await denyOwnerText(aSource!, owner, [401, 403])")
     assert trial.index("await verifyOwnText(other)") < trial.index("await denyOwnerText(aSource!, other, [404])")
     assert trial.index("await verifyOwnText(restored)") < trial.rindex("await denyOwnerText(aSource!, owner, [401, 403])")
+
+
+def test_owner_text_report_rejects_generic_isolation_pass_and_invalid_markers():
+    from copy import deepcopy
+
+    import pytest
+
+    from scripts.ci.verify_local_browser_report import (
+        EXPLORER_PREFIXES, EXPLORER_SPEC, validate_report,
+    )
+
+    report = {
+        "errors": [],
+        "stats": {"expected": 4, "unexpected": 0, "skipped": 0, "flaky": 0},
+        "suites": [{"specs": [
+            {"title": prefix + " acceptance", "file": EXPLORER_SPEC,
+             "tests": [{"projectName": "chromium", "expectedStatus": "passed",
+                        "status": "expected", "results": [{"status": "passed", "retry": 0}]}]}
+            for prefix in EXPLORER_PREFIXES
+        ]}],
+    }
+    validate_report(report, EXPLORER_PREFIXES, EXPLORER_SPEC)
+    with pytest.raises(ValueError):
+        validate_report(report, EXPLORER_PREFIXES, EXPLORER_SPEC, owner_text=True)
+    specs = report["suites"][0]["specs"]
+    marker = {"name": "karen.owner_text.v1", "contentType": "text/plain", "body": "cGFzc2Vk"}
+    specs[-1]["tests"][0]["results"][0]["attachments"] = [marker]
+    validate_report(report, EXPLORER_PREFIXES, EXPLORER_SPEC, owner_text=True)
+    for invalid in ([marker, marker], [{**marker, "body": "invalid"}], [{**marker, "path": "file"}]):
+        bad = deepcopy(report)
+        bad["suites"][0]["specs"][-1]["tests"][0]["results"][0]["attachments"] = invalid
+        with pytest.raises(ValueError):
+            validate_report(bad, EXPLORER_PREFIXES, EXPLORER_SPEC, owner_text=True)
+    bad = deepcopy(report)
+    bad["suites"][0]["specs"][0]["tests"][0]["results"][0]["attachments"] = [marker]
+    with pytest.raises(ValueError):
+        validate_report(bad, EXPLORER_PREFIXES, EXPLORER_SPEC, owner_text=True)
+    discovery = deepcopy(report)
+    for spec in discovery["suites"][0]["specs"]:
+        spec["tests"][0]["results"] = []
+    validate_report(discovery, EXPLORER_PREFIXES, EXPLORER_SPEC, list_only=True, owner_text=True)
+    source = SPEC.read_text(encoding="utf-8")
+    assert source.rindex("await denyOwnerText(aSource!, owner, [401, 403])") < source.index('testInfo.attach("karen.owner_text.v1"')
+    runner = (ROOT / "scripts/ci/kui-local-acceptance.sh").read_text(encoding="utf-8")
+    assert "REPORT+=(--owner-text)" in runner
+    assert "PASS explorer_owner_text_acceptance" in runner
+    assert "NOT_RUN explorer_owner_text_acceptance" in runner

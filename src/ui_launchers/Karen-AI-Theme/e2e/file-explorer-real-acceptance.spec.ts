@@ -910,7 +910,7 @@ test("KFILE-ATTACHMENT-LOCAL: capacity, saved references and blocked submission"
  * No setup writes; the only mutation probes request an unchanged folder name.
  * Never use a real customer's credentials or objects.
  */
-test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session denial", async ({ page, browser }) => {
+test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session denial", async ({ page, browser }, testInfo) => {
   test.skip(!enabled || process.env.KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE !== "true",
     "Requires explicit local isolation acceptance");
   test.setTimeout(6 * 60_000);
@@ -1090,6 +1090,7 @@ test("KFILE-ISOLATION-LOCAL: cross-tenant owner inventory and revoked session de
     if (ownerTextAcceptance) {
       await verifyOwnText(restored);
       await denyOwnerText(aSource!, owner, [401, 403]);
+      await testInfo.attach("karen.owner_text.v1", { body: Buffer.from("passed", "utf8"), contentType: "text/plain" });
     }
   } finally {
     await replay.close();

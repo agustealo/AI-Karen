@@ -83,6 +83,7 @@ async def test_recovery_response_requires_durable_transcript(persisted):
             "authorized_session_id": ctx.session_id,
             "correlation_id": ctx.correlation_id,
             "max_model_calls": plan.budget.max_model_calls,
+            "max_tool_calls": plan.budget.max_tool_calls,
         },
     )
     issuer._record_issued_model_decision(issued)
