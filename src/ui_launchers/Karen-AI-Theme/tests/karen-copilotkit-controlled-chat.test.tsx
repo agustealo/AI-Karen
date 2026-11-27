@@ -21,8 +21,10 @@ const sdk = vi.hoisted(() => ({
   stopAgent: vi.fn(),
   clearDraft: vi.fn(),
   prepareRevision: vi.fn(),
+  prepareAttachment: vi.fn(),
   refreshDraft: vi.fn(),
   revisionBoundSubmission: false,
+  attachmentDraftSubmission: false,
   post: vi.fn(),
   get: vi.fn(),
   refreshHistory: vi.fn(),
@@ -82,6 +84,7 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", async (importOrig
       failureStatus: sdk.draftFailureStatus,
       prepareSubmission: (...args: unknown[]) => sdk.clearDraft(...args),
       prepareRevisionSubmission: (...args: unknown[]) => sdk.prepareRevision(...args),
+      prepareAttachmentSubmission: (...args: unknown[]) => sdk.prepareAttachment(...args),
       refreshSubmittedDraft: sdk.refreshDraft,
       retry: vi.fn(),
       discardAndReload: vi.fn(),
@@ -99,6 +102,7 @@ vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => {
     useKarenScopedAgent: () => ({
       agent: sdk.agent, isReady: sdk.isReady, refreshVerifiedHistory: sdk.refreshHistory,
       recoveryRun: sdk.recoveryRun, revisionBoundSubmission: sdk.revisionBoundSubmission,
+      attachmentDraftSubmission: sdk.attachmentDraftSubmission,
     }),
   };
 });
@@ -127,8 +131,10 @@ beforeEach(() => {
   sdk.stopAgent.mockReset().mockResolvedValue(undefined);
   sdk.clearDraft.mockReset().mockResolvedValue(true);
   sdk.prepareRevision.mockReset().mockResolvedValue("draft-v1-7");
+  sdk.prepareAttachment.mockReset().mockResolvedValue(null);
   sdk.refreshDraft.mockReset().mockResolvedValue(undefined);
   sdk.revisionBoundSubmission = false;
+  sdk.attachmentDraftSubmission = false;
   sdk.refreshHistory.mockReset().mockResolvedValue(true);
   sdk.recoveryRun = null;
   sdk.get.mockReset().mockResolvedValue({
@@ -1303,5 +1309,133 @@ describe("ARM-04 canonical mission draft admission", () => {
     } finally {
       window.removeEventListener("karen:chat-draft-prepared", navigation);
     }
+  });
+});
+
+
+
+describe("KEXP-042A.6C explicit attachment-bound composer handoff", () => {
+  const first = { source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) };
+  const second = { source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", revision: "b".repeat(64) };
+  const submissionId = "draft-v2-7-" + "e1e0621b3a710eb63db47864a9d9b89ec137ad424320a2f939681831e3e1c23b";
+  const snapshot = Object.freeze({
+    submissionId,
+    attachmentReferences: Object.freeze([Object.freeze({ ...first }), Object.freeze({ ...second })]),
+  });
+  function enable() {
+    sdk.revisionBoundSubmission = true;
+    sdk.attachmentDraftSubmission = true;
+    sdk.initialAttachments = [{ ...first }, { ...second }];
+    sdk.prepareAttachment.mockResolvedValue(snapshot);
+  }
+  function submitAttached() {
+    act(() => {
+      input().onChange("Read these documents");
+      input().onSubmitMessage("Read these documents");
+      input().onChange("");
+    });
+  }
+
+  it("uses the exact prepared v2 identity and ordered per-run hints, not an optimistic clear", async () => {
+    enable();
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    expect(sdk.prepareAttachment).toHaveBeenCalledWith("Read these documents", [first, second]);
+    expect(sdk.prepareRevision).not.toHaveBeenCalled();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).toHaveBeenCalledWith({
+      id: submissionId, role: "user", content: "Read these documents",
+    });
+    expect(sdk.runAgent).toHaveBeenCalledWith({
+      agent: sdk.agent, forwardedProps: { attachment_references: snapshot.attachmentReferences },
+    });
+    expect(input().value).toBe("Read these documents");
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(["legacy", "older-governed"] as const)("denies %s backend without both capabilities", (kind) => {
+    enable();
+    if (kind === "legacy") sdk.revisionBoundSubmission = false;
+    else sdk.attachmentDraftSubmission = false;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    expect(sdk.prepareAttachment).not.toHaveBeenCalled();
+    expect(sdk.prepareRevision).not.toHaveBeenCalled();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(input().value).toBe("Read these documents");
+  });
+
+  it("fails closed if snapshot preparation cannot verify the saved draft", async () => {
+    enable();
+    sdk.prepareAttachment.mockResolvedValueOnce(null);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("attached draft"));
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(sdk.prepareRevision).not.toHaveBeenCalled();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(input().value).toBe("Read these documents");
+    expect(screen.getByText("2 / 12 file references")).toBeTruthy();
+  });
+
+  it.each(["capability", "recovery", "thread", "unmount"] as const)(
+    "rejects prepared snapshot after %s changes during preparation", async (change) => {
+      enable();
+      let finish!: (value: typeof snapshot) => void;
+      sdk.prepareAttachment.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const view = render(<KarenCopilotControlledChat conversationId={THREAD} />);
+      submitAttached();
+      expect(sdk.prepareAttachment).toHaveBeenCalledTimes(1);
+      if (change === "capability") {
+        sdk.attachmentDraftSubmission = false;
+        view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+      } else if (change === "recovery") {
+        sdk.recoveryRun = { runId: "old-run", submissionId: "old-turn", status: "interrupted" };
+        view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+      } else if (change === "thread") {
+        sdk.agent.threadId = "bd1d23c2-bbd7-4d31-987a-cf81025ebafd";
+      } else {
+        view.unmount();
+      }
+      await act(async () => { finish(snapshot); });
+      expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+      expect(sdk.runAgent).not.toHaveBeenCalled();
+      expect(sdk.clearDraft).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not automatically retry or discard references when SDK execution fails", async () => {
+    enable();
+    sdk.runAgent.mockRejectedValueOnce(new Error("connection lost"));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(input().value).toBe("Read these documents");
+    expect(screen.getByText("2 / 12 file references")).toBeTruthy();
+  });
+
+  it("does not forward attachment hints on a subsequent explicitly text-only submission", async () => {
+    enable();
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Remove file reference " + first.source_id }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Remove file reference " + first.source_id }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove file reference " + second.source_id }));
+    act(() => {
+      input().onChange("Text only");
+      input().onSubmitMessage("Text only");
+    });
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(2));
+    expect(sdk.prepareAttachment).toHaveBeenCalledTimes(1);
+    expect(sdk.prepareRevision).toHaveBeenCalledWith("Text only");
+    expect(sdk.runAgent).toHaveBeenNthCalledWith(2, { agent: sdk.agent });
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
   });
 });

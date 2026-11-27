@@ -10,7 +10,7 @@
  * persistence; there are no frontend tools or client-owned checkpoints.
  */
 import { CopilotChatView, useCopilotKit } from "@copilotkit/react-core/v2";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { KarenCopilotVoiceDock } from "./KarenCopilotVoiceDock";
 import { KarenComposerFileExplorer } from "../KarenComposerFileExplorer";
@@ -72,7 +72,7 @@ export function KarenCopilotControlledChat({
   onOpenAgents?: () => void;
   fileExplorerPluginId?: string;
 }) {
-  const { agent, isReady, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission } = useKarenScopedAgent();
+  const { agent, isReady, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission, attachmentDraftSubmission } = useKarenScopedAgent();
   const { copilotkit } = useCopilotKit();
   const [error, setError] = useState<string | null>(null);
   const [draftRecoveryFeedback, setDraftRecoveryFeedback] = useState<string | null>(null);
@@ -113,10 +113,20 @@ export function KarenCopilotControlledChat({
     draft, setText: setDraftText, readText: readDraftText,
     attachments, updateAttachments,
     status: draftStatus, synced: draftSynced, failureStatus: draftFailureStatus, prepareSubmission,
-    prepareRevisionSubmission, refreshSubmittedDraft,
+    prepareRevisionSubmission, prepareAttachmentSubmission, refreshSubmittedDraft,
     retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
   const rejectedAttachmentClear = useRef<object | null>(null);
+  // CAS and WebCrypto can await while verified history withdraws protocol
+  // support or discovers an unresolved run. Fence that eligibility epoch.
+  const attachmentAdmissionScope = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    attachmentAdmissionScope.current =
+      isReady && revisionBoundSubmission && attachmentDraftSubmission &&
+      !recoveryRun && draftStatus === "ready" ? {} : null;
+    return () => { attachmentAdmissionScope.current = null; };
+  }, [agent, conversationId, isReady, revisionBoundSubmission,
+    attachmentDraftSubmission, recoveryRun, draftStatus]);
   const onDraftChange = useCallback((value: string) => {
     if (typeof value !== "string" || value.length > MAX_INPUT_CHARS ||
         new TextEncoder().encode(value).length > 262144) {
@@ -290,7 +300,9 @@ export function KarenCopilotControlledChat({
       setError("The previous run is unverified. Check its status and saved history before sending another message.");
       return;
     }
-    if (attachments.length > 0) {
+    const wantsAttachments = attachments.length > 0;
+    const attachmentScope = attachmentAdmissionScope.current;
+    if (wantsAttachments && (!revisionBoundSubmission || !attachmentDraftSubmission || !attachmentScope)) {
       setError("Sending attached files is not supported yet. Remove the attachments before sending your message.");
       return;
     }
@@ -314,14 +326,22 @@ export function KarenCopilotControlledChat({
     // Only legacy non-governed history uses the existing pre-run clear.
     void (async () => {
       try {
-        const submissionId = revisionBoundSubmission
-          ? await prepareRevisionSubmission(text)
-          : await prepareSubmission(text) ? crypto.randomUUID() : null;
-        if (!submissionId || !mounted.current || agent.threadId !== conversationId) {
+        const attachedSubmission = wantsAttachments
+          ? await prepareAttachmentSubmission(text, attachments) : null;
+        const submissionId = wantsAttachments
+          ? attachedSubmission?.submissionId ?? null
+          : revisionBoundSubmission
+            ? await prepareRevisionSubmission(text)
+            : await prepareSubmission(text) ? crypto.randomUUID() : null;
+        if (!submissionId || !mounted.current || agent.threadId !== conversationId ||
+            (wantsAttachments && (attachmentAdmissionScope.current !== attachmentScope ||
+              finalityHoldRef.current?.conversationId === conversationId || agent.isRunning))) {
           if (mounted.current) {
-            setError(revisionBoundSubmission
-              ? "The original draft revision could not be verified. No message was sent."
-              : "The draft could not be safely saved and cleared. No message was sent.");
+            setError(wantsAttachments
+              ? "The attached draft or execution capability could not be verified. No message was sent."
+              : revisionBoundSubmission
+                ? "The original draft revision could not be verified. No message was sent."
+                : "The draft could not be safely saved and cleared. No message was sent.");
           }
           return;
         }
@@ -351,7 +371,16 @@ export function KarenCopilotControlledChat({
         observedRunId.current = null;
         sdkInvocationPending.current = true;
         try {
-          await copilotkit.runAgent({ agent });
+          if (attachedSubmission) {
+            // Per-run hints only. The backend verifies the v2 identity and
+            // authorizes exact source revisions before document access.
+            await copilotkit.runAgent({
+              agent,
+              forwardedProps: { attachment_references: attachedSubmission.attachmentReferences },
+            });
+          } else {
+            await copilotkit.runAgent({ agent });
+          }
         } catch (failure: unknown) {
           if (mounted.current) {
             // addMessage already accepted this user turn. The SDK may have
@@ -384,9 +413,9 @@ export function KarenCopilotControlledChat({
     })();
   }, [
     agent, conversationId, copilotkit, isReady, prepareSubmission,
-    draftStatus, readDraftText, setDraftText, failedSubmission, attachments.length,
-    reportBusy, holdUnverifiedRun, recoveryRun, revisionBoundSubmission,
-    prepareRevisionSubmission, refreshSubmittedDraft,
+    draftStatus, readDraftText, setDraftText, failedSubmission, attachments,
+    reportBusy, holdUnverifiedRun, recoveryRun, revisionBoundSubmission, attachmentDraftSubmission,
+    prepareRevisionSubmission, prepareAttachmentSubmission, refreshSubmittedDraft,
   ]);
 
   const checkUnverifiedFinality = useCallback(() => {
@@ -694,7 +723,9 @@ export function KarenCopilotControlledChat({
               ))}
             </ul>
             <p className="text-xs text-muted-foreground">
-              File references are saved with the draft, not sent to a model. Remove them before sending.
+              {revisionBoundSubmission && attachmentDraftSubmission
+                ? "File references are saved with the draft. Karen checks access and supported content when you send."
+                : "File references are saved with the draft, not sent to a model. Remove them before sending."}
             </p>
           </section>
         )}

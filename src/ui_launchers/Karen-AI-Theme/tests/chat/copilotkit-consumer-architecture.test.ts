@@ -260,7 +260,7 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(history.match(/\buseAgent\(/g)).toHaveLength(1);
     expect(history).toContain("restoreHistoryRef.current = restore;");
     expect(history).toContain("export function useKarenScopedAgent()");
-    expect(controller).toContain("const { agent, isReady, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission } = useKarenScopedAgent()");
+    expect(controller).toContain("const { agent, isReady, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission, attachmentDraftSubmission } = useKarenScopedAgent()");
     expect(controller).toContain("await refreshVerifiedHistory()");
     expect(controller).not.toContain("useAgent(");
     expect(controller).not.toContain("registerProxiedAgent");
@@ -274,6 +274,9 @@ describe("canonical CopilotKit chat ownership", () => {
     expect(draftHook).toContain("return clearBeforeSubmit(submittedText)");
     expect(draftHook).toContain("await startSave()");
     expect(controller).toContain("copilotkit.runAgent({ agent })");
+    expect(controller).toContain("await prepareAttachmentSubmission(text, attachments)");
+    expect(controller).toContain("forwardedProps: { attachment_references: attachedSubmission.attachmentReferences }");
+    expect(controller).toContain("attachmentAdmissionScope.current !== attachmentScope");
     expect(controller).toContain("validStopReceipt(receipt)");
     expect(controller).toContain("copilotkit.stopAgent({ agent })");
     expect(controller).toContain("KarenCopilotVoiceDock");
