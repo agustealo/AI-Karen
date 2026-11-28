@@ -18,6 +18,9 @@ const catalog = read("src/components/chat/KarenComposerRuntimeCatalog.tsx");
 const agentDiscovery = read("src/components/chat/KarenComposerAgentDiscovery.tsx");
 const pkg = JSON.parse(read("package.json"));
 const liveBrowser = read("e2e/copilotkit-consumer-boot.spec.ts");
+const approvedBrowser = read("e2e/fixtures/approved-karen-login.ts");
+const nativeBrowser = read("e2e/karen-copilotkit-native-acceptance.spec.ts");
+const explorerBrowser = read("e2e/file-explorer-real-acceptance.spec.ts");
 const nativePreview = read("src/app/acceptance/copilotkit/[conversationId]/page.tsx");
 const consumerPreview = read("src/app/acceptance/copilotkit-consumer/[conversationId]/page.tsx");
 
@@ -82,10 +85,18 @@ describe("canonical CopilotKit chat ownership", () => {
   it("verifies persisted messages through the real browser's bearer and cookie context", () => {
     expect(liveBrowser).toContain("readAuthorizedSameOriginJson(page, draftEndpoint)");
     expect(liveBrowser).toContain("readAuthorizedSameOriginJson(page, endpoint)");
-    expect(liveBrowser).toContain('window.localStorage.getItem("access_token")');
-    expect(liveBrowser).toContain('credentials: "same-origin"');
-    expect(liveBrowser).toContain('redirect: "error"');
-    expect(liveBrowser).toContain('url.origin !== window.location.origin');
+    expect(liveBrowser).toContain('import { readAuthorizedSameOriginJson, signInApprovedKaren } from "./fixtures/approved-karen-login";');
+    expect(liveBrowser).not.toContain("async function readAuthorizedSameOriginJson(");
+    expect(approvedBrowser).toContain('window.localStorage.getItem("access_token")');
+    expect(approvedBrowser).toContain('credentials: "same-origin"');
+    expect(approvedBrowser).toContain('redirect: "error"');
+    expect(approvedBrowser).toContain('new URL(page.url()).origin !== new URL(configured).origin');
+    expect(approvedBrowser).toContain('window.location.origin !== approved || url.origin !== approved');
+    expect(approvedBrowser).toContain('!url.pathname.startsWith("/api/")');
+    expect(approvedBrowser).toContain('Authorization: `Bearer ${accessToken}`');
+    expect(approvedBrowser).toContain('return authorizedSameOriginJson(page, apiPath);');
+    expect(nativeBrowser).toContain('const read = (path: string) => readAuthorizedSameOriginJson(page, path);');
+    expect(explorerBrowser).toContain('const result = await readAuthorizedSameOriginJson(page, path);');
     expect(liveBrowser).not.toContain("authenticatedRequest.get");
   });
 
