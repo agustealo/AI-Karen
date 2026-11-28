@@ -363,32 +363,36 @@ async def test_async_json_transport_has_total_wire_deadline(monkeypatch):
     ("unauthorized", None), ("rate_limit", None), ("redirect", None),
     ("pool_timeout", None), ("credential_missing", None), ("tenant_scoped", None),
     ("registry_drift", None),
+    ("wire_before_handoff", None), ("wire_after_handoff", None),
+    ("wire_server_error", None),
 ])
 async def test_canonical_json_transport_owns_shared_health_once(
     monkeypatch, structured, case, expected,
 ):
     from dataclasses import replace
-    from types import SimpleNamespace
     from ai_karen_engine.core.model_runtime import provider_execution, provider_health_monitor
+    from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
 
     endpoint = replace(_endpoint("ollama-local"), capabilities=("chat_completion", "tools"))
+    if case.startswith("wire_"):
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     if case == "credential_missing":
         endpoint = replace(endpoint, api_key_env="KAREN_TEST_MISSING_HTTP_KEY")
         monkeypatch.delenv("KAREN_TEST_MISSING_HTTP_KEY", raising=False)
     if case == "tenant_scoped":
         endpoint = replace(endpoint, tenant_scoped=True)
     registered = replace(endpoint, base_url="http://localhost:9999/v1") if case == "registry_drift" else endpoint
-    monitor = provider_health_monitor.ProviderHealthMonitor(
-        registry=SimpleNamespace(get_provider_endpoint=lambda _: registered),
-    )
+    registry = ProviderRegistryService()
+    registry.register_provider_endpoint(registered)
+    monitor = registry.health_monitor
     observations = []
-    original = monitor.update_provider_health
+    original = monitor._apply_provider_health
 
     def observe(*args, **kwargs):
         observations.append((args, kwargs))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(monitor, "update_provider_health", observe)
+    monkeypatch.setattr(monitor, "_apply_provider_health", observe)
     monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
     from ai_karen_engine.platform.observability.metrics import MetricsCollector
     from ai_karen_engine.platform.observability import metrics
@@ -398,6 +402,12 @@ async def test_canonical_json_transport_owns_shared_health_once(
     wire = []
     def respond(request):
         wire.append(request)
+        if case.startswith("wire_"):
+            assert str(request.url) == "http://localhost:11434/v1/chat/completions"
+        if case in {"wire_after_handoff", "wire_server_error"}:
+            monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11435/v1")
+        if case == "wire_server_error":
+            return httpx.Response(503)
         if case == "connect_error":
             raise httpx.ConnectError("secret upstream detail", request=request)
         if case == "pool_timeout":
@@ -411,12 +421,20 @@ async def test_canonical_json_transport_owns_shared_health_once(
         })
 
     _mock_client(monkeypatch, respond)
+    if case == "wire_before_handoff":
+        original_client = provider_execution._provider_http_client
+
+        def changed_client(timeout):
+            monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11435/v1")
+            return original_client(timeout)
+
+        monkeypatch.setattr(provider_execution, "_provider_http_client", changed_client)
     kwargs = dict(messages=[], model="test-model", max_tokens=16, temperature=0.0)
     call = (
         provider_execution.execute_structured_provider_endpoint(endpoint, tools=[], **kwargs)
         if structured else provider_execution.execute_provider_endpoint(endpoint, **kwargs)
     )
-    if case in {"success", "tenant_scoped", "registry_drift"}:
+    if case in {"success", "tenant_scoped", "registry_drift", "wire_before_handoff", "wire_after_handoff"}:
         await call
     else:
         with pytest.raises(provider_execution.ProviderExecutionError):
@@ -435,3 +453,47 @@ async def test_canonical_json_transport_owns_shared_health_once(
         key = ("structured" if structured else "text", expected)
         assert counters["kari_provider_http_observations_total"]["values"] == {key: 1.0}
         assert snapshot["histograms"]["kari_provider_http_observation_duration_seconds"]["values"][key].count == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (200, b'{"data":[{"id":"live"},{"id":"live"}]}', ["live"]),
+        (200, b'{"data":[]}', []),
+        (200, b'{"error":{"message":"denied"},"data":[]}', None),
+        (200, b'{"models":["static"]}', None),
+        (200, b'{"data":[{"id":null}]}', None),
+        (200, b'<html>login</html>', None),
+        (401, b'{"data":[{"id":"fake"}]}', None),
+        (302, b'{"data":[{"id":"fake"}]}', None),
+    ],
+)
+@pytest.mark.parametrize("key", [None, "explicit-test-key"])
+def test_strict_inventory_never_uses_static_ids_or_ambient_key(monkeypatch, status, body, expected, key):
+    from unittest.mock import MagicMock
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-key")
+    monkeypatch.setenv("KARI_OPENAI_OFFLINE", "true")
+    response = MagicMock()
+    response.status = status
+    response.read.return_value = body
+    response.__enter__.return_value = response
+
+    def opener(request, timeout):
+        assert request.full_url == "https://api.example.invalid/v1/models"
+        assert request.get_method() == "GET"
+        assert request.get_header("Authorization") == (f"Bearer {key}" if key else None)
+        assert timeout == 3.0
+        return response
+
+    monkeypatch.setattr(provider_execution, "_open_provider_request", opener)
+    if expected is None:
+        with pytest.raises(provider_execution.ProviderExecutionError):
+            provider_execution.discover_openai_compatible_model_ids(
+                "https://api.example.invalid/v1", api_key=key,
+            )
+    else:
+        assert provider_execution.discover_openai_compatible_model_ids(
+            "https://api.example.invalid/v1", api_key=key,
+        ) == expected

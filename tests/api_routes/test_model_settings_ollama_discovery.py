@@ -288,12 +288,12 @@ async def test_hyphenated_provider_selection_persists_under_canonical_id(
 async def test_remote_provider_discovery_tracks_live_and_configured_model_sources(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_karen_engine.integrations.providers import openai_compatible_provider
+    from ai_karen_engine.core.model_runtime import provider_execution
 
     provider = SimpleNamespace(
         name="gmi-cloud",
         enabled=True,
-        endpoint=SimpleNamespace(base_url="https://models.example.invalid/v1"),
+        endpoint=SimpleNamespace(base_url="https://api.gmi-serving.com/v1"),
         provider_type=ProviderType.REMOTE,
         models=[
             SimpleNamespace(id="catalog-only", name="Catalog only", family="cloud", capabilities=[]),
@@ -317,14 +317,12 @@ async def test_remote_provider_discovery_tracks_live_and_configured_model_source
         lambda: SimpleNamespace(get_models_async=no_local_models),
     )
 
-    class RemoteCatalog:
-        def __init__(self, **kwargs: object) -> None:
-            assert kwargs["base_url"] == "https://models.example.invalid/v1"
+    def remote_catalog(base_url, *, api_key):
+        assert base_url == "https://api.gmi-serving.com/v1"
+        assert api_key is None
+        return ["live-model", "new-live-model"]
 
-        def get_models(self) -> list[str]:
-            return ["live-model", "new-live-model"]
-
-    monkeypatch.setattr(openai_compatible_provider, "OpenAICompatibleProvider", RemoteCatalog)
+    monkeypatch.setattr(provider_execution, "discover_openai_compatible_model_ids", remote_catalog)
     response = await settings_routes.get_provider_models(
         "gmi-cloud", current_user={"roles": ["admin"]},
     )
@@ -339,6 +337,7 @@ async def test_remote_provider_discovery_tracks_live_and_configured_model_source
     assert all(model.is_installed is False for model in by_id.values())
     serialized = settings_routes.ProviderModelsResponse(**response).model_dump()
     assert serialized["inventory_source"] == "mixed"
+    assert serialized["workspace_inventory_verified"] is False
     assert serialized["models"][1]["source"] == "provider_live"
 
 
@@ -403,12 +402,14 @@ async def test_nous_discovery_rejects_previously_saved_untrusted_endpoint(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["success", "outage", "credential_changed", "registration_aba"])
 async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, scenario: str,
 ) -> None:
-    from ai_karen_engine.integrations.providers import openai_compatible_provider
+    from ai_karen_engine.core.model_runtime import provider_execution
 
     key = "credential-from-secret-manager"
+    active_key = [key]
     provider = SimpleNamespace(
         name="nous",
         enabled=True,
@@ -430,7 +431,7 @@ async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
         "get_provider_config_manager",
         lambda: SimpleNamespace(
             get_provider=lambda name: provider if name == "nous" else None,
-            get_api_key=lambda name: key if name == "nous" else None,
+            get_api_key=lambda name: active_key[0] if name == "nous" else None,
         ),
     )
     monkeypatch.setattr(settings_routes, "_get_provider_override", lambda name: {})
@@ -445,45 +446,59 @@ async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
         lambda: SimpleNamespace(get_models_async=no_local_models),
     )
 
-    class NousInventory:
-        def __init__(self, **kwargs: object) -> None:
-            assert kwargs["base_url"] == "https://inference-api.nousresearch.com/v1"
-            assert kwargs["api_key"] == key
-
-        def get_models(self) -> list[str]:
-            return ["Hermes-4.3-36B", "Hermes-4-405B"]
-
-    monkeypatch.setattr(
-        openai_compatible_provider, "OpenAICompatibleProvider", NousInventory
-    )
+    from dataclasses import replace
     from ai_karen_engine.core.model_runtime import provider_registry_service
-    from ai_karen_engine.core.model_runtime.runtime_engine import EndpointKind
-
-    health_events: list[tuple[str, bool]] = []
-    monitored_registry = SimpleNamespace(
-        get_provider_endpoint=lambda name: SimpleNamespace(kind=EndpointKind.CLOUD_PROVIDER),
-        health_monitor=SimpleNamespace(
-            update_provider_health=lambda name, *, is_healthy: health_events.append(
-                (name, is_healthy)
-            )
-        ),
+    from ai_karen_engine.core.model_runtime.provider_endpoint import (
+        ProviderEndpoint, ProviderEndpointType,
     )
+    from ai_karen_engine.core.model_runtime.runtime_engine import EndpointKind
+    from ai_karen_engine.core.model_runtime.provider_health_monitor import HealthStatus
+
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = ProviderEndpoint(
+        provider_id="nous", display_name="Nous",
+        endpoint_type=ProviderEndpointType.OPENAI_COMPATIBLE,
+        base_url=provider.endpoint.base_url,
+        kind=EndpointKind.CLOUD_PROVIDER, tenant_scoped=True,
+    )
+    registry.register_provider_endpoint(endpoint)
     monkeypatch.setattr(
-        provider_registry_service,
-        "get_provider_registry_service",
-        lambda: monitored_registry,
+        provider_registry_service, "get_provider_registry_service", lambda: registry,
+    )
+
+    def nous_inventory(base_url, *, api_key):
+        assert base_url == provider.endpoint.base_url
+        assert api_key == key
+        if scenario == "outage":
+            raise ConnectionError("unavailable")
+        if scenario == "credential_changed":
+            active_key[0] = "replacement-key"
+        if scenario == "registration_aba":
+            registry.register_provider_endpoint(replace(endpoint, default_model="other"))
+            registry.register_provider_endpoint(endpoint)
+        return ["Hermes-4.3-36B", "Hermes-4-405B"]
+
+    monkeypatch.setattr(
+        provider_execution, "discover_openai_compatible_model_ids", nous_inventory,
     )
     response = await settings_routes.get_provider_models(
         "nous", current_user={"roles": ["admin"]}
     )
     assert response["provider"] == "nous"
-    assert response["discovery_status"] == "ready"
-    assert response["inventory_source"] == "mixed"
+    assert response["workspace_inventory_verified"] is (scenario == "success")
+    assert response["live_discovery_failed"] is (scenario != "success")
     by_id = {model.id: model for model in response["models"]}
-    assert by_id["Hermes-4.3-36B"].source == "provider_live"
-    assert by_id["Hermes-4-405B"].source == "provider_live"
     assert by_id["Hermes-4-70B"].source == "configured_catalog"
-    assert health_events == [("nous", True)]
+    if scenario == "success":
+        assert response["discovery_status"] == "ready"
+        assert response["inventory_source"] == "mixed"
+        assert by_id["Hermes-4.3-36B"].source == "provider_live"
+        assert by_id["Hermes-4-405B"].source == "provider_live"
+    else:
+        assert response["discovery_status"] == "catalog_only"
+        assert all(model.source == "configured_catalog" for model in by_id.values())
+    assert registry.health_monitor.get_provider_health("nous").health_status == HealthStatus.UNKNOWN
+
     assert key not in repr(response)
 
     with pytest.raises(HTTPException) as exc:
@@ -499,12 +514,12 @@ async def test_nous_model_discovery_uses_authorized_portal_endpoint_and_key(
 async def test_remote_outage_returns_honest_catalog_status_not_live_discovery(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from ai_karen_engine.integrations.providers import openai_compatible_provider
+    from ai_karen_engine.core.model_runtime import provider_execution
 
     provider = SimpleNamespace(
         name="gmi-cloud",
         enabled=True,
-        endpoint=SimpleNamespace(base_url="https://models.example.invalid/v1"),
+        endpoint=SimpleNamespace(base_url="https://api.gmi-serving.com/v1"),
         provider_type=ProviderType.REMOTE,
         models=[SimpleNamespace(id="saved-catalog", name="Saved catalog", family="cloud", capabilities=[])],
     )
@@ -525,14 +540,10 @@ async def test_remote_outage_returns_honest_catalog_status_not_live_discovery(
         lambda: SimpleNamespace(get_models_async=no_local_models),
     )
 
-    class UnreachableProvider:
-        def __init__(self, **kwargs: object) -> None:
-            pass
+    def unreachable_provider(base_url, *, api_key):
+        raise ConnectionError("provider unavailable")
 
-        def get_models(self) -> list[str]:
-            raise ConnectionError("provider unavailable")
-
-    monkeypatch.setattr(openai_compatible_provider, "OpenAICompatibleProvider", UnreachableProvider)
+    monkeypatch.setattr(provider_execution, "discover_openai_compatible_model_ids", unreachable_provider)
     response = await settings_routes.get_provider_models(
         "gmi-cloud", current_user={"roles": ["admin"]},
     )
@@ -1277,3 +1288,34 @@ async def test_personal_key_provisioning_denies_collisions_and_unapproved_vendor
         )
     assert exc.value.status_code == 403
     vault.create_provider.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_governed_vendor_rejects_unapproved_saved_endpoint_before_key_read(monkeypatch):
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    provider = SimpleNamespace(
+        name="gmi-cloud", enabled=True,
+        endpoint=SimpleNamespace(base_url="https://api.gmi-serving.com/v1"),
+        provider_type=ProviderType.EXTERNAL, models=[],
+    )
+    monkeypatch.setattr(
+        settings_routes, "get_provider_config_manager",
+        lambda: SimpleNamespace(
+            get_provider=lambda name: provider,
+            get_api_key=lambda name: pytest.fail("key must not be read for a foreign URL"),
+        ),
+    )
+    monkeypatch.setattr(
+        settings_routes, "_get_provider_override",
+        lambda name: {"base_url": "https://foreign.example.invalid/v1"},
+    )
+    monkeypatch.setattr(
+        provider_execution, "discover_openai_compatible_model_ids",
+        lambda *args, **kwargs: pytest.fail("foreign endpoint must not be contacted"),
+    )
+    with pytest.raises(HTTPException) as exc:
+        await settings_routes.get_provider_models(
+            "gmi-cloud", current_user={"roles": ["admin"]},
+        )
+    assert exc.value.status_code == 403

@@ -85,6 +85,8 @@ class _HttpExecutionObservation:
         self.transport = transport
         self.shared = shared and endpoint.tenant_scoped is False
         self.started: float | None = None
+        self.registration: object | None = None
+        self.wire_base_url: str | None = None
         self.response_status: int | None = None
         self.connection_failed = False
         self.finished = False
@@ -92,7 +94,19 @@ class _HttpExecutionObservation:
     def __enter__(self) -> _HttpExecutionObservation:
         return self
 
-    def handoff(self) -> None:
+    def handoff(self, base_url: str) -> None:
+        self.wire_base_url = base_url
+        if self.shared:
+            try:
+                from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+                    get_health_monitor,
+                )
+                self.registration = get_health_monitor().capture_endpoint_registration(
+                    self.endpoint, wire_base_url=base_url,
+                )
+            except Exception:
+                # Evidence failure cannot change execution admission.
+                self.registration = None
         self.started = time.perf_counter()
 
     def note_http_error(self, exc: BaseException) -> None:
@@ -117,6 +131,8 @@ class _HttpExecutionObservation:
             return get_health_monitor().record_shared_http_execution(
                 self.endpoint, transport=self.transport, outcome=outcome,
                 response_time=time.perf_counter() - self.started,
+                registration=self.registration,
+                wire_base_url=self.wire_base_url,
             )
         except Exception:
             # Observation is never a model-execution dependency.
@@ -341,6 +357,46 @@ def _open_provider_request(request: Request, timeout: float):
     )
 
 
+def discover_openai_compatible_model_ids(
+    base_url: str, *, api_key: str | None, timeout_seconds: float = 3.0,
+) -> list[str]:
+    """Read actual /models inventory without fallback, inference, or health writes.
+
+    The caller owns endpoint and credential authorization. Never consult
+    ambient provider credentials or merge configured model hints into evidence.
+    """
+    url = base_url.rstrip("/") + "/models"
+    _require_safe_provider_destination(url)
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request = Request(url, headers=headers, method="GET")
+    max_bytes = 4 * 1024 * 1024
+    with _open_provider_request(request, timeout=timeout_seconds) as response:
+        if response.status != 200:
+            raise ProviderExecutionError("provider_inventory_unavailable")
+        raw = response.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ProviderExecutionError("provider_inventory_response_too_large")
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise ProviderExecutionError("provider_inventory_invalid_response") from None
+    if (
+        not isinstance(body, dict)
+        or body.get("error") is not None
+        or not isinstance(body.get("data"), list)
+    ):
+        raise ProviderExecutionError("provider_inventory_invalid_response")
+    ids: list[str] = []
+    for item in body["data"]:
+        model_id = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ProviderExecutionError("provider_inventory_invalid_model")
+        ids.append(model_id)
+    return list(dict.fromkeys(ids))
+
+
 def _inherit_registered_api_path(
     runtime_url: str,
     registered_url: str | None,
@@ -551,7 +607,7 @@ async def _post_chat_completions(
         async with asyncio.timeout(total_seconds):
             async with _provider_http_client(total_seconds) as client:
                 if observation is not None:
-                    observation.handoff()
+                    observation.handoff(base_url)
                 async with client.stream(
                     "POST", f"{base_url}/chat/completions", json=payload, headers=headers,
                 ) as response:
@@ -1011,7 +1067,7 @@ async def stream_provider_endpoint(
         try:
             async with asyncio.timeout(total_seconds):
                 async with _provider_http_client(total_seconds) as client:
-                    observation.handoff()
+                    observation.handoff(base_url)
                     async with client.stream(
                         "POST", f"{base_url}/chat/completions",
                         json=payload, headers=headers,

@@ -84,9 +84,16 @@ class NativeExecutionObservation:
     finished: bool = False
     soft_attempt: bool = False
     sealed_at: float | None = None
+    registration: object | None = field(default=None, init=False, repr=False)
 
     @contextmanager
     def bind(self) -> Iterator[None]:
+        # Bind occurs at the owned worker's handoff, before any model lock/I/O.
+        if self.endpoint is not None and self.started is None:
+            try:
+                self.registration = get_health_monitor().capture_endpoint_registration(self.endpoint)
+            except Exception:
+                self.registration = None
         token = _native_observation.set(self)
         try:
             yield
@@ -111,6 +118,7 @@ class NativeExecutionObservation:
             return get_health_monitor().record_native_execution(
                 self.endpoint, operation=self.operation,
                 outcome=outcome, response_time=elapsed,
+                registration=self.registration,
             )
         except Exception:
             return False
@@ -258,6 +266,15 @@ class ProviderHealthMonitor:
         Returns a ProviderHealthInfo with UNKNOWN status if not yet checked.
         """
         provider_key = self._provider_key(provider_id)
+        self._refresh_health_identity(provider_key)
+        return self._read_cached_provider_health(provider_key)
+
+    def _refresh_health_identity(self, provider_key: str) -> None:
+        refresh = getattr(self._registry, "refresh_endpoint_health_identity", None)
+        if callable(refresh):
+            refresh(provider_key)
+
+    def _read_cached_provider_health(self, provider_key: str) -> ProviderHealthInfo:
         cached = self._health_cache.get(provider_key)
         if cached is not None:
             cache_age = (
@@ -266,7 +283,7 @@ class ProviderHealthMonitor:
             )
             if cache_age < self._cache_ttl:
                 return cached
-            logger.debug("Health cache expired for %s", provider_id)
+            logger.debug("Health cache expired for %s", provider_key)
 
         return ProviderHealthInfo(
             provider_id=provider_key,
@@ -284,7 +301,29 @@ class ProviderHealthMonitor:
         error_type: Optional[str] = None,
         error_message: Optional[str] = None,
     ) -> None:
-        """Update observed health state for a provider."""
+        """Compatibility ingress; canonical endpoints require fenced publication."""
+        publish = getattr(self._registry, "publish_legacy_provider_health", None)
+        if callable(publish):
+            publish(
+                provider_id, is_healthy=is_healthy, response_time=response_time,
+                error_code=error_code, error_type=error_type, error_message=error_message,
+            )
+            return
+        self._apply_provider_health(
+            provider_id, is_healthy=is_healthy, response_time=response_time,
+            error_code=error_code, error_type=error_type, error_message=error_message,
+        )
+
+    def _apply_provider_health(
+        self,
+        provider_id: str,
+        is_healthy: bool,
+        response_time: Optional[float] = None,
+        error_code: Optional[str] = None,
+        error_type: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Apply an observation admitted by the canonical registry."""
         provider_key = self._provider_key(provider_id)
         now = datetime.utcnow()
 
@@ -299,7 +338,10 @@ class ProviderHealthMonitor:
 
         # An expired snapshot is UNKNOWN to readers. A fresh observation
         # must not silently suppress a transition from that visible state.
-        prev_status = self.get_provider_health(provider_key).health_status
+        # Registry-fenced publication has already admitted the observation.
+        # Do not advance the destination generation between that check and
+        # this write. Subsequent reads retire a now-superseded observation.
+        prev_status = self._read_cached_provider_health(provider_key).health_status
 
         if is_healthy:
             health_info.health_status = HealthStatus.HEALTHY
@@ -344,9 +386,20 @@ class ProviderHealthMonitor:
             "Updated health for %s: %s", provider_id, health_info.health_status.value
         )
 
+    def capture_endpoint_registration(
+        self, endpoint: ProviderEndpoint, *, wire_base_url: str | None = None,
+    ) -> object | None:
+        """Read the canonical registry's opaque observation fence at handoff."""
+        if self._registry is None:
+            return None
+        return self._registry.capture_endpoint_health_registration(
+            endpoint, wire_base_url=wire_base_url,
+        )
+
     def record_shared_http_execution(
         self, endpoint: ProviderEndpoint, *, transport: str,
-        outcome: str, response_time: float,
+        outcome: str, response_time: float, registration: object | None,
+        wire_base_url: str | None,
     ) -> bool:
         """Accept only bounded observations for the still-registered shared endpoint.
 
@@ -364,14 +417,17 @@ class ProviderHealthMonitor:
             or not math.isfinite(response_time)
             or response_time < 0
             or self._registry is None
-            or self._registry.get_provider_endpoint(endpoint.provider_id) != endpoint
+            or registration is None
+            or not wire_base_url
         ):
             return False
-        self.update_provider_health(
-            endpoint.provider_id, is_healthy=outcome == "success",
+        if not self._registry.publish_endpoint_health(
+            endpoint, registration, is_healthy=outcome == "success",
             response_time=response_time,
             error_code=None if outcome == "success" else outcome,
-        )
+            wire_base_url=wire_base_url,
+        ):
+            return False
         try:
             from ai_karen_engine.platform.observability.metrics import get_metrics_collector
 
@@ -394,7 +450,7 @@ class ProviderHealthMonitor:
 
     def record_native_execution(
         self, endpoint: ProviderEndpoint | None, *, operation: str,
-        outcome: str, response_time: float,
+        outcome: str, response_time: float, registration: object | None,
     ) -> bool:
         """Observe native execution without conflating reasoning, encoder and chat health."""
         if (
@@ -429,15 +485,13 @@ class ProviderHealthMonitor:
         if (
             operation == "generation" and outcome == "success"
             and endpoint is not None and endpoint.tenant_scoped is False
-            and self._registry is not None
-            and self._registry.get_provider_endpoint(endpoint.provider_id) == endpoint
+            and self._registry is not None and registration is not None
         ):
             from ai_karen_engine.core.model_runtime.runtime_engine import EndpointProtocol
             if endpoint.protocol is EndpointProtocol.NATIVE:
-                self.update_provider_health(
-                    endpoint.provider_id, is_healthy=True, response_time=response_time,
+                return self._registry.publish_endpoint_health(
+                    endpoint, registration, is_healthy=True, response_time=response_time,
                 )
-                return True
         return False
 
     def _emit_transition_if_changed(
@@ -502,6 +556,12 @@ class ProviderHealthMonitor:
                 healthy.append(provider_id)
         return healthy
 
+    def invalidate_provider(self, provider_id: str) -> None:
+        """Discard observations for a replaced or withdrawn endpoint identity."""
+        provider_key = self._provider_key(provider_id)
+        self._health_cache.pop(provider_key, None)
+        self._prev_statuses.pop(provider_key, None)
+
     def clear_cache(self) -> None:
         """Clear the health state cache."""
         self._health_cache.clear()
@@ -510,6 +570,8 @@ class ProviderHealthMonitor:
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get statistics about the health cache."""
+        for provider_key in tuple(self._health_cache):
+            self._refresh_health_identity(provider_key)
         now = datetime.utcnow()
         stats: Dict[str, Any] = {
             "total_providers": len(self._health_cache),
@@ -522,7 +584,7 @@ class ProviderHealthMonitor:
         }
 
         response_times: List[float] = []
-        for provider_name, info in self._health_cache.items():
+        for provider_name, info in tuple(self._health_cache.items()):
             if info.health_status == HealthStatus.HEALTHY:
                 stats["healthy_count"] += 1
             elif info.health_status == HealthStatus.DEGRADED:

@@ -1,39 +1,25 @@
+"""Native research through the canonical governed tool and generation bridges."""
+
 from typing import Any, Dict, Optional
-import logging
+import json
+
 from .specialist_base import SpecialistBase
 from ..contracts.subagent_contract import SubagentContract, AgentCapability
 from ..contracts.specialist_execution import SpecialistExecutionContext
-from ..specialists.bridges import GenerationBridge, ToolBridge, resolve_prompt_text
-from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
-
-logger = logging.getLogger(__name__)
-
-SYNTHESIS_PROMPT = """
-As a Researcher Agent, summarize the following tool findings for the query: "{query}"
-
-Findings:
-{findings}
-"""
-
+from ..specialists.bridges import GenerationBridge, ToolBridge
 
 class ResearcherSpecialist(SpecialistBase):
-    """The Researcher: specialized in gathering context and executing tool-based searches.
-
-    Prompt lives in PromptRegistry (karen.agent.researcher.synthesis@v1) for
-    versioned reproducibility (A10). Tool side effects flow through ToolBridge ->
-    ActionExecutionGate; model synthesis through GenerationBridge.
-    """
+    """Collect acknowledged tool evidence and synthesize through local generation."""
 
     PROMPT_CONTRACT_ID = "karen.agent.researcher.synthesis"
-    PROMPT_VERSION = "v1"
+    PROMPT_VERSION = "v1.0.0"
 
     def __init__(self):
-        contract = SubagentContract(
+        super().__init__(SubagentContract(
             agent_id="researcher",
             role="Specialist in gathering external/internal context and using search tools",
-            capabilities=[AgentCapability.WEB_SEARCH, AgentCapability.MEMORY_RETRIEVAL]
-        )
-        super().__init__(contract)
+            capabilities=[AgentCapability.WEB_SEARCH, AgentCapability.MEMORY_RETRIEVAL],
+        ))
 
     async def _process(
         self,
@@ -41,81 +27,59 @@ class ResearcherSpecialist(SpecialistBase):
         context: Dict[str, Any],
         execution: Optional[SpecialistExecutionContext] = None,
     ) -> Dict[str, Any]:
-        self.logger.info("Researcher gathering context")
-
+        if execution is None:
+            raise PermissionError("researcher_execution_authority_required")
         query = input_data.get("raw", input_data.get("query", ""))
-        tool_results = []
+        if not isinstance(query, str) or not query.strip():
+            raise ValueError("researcher_query_required")
 
-        if query:
-            tool_name = "web_search"
-            try:
-                self.logger.info(f"Researcher executing tool via gate: {tool_name}")
-                result = await ToolBridge().execute(
-                    tool_name=tool_name,
-                    parameters={"query": query},
-                    authorized_plan=execution.authorized_plan,
-                    tenant_id=execution.tenant_id,
-                    user_id=execution.user_id,
-                    policy_decision_id=execution.policy_decision_id,
-                    trajectory_id=execution.trajectory_id,
-                    agent_id="researcher",
-                    step_id=execution.step_id,
-                    execution=execution,
-                )
-                if result.get("success"):
-                    tool_results.append({"tool": tool_name, "result": result.get("result")})
-            except OutcomeStoreError:
-                # A tool may have performed an external side effect before the
-                # audit write failed. Never turn that uncertainty into a
-                # normal-looking research answer or schedule a blind retry.
-                self.logger.error("researcher.governed_tool_receipt_unavailable")
-                raise
-            except Exception as e:
-                self.logger.warning(
-                    "Researcher tool execution failed",
-                    extra={"tool": tool_name, "error_type": type(e).__name__},
-                )
+        from ai_karen_engine.core.runtime.prompt import get_prompt_runtime_service
 
-        if tool_results:
-            import json
-            findings_data = json.dumps(tool_results, indent=2, default=str)
-            system_prompt = resolve_prompt_text(self.PROMPT_CONTRACT_ID, self.PROMPT_VERSION, SYNTHESIS_PROMPT)
-            messages = [
-                {"role": "system", "content": "You are Karen's Researcher specialist."},
-                {"role": "user", "content": system_prompt.format(query=query, findings=findings_data)},
-            ]
-            try:
-                summary = await GenerationBridge().invoke(
-                    request_id=execution.trajectory_id if execution else "researcher",
-                    correlation_id=execution.correlation_id if execution else "researcher",
-                    messages=messages,
-                    prompt_contract_id=self.PROMPT_CONTRACT_ID,
-                    policy_decision_id=execution.policy_decision_id if execution else None,
-                    provider_constraints=getattr(execution.authorized_plan, "provider_constraints", {}) if execution else None,
-                    model_constraints=getattr(execution.authorized_plan, "model_constraints", {}) if execution else None,
-                    execution=execution,
-                )
-                return {
-                    "search_results": tool_results,
-                    "context_found": summary.strip(),
-                    "confidence": 0.9,
-                }
-            except Exception as exc:
-                self.logger.warning(
-                    "Research synthesis failed; returning unsynthesized tool evidence",
-                    extra={"error_type": type(exc).__name__},
-                )
-                return {
-                    "search_results": tool_results,
-                    "context_found": findings_data,
-                    "confidence": 0.65,
-                    "degraded": True,
-                    "degradation_reason": "research_synthesis_failed",
-                }
+        # A missing synthesis contract must not trigger a paid/external tool.
+        get_prompt_runtime_service().require_active_prompt_definition(
+            self.PROMPT_CONTRACT_ID, self.PROMPT_VERSION
+        )
+        # ToolBridge owns authorization, accounting and durable receipts.
+        # Never interpret a denial or uncertain receipt as a successful search.
+        tool_name = "web_search"
+        result = await ToolBridge().execute(
+            tool_name=tool_name,
+            parameters={"query": query},
+            authorized_plan=execution.authorized_plan,
+            tenant_id=execution.tenant_id,
+            user_id=execution.user_id,
+            policy_decision_id=execution.policy_decision_id,
+            trajectory_id=execution.trajectory_id,
+            agent_id="researcher",
+            step_id=execution.step_id,
+            execution=execution,
+        )
+        if not isinstance(result, dict) or result.get("success") is not True:
+            raise RuntimeError("researcher_tool_result_unacknowledged")
+        if "result" not in result or result["result"] is None:
+            raise RuntimeError("researcher_tool_evidence_missing")
 
+        tool_results = [{"tool": tool_name, "result": result["result"]}]
+        messages = [{
+            "role": "user",
+            "content": json.dumps({"query": query, "findings": tool_results}, default=str),
+        }]
+        # Do not return private raw findings after a failed or denied synthesis.
+        # The coordinator owns failure handling; no synthetic confidence score.
+        summary = await GenerationBridge().invoke(
+            request_id=execution.trajectory_id,
+            correlation_id=execution.correlation_id,
+            messages=messages,
+            prompt_contract_id=self.PROMPT_CONTRACT_ID,
+            prompt_version=self.PROMPT_VERSION,
+            policy_decision_id=execution.policy_decision_id,
+            provider_constraints=execution.authorized_plan.provider_constraints,
+            model_constraints=getattr(execution.authorized_plan, "model_constraints", {}),
+            execution=execution,
+        )
+        if not isinstance(summary, str) or not summary.strip():
+            raise RuntimeError("researcher_synthesis_empty")
         return {
             "search_results": tool_results,
-            "context_found": "No additional context found.",
-            "confidence": 0.5,
-            "degraded": False,
+            "context_found": summary.strip(),
         }

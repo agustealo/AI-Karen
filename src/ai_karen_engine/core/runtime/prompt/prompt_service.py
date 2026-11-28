@@ -16,6 +16,7 @@ from ai_karen_engine.core.runtime.prompt.prompt_contract import (
     PromptAssemblyRequest,
     PromptAssemblyResult,
     PromptDefinition,
+    PromptLifecycleStatus,
 )
 from ai_karen_engine.core.runtime.prompt.prompt_registry import (
     PromptNotFoundError,
@@ -54,11 +55,17 @@ class PromptRuntimeService:
         request: PromptAssemblyRequest,
         enforce_budget: bool = True,
         validate_schema: bool = True,
+        *,
+        require_registered: bool = False,
     ) -> PromptAssemblyResult:
         """Assemble a prompt from trusted runtime inputs."""
         working_request = copy.deepcopy(request)
         prompt_definition = None
-        if working_request.prompt_id:
+        if require_registered:
+            prompt_definition = self.require_active_prompt_definition(
+                working_request.prompt_id, working_request.prompt_version
+            )
+        elif working_request.prompt_id:
             try:
                 prompt_definition = self.registry.get_prompt(
                     working_request.prompt_id,
@@ -70,8 +77,13 @@ class PromptRuntimeService:
                     working_request.prompt_id,
                 )
 
+        def estimate(candidate: PromptAssemblyRequest) -> TokenEstimate:
+            if require_registered:
+                return self.registry.estimate_tokens(candidate, definition=prompt_definition)
+            return self.registry.estimate_tokens(candidate)
+
         try:
-            initial_estimate = self.registry.estimate_tokens(working_request)
+            initial_estimate = estimate(working_request)
         except TokenEstimateError:
             logger.exception("Prompt token estimation failed")
             raise
@@ -80,21 +92,28 @@ class PromptRuntimeService:
         if enforce_budget and initial_estimate.total_tokens > working_request.token_budget:
             truncation_events = self.truncation_policy.enforce(
                 working_request,
-                self.registry.estimate_tokens,
+                estimate,
             )
 
-        final_estimate = self.registry.estimate_tokens(working_request)
+        final_estimate = estimate(working_request)
+        assembly_result = await self.assembler.assemble_prompt(
+            working_request,
+            prompt_definition,
+        )
+        if require_registered:
+            # Account for fixed assembler instructions and actual message overhead
+            # too. The strict caller must not dispatch if this estimate exceeds
+            # its admitted input limit, even after protected-section trimming.
+            assembled_tokens = self.registry.estimate_assembled_messages(assembly_result.messages)
+            additional_tokens = max(0, assembled_tokens - final_estimate.total_tokens)
+            final_estimate.overhead_tokens += additional_tokens
+            final_estimate.total_tokens += additional_tokens
         if final_estimate.total_tokens > working_request.token_budget:
             logger.warning(
                 "Prompt remains above budget after protected-section enforcement: %s > %s",
                 final_estimate.total_tokens,
                 working_request.token_budget,
             )
-
-        assembly_result = await self.assembler.assemble_prompt(
-            working_request,
-            prompt_definition,
-        )
         assembly_result.token_estimate = final_estimate.total_tokens
         assembly_result.truncation_events = truncation_events
         assembly_result.metadata.setdefault("context_policy", {})
@@ -264,6 +283,20 @@ class PromptRuntimeService:
             if content and content not in lines:
                 lines.append(content)
         return lines
+
+    def require_active_prompt_definition(
+        self, prompt_id: Optional[str], version: Optional[str]
+    ) -> PromptDefinition:
+        """Resolve an explicit active, nonempty contract without fallback."""
+        if not prompt_id or not version:
+            raise PromptNotFoundError("explicit_versioned_prompt_required")
+        definition = self.registry.get_prompt(prompt_id, version)
+        if (
+            definition.status != PromptLifecycleStatus.ACTIVE
+            or not definition.system_instructions.strip()
+        ):
+            raise PromptNotFoundError("active_nonempty_prompt_required")
+        return definition
 
     def get_prompt_definition(
         self,

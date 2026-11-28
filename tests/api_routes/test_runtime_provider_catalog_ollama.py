@@ -356,6 +356,10 @@ async def test_runtime_catalog_distinguishes_real_failure_from_unknown(
             "selected_provider": "ollama",
         }
 
+    async def unavailable(*args, **kwargs):
+        raise ConnectionError("unavailable")
+
+    monkeypatch.setattr(runtime_api, "get_provider_models", unavailable)
     monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
     catalog = await runtime_api.get_runtime_provider_catalog(
         current_user={"roles": ["admin"]}
@@ -391,6 +395,8 @@ async def test_remote_provider_requires_live_models_before_chat_selection(
         assert name == "openai"
         assert current_user == {"roles": ["admin"]}
         return {
+            "workspace_inventory_verified": True,
+            "discovered_at": "2026-11-27T00:00:00+00:00",
             "models": [
                 {"id": "gpt-live", "name": "Provider observed", "source": "provider_live"},
                 {"id": "catalog-only", "name": "Catalog", "source": "configured_catalog", "is_installed": False},
@@ -402,6 +408,7 @@ async def test_remote_provider_requires_live_models_before_chat_selection(
     catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["admin"]})
     provider = catalog.providers[0]
     assert provider.healthy is True
+    assert provider.health.source == "workspace_inventory"
     assert {model.id for model in provider.models if model.available} == {"gpt-live"}
     assert catalog.default_model == "gpt-live"
     assert any(model.id == "catalog-only" and not model.available for model in provider.models)
@@ -491,8 +498,8 @@ async def test_runtime_catalog_outage_does_not_expose_secret_exception_details(
     [
         (True, True, True, "healthy", True),
         (True, False, True, "healthy", False),
-        (True, True, False, "unknown", False),
-        (True, True, False, "degraded", False),
+        (True, True, False, "unknown", True),
+        (True, True, False, "degraded", True),
         (False, True, True, "healthy", False),
     ],
 )
@@ -532,6 +539,8 @@ async def test_nous_portal_chat_inventory_requires_verified_configuration_and_he
     async def live_models(provider_id: str, *, current_user) -> dict[str, object]:
         observed.append(provider_id)
         return {
+            "workspace_inventory_verified": True,
+            "discovered_at": "2026-11-27T00:00:00+00:00",
             "models": [{
                 "id": "Hermes-4.3-36B",
                 "name": "Hermes 4.3 36B",
@@ -635,17 +644,18 @@ async def test_admin_hidden_model_is_excluded_without_disabling_other_live_model
     assert catalog.default_model == "qwen2.5:7b"
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["normal", "saved_mismatch", "registration_aba", "wire_changed"])
 async def test_selected_ollama_native_probe_is_recorded_before_chat_availability(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, scenario: str,
 ) -> None:
     """A successful selected-endpoint probe provides observed health, not static trust."""
     from ai_karen_engine.api_routes.models import settings as model_settings
     from ai_karen_engine.config.llm_provider_config import ProviderType
     from ai_karen_engine.core.model_runtime import provider_registry_service
     from ai_karen_engine.core.model_runtime.provider_health_monitor import (
-        ProviderHealthMonitor,
         HealthStatus,
     )
+    from dataclasses import replace
 
     provider = SimpleNamespace(
         name="ollama",
@@ -663,13 +673,11 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
         chat_model_visibility={},
     )
     manager = SimpleNamespace(list_providers=lambda: [provider])
-    monitor = ProviderHealthMonitor(
-        registry=SimpleNamespace(canonicalize_provider_id=lambda name: "ollama-local")
-    )
-    registry = SimpleNamespace(
-        canonicalize_provider_id=lambda name: "ollama-local",
-        health_monitor=monitor,
-    )
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    monitor = registry.health_monitor
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1")
     monkeypatch.setattr(
         provider_registry_service, "get_provider_registry_service", lambda: registry
     )
@@ -688,7 +696,8 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
         lambda: SimpleNamespace(get_models_async=no_discovered_models),
     )
     monkeypatch.setattr(model_settings, "_get_provider_override", lambda name: {
-        "runtime_source": "host", "last_model": "qwen3:4b"
+        "runtime_source": "host", "last_model": "qwen3:4b",
+        **({"base_url": "http://other.local:11434/v1"} if scenario == "saved_mismatch" else {}),
     })
     monkeypatch.setattr(model_settings, "_get_api_key_status", lambda *args: "not_required")
     monkeypatch.setattr(model_settings, "_supports_base_url_override", lambda *_: False)
@@ -705,6 +714,11 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
     probe_available = True
 
     async def runtime_options() -> list[model_settings.RuntimeOptionPayload]:
+        if scenario == "registration_aba":
+            registry.register_provider_endpoint(replace(endpoint, default_model="other"))
+            registry.register_provider_endpoint(endpoint)
+        if scenario == "wire_changed":
+            monkeypatch.setenv("OLLAMA_BASE_URL", "http://other.local:11434/v1")
         return [
             model_settings.RuntimeOptionPayload(
                 source="host",
@@ -723,6 +737,13 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
         current_user={"roles": ["user"]}
     )
     item = next(provider for provider in catalog.providers if provider.id == "ollama")
+    if scenario != "normal":
+        assert item.health.status == "unknown"
+        assert item.healthy is False
+        assert item.models[0].available is False
+        assert catalog.default_model == "auto"
+        assert monitor.get_provider_health("ollama").health_status == HealthStatus.UNKNOWN
+        return
     assert item.health.status == "healthy"
     assert item.models[0].available is True
     assert catalog.default_model == "qwen3:4b"
@@ -736,3 +757,30 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
     assert item.healthy is False
     assert item.models[0].available is False
     assert item.health.status == "unavailable"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("verified", [False, True])
+async def test_cloud_inventory_requires_request_scoped_observation(monkeypatch, verified):
+    async def payload():
+        return {"providers": [{
+            "id": "openai", "provider_type": "external", "enabled": True,
+            "is_configured": True, "healthy": True, "health_status": "healthy",
+            "selected_model": "live", "models": [],
+        }], "selected_provider": "openai"}
+
+    async def inventory(*args, **kwargs):
+        return {
+            "workspace_inventory_verified": verified,
+            "discovered_at": "2026-11-27T00:00:00+00:00",
+            "models": [{"id": "live", "source": "provider_live"}],
+        }
+
+    monkeypatch.setattr(runtime_api, "build_model_settings_payload", payload)
+    monkeypatch.setattr(runtime_api, "get_provider_models", inventory)
+    catalog = await runtime_api.get_runtime_provider_catalog(current_user={"roles": ["user"]})
+    provider = catalog.providers[0]
+    assert provider.healthy is verified
+    assert provider.models[0].available is verified
+    assert catalog.default_model == ("live" if verified else "auto")
+    assert provider.health.source == ("workspace_inventory" if verified else "registry")

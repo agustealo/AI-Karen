@@ -355,27 +355,21 @@ async def test_kcon768_invalid_output_attempt_is_distinct_from_verified_model():
 @pytest.mark.asyncio
 async def test_real_gateway_http_observes_provider_health_once(monkeypatch):
     import httpx
-    from types import SimpleNamespace
-    from ai_karen_engine.core.model_runtime import provider_health_monitor, provider_registry_service
-    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+    from ai_karen_engine.core.model_runtime import provider_registry_service
 
-    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS if item.provider_id == "ollama-local")
-    registry = SimpleNamespace(
-        get_provider_endpoint=lambda value: endpoint if value == endpoint.provider_id else None,
-        get_provider_status=lambda _: SimpleNamespace(is_available=True),
-        resolve_capable_targets=lambda **_: [endpoint],
-        canonicalize_provider_id=lambda value: value,
-    )
-    registry.health_monitor = provider_health_monitor.ProviderHealthMonitor(registry=registry)
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    assert registry.capture_endpoint_health_registration(endpoint) is not None
     monkeypatch.setattr(provider_registry_service, "get_provider_registry_service", lambda: registry)
     observations = []
-    original = registry.health_monitor.update_provider_health
+    original = registry.health_monitor._apply_provider_health
 
     def observe(*args, **kwargs):
         observations.append((args, kwargs))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(registry.health_monitor, "update_provider_health", observe)
+    monkeypatch.setattr(registry.health_monitor, "_apply_provider_health", observe)
     original_client = httpx.AsyncClient
     wire = []
 
@@ -403,3 +397,86 @@ async def test_real_gateway_http_observes_provider_health_once(monkeypatch):
     assert result.provider == endpoint.provider_id
     assert len(wire) == len(observations) == 1
     assert observations[0][1]["is_healthy"] is True
+    assert registry.get_provider_health_snapshot(endpoint.provider_id)["status"] == "healthy"
+
+
+@pytest.mark.parametrize(
+    "preferred, required, forbidden, expected",
+    [
+        ("plain-local", ["structured_output"], [], "structured-local"),
+        ("structured-local", [], ["structured_output"], "plain-local"),
+        (None, ["structured_output"], [], "structured-local"),
+        (None, [], ["structured_output"], "plain-local"),
+        ("plain-local", ["structured_output"], ["structured_output"], None),
+        ("structured-local", ["unregistered_capability"], [], None),
+        ("plain-local", [" CHAT "], [], "plain-local"),
+        (None, [], ["chat"], None),
+    ],
+)
+def test_local_expression_selection_enforces_task_capabilities(
+    monkeypatch, preferred, required, forbidden, expected
+):
+    from types import SimpleNamespace
+    from ai_karen_engine.core.expression.engines.openai_compatible_engine import (
+        OpenAICompatibleEngine,
+    )
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        ProviderRegistryService,
+    )
+
+    registry = ProviderRegistryService()
+    registry.register_openai_compatible_endpoint(
+        "plain-local", "Plain local", base_url="http://localhost:5001/v1",
+        capabilities=["chat"],
+    )
+    registry.register_openai_compatible_endpoint(
+        "structured-local", "Structured local", base_url="http://localhost:5002/v1",
+        capabilities=["chat", "structured_output"],
+    )
+    monkeypatch.setattr(
+        registry, "get_provider_status",
+        lambda provider_id: SimpleNamespace(
+            is_available=provider_id in {"plain-local", "structured-local"}
+        ),
+    )
+    task = ExpressionTask(
+        task_id="local-capability-selection", kind="chat",
+        messages=[{"role": "user", "content": "query"}],
+        response_mode="text",
+        required_capabilities=["memory.write", "artifact.code.read"],
+        forbidden_capabilities=["tools", "chat"],
+        required_provider_capabilities=required,
+        forbidden_provider_capabilities=forbidden,
+        preferred_provider=preferred,
+        local_only=True,
+    )
+    assert OpenAICompatibleEngine()._resolve_provider(task, False, registry) == expected
+
+
+
+def test_runtime_capability_hints_do_not_exclude_ollama(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.core.expression.engines.openai_compatible_engine import (
+        OpenAICompatibleEngine,
+    )
+    from ai_karen_engine.core.model_runtime.provider_registry_service import (
+        ProviderRegistryService,
+    )
+
+    registry = ProviderRegistryService()
+    monkeypatch.setattr(
+        registry, "get_provider_status",
+        lambda _: SimpleNamespace(is_available=True),
+    )
+    task = ExpressionTask(
+        task_id="runtime-capability-domain", kind="chat",
+        messages=[{"role": "user", "content": "Hello"}],
+        response_mode="text",
+        required_capabilities=["memory.write", "artifact.code.read"],
+        forbidden_capabilities=["tools"],
+        preferred_provider="ollama-local",
+        preferred_model="smollm2:135m",
+    )
+    assert OpenAICompatibleEngine()._resolve_provider(task, False, registry) == "ollama-local"
+    assert task.required_capabilities == ["memory.write", "artifact.code.read"]
+    assert task.forbidden_capabilities == ["tools"]
