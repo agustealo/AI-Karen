@@ -1558,7 +1558,7 @@ describe("KEXP-042A.6C explicit attachment-bound composer handoff", () => {
 describe("KEXP-042A.6D4 exact failed-submission retry preparation", () => {
   const text = "Original governed question";
   const id = "draft-v1-7";
-  const snapshot = { text, attachmentReferences: [] };
+  const snapshot = { submissionId: id, text, attachmentReferences: [] };
   const retryPath = "/api/copilotkit/agent/default/draft-retry/" + THREAD + "/" + id;
   async function offer() {
     sdk.revisionBoundSubmission = true;
@@ -1604,5 +1604,92 @@ describe("KEXP-042A.6D4 exact failed-submission retry preparation", () => {
     expect(sdk.runAgent).toHaveBeenCalledTimes(1);
     expect(sdk.post).toHaveBeenCalledTimes(1);
     expect(input().value).toBe(text);
+  });
+});
+
+describe("KEXP-042A.6D5 retained run recovery", () => {
+  const text = "Original governed question";
+  const id = "draft-v1-7";
+  const next = "draft-v1-8";
+  const snapshot = { submissionId: id, text, attachmentReferences: [] };
+  const receipt = {
+    runId: "owned-run", submissionId: id, status: "failed",
+    cancel_requested: false, cancellation_confirmed: false,
+  };
+  const statusPath = "/api/copilotkit/agent/default/submissions/" + THREAD + "/" + id + "/status";
+
+  it("correlates an ordinary governed transport failure to the original submission", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(new Error("Connection lost"));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => { input().onChange(text); input().onSubmitMessage(text); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check run status and saved history" })).toBeTruthy());
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({ submission_id: id, eligible: true });
+    sdk.readRetryDraft.mockResolvedValue(snapshot);
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Prepare failed draft for retry" })).toBeTruthy());
+    expect(sdk.get).toHaveBeenNthCalledWith(1, statusPath);
+    expect(sdk.post).not.toHaveBeenCalled();
+  });
+
+  it("discovers an existing exact saved submission without starting a run", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.readRetryDraft.mockResolvedValue(snapshot);
+    sdk.get.mockResolvedValueOnce(receipt);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onChange(text));
+    fireEvent.click(screen.getByRole("button", { name: "Check saved draft recovery" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check run status and saved history" })).toBeTruthy());
+    expect(sdk.get).toHaveBeenCalledExactlyOnceWith(statusPath);
+    expect(sdk.readRetryDraft).toHaveBeenLastCalledWith(id);
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(sdk.post).not.toHaveBeenCalled();
+  });
+
+  it.each(["unavailable", "wrong identity", "changed draft"] as const)(
+    "does not invent a recovery identity when %s", async fault => {
+      sdk.revisionBoundSubmission = true;
+      sdk.readRetryDraft.mockResolvedValue(snapshot);
+      if (fault === "unavailable") sdk.get.mockRejectedValueOnce(new Error("Unavailable"));
+      else if (fault === "wrong identity") sdk.get.mockResolvedValueOnce({ ...receipt, submissionId: next });
+      else {
+        sdk.get.mockResolvedValueOnce(receipt);
+        sdk.readRetryDraft.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(null);
+      }
+      render(<KarenCopilotControlledChat conversationId={THREAD} />);
+      act(() => input().onChange(text));
+      fireEvent.click(screen.getByRole("button", { name: "Check saved draft recovery" }));
+      await waitFor(() => expect(screen.getByText(/No existing submission could be verified|saved draft changed during recovery/)).toBeTruthy());
+      expect(screen.queryByRole("region", { name: "Unverified run recovery" })).toBeNull();
+      expect(sdk.runAgent).not.toHaveBeenCalled();
+      expect(sdk.post).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not replay a lost retry mutation and discovers a positively attested successor run", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(new Error("Connection lost"));
+    sdk.readRetryDraft.mockResolvedValue(snapshot);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => { input().onChange(text); input().onSubmitMessage(text); });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({ submission_id: id, eligible: true });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Prepare failed draft for retry" })).toBeTruthy());
+    sdk.post.mockRejectedValueOnce(new Error("Lost response"));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare failed draft for retry" }));
+    await waitFor(() => expect(screen.getByText(/Retry preparation could not be verified/)).toBeTruthy());
+    sdk.readRetryDraft.mockResolvedValueOnce(null).mockResolvedValueOnce({ ...snapshot, submissionId: next });
+    sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({ ...receipt, runId: "next-run", submissionId: next });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/newer saved submission was verified/)).toBeTruthy());
+    expect(sdk.get).toHaveBeenLastCalledWith("/api/copilotkit/agent/default/submissions/" + THREAD + "/" + next + "/status");
+    expect(sdk.post).toHaveBeenCalledTimes(1);
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
   });
 });

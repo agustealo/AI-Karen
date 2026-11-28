@@ -315,7 +315,10 @@ describe("read-only retained retry draft", () => {
     await flush();
     await act(async () => {
       expect(await result.current.readRetainedRetryDraft(identity)).toEqual({
-        text, attachmentReferences: references,
+        submissionId: identity, text, attachmentReferences: references,
+      });
+      expect(await result.current.readRetainedRetryDraft()).toEqual({
+        submissionId: identity, text, attachmentReferences: references,
       });
       expect(await result.current.readRetainedRetryDraft("draft-v1-7")).toBeNull();
       expect(await result.current.readRetainedRetryDraft(identity.replace("-7-", "-8-"))).toBeNull();

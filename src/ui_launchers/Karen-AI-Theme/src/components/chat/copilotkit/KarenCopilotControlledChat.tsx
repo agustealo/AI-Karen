@@ -24,18 +24,11 @@ import {
   KarenCopilotAssistantSlot,
   KarenCopilotUserSlot,
 } from "./KarenCopilotVerifiedHistory";
-import { useKarenPersistedDraft, MAX_DRAFT_ATTACHMENTS, type DraftAttachment } from "./useKarenPersistedDraft";
+import { useKarenPersistedDraft, MAX_DRAFT_ATTACHMENTS, retryIdentity, type DraftAttachment, type RetainedRetryDraft } from "./useKarenPersistedDraft";
 import { FileText, X } from "lucide-react";
 
 const MAX_INPUT_CHARS = 65536;
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
-function retryIdentity(submissionId: string): { revision: number; next: string } | null {
-  const match = /^(?:draft-v1-([1-9][0-9]{0,15})|draft-v2-([1-9][0-9]{0,15})-([a-f0-9]{64}))$/.exec(submissionId);
-  if (!match) return null;
-  const revision = Number(match[1] ?? match[2]);
-  if (!Number.isSafeInteger(revision) || revision >= Number.MAX_SAFE_INTEGER - 1) return null;
-  return { revision, next: match[3] ? "draft-v2-" + (revision + 1) + "-" + match[3] : "draft-v1-" + (revision + 1) };
-}
 type StopReceipt = {
   status: "cancelling" | "cancelled";
   cancel_requested: true;
@@ -57,6 +50,20 @@ function validRunStatus(value: unknown): value is RunStatus {
     typeof info.cancellation_confirmed === "boolean" &&
     (!info.cancellation_confirmed ||
       (info.status === "cancelled" && info.cancel_requested === true));
+}
+
+function validSubmissionStatus(value: unknown, id: string): value is RunStatus & { runId: string; submissionId: string } {
+  if (!validRunStatus(value)) return false;
+  const receipt = value as RunStatus & { runId?: unknown; submissionId?: unknown };
+  return receipt.submissionId === id && typeof receipt.runId === "string" && RUN_ID.test(receipt.runId);
+}
+
+function sameRetainedContent(a: RetainedRetryDraft, b: RetainedRetryDraft): boolean {
+  return a.text === b.text && a.attachmentReferences.length === b.attachmentReferences.length &&
+    a.attachmentReferences.every((ref, index) => {
+      const other = b.attachmentReferences[index];
+      return ref.source_id === other.source_id && ref.revision === other.revision;
+    });
 }
 
 function validStopReceipt(value: unknown): value is StopReceipt {
@@ -102,26 +109,31 @@ export function KarenCopilotControlledChat({
   const checkingFinalityRef = useRef(false);
   const [retryOffer, setRetryOffer] = useState<FinalityHold | null>(null);
   const retryScope = useRef<object | null>(null);
+  // Ephemeral reconciliation witness for an explicitly attempted mutation.
+  // Never persisted, never an execution grant or a successful CAS receipt.
+  const retryAttempt = useRef<{ hold: FinalityHold; snapshot: RetainedRetryDraft } | null>(null);
   const observedRunId = useRef<string | null>(null);
   // Correlation only, scoped to this explicit governed SDK invocation.
   const submittedIdentity = useRef<{ conversationId: string; submissionId: string } | null>(null);
   const holdUnverifiedRun = useCallback((failure: unknown, runId: string | null) => {
     const admissionConflict = isCopilotRunAdmissionConflict(failure);
-    if (!admissionConflict && !isCopilotRunFinalityUnverified(failure)) return false;
     const previous = finalityHoldRef.current;
     const submitted = submittedIdentity.current;
-    const submissionId = admissionConflict && submitted?.conversationId === conversationId
+    const submissionId = submitted?.conversationId === conversationId && retryIdentity(submitted.submissionId)
       ? submitted.submissionId : null;
+    if (!submissionId && !admissionConflict && !isCopilotRunFinalityUnverified(failure)) return false;
     if (previous?.conversationId !== conversationId ||
-        (admissionConflict && (previous.runId !== null ||
+        ((admissionConflict || submissionId) && (previous.runId !== null ||
           (previous.submissionId === null && submissionId !== null)))) {
       // The rejected transport ID may belong to a different attempt. Only
       // correlate against the original governed submission, never guess a run.
       const hold = {
-        conversationId, runId: admissionConflict ? null : runId, submissionId,
+        conversationId, runId: admissionConflict || submissionId ? null : runId, submissionId,
       };
       finalityHoldRef.current = hold;
       setFinalityHold(hold);
+      setRetryOffer(null);
+      retryAttempt.current = null;
       setFinalityFeedback(null);
     }
     setError(getCopilotRunFailureMessage(failure));
@@ -317,7 +329,7 @@ export function KarenCopilotControlledChat({
 
   const onSubmitMessage = useCallback((value: string) => {
     const text = typeof value === "string" ? value.trim() : "";
-    if (attachments.length > 0 || recoveryRun ||
+    if (attachments.length > 0 || recoveryRun || checkingFinalityRef.current ||
         finalityHoldRef.current?.conversationId === conversationId) {
       // The SDK synchronously emits onChange("") after onSubmitMessage even
       // when admission is rejected. Fence only that turn, not later user edits.
@@ -327,7 +339,7 @@ export function KarenCopilotControlledChat({
         if (rejectedAttachmentClear.current === rejected) rejectedAttachmentClear.current = null;
       });
     }
-    if (recoveryRun || finalityHoldRef.current?.conversationId === conversationId) {
+    if (recoveryRun || checkingFinalityRef.current || finalityHoldRef.current?.conversationId === conversationId) {
       setError("The previous run is unverified. Check its status and saved history before sending another message.");
       return;
     }
@@ -452,6 +464,52 @@ export function KarenCopilotControlledChat({
     prepareRevisionSubmission, prepareAttachmentSubmission, refreshSubmittedDraft,
   ]);
 
+  const discoverRetainedRun = useCallback(() => {
+    const scope = retryScope.current;
+    if (!scope || finalityHoldRef.current || checkingFinalityRef.current ||
+        submitPending.current || agent.isRunning || agent.threadId !== conversationId) return;
+    checkingFinalityRef.current = true;
+    setCheckingFinality(true);
+    setFinalityFeedback(null);
+    const current = () => mounted.current && retryScope.current === scope &&
+      !finalityHoldRef.current && agent.threadId === conversationId && !agent.isRunning;
+    void (async () => {
+      try {
+        const snapshot = await readRetainedRetryDraft();
+        if (!current()) return;
+        if (!snapshot || (snapshot.submissionId.startsWith("draft-v2-") && !attachmentDraftSubmission)) {
+          setFinalityFeedback("No exact saved draft was verified for recovery.");
+          return;
+        }
+        const id = snapshot.submissionId;
+        const receipt: unknown = await apiClient.get(
+          "/api/copilotkit/agent/default/submissions/" + conversationId + "/" + id + "/status",
+        );
+        if (!current()) return;
+        if (!validSubmissionStatus(receipt, id)) throw new Error("Invalid submission status");
+        // Verify the saved identity again after the ledger read. A peer
+        // revision or local edit must not attach recovery to another draft.
+        const retained = await readRetainedRetryDraft(id);
+        if (!current()) return;
+        if (!retained || !sameRetainedContent(snapshot, retained)) {
+          setFinalityFeedback("The saved draft changed during recovery. Check it again.");
+          return;
+        }
+        const hold = { conversationId, runId: null, submissionId: id };
+        finalityHoldRef.current = hold;
+        setFinalityHold(hold);
+        setRetryOffer(null);
+        retryAttempt.current = null;
+        setFinalityFeedback("An existing submission was verified. Check its run status and saved history before sending.");
+      } catch {
+        if (current()) setFinalityFeedback("No existing submission could be verified. This does not confirm that no run exists.");
+      } finally {
+        checkingFinalityRef.current = false;
+        if (mounted.current) setCheckingFinality(false);
+      }
+    })();
+  }, [agent, conversationId, readRetainedRetryDraft, attachmentDraftSubmission]);
+
   const checkUnverifiedFinality = useCallback(() => {
     const hold = finalityHoldRef.current;
     const identity = hold?.submissionId ?? hold?.runId;
@@ -470,12 +528,8 @@ export function KarenCopilotControlledChat({
         );
         if (!mounted.current || finalityHoldRef.current !== hold) return;
         if (!validRunStatus(result)) throw new Error("Invalid run status");
-        if (hold.submissionId) {
-          const receipt = result as RunStatus & { runId?: unknown; submissionId?: unknown };
-          if (receipt.submissionId !== hold.submissionId ||
-              typeof receipt.runId !== "string" || !RUN_ID.test(receipt.runId)) {
-            throw new Error("Invalid submission status");
-          }
+        if (hold.submissionId && !validSubmissionStatus(result, hold.submissionId)) {
+          throw new Error("Invalid submission status");
         }
         // Interrupted is an expired lease observation, not a durable
         // terminal receipt. Orphaned work may still need operator recovery.
@@ -510,6 +564,37 @@ export function KarenCopilotControlledChat({
           if (!mounted.current || finalityHoldRef.current !== hold || retryScope.current !== scope ||
               agent.threadId !== conversationId) return;
           if (!snapshot) {
+            const attempt = retryAttempt.current;
+            const identity = retryIdentity(id);
+            if (attempt?.hold === hold && identity) {
+              const successor = await readRetainedRetryDraft(identity.next);
+              if (!mounted.current || finalityHoldRef.current !== hold || retryScope.current !== scope ||
+                  agent.threadId !== conversationId) return;
+              if (successor && sameRetainedContent(attempt.snapshot, successor)) {
+                // A successor is not proof that our POST committed. Observe
+                // its own ledger identity; never resend POST or infer absence.
+                try {
+                  const nextStatus: unknown = await apiClient.get(
+                    "/api/copilotkit/agent/default/submissions/" + conversationId + "/" + identity.next + "/status",
+                  );
+                  if (!mounted.current || finalityHoldRef.current !== hold || retryScope.current !== scope ||
+                      agent.threadId !== conversationId) return;
+                  if (validSubmissionStatus(nextStatus, identity.next)) {
+                    const nextHold = { conversationId, runId: null, submissionId: identity.next };
+                    finalityHoldRef.current = nextHold;
+                    setFinalityHold(nextHold);
+                    retryAttempt.current = null;
+                    setFinalityFeedback("A newer saved submission was verified. Check its status and history before sending.");
+                    return;
+                  }
+                } catch {
+                  if (!mounted.current || finalityHoldRef.current !== hold || retryScope.current !== scope ||
+                      agent.threadId !== conversationId) return;
+                }
+                setFinalityFeedback("A newer saved draft with matching content was verified, but the retry receipt is unavailable. Sending remains blocked; reopen the conversation to review the saved draft.");
+                return;
+              }
+            }
             setFinalityFeedback("The original saved draft could not be verified. Sending remains blocked.");
             return;
           }
@@ -564,6 +649,7 @@ export function KarenCopilotControlledChat({
         const snapshot = await readRetainedRetryDraft(id);
         if (!current()) return;
         if (!snapshot) throw new Error("Original saved draft unavailable");
+        retryAttempt.current = { hold, snapshot };
         const receipt: unknown = await apiClient.post(
           "/api/copilotkit/agent/default/draft-retry/" + conversationId + "/" + id,
           { submitted_text: snapshot.text.trim(), attachment_references: snapshot.attachmentReferences },
@@ -576,8 +662,7 @@ export function KarenCopilotControlledChat({
         }
         const retained = await readRetainedRetryDraft(identity.next);
         if (!current()) return;
-        if (!retained || retained.text !== snapshot.text ||
-            JSON.stringify(retained.attachmentReferences) !== JSON.stringify(snapshot.attachmentReferences)) {
+        if (!retained || !sameRetainedContent(snapshot, retained)) {
           throw new Error("Retry draft readback mismatch");
         }
         // Only explicit preparation was authorized. The normal composer
@@ -585,6 +670,7 @@ export function KarenCopilotControlledChat({
         finalityHoldRef.current = null;
         setFinalityHold(null);
         setError(null);
+        retryAttempt.current = null;
         setFinalityFeedback("Draft prepared and verified. Review it and select Send when ready.");
       } catch {
         if (mounted.current && finalityHoldRef.current === hold) {
@@ -778,6 +864,13 @@ export function KarenCopilotControlledChat({
             </button>}
         </section>
       )}
+      {!finalityHold && revisionBoundSubmission && draftStatus === "ready" && draftSynced &&
+        draft.trim() && !recoveryRun && (!attachments.length || attachmentDraftSubmission) && (
+          <button type="button" disabled={checkingFinality || submitting || agent.isRunning}
+            onClick={discoverRetainedRun} className="self-start rounded-md border border-input px-3 py-2 text-sm">
+            Check saved draft recovery
+          </button>
+        )}
       {finalityFeedback && <p role="status" className="px-3 py-2 text-sm">{finalityFeedback}</p>}
       {stopStatus && <div className="flex flex-wrap items-center gap-2 border-b border-border/40 px-3 py-2">
         <p role="status" data-testid="karen-copilot-stop-status"

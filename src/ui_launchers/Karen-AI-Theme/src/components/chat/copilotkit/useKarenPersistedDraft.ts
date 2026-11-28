@@ -16,9 +16,18 @@ export type AttachmentSubmissionSnapshot = Readonly<{
 }>;
 type DraftRecord = { text: string; revision: number; attachment_references: DraftAttachment[] };
 export type RetainedRetryDraft = Readonly<{
+  submissionId: string;
   text: string;
   attachmentReferences: ReadonlyArray<Readonly<DraftAttachment>>;
 }>;
+
+export function retryIdentity(submissionId: string): { revision: number; next: string } | null {
+  const match = /^(?:draft-v1-([1-9][0-9]{0,15})|draft-v2-([1-9][0-9]{0,15})-([a-f0-9]{64}))$/.exec(submissionId);
+  if (!match) return null;
+  const revision = Number(match[1] ?? match[2]);
+  if (!Number.isSafeInteger(revision) || revision >= Number.MAX_SAFE_INTEGER - 1) return null;
+  return { revision, next: match[3] ? "draft-v2-" + (revision + 1) + "-" + match[3] : "draft-v1-" + (revision + 1) };
+}
 
 async function attachmentDigest(selection: DraftAttachment[]): Promise<string> {
   // Python canonical compact sorted-key JSON. Preserve array order.
@@ -536,28 +545,29 @@ export function useKarenPersistedDraft(conversationId: string) {
   // Retry preparation is deliberately read-only here. Never flush an edit
   // or use an optimistic local revision to reconstruct a failed identity.
   const readRetainedRetryDraft = useCallback(async (
-    submissionId: string,
+    expectedSubmissionId?: string,
   ): Promise<RetainedRetryDraft | null> => {
-    const match = /^(?:draft-v1-([1-9][0-9]{0,15})|draft-v2-([1-9][0-9]{0,15})-([a-f0-9]{64}))$/.exec(submissionId);
-    if (!match) return null;
-    const revision = Number(match[1] ?? match[2]);
-    if (!Number.isSafeInteger(revision) || revision >= Number.MAX_SAFE_INTEGER) return null;
+    if (expectedSubmissionId && !retryIdentity(expectedSubmissionId)) return null;
     const generation = generationRef.current;
     if (!await refresh(false) || generationRef.current !== generation) return null;
     const sequence = readSequenceRef.current;
+    const revision = revisionRef.current;
     const text = textRef.current;
     const selection = attachmentsRef.current.map(ref => ({ ...ref }));
     const current = () => activeRef.current && generationRef.current === generation &&
       readSequenceRef.current === sequence && statusRef.current === "ready" &&
       !busyRef.current && !dirtyRef.current && revisionRef.current === revision &&
       textRef.current === text && sameAttachments(attachmentsRef.current, selection);
-    if (!current() || !text.trim() || text.trim().length > 10000 ||
-        !validAttachments(selection) || (match[3] ? selection.length === 0 : selection.length !== 0)) return null;
+    if (revision === null || !Number.isSafeInteger(revision) || revision < 1 ||
+        revision >= Number.MAX_SAFE_INTEGER - 1 || !current() || !text.trim() ||
+        text.trim().length > 10000 || !validAttachments(selection)) return null;
     try {
-      if (match[3] && await attachmentDigest(selection) !== match[3]) return null;
-      if (!current()) return null;
+      const submissionId = selection.length
+        ? "draft-v2-" + revision + "-" + await attachmentDigest(selection)
+        : "draft-v1-" + revision;
+      if (!current() || (expectedSubmissionId && submissionId !== expectedSubmissionId)) return null;
       return Object.freeze({
-        text,
+        submissionId, text,
         attachmentReferences: Object.freeze(selection.map(ref => Object.freeze(ref))),
       });
     } catch {
