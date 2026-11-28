@@ -51,7 +51,12 @@ CONFIRM_RESTORE='I_UNDERSTAND_THIS_IS_DESTRUCTIVE' \
   bash scripts/deploy/database-restore.sh
 ```
 
-Verify restore behavior against an isolated recovery or staging database before using the procedure for an incident.
+Restore into an exclusively offline, fresh recovery database. The command
+checks the selected archive digest, refuses existing application relations,
+and stages the restore atomically. A successful restore is not authorization
+to serve recovered memories. Reconcile post-snapshot revocations and verify
+the recovery cutoff before admission (see [recovery runbook](../docs/operations/backup-recovery.md)).
+The target emptiness check is not a network isolation or concurrent-access lease.
 
 ## Storage Bucket Setup
 

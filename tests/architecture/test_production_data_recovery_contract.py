@@ -56,9 +56,14 @@ def test_restore_is_explicitly_destructive_and_checksum_guarded() -> None:
 
     assert "RESTORE_DATABASE_URL is required" in script
     assert "I_UNDERSTAND_THIS_IS_DESTRUCTIVE" in script
-    assert 'sha256sum --check "${CHECKSUM_FILE}"' in script
+    assert 'sha256sum < "${BACKUP_FILE}"' in script
+    assert "selected backup checksum mismatch" in script
+    assert "restore target contains existing relations" in script
+    assert script.index("restore target contains existing relations") < script.index("\npg_restore ")
     assert "--clean" in script
+    assert "--single-transaction" in script
     assert "--exit-on-error" in script
+    assert "recovery admission is not verified" in script
 
 
 def test_postgres_backup_does_not_claim_other_recovery_domains() -> None:

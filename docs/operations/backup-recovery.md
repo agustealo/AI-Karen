@@ -44,10 +44,18 @@ cannot independently prove current authorization. Do not admit a recovered
 memory authority to consumer traffic until recovery has been reconciled against
 a trusted revocation cutoff that was not rolled back with the snapshot.
 
-The implementation and disposable restore proof are outstanding. The existing
-restore checksum and destructive-action confirmation are not proof of this
-boundary. Operators must treat missing or unverifiable reconciliation evidence
-as a recovery hold, not as permission to serve governed memory.
+The guarded PostgreSQL restore command checks the selected archive digest,
+refuses targets containing existing application relations, and restores in a
+single transaction. Use an exclusively offline, fresh target; the catalog
+preflight is not a lease against concurrent access or proof of network isolation.
+A successful command reports staging only, never consumer admission.
+
+The disposable backup/restore regression deliberately demonstrates the unsafe
+pre-reconciliation state: an older snapshot can restore retired/revoked memory
+and replay receipts. Passing this diagnostic is NOT proof of recovery safety.
+Trusted cutoff reconciliation and automated admission remain outstanding.
+Operators must treat missing or unverifiable reconciliation evidence as a
+recovery hold, not as permission to serve governed memory.
 
 Required acceptance:
 
