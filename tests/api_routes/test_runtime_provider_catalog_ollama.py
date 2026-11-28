@@ -635,17 +635,18 @@ async def test_admin_hidden_model_is_excluded_without_disabling_other_live_model
     assert catalog.default_model == "qwen2.5:7b"
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["normal", "saved_mismatch", "registration_aba", "wire_changed"])
 async def test_selected_ollama_native_probe_is_recorded_before_chat_availability(
-    monkeypatch: pytest.MonkeyPatch,
+    monkeypatch: pytest.MonkeyPatch, scenario: str,
 ) -> None:
     """A successful selected-endpoint probe provides observed health, not static trust."""
     from ai_karen_engine.api_routes.models import settings as model_settings
     from ai_karen_engine.config.llm_provider_config import ProviderType
     from ai_karen_engine.core.model_runtime import provider_registry_service
     from ai_karen_engine.core.model_runtime.provider_health_monitor import (
-        ProviderHealthMonitor,
         HealthStatus,
     )
+    from dataclasses import replace
 
     provider = SimpleNamespace(
         name="ollama",
@@ -663,13 +664,11 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
         chat_model_visibility={},
     )
     manager = SimpleNamespace(list_providers=lambda: [provider])
-    monitor = ProviderHealthMonitor(
-        registry=SimpleNamespace(canonicalize_provider_id=lambda name: "ollama-local")
-    )
-    registry = SimpleNamespace(
-        canonicalize_provider_id=lambda name: "ollama-local",
-        health_monitor=monitor,
-    )
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    monitor = registry.health_monitor
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://host.docker.internal:11434/v1")
     monkeypatch.setattr(
         provider_registry_service, "get_provider_registry_service", lambda: registry
     )
@@ -688,7 +687,8 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
         lambda: SimpleNamespace(get_models_async=no_discovered_models),
     )
     monkeypatch.setattr(model_settings, "_get_provider_override", lambda name: {
-        "runtime_source": "host", "last_model": "qwen3:4b"
+        "runtime_source": "host", "last_model": "qwen3:4b",
+        **({"base_url": "http://other.local:11434/v1"} if scenario == "saved_mismatch" else {}),
     })
     monkeypatch.setattr(model_settings, "_get_api_key_status", lambda *args: "not_required")
     monkeypatch.setattr(model_settings, "_supports_base_url_override", lambda *_: False)
@@ -705,6 +705,11 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
     probe_available = True
 
     async def runtime_options() -> list[model_settings.RuntimeOptionPayload]:
+        if scenario == "registration_aba":
+            registry.register_provider_endpoint(replace(endpoint, default_model="other"))
+            registry.register_provider_endpoint(endpoint)
+        if scenario == "wire_changed":
+            monkeypatch.setenv("OLLAMA_BASE_URL", "http://other.local:11434/v1")
         return [
             model_settings.RuntimeOptionPayload(
                 source="host",
@@ -723,6 +728,13 @@ async def test_selected_ollama_native_probe_is_recorded_before_chat_availability
         current_user={"roles": ["user"]}
     )
     item = next(provider for provider in catalog.providers if provider.id == "ollama")
+    if scenario != "normal":
+        assert item.health.status == "unknown"
+        assert item.healthy is False
+        assert item.models[0].available is False
+        assert catalog.default_model == "auto"
+        assert monitor.get_provider_health("ollama").health_status == HealthStatus.UNKNOWN
+        return
     assert item.health.status == "healthy"
     assert item.models[0].available is True
     assert catalog.default_model == "qwen3:4b"

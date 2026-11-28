@@ -416,7 +416,7 @@ class ProviderRegistryService:
 
     def publish_endpoint_health(
         self, endpoint: ProviderEndpoint, registration: Optional[object], *,
-        is_healthy: bool, response_time: float, error_code: Optional[str] = None,
+        is_healthy: bool, response_time: Optional[float], error_code: Optional[str] = None,
     ) -> bool:
         """Compare and publish against the same registration critical section."""
         if registration is None:

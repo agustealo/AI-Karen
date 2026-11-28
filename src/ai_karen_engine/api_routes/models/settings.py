@@ -1440,27 +1440,62 @@ async def build_model_settings_payload() -> Dict[str, Any]:
         # Endpoint settings from storage
         override = _get_provider_override(provider.name)
         
-        # Runtime options for local providers
+        # Capture the actual inference destination and registry generation before
+        # the asynchronous runtime-option probes. A configured alias alone is
+        # not evidence that the selected option is the inference server.
         runtime_options = None
+        ollama_probe_published = False
+        selected_option = None
         if provider.name == "ollama":
-            runtime_options = await _get_ollama_runtime_options()
+            from ai_karen_engine.core.model_runtime.provider_execution import (
+                _resolve_base_url,
+            )
 
-        api_key_status = _get_api_key_status(provider.name, provider)
-        
-        # Ollama runtime options are measured with a native /api/tags probe.
-        # Publish only the selected endpoint's actual observation through the
-        # existing canonical health monitor, before reading its status. This
-        # is not an authorization grant or proof that any model is installed.
-        if provider.name == "ollama" and provider.enabled and runtime_options:
+            endpoint = None
+            registration = None
+            wire_url = None
+            if provider.enabled:
+                try:
+                    endpoint = canonical_registry.get_provider_endpoint(
+                        canonical_registry.canonicalize_provider_id(provider.name)
+                    )
+                    if endpoint is not None:
+                        registration = canonical_registry.capture_endpoint_health_registration(
+                            endpoint
+                        )
+                        wire_url = _resolve_base_url(endpoint)
+                except Exception:
+                    logger.warning("ollama_probe_registration_unavailable")
+            runtime_options = await _get_ollama_runtime_options()
             selected_source = override.get("runtime_source") or OLLAMA_HOST_RUNTIME
             selected_option = next(
                 (option for option in runtime_options if option.source == selected_source),
                 None,
             )
-            if selected_option is not None:
-                health_monitor.update_provider_health(
-                    provider.name, is_healthy=bool(selected_option.available)
-                )
+            try:
+                current_override = _get_provider_override(provider.name)
+                if (
+                    endpoint is not None and registration is not None
+                    and wire_url and selected_option is not None
+                    and current_override.get("runtime_source") == override.get("runtime_source")
+                    and current_override.get("base_url") == override.get("base_url")
+                    and _resolve_base_url(endpoint) == wire_url
+                    and _discovery_url_key(selected_option.base_url, ollama=True)
+                    == _discovery_url_key(wire_url, ollama=True)
+                    and (
+                        not override.get("base_url")
+                        or _discovery_url_key(override["base_url"], ollama=True)
+                        == _discovery_url_key(wire_url, ollama=True)
+                    )
+                ):
+                    ollama_probe_published = canonical_registry.publish_endpoint_health(
+                        endpoint, registration, is_healthy=bool(selected_option.available),
+                        response_time=None,
+                    )
+            except Exception:
+                logger.warning("ollama_probe_health_publication_unavailable")
+
+        api_key_status = _get_api_key_status(provider.name, provider)
 
         # Read the registry-owned observed health record by canonical ID.
         # Registration and configured keys never stand in for a successful
@@ -1491,15 +1526,18 @@ async def build_model_settings_payload() -> Dict[str, Any]:
             healthy = False
             degraded_reason = "Provider disabled"
             
-        # Local providers like Ollama are only configured if they have available runtime options
-        # or if a base_url has been manually set.
-        if provider.name == "ollama" and runtime_options:
-            active_source = override.get("runtime_source") or "host"
-            active_option = next(
-                (opt for opt in runtime_options if opt.source == active_source),
-                None,
-            )
-            if active_option is None or not active_option.available:
+        # An unrelated or superseded option must not certify the selected
+        # installation, even if the alias has an earlier healthy observation.
+        if provider.name == "ollama" and provider.enabled:
+            if not ollama_probe_published:
+                healthy = False
+                health_status = "unknown"
+                health_last_checked_at = None
+                degraded_reason = "Ollama selected endpoint health unverified"
+            if (
+                (ollama_probe_published or not override.get("base_url"))
+                and (selected_option is None or not selected_option.available)
+            ):
                 is_configured = False
                 healthy = False
                 degraded_reason = "Selected Ollama runtime is unavailable"
