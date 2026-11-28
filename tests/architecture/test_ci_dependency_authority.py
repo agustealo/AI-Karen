@@ -133,3 +133,20 @@ def test_dev_fast_frontend_preserves_required_merge_gate() -> None:
     assert "npm run build" in gate
     assert "Publish fail-closed merge decision" in gate
     assert "ci:merge-gate" in gate
+
+
+def test_main_quality_supabase_sdk_matches_runtime_pin() -> None:
+    """The real Storage SDK proof must use the same exact pin as production."""
+    runtime_pins = [
+        line.strip() for line in (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("supabase==")
+    ]
+    quality_pins = [
+        line.strip() for line in (ROOT / "requirements/ci/quality.txt").read_text(encoding="utf-8").splitlines()
+        if line.strip().startswith("supabase==")
+    ]
+    assert len(runtime_pins) == 1
+    assert quality_pins == runtime_pins
+    workflow = _workflow_text(".github/workflows/main-quality-gate.yml")
+    assert "python -m pip install -r requirements/ci/quality.txt" in workflow
+    assert "pytest tests/integrations/test_supabase_current_environment.py -q" in workflow
