@@ -86,6 +86,9 @@ def _register_canonical_routes(app: FastAPI) -> None:
 
 def create_app() -> FastAPI:
     """Construct the canonical AI KAREN ASGI application directly."""
+    from ai_karen_engine.config.database import require_database_recovery_not_held
+
+    require_database_recovery_not_held()
     # Uvicorn configures access logging before loading the application factory.
     # Install the existing privacy boundary on this canonical entrypoint,
     # independently of optional or legacy logging configuration.

@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import AsyncGenerator, Generator, Optional
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import create_engine, event, text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
@@ -26,9 +26,18 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import QueuePool
 
-from ai_karen_engine.config.database import get_database_settings
+from ai_karen_engine.config.database import (
+    get_database_settings,
+    require_database_recovery_not_held,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _guard_recovery_checkout(dbapi_connection, connection_record, connection_proxy) -> None:
+    # Existing session factories may outlive initialization. Check every
+    # canonical pool checkout; this does not cancel transactions in flight.
+    require_database_recovery_not_held()
 
 
 @dataclass
@@ -72,6 +81,7 @@ class PostgresEngine:
 
     def initialize(self) -> None:
         """Create engines and session factories. Idempotent."""
+        require_database_recovery_not_held()
         if self._engine is not None:
             return
 
@@ -106,6 +116,9 @@ class PostgresEngine:
             hide_parameters=True,
         )
 
+        event.listen(self._engine, "checkout", _guard_recovery_checkout)
+        event.listen(self._async_engine.sync_engine, "checkout", _guard_recovery_checkout)
+
         self._session_factory = sessionmaker(
             autocommit=False,
             autoflush=False,
@@ -124,24 +137,28 @@ class PostgresEngine:
 
     @property
     def engine(self):
+        require_database_recovery_not_held()
         if self._engine is None:
             self.initialize()
         return self._engine
 
     @property
     def async_engine(self):
+        require_database_recovery_not_held()
         if self._async_engine is None:
             self.initialize()
         return self._async_engine
 
     @property
     def session_factory(self):
+        require_database_recovery_not_held()
         if self._session_factory is None:
             self.initialize()
         return self._session_factory
 
     @property
     def async_session_factory(self):
+        require_database_recovery_not_held()
         if self._async_session_factory is None:
             self.initialize()
         return self._async_session_factory

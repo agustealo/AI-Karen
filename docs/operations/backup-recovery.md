@@ -153,6 +153,22 @@ discover the final epoch, certify source fencing, or authorize promotion.
 Production inventory and trusted key custody require separate infrastructure
 acceptance; the CI test signs synthetic evidence using disposable keys only.
 
+### Explicit application recovery hold
+
+Set KAREN_DATABASE_RECOVERY_MODE=hold in the actual process environment
+before starting the canonical ASGI application against recovery infrastructure.
+The application factory and lifespan reject startup before router wiring or
+service acquisition. The canonical PostgreSQL engine rejects initialization,
+factory access and new pool checkouts. Invalid mode values also deny.
+The default normal preserves existing non-recovery deployments; the absence
+of a hold is not proof that a database has been safely recovered. This is not
+a live distributed kill switch: stop/drain all processes, fence credentials
+and network access, and keep independent workers, direct database clients
+and legacy entrypoints isolated. Existing checked-out connections are not
+revoked by this check. No signed diagnostic automatically clears the hold.
+Do not set normal for a recovered target until the separate admission protocol
+is independently verified. No global enforcement claim is made.
+
 Required acceptance:
 
 - Restore a pre-revocation backup into an isolated disposable database after
