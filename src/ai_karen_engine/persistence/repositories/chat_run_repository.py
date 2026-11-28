@@ -1150,8 +1150,8 @@ class SqlChatRunRepository:
     async def read_failed_draft_revision(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
         submission_id: str,
-    ) -> Optional[int]:
-        """Observe exact retained retry eligibility without granting mutation."""
+    ) -> dict[str, Any]:
+        """Observe eligibility and causal preparation in one scoped SQL snapshot."""
         revision = _retry_draft_revision(submission_id)
         digest = draft_attachment_digest_from_submission_id(submission_id)
         from ai_karen_engine.services.database.repositories.conversation_repository import (
@@ -1164,40 +1164,63 @@ class SqlChatRunRepository:
             "conversation": _uuid(conversation_id),
             "submission_id": submission_id, "revision": revision,
         }
+        # An existing successor execution, even terminal and retaining its
+        # draft, owns its own recovery identity. Do not advertise it as a
+        # fresh prepared submission from the original failed run.
+        scope["successor_id"] = (
+            f"draft-v2-{revision + 1}-{digest}" if digest is not None
+            else f"draft-v1-{revision + 1}"
+        )
+        observation: dict[str, Any] = {
+            "eligible": False, "prepared_revision": None, "prepared_current": False,
+        }
         async with async_transaction_scope(
             scope["tenant"], user_id=scope["owner"],
         ) as session:
             result = await session.execute(text(f"""
-                SELECT d.draft_text, d.attachment_references
-                FROM public.conversation_composer_drafts d
-                WHERE d.tenant_id = CAST(:tenant AS uuid)
-                  AND d.user_id = CAST(:owner AS uuid)
-                  AND d.conversation_id = CAST(:conversation AS uuid)
-                  AND d.revision = :revision
-                  AND EXISTS (
-                    SELECT 1 FROM public.runtime_chat_runs r
-                    WHERE r.tenant_id = d.tenant_id AND r.user_id = d.user_id
-                      AND r.conversation_id = d.conversation_id
-                      AND r.submission_id = :submission_id
-                      AND {_DRAFT_RETRY_TERMINAL}
-                  )
+                SELECT r.retry_prepared_revision, d.draft_text, d.attachment_references
+                FROM public.runtime_chat_runs r
+                LEFT JOIN public.conversation_composer_drafts d
+                  ON d.tenant_id = r.tenant_id AND d.user_id = r.user_id
+                  AND d.conversation_id = r.conversation_id
+                  AND d.revision = COALESCE(r.retry_prepared_revision, :revision)
                   AND {_DRAFT_RETRY_NO_UNRESOLVED}
+                  AND (
+                    r.retry_prepared_revision IS NULL OR NOT EXISTS (
+                        SELECT 1 FROM public.runtime_chat_runs successor
+                        WHERE successor.tenant_id = r.tenant_id
+                          AND successor.user_id = r.user_id
+                          AND successor.conversation_id = r.conversation_id
+                          AND successor.submission_id = :successor_id
+                    )
+                  )
+                WHERE r.tenant_id = CAST(:tenant AS uuid)
+                  AND r.user_id = CAST(:owner AS uuid)
+                  AND r.conversation_id = CAST(:conversation AS uuid)
+                  AND r.submission_id = :submission_id
+                  AND {_DRAFT_RETRY_TERMINAL}
             """), scope)
             row = result.mappings().one_or_none()
             if row is None:
-                return None
+                return observation
+            prepared = row["retry_prepared_revision"]
+            if prepared is not None and (type(prepared) is not int or prepared != revision + 1):
+                raise RuntimeError("invalid_durable_retry_receipt")
+            observation["prepared_revision"] = prepared
             saved = row["draft_text"]
+            if not isinstance(saved, str) or not saved.strip() or len(saved.strip()) > 10000:
+                return observation
             refs = validate_draft_attachment_references(row["attachment_references"])
             if (
-                not isinstance(saved, str) or not saved.strip()
-                or len(saved.strip()) > 10000
-                or (digest is None and refs)
+                (digest is None and refs)
                 or (digest is not None and (
                     not refs or draft_attachment_selection_digest(refs) != digest
                 ))
             ):
-                return None
-            return revision
+                return observation
+            observation["eligible"] = prepared is None
+            observation["prepared_current"] = prepared is not None
+            return observation
 
     async def advance_failed_draft_revision(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
@@ -1207,8 +1230,9 @@ class SqlChatRunRepository:
         """Advance exactly one retained failed/cancelled draft; never execute.
 
         The caller must have authorized an explicit retry of this submission.
-        The original ledger row remains immutable. A repeated or lost-receipt
-        request cannot advance twice because the original revision is fenced.
+        Terminal execution evidence remains immutable. Record only the causal
+        retry receipt on the original row, in the same transaction as the CAS.
+        Repeated requests cannot advance twice or overwrite the receipt.
         Normal admission still checks the new revision and all runtime policy.
         """
         revision = _retry_draft_revision(submission_id)
@@ -1249,9 +1273,11 @@ class SqlChatRunRepository:
                   AND conversation_id = CAST(:conversation AS uuid)
                   AND submission_id = :submission_id
                   AND {_DRAFT_RETRY_TERMINAL}
+                  AND retry_prepared_revision IS NULL
                 FOR UPDATE
             """), scope)
-            if eligible.scalar_one_or_none() is None:
+            execution_id = eligible.scalar_one_or_none()
+            if execution_id is None:
                 return None
             if not await PostgresConversationRepository.lock_matching_submission_draft(
                 session, tenant_id=scope["tenant"], user_id=scope["owner"],
@@ -1274,7 +1300,28 @@ class SqlChatRunRepository:
                 RETURNING revision
             """), scope)
             result = advanced.scalar_one_or_none()
-            return int(result) if result is not None else None
+            if result is None:
+                return None
+            if type(result) is not int or result != revision + 1:
+                raise RuntimeError("invalid_retry_revision_advance")
+            recorded = await session.execute(text(f"""
+                UPDATE public.runtime_chat_runs
+                SET retry_prepared_revision = :prepared_revision,
+                    retry_prepared_at = clock_timestamp()
+                WHERE execution_id = CAST(:execution AS uuid)
+                  AND tenant_id = CAST(:tenant AS uuid)
+                  AND user_id = CAST(:owner AS uuid)
+                  AND conversation_id = CAST(:conversation AS uuid)
+                  AND submission_id = :submission_id
+                  AND {_DRAFT_RETRY_TERMINAL}
+                  AND retry_prepared_revision IS NULL
+                RETURNING retry_prepared_revision
+            """), {**scope, "execution": str(execution_id), "prepared_revision": result})
+            marker = recorded.scalar_one_or_none()
+            if type(marker) is not int or marker != result:
+                # Never commit a draft advance without its causal evidence.
+                raise RuntimeError("retry_receipt_not_recorded")
+            return result
 
     async def read_status(
         self, *, tenant_id: str, user_id: str, conversation_id: str,

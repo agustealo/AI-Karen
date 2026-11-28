@@ -283,6 +283,13 @@ if [[ "${draft_schema_status}" != "ready" ]]; then
   exit 1
 fi
 
+# Reuse the production schema preflight for the receipt contract, rather
+# than maintain a second set of causal receipt predicates in smoke.
+# This disposable smoke database uses its provisioned role; production
+# deployment must additionally verify the actual runtime database role.
+docker exec -i -e DATABASE_URL="postgresql://${DB_USER}:${DB_PASSWORD}@127.0.0.1:5432/${DB_NAME}" \
+  "${POSTGRES_CONTAINER}" bash -s < scripts/deploy/verify-composer-draft-schema.sh
+
 echo "[smoke] booting production API image"
 start_api
 

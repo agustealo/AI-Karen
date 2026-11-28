@@ -113,6 +113,7 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
                 "20261125010000_74_runtime_chat_single_active_run.sql",
                 "20261125020000_75_runtime_chat_submission_identity.sql",
                 "20261125030000_76_runtime_chat_unresolved_run.sql",
+                "20261128010000_79_runtime_chat_retry_receipt.sql",
             ):
                 await raw.driver_connection.execute(
                     (migrations / name).read_text(encoding="utf-8")
@@ -830,11 +831,17 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
                 attachment_references=refs,
             )
 
-        async def retry_eligibility(lease, *, principal=owner, tid=tenant):
+        async def retry_observation(lease, *, principal=owner, tid=tenant):
             return await runs.read_failed_draft_revision(
                 tenant_id=tid, user_id=principal, conversation_id=conversation,
                 submission_id=lease.submission_id,
             )
+
+        async def retry_eligibility(lease, *, principal=owner, tid=tenant):
+            observed = await retry_observation(lease, principal=principal, tid=tid)
+            if observed["eligible"]:
+                return int(lease.submission_id.split("-")[2])
+            return None
 
         assert await retry_eligibility(completing) is None
         assert await retry_eligibility(cancelled, principal=other_owner) is None
@@ -859,6 +866,11 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
                 """), {"tenant": tenant, "owner": owner,
                        "conversation": conversation})).scalar_one()
                 assert revision == 8
+                marker = (await session.execute(text("""
+                    SELECT retry_prepared_revision FROM public.runtime_chat_runs
+                    WHERE execution_id = CAST(:execution AS uuid)
+                """), {"execution": cancelled.execution_id})).scalar_one()
+                assert marker == 8
                 raise RuntimeError("controlled retry rollback")
 
         with monkeypatch.context() as fault:
@@ -866,6 +878,7 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
             with pytest.raises(RuntimeError, match="controlled retry rollback"):
                 await retry(cancelled, newer.data["text"], [active_ref])
         assert await retry_eligibility(cancelled) == 7
+        assert (await retry_observation(cancelled))["prepared_revision"] is None
         assert await observe(cancelled) == ("cancelled", 0)
         assert (await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
@@ -878,6 +891,13 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
             retry(cancelled, newer.data["text"], [active_ref]),
         )
         assert retried.count(8) == 1 and retried.count(None) == 1
+        assert await retry_observation(cancelled) == {
+            "eligible": False, "prepared_revision": 8, "prepared_current": True,
+        }
+        for principal, tid in [(other_owner, tenant), (owner, other_tenant)]:
+            assert await retry_observation(cancelled, principal=principal, tid=tid) == {
+                "eligible": False, "prepared_revision": None, "prepared_current": False,
+            }
         assert await retry_eligibility(cancelled) is None
         assert await retry(cancelled, newer.data["text"], [active_ref]) is None
         assert await observe(cancelled) == ("cancelled", 0)
@@ -886,9 +906,18 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         )).data == {**newer.data, "revision": 8}
         failed_retry = await admit("retry-fails", 8, [active_ref], newer.data["text"])
         assert failed_retry is not None
+        assert await retry_observation(cancelled) == {
+            "eligible": False, "prepared_revision": 8, "prepared_current": False,
+        }
         assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
         assert await retry_eligibility(failed_retry) is None
         assert await runs.finish(failed_retry, status="failed", error_code="CHAT_TEST_TERMINAL")
+        # The successor's failed terminal state retains the same draft and
+        # removes the unresolved fence, but it has already been admitted.
+        # Only the successor can now authorize another retry preparation.
+        assert await retry_observation(cancelled) == {
+            "eligible": False, "prepared_revision": 8, "prepared_current": False,
+        }
         assert await retry_eligibility(failed_retry) == 8
         # A successful database commit followed by a lost response must
         # not allow the old submission to advance a second time.
@@ -903,6 +932,9 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
             with pytest.raises(RuntimeError, match="controlled lost retry receipt"):
                 await retry(failed_retry, newer.data["text"], [active_ref])
         assert await retry_eligibility(failed_retry) is None
+        assert await retry_observation(failed_retry) == {
+            "eligible": False, "prepared_revision": 9, "prepared_current": True,
+        }
         assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
         assert (await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
@@ -912,6 +944,9 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         # A newer explicit edit is never overwritten by retry recovery.
         latest = await write(9, [active_ref], "Newer retry draft")
         assert latest.success and latest.data["revision"] == 10
+        assert await retry_observation(failed_retry) == {
+            "eligible": False, "prepared_revision": 9, "prepared_current": False,
+        }
         assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
         assert (await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,

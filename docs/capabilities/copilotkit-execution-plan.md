@@ -467,6 +467,12 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-27: KEXP-042A.6D6 staged durable receipt authority
+
+- **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** extend the existing scoped run ledger with nullable causal retry evidence, atomically recorded alongside the exact retained draft CAS. Existing authorized GET distinguishes historical preparation from current successor eligibility; no inferred receipts, new table, endpoint or execution grant. Canonical migration 79 has no historical backfill. Extend the existing deployment schema preflight and reuse it in first-boot smoke.
+- **Proof:** repository, ingress, coordinator and disposable PostgreSQL regressions cover failed marker write, rollback, lost commit response, concurrent retry, cross-owner denial and later draft edit. Added preflight contract assertions. Staging source only; fresh execution and review, integrated main reconciliation, migration readiness and signed browser/Storage/model acceptance outstanding. All related checklist tasks remain open.
+- **Reconciliation:** prior exact head `3b83c95454352b667d97f9e99e8d15139b932fb0` passed 17/17 distinct source workflows. Preserve all eleven non-ledger candidate blobs against main `31fa5ba729a3b36c40ccb1a22522edd847506230`; fresh combined-head CI and independent review required. No deployment or migration execution.
+
 ### 2026-11-24: KIS-UX-02B governed general search, PR #1292
 
 - **KCON-213 / KCON-260 / KCON-750, SOURCE_CANDIDATE:** Reuses ChatRuntime and CORTEX admission for typed general-search retrieval options in HTTP/SSE; propagates the original authorized plan and cumulative execution meter through primary retrieval and eligible Intelligent Search fallback. Source-matched supporting citations in the three synchronized plugin UI distributions are not claim-level verification. Unsupported specialized/crawl options retain the existing plugin path; runtime denial does not trigger a UI retry. No new orchestrator or provider registry.

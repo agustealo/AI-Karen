@@ -16,6 +16,7 @@ PGCONNECT_TIMEOUT="${PGCONNECT_TIMEOUT:-10}" psql "${DATABASE_URL}" \
 DO $$
 DECLARE
     drafts regclass := to_regclass('public.conversation_composer_drafts');
+    runs regclass := to_regclass('public.runtime_chat_runs');
     policy_count integer;
     fk_count integer;
     policy_qual text;
@@ -106,6 +107,39 @@ BEGIN
        OR NOT has_table_privilege(current_user, drafts, 'INSERT')
        OR NOT has_table_privilege(current_user, drafts, 'UPDATE') THEN
         RAISE EXCEPTION 'composer_draft_runtime_grant_missing';
+    END IF;
+    -- Causal retry evidence belongs to the existing scoped run ledger.
+    IF runs IS NULL OR NOT EXISTS (
+        SELECT 1 FROM pg_class WHERE oid = runs AND relrowsecurity AND relforcerowsecurity
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_policies WHERE schemaname = 'public'
+          AND tablename = 'runtime_chat_runs'
+          AND policyname = 'runtime_chat_run_scoped_execution'
+          AND cmd = 'ALL'
+          AND qual LIKE '%app.current_tenant_id%'
+          AND qual LIKE '%app.current_user_id%'
+          AND with_check LIKE '%app.current_tenant_id%'
+          AND with_check LIKE '%app.current_user_id%'
+    ) THEN
+        RAISE EXCEPTION 'chat_retry_ledger_security_missing';
+    END IF;
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = runs
+          AND attname = 'retry_prepared_revision' AND atttypid = 'bigint'::regtype
+          AND NOT attnotnull AND NOT attisdropped
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_attribute WHERE attrelid = runs
+          AND attname = 'retry_prepared_at' AND atttypid = 'timestamptz'::regtype
+          AND NOT attnotnull AND NOT attisdropped
+    ) OR NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conrelid = runs
+          AND conname = 'ck_runtime_chat_retry_receipt' AND contype = 'c' AND convalidated
+    ) THEN
+        RAISE EXCEPTION 'chat_retry_receipt_contract_missing: apply canonical migration 79';
+    END IF;
+    IF NOT has_table_privilege(current_user, runs, 'SELECT')
+       OR NOT has_table_privilege(current_user, runs, 'UPDATE') THEN
+        RAISE EXCEPTION 'chat_retry_ledger_runtime_privilege_missing';
     END IF;
     RAISE NOTICE 'composer_draft_schema_ready';
 END

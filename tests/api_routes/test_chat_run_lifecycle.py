@@ -846,7 +846,7 @@ async def test_retry_coordinator_reauthorizes_before_repository(monkeypatch, mut
     monkeypatch.setattr(chat_run_lifecycle, "get_conversation_runtime_gateway",
                         lambda: SimpleNamespace(require_owned_conversation=ownership))
     repo = SimpleNamespace(
-        read_failed_draft_revision=AsyncMock(return_value=7),
+        read_failed_draft_revision=AsyncMock(return_value={"eligible": True, "prepared_revision": None, "prepared_current": False}),
         advance_failed_draft_revision=AsyncMock(return_value=8),
     )
     coordinator = ChatRunCoordinator(repo)
@@ -863,7 +863,9 @@ async def test_retry_coordinator_reauthorizes_before_repository(monkeypatch, mut
         repo.read_failed_draft_revision.assert_not_awaited()
         repo.advance_failed_draft_revision.assert_not_awaited()
     else:
-        assert await invoke() == (8 if mutation else 7)
+        assert await invoke() == (8 if mutation else {
+            "eligible": True, "prepared_revision": None, "prepared_current": False,
+        })
         operation = repo.advance_failed_draft_revision if mutation else repo.read_failed_draft_revision
         operation.assert_awaited_once_with(
             tenant_id=TENANT_A, user_id=USER_A, conversation_id=THREAD,
