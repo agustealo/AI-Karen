@@ -904,3 +904,72 @@ def test_attested_attachment_history_projects_count_without_private_reference():
     answer.metadata["verified_attachment_receipt_v1"] = {**private, "references": []}
     with pytest.raises(UnreplayableHistory):
         project_owned_history(snapshot, attestations=attested(snapshot))
+
+
+@pytest.mark.parametrize("ordinal", [0, -1, 3, 13, True, 1.0, "1", None])
+def test_historical_attachment_resolver_rejects_invalid_ordinal(ordinal):
+    from ai_karen_engine.core.runtime.conversation_runtime_gateway import OwnedHistoryEvidence
+    from ai_karen_engine.core.runtime.owned_history_projection import resolve_owned_historical_attachment
+
+    evidence = OwnedHistoryEvidence(saved([]), None, {}, {}, False)
+    with pytest.raises(UnreplayableHistory):
+        resolve_owned_historical_attachment(evidence, assistant_message_id=ASSISTANT_ID, ordinal=ordinal)
+
+
+def test_historical_attachment_resolver_uses_exact_ordered_attested_pair():
+    from ai_karen_engine.core.runtime.conversation_runtime_gateway import OwnedHistoryEvidence
+    from ai_karen_engine.core.runtime.owned_history_projection import resolve_owned_historical_attachment
+    from ai_karen_engine.services.database.repositories.conversation_repository import (
+        build_completed_attachment_receipt, draft_attachment_selection_digest,
+    )
+
+    shared = {
+        "source": "chat_runtime", "request_id": REQUEST_ID, "correlation_id": "corr",
+        "session_id": "owned-session", "conversation_id": THREAD, "authorized_user_id": USER,
+    }
+    original = Message(
+        id="original-user", conversation_id=THREAD, tenant_id=TENANT, role="user",
+        content="question", metadata={**shared, "transcript_actor": "user"},
+    )
+    refs = [
+        {"source_id": "55555555-5555-4555-8555-555555555555", "revision": "a" * 64},
+        {"source_id": "66666666-6666-4666-8666-666666666666", "revision": "b" * 64},
+    ]
+    submission = "draft-v2-4-" + draft_attachment_selection_digest(refs)
+    private = build_completed_attachment_receipt(original, submission, refs)
+    answer = assistant({
+        **shared, "transcript_actor": "assistant", "verified_attachment_receipt_v1": private,
+    })
+    snapshot = saved([original, answer])
+    proof = attested(snapshot)
+    evidence = OwnedHistoryEvidence(snapshot, None, proof, {}, False)
+
+    def resolve(current=evidence, identifier=ASSISTANT_ID, ordinal=2):
+        return resolve_owned_historical_attachment(
+            current, assistant_message_id=identifier, ordinal=ordinal,
+        )
+
+    assert resolve(ordinal=1) == refs[0]
+    selected = resolve()
+    assert selected == refs[1]
+    selected["revision"] = "changed"
+    assert resolve() == refs[1]
+    for bad in (
+        OwnedHistoryEvidence(snapshot, None, {}, {}, False),
+        OwnedHistoryEvidence(snapshot, None, proof, {}, True),
+        OwnedHistoryEvidence(saved([answer]), None, proof, {}, False),
+        OwnedHistoryEvidence(saved([answer, original]), None, proof, {}, False),
+    ):
+        with pytest.raises(UnreplayableHistory):
+            resolve(bad)
+    with pytest.raises(UnreplayableHistory):
+        resolve(identifier=original.id)
+    with pytest.raises(UnreplayableHistory):
+        resolve(ordinal=3)
+    original.content = "tampered"
+    with pytest.raises(UnreplayableHistory):
+        resolve()
+    original.content = "question"
+    answer.metadata["verified_attachment_receipt_v1"]["references"].reverse()
+    with pytest.raises(UnreplayableHistory):
+        resolve()

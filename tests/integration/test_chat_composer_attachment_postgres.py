@@ -821,6 +821,119 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
             finally:
                 await session.rollback()
 
+        # Explicit retry only advances the original retained revision. The
+        # completed/cancelled ledger rows and transcript are never rewritten.
+        async def retry(lease, content, refs, *, principal=owner, tid=tenant):
+            return await runs.advance_failed_draft_revision(
+                tenant_id=tid, user_id=principal, conversation_id=conversation,
+                submission_id=lease.submission_id, submitted_text=content,
+                attachment_references=refs,
+            )
+
+        async def retry_eligibility(lease, *, principal=owner, tid=tenant):
+            return await runs.read_failed_draft_revision(
+                tenant_id=tid, user_id=principal, conversation_id=conversation,
+                submission_id=lease.submission_id,
+            )
+
+        assert await retry_eligibility(completing) is None
+        assert await retry_eligibility(cancelled, principal=other_owner) is None
+        assert await retry_eligibility(cancelled, tid=other_tenant) is None
+        assert await retry_eligibility(cancelled) == 7
+        assert await retry(completing, attached.data["text"], [active_ref]) is None
+        assert await retry(cancelled, newer.data["text"], [active_ref], principal=other_owner) is None
+        assert await retry(cancelled, newer.data["text"], [active_ref], tid=other_tenant) is None
+        assert await retry(cancelled, "different text", [active_ref]) is None
+        # A failure after the SQL UPDATE but before commit must roll back
+        # the revision, preserving eligibility. Observe the write inside
+        # the actual transaction before injecting the failure.
+        @asynccontextmanager
+        async def rollback_retry_scope(tenant_id, *, user_id):
+            async with real_scope(tenant_id, user_id=user_id) as session:
+                yield session
+                revision = (await session.execute(text("""
+                    SELECT revision FROM public.conversation_composer_drafts
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                """), {"tenant": tenant, "owner": owner,
+                       "conversation": conversation})).scalar_one()
+                assert revision == 8
+                raise RuntimeError("controlled retry rollback")
+
+        with monkeypatch.context() as fault:
+            fault.setattr(chat_run_repository, "async_transaction_scope", rollback_retry_scope)
+            with pytest.raises(RuntimeError, match="controlled retry rollback"):
+                await retry(cancelled, newer.data["text"], [active_ref])
+        assert await retry_eligibility(cancelled) == 7
+        assert await observe(cancelled) == ("cancelled", 0)
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == newer.data
+
+        # Two explicit retry requests for the same original identity may
+        # produce at most one revision advance.
+        retried = await asyncio.gather(
+            retry(cancelled, newer.data["text"], [active_ref]),
+            retry(cancelled, newer.data["text"], [active_ref]),
+        )
+        assert retried.count(8) == 1 and retried.count(None) == 1
+        assert await retry_eligibility(cancelled) is None
+        assert await retry(cancelled, newer.data["text"], [active_ref]) is None
+        assert await observe(cancelled) == ("cancelled", 0)
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == {**newer.data, "revision": 8}
+        failed_retry = await admit("retry-fails", 8, [active_ref], newer.data["text"])
+        assert failed_retry is not None
+        assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
+        assert await retry_eligibility(failed_retry) is None
+        assert await runs.finish(failed_retry, status="failed", error_code="CHAT_TEST_TERMINAL")
+        assert await retry_eligibility(failed_retry) == 8
+        # A successful database commit followed by a lost response must
+        # not allow the old submission to advance a second time.
+        @asynccontextmanager
+        async def lost_retry_receipt_scope(tenant_id, *, user_id):
+            async with real_scope(tenant_id, user_id=user_id) as session:
+                yield session
+            raise RuntimeError("controlled lost retry receipt")
+
+        with monkeypatch.context() as fault:
+            fault.setattr(chat_run_repository, "async_transaction_scope", lost_retry_receipt_scope)
+            with pytest.raises(RuntimeError, match="controlled lost retry receipt"):
+                await retry(failed_retry, newer.data["text"], [active_ref])
+        assert await retry_eligibility(failed_retry) is None
+        assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == {**newer.data, "revision": 9}
+        assert await observe(failed_retry) == ("failed", 0)
+        assert await admit("retry-original-replay", 8, [active_ref], newer.data["text"]) is None
+        # A newer explicit edit is never overwritten by retry recovery.
+        latest = await write(9, [active_ref], "Newer retry draft")
+        assert latest.success and latest.data["revision"] == 10
+        assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == latest.data
+        # Expired leases and orphaned rows remain unresolved, not retryable.
+        expired = await admit("retry-expired", 10, [active_ref], latest.data["text"])
+        assert expired is not None
+        async with real_scope(tenant, user_id=owner) as session:
+            await session.execute(text("""
+                UPDATE public.runtime_chat_runs
+                SET lease_expires_at = NOW() - INTERVAL '1 second'
+                WHERE execution_id = CAST(:execution AS uuid)
+            """), {"execution": expired.execution_id})
+        assert await retry_eligibility(expired) is None
+        assert await retry(expired, latest.data["text"], [active_ref]) is None
+        assert await admit("retry-orphan-reconcile", 10, [active_ref], latest.data["text"]) is None
+        assert await observe(expired) == ("orphaned", 0)
+        assert await retry_eligibility(expired) is None
+        assert await retry(expired, latest.data["text"], [active_ref]) is None
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == latest.data
         assert issuer.revalidate_issued_session_in_transaction.await_count >= 5
         for call in issuer.revalidate_issued_session_in_transaction.await_args_list:
             assert isinstance(call.args[3], AsyncSession)

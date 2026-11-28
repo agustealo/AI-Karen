@@ -11,6 +11,7 @@ from sqlalchemy import delete, select
 from ai_karen_engine.core.memory.signals import MemorySignal
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 from ai_karen_engine.platform.memory.postgres.derived_projector import PostgresDerivedMemoryProjector
+from ai_karen_engine.platform.memory.postgres.event_source import PostgresEventSource
 from ai_karen_engine.platform.memory.postgres.ledger_models import (
     ConsentScope, MemoryAssertion, MemoryEvent, ProfileFact,
 )
@@ -212,6 +213,27 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
             text="favorite genre", top_k=1,
         ))
         assert [row.content for row in ledger_rows] == ["favorite genre research notes"]
+        source = PostgresEventSource()
+        event_scope = {
+            "tenant_id": str(tenant), "user_id": str(user),
+            "event_ids": [str(event_id) for event_id in event_ids],
+        }
+        # Historical evidence remains authorized, but alternate generic
+        # recall must honor the same ownership as the assertion adapter.
+        historical = await source.fetch_many(**event_scope)
+        assert set(historical) == set(event_scope["event_ids"])
+        current_generic = await source.fetch_many(
+            **event_scope, for_current_recall=True,
+        )
+        assert set(current_generic) == {str(ordinary_event)}
+        assert await source.fetch_many(
+            **{**event_scope, "user_id": str(uuid.uuid4())},
+            for_current_recall=True,
+        ) == {}
+        assert await source.fetch_many(
+            **{**event_scope, "tenant_id": str(uuid.uuid4())},
+            for_current_recall=True,
+        ) == {}
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             preserved = (await session.execute(select(MemoryAssertion.event_id).where(
                 MemoryAssertion.event_id.in_(event_ids),
@@ -226,6 +248,8 @@ async def test_reinforcement_disagreement_explicit_correction_and_recall():
                 scope_name="memory.write", is_granted=False,
             ))
         assert await retriever.recall(query()) == []
+        assert await source.fetch_many(**event_scope) == {}
+        assert await source.fetch_many(**event_scope, for_current_recall=True) == {}
     finally:
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             await session.execute(delete(MemoryAssertion).where(

@@ -10,6 +10,10 @@ from __future__ import annotations
 import os
 from typing import Any, Dict, Optional
 
+import httpx
+
+from ai_karen_engine.config.artifact_storage import StorageTLSPolicy
+
 from ai_karen_engine.core.logging import get_logger
 
 logger = get_logger(__name__)
@@ -26,6 +30,12 @@ class SupabasePlatformClient:
         self._key: Optional[str] = None
         self._credential_source: Optional[str] = None
         self._initialized = False
+        self._storage_tls_policy: StorageTLSPolicy | None = None
+        self._storage_http_client: httpx.Client | None = None
+
+    @property
+    def storage_tls_policy(self) -> StorageTLSPolicy | None:
+        return self._storage_tls_policy
 
     @property
     def storage(self) -> Optional[Any]:
@@ -57,6 +67,7 @@ class SupabasePlatformClient:
         url: Optional[str] = None,
         key: Optional[str] = None,
     ) -> bool:
+        self.reset()
         # New API-key contract has precedence. Legacy keys remain a compatibility
         # path for existing installations until their deployment env is migrated.
         self._url = url or os.getenv("SUPABASE_PROJECT_URL") or os.getenv("SUPABASE_URL")
@@ -96,12 +107,34 @@ class SupabasePlatformClient:
         try:
             from supabase import create_client
 
-            client = create_client(self._url, self._key)
+            policy = StorageTLSPolicy.from_environment(self._url)
+            if policy is None:
+                client = create_client(self._url, self._key)
+            else:
+                from supabase import ClientOptions
+
+                def enforce_origin(request: httpx.Request) -> None:
+                    policy.require_destination(str(request.url))
+
+                self._storage_http_client = httpx.Client(
+                    verify=policy.verify_for_origin(self._url),
+                    trust_env=False,
+                    follow_redirects=False,
+                    timeout=20.0,
+                    event_hooks={"request": [enforce_origin]},
+                )
+                client = create_client(
+                    self._url, self._key,
+                    options=ClientOptions(httpx_client=self._storage_http_client),
+                )
             self._storage = client.storage
+            self._storage_tls_policy = policy
             self._realtime_client = client
             logger.info("Supabase Storage capability initialized")
         except Exception as exc:
-            logger.warning("Supabase Storage initialization failed: %s", exc)
+            logger.warning("Supabase Storage initialization failed (%s)", type(exc).__name__)
+            self._close_storage_transport()
+            self._storage_tls_policy = None
             self._storage = None
             self._realtime_client = None
 
@@ -134,7 +167,17 @@ class SupabasePlatformClient:
             "credential_source": self._credential_source,
         }
 
+    def _close_storage_transport(self) -> None:
+        transport, self._storage_http_client = self._storage_http_client, None
+        if transport is not None:
+            try:
+                transport.close()
+            except Exception as exc:
+                logger.warning("Supabase Storage transport close failed (%s)", type(exc).__name__)
+
     def reset(self) -> None:
+        self._close_storage_transport()
+        self._storage_tls_policy = None
         self._storage = None
         self._realtime_client = None
         self._publisher = None
