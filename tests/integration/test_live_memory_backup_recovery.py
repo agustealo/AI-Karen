@@ -7,6 +7,7 @@ the pre-reconciliation resurrection risk; it does not certify safe admission.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import os
 import shutil
@@ -33,7 +34,7 @@ from ai_karen_engine.platform.memory.postgres.vault import (
 
 
 @pytest.mark.asyncio
-@pytest.mark.timeout(120)
+@pytest.mark.timeout(180)
 @pytest.mark.skipif(
     os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1"
     or os.getenv("KAREN_TEST_DISPOSABLE_DATABASE") != "1",
@@ -57,6 +58,11 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
     admin = await asyncpg.connect(base.render_as_string(hide_password=False))
     engines = []
     created = []
+    physical = os.getenv("KAREN_TEST_PHYSICAL_REPLAY") == "1"
+    standby_dir = f"/tmp/karen-physical-replay-{suffix}"
+    standby_port = 55432
+    standby_url = source_url.set(port=standby_port)
+    standby_started = False
 
     async def command(script, **overrides):
         env = {**os.environ, **overrides}
@@ -72,6 +78,47 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
             RESTORE_DATABASE_URL=url.render_as_string(hide_password=False),
             BACKUP_FILE=str(archive),
             CONFIRM_RESTORE="I_UNDERSTAND_THIS_IS_DESTRUCTIVE",
+        )
+
+    async def docker_postgres(*args, check=True, timeout=45):
+        if not physical or os.getenv("GITHUB_ACTIONS") != "true":
+            pytest.fail("physical replay fixture requires isolated GitHub CI")
+        container = f"ai-karen-postgres-{os.environ['GITHUB_RUN_ID']}-{os.environ['GITHUB_RUN_ATTEMPT']}"
+        result = await asyncio.to_thread(
+            subprocess.run, ["docker", "exec", "-u", "postgres", container, *args],
+            capture_output=True, text=True, timeout=timeout, check=False,
+        )
+        if check:
+            assert result.returncode == 0, result.stderr
+        return result
+
+    async def standby_sql(sql):
+        binary = Path(os.environ["KAREN_POSTGRES_BIN_DIR"]) / "psql"
+        result = await asyncio.to_thread(
+            subprocess.run, [str(binary), "-X", "-qAt", "--set=ON_ERROR_STOP=1",
+                             "--dbname", standby_url.render_as_string(hide_password=False),
+                             "--command", sql],
+            capture_output=True, text=True, timeout=10, check=False,
+        )
+        assert result.returncode == 0, result.stderr
+        return result.stdout.strip()
+
+    async def await_standby(sql, expected):
+        for _ in range(100):
+            if await standby_sql(sql) == expected:
+                return
+            await asyncio.sleep(0.2)
+        pytest.fail("physical standby did not reach required state")
+
+    async def verify_replay(url, receipt_path, expected_digest):
+        env = {
+            **os.environ, "RECOVERY_DATABASE_URL": url.render_as_string(hide_password=False),
+            "RECOVERY_CUTOFF_FILE": str(receipt_path),
+            "RECOVERY_CUTOFF_SHA256": expected_digest,
+        }
+        return await asyncio.to_thread(
+            subprocess.run, [os.sys.executable, str(root / "scripts/deploy/database-recovery-replay.py")],
+            cwd=root, env=env, capture_output=True, text=True, timeout=40, check=False,
         )
 
     async def cutoff(url):
@@ -155,6 +202,27 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
         )
         assert missing_confirmation.returncode == 2
         before_cutoff = await cutoff(source_url)
+        if physical:
+            # Clone only the synthetic disposable CI cluster.
+            await docker_postgres(
+                "pg_basebackup", "-h", "/var/run/postgresql", "-p", "5432",
+                "-U", "postgres", "-D", standby_dir, "-X", "stream",
+                "-R", "-c", "fast", "-w",
+            )
+            standby_started = True
+            await docker_postgres(
+                "pg_ctl", "-D", standby_dir, "-l", standby_dir + "/standby.log",
+                "-o", f"-p {standby_port} -h 127.0.0.1 -k {standby_dir}",
+                "-w", "-t", "30", "start",
+            )
+            await await_standby(
+                "SELECT count(*) FROM pg_stat_wal_receiver WHERE status = 'streaming'", "1",
+            )
+            await standby_sql("SELECT pg_wal_replay_pause()")
+            await await_standby("SELECT pg_get_wal_replay_pause_state()", "paused")
+            assert await standby_sql(
+                f"SELECT count(*) FROM memory_assertion WHERE assertion_id = '{retired.id}'"
+            ) == "1"
         backup = await command(
             "database-backup.sh",
             DATABASE_URL=source_url.render_as_string(hide_password=False),
@@ -200,6 +268,40 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
         # cannot overwrite it. This is test-local retention, not production WORM.
         receipt_path = tmp_path / "independent-cutoff.json"
         receipt_path.write_text(json.dumps(after_cutoff), encoding="utf-8")
+        receipt_digest = hashlib.sha256(receipt_path.read_bytes()).hexdigest()
+        wrong_digest = await verify_replay(source_url, receipt_path, "0" * 64)
+        assert wrong_digest.returncode == 2
+        assert "digest mismatch" in wrong_digest.stderr
+        primary_rejected = await verify_replay(source_url, receipt_path, receipt_digest)
+        assert primary_rejected.returncode == 2
+        assert "not a paused read-only physical standby" in primary_rejected.stderr
+
+        if physical:
+            lagging = await verify_replay(standby_url, receipt_path, receipt_digest)
+            assert lagging.returncode == 2, lagging.stdout
+            assert "required WAL cutoff not replayed" in lagging.stderr
+            await standby_sql("SELECT pg_wal_replay_resume()")
+            await await_standby(
+                f"SELECT pg_last_wal_replay_lsn() >= '{after_cutoff['required_lsn']}'::pg_lsn", "t",
+            )
+            await standby_sql("SELECT pg_wal_replay_pause()")
+            await await_standby("SELECT pg_get_wal_replay_pause_state()", "paused")
+            verified = await verify_replay(standby_url, receipt_path, receipt_digest)
+            assert verified.returncode == 0, verified.stderr
+            observation = json.loads(verified.stdout)
+            assert observation["evidence_type"] == "paused_standby_replay_observation"
+            assert observation["admission_verified"] is False
+            assert observation["cutoff_sha256"] == receipt_digest
+            assert lsn(observation["replay_lsn"]) >= lsn(after_cutoff["required_lsn"])
+            assert await standby_sql(
+                f"SELECT count(*) FROM memory_assertion WHERE assertion_id = '{retired.id}'"
+            ) == "0"
+            assert await standby_sql(
+                f"SELECT is_granted FROM consent_scope WHERE scope_id = '{scope_id}'"
+            ) == "f"
+            assert await standby_sql(
+                f"SELECT count(*) FROM memory_assertion WHERE assertion_id = '{unrelated.id}'"
+            ) == "1"
 
         restored = await restore(target_url, archive)
         assert restored.returncode == 0, restored.stderr
@@ -211,6 +313,9 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
         assert target_cutoff["system_identifier"] == after_cutoff["system_identifier"]
         assert target_cutoff["database_oid"] != after_cutoff["database_oid"]
         assert lsn(target_cutoff["required_lsn"]) >= lsn(after_cutoff["required_lsn"])
+        logical_rejected = await verify_replay(target_url, receipt_path, receipt_digest)
+        assert logical_rejected.returncode == 2
+        assert "not a paused read-only physical standby" in logical_rejected.stderr
 
         # This is the known unsafe pre-reconciliation state, not authorization
         # to expose recovered records. Keep both databases isolated.
@@ -227,6 +332,8 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
         assert "restore target contains existing relations" in repeat.stderr
     finally:
         try:
+            if standby_started:
+                await docker_postgres("pg_ctl", "-D", standby_dir, "-m", "immediate", "-w", "stop", check=False)
             for engine in engines:
                 await engine.dispose()
             for name in reversed(created):
