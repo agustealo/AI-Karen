@@ -363,13 +363,13 @@ async def test_real_gateway_http_observes_provider_health_once(monkeypatch):
     assert registry.capture_endpoint_health_registration(endpoint) is not None
     monkeypatch.setattr(provider_registry_service, "get_provider_registry_service", lambda: registry)
     observations = []
-    original = registry.health_monitor.update_provider_health
+    original = registry.health_monitor._apply_provider_health
 
     def observe(*args, **kwargs):
         observations.append((args, kwargs))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(registry.health_monitor, "update_provider_health", observe)
+    monkeypatch.setattr(registry.health_monitor, "_apply_provider_health", observe)
     original_client = httpx.AsyncClient
     wire = []
 
