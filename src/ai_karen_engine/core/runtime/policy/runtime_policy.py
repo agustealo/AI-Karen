@@ -129,6 +129,8 @@ class PolicyEvaluationRequest:
     resource: Optional[str] = None
     # Host-normalized selected artifact revisions, not client-granted access.
     attachment_references: List[Dict[str, str]] = field(default_factory=list)
+    # Explicit host-selected operation; never a capability or source grant by itself.
+    document_operation: Optional[Dict[str, Any]] = field(default=None, repr=False)
     requested_capabilities: List[str] = field(default_factory=list)
     forbidden_capabilities: List[str] = field(default_factory=list)
     requested_reasoning_modes: List[str] = field(default_factory=list)
@@ -217,6 +219,14 @@ class PolicyDecision:
                 plan_scope = deepcopy(dict(scope))
         elif scope is not None:
             raise ValueError("policy_resource_scope_invalid")
+        document_digest = self.runtime_constraints.get("document_operation_digest")
+        if self.allowed and document_digest is not None:
+            if plan_scope or not {"content-intelligence", "data:read"}.issubset(self.allowed_capabilities):
+                raise ValueError("policy_operation_scope_invalid")
+            plan_scope = {
+                "attachment_references": deepcopy(self.runtime_constraints["attachment_references"]),
+                "document_operation_digest": document_digest,
+            }
         return AuthorizedExecutionPlan(
             execution_id=self.decision_id,
             policy_decision_id=self.decision_id,
@@ -980,6 +990,8 @@ class RuntimePolicyEnforcer:
             if (
                 selected_scope != issued_attachments
                 or (issued_attachments and "data:read" not in plan.allowed_capabilities)
+                or plan.resource_scope.get("document_operation_digest")
+                != constraints.get("document_operation_digest")
             ):
                 return False
             # A standalone coordinator must not self-issue tool/plugin/agent
@@ -1313,6 +1325,56 @@ class RuntimePolicyEnforcer:
         else:
             authorized_attachments = []
 
+        # A scoped document operation is a distinct, explicit read-only grant.
+        # Do not infer it from attachments, plugin hints or a generic chat action.
+        document_digest = None
+        document_requested = request.document_operation is not None or (
+            bool(authorized_attachments) and (
+                request.action == "content-intelligence"
+                or "content-intelligence" in request.requested_capabilities
+                or "content-intelligence" in (request.execution_topology.get("plugin_candidates") or [])
+                or request.plugin_id == "content-intelligence"
+                or request.extension_id == "content-intelligence"
+            )
+        )
+        if document_requested:
+            from ai_karen_engine.extensions.content_intelligence_sources import (
+                runtime_content_operation_digest,
+            )
+
+            try:
+                topology = request.execution_topology
+                if (
+                    not authorized_attachments
+                    or request.action != "content-intelligence"
+                    or set(request.requested_capabilities) != {"content-intelligence", "data:read"}
+                    or topology.get("plugin_candidates") != ["content-intelligence"]
+                    or request.resource_scope is not None
+                    or request.tool_id or request.plugin_id or request.extension_id
+                    or not request.session_id or not request.correlation_id
+                    or request.runtime_level is not RuntimeLevel.FULL
+                    or type(request.max_model_calls) is not int or request.max_model_calls != 0
+                    or request.requested_reasoning_modes
+                    or any(topology.get(key) for key in (
+                        "tool_requirements", "requested_agents", "workflow_id",
+                        "agent_delegation", "requires_human_gate", "graph_required",
+                        "requires_resumability", "requires_parallel_execution",
+                    ))
+                ):
+                    raise PermissionError("document_operation_not_authorized")
+                document_digest = runtime_content_operation_digest(
+                    authorized_attachments, request.document_operation,
+                )
+            except (PermissionError, ValueError, TypeError):
+                return PolicyDecision(
+                    decision_id=decision_id,
+                    policy_version=policy_version,
+                    allowed=False,
+                    reason_codes=[PolicyReasonCode.RESOURCE_SCOPE_DENIED],
+                    denied_capabilities=["content-intelligence"],
+                    evaluated_at=evaluated_at,
+                )
+
         # Explorer mutations are owner-only and must not inherit broad data
         # write/delete authority. Unknown future actions default to denial.
         explorer_actions = {
@@ -1569,6 +1631,10 @@ class RuntimePolicyEnforcer:
                 "correlation_id": request.correlation_id,
             }
         )
+
+        if document_digest is not None:
+            runtime_constraints["document_operation_digest"] = document_digest
+            runtime_constraints["max_tool_calls"] = 1
 
         reason_codes = [PolicyReasonCode.POLICY_CHECK_PASSED]
         if reasoning_policy.denied_modes:
