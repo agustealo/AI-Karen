@@ -1345,7 +1345,7 @@ class RuntimePolicyEnforcer:
             )
         )
         if document_requested:
-            from ai_karen_engine.extensions.content_intelligence_sources import (
+            from ai_karen_engine.core.runtime.document_operation_contract import (
                 runtime_content_operation_digest,
             )
 
