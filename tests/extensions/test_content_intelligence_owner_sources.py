@@ -592,3 +592,69 @@ async def test_runtime_source_host_uses_only_pinned_evidence(monkeypatch, scenar
                 kernel=kernel, context=ctx, plan=auth, operation="analyze",
             )
         assert len(kernel.calls) == (0 if scenario == "unbound" else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", [
+    "valid", "missing_operation", "invalid_operation", "wrong_action",
+    "missing_attachment", "extra_plugin", "graph", "model_budget", "no_read_permission",
+])
+async def test_runtime_policy_document_operation_commitment(monkeypatch, scenario):
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.extensions.content_intelligence_sources import (
+        runtime_content_operation_digest,
+    )
+
+    operation = {"operation": "search", "query": "vendor"}
+    topology = {"plugin_candidates": ["content-intelligence"], "tool_requirements": []}
+    if scenario == "extra_plugin":
+        topology["plugin_candidates"].append("intelligent-search")
+    if scenario == "graph":
+        topology["graph_required"] = True
+    req = PolicyEvaluationRequest(
+        user_id=OWNER, tenant_id=TENANT, session_id="session", correlation_id="corr",
+        permissions=[] if scenario == "no_read_permission" else ["data:read"],
+        action="general_assist" if scenario == "wrong_action" else "content-intelligence",
+        attachment_references=[] if scenario == "missing_attachment" else REFS,
+        document_operation=(
+            None if scenario == "missing_operation" else
+            {"operation": "search", "query": ""} if scenario == "invalid_operation"
+            else operation
+        ),
+        requested_capabilities=["content-intelligence", "data:read"],
+        execution_topology=topology,
+        max_model_calls=1 if scenario == "model_budget" else 0,
+    )
+    policy = RuntimePolicyEnforcer()
+    decision = await policy.evaluate(req)
+    assert decision.allowed is (scenario == "valid")
+    if not decision.allowed:
+        return
+
+    digest = runtime_content_operation_digest(REFS, operation)
+    assert decision.runtime_constraints["document_operation_digest"] == digest
+    assert "vendor" not in str(decision.runtime_constraints)
+    auth = decision.to_authorized_plan()
+    assert auth.resource_scope == {
+        "attachment_references": REFS, "document_operation_digest": digest,
+    }
+    assert auth.budget.max_tool_calls == 1
+    assert auth.budget.max_model_calls == 0
+
+    # The issuer is real; isolate the separate authenticated-ingress witness.
+    runtime = ChatExecutionContext(
+        user_id=OWNER, tenant_id=TENANT, session_id="session", correlation_id="corr",
+    )
+    monkeypatch.setattr(ChatExecutionContext, "require_authenticated_user", lambda self: None)
+    policy.bind_chat_model_policy(context=runtime, decision=decision)
+    assert policy.verifies_chat_model_policy(context=runtime, plan=auth)
+    for altered in (
+        {"attachment_references": REFS},
+        {"attachment_references": REFS, "document_operation_digest": "0" * 64},
+    ):
+        assert not policy.verifies_chat_model_policy(
+            context=runtime, plan=replace(auth, resource_scope=altered),
+        )
