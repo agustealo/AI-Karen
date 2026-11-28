@@ -196,7 +196,8 @@ class ChatExecutionContext:
             return None
         root = binding[0]
         if (
-            self.__dict__.get("_runtime_model_root_grants")
+            root.budget is not meter.budget
+            or self.__dict__.get("_runtime_model_root_grants")
             != _model_grant_snapshot(root)
         ):
             return None
@@ -261,6 +262,7 @@ class ChatExecutionContext:
         root = self.original_runtime_model_plan(meter)
         return (
             root is not None
+            and getattr(plan, "budget", None) is meter.budget
             and (
                 plan is root
                 or any(
