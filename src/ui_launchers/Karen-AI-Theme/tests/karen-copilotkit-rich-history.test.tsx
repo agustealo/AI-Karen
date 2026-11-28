@@ -1,12 +1,20 @@
 import React from "react";
-import { cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ComponentProps } from "react";
 
 const currentAccount = vi.hoisted(() => ({ fullName: "Zeus" as string | null }));
+const attachmentRead = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/api", () => ({
+  apiClient: { readHistoricalAttachmentText: attachmentRead },
+  captureApiPrincipalScope: (tenant_id: string, user_id: string) => ({ tenant_id, user_id, revision: 1 }),
+  isCurrentApiPrincipalScope: () => true,
+}));
 
 vi.mock("@/lib/useAuth", () => ({
   useAuth: () => ({
+    isAuthenticated: currentAccount.fullName !== null,
+    isLoading: false,
     user: currentAccount.fullName === null ? null : {
       user_id: "11111111-1111-4111-8111-111111111111",
       tenant_id: "22222222-2222-4222-8222-222222222222",
@@ -165,4 +173,98 @@ describe("CK-07E3 CopilotKit v2 rich restoration in native message slot", () => 
     expect(() => parseKarenVerifiedHistory(new Array(4001).fill(timeEvent), messages)).toThrow();
     expect(() => parseKarenVerifiedHistory([null], messages)).toThrow();
   });
+});
+
+
+it("restores only the verified historical attachment count", () => {
+  const event = {
+    type: "CUSTOM", name: "karen.verified_attachment_history.v1",
+    messageId: "assistant-1", value: { user_message_id: "user-1", attachment_count: 2 },
+  };
+  renderAssistant([event]);
+  expect(screen.getByLabelText("Historical attachments")).toBeTruthy();
+  expect(screen.getByText("2 originally submitted with this turn.")).toBeTruthy();
+  expect(screen.getByText(/Current file access is not verified/)).toBeTruthy();
+  expect(() => parseKarenVerifiedHistory([event, event], messages)).toThrow();
+  for (const value of [
+    { ...event.value, attachment_count: 0 },
+    { ...event.value, attachment_count: 13 },
+    { ...event.value, attachment_count: 1.5 },
+    { ...event.value, user_message_id: "assistant-1" },
+    { ...event.value, user_message_id: "foreign" },
+    { ...event.value, url: "https://example.com/private" },
+  ]) {
+    expect(() => parseKarenVerifiedHistory([{ ...event, value }], messages)).toThrow();
+  }
+  expect(() => parseKarenVerifiedHistory([event], [...messages].reverse())).toThrow();
+});
+
+
+const historicalThread = "11111111-1111-4111-8111-111111111111";
+const historicalAssistant = "44444444-4444-4444-8444-444444444444";
+const historicalEvent = {
+  type: "CUSTOM", name: "karen.verified_attachment_history.v1",
+  messageId: historicalAssistant, value: { user_message_id: "user-1", attachment_count: 2 },
+};
+const historicalResponse = { filename: "verified.txt", mime_type: "text/plain", size_bytes: 12, text: "private text" };
+function historicalView(threadId = historicalThread) {
+  const parts = parseKarenVerifiedHistory([historicalEvent], [
+    { id: "user-1", role: "user" }, { id: historicalAssistant, role: "assistant" },
+  ]);
+  return <KarenVerifiedHistoryProvider parts={parts} conversationId={threadId}>
+    <KarenCopilotAssistantMessage {...({ message: {
+      id: historicalAssistant, role: "assistant", content: "Saved reply",
+    } } as unknown as ComponentProps<typeof CopilotChatAssistantMessage>)} />
+  </KarenVerifiedHistoryProvider>;
+}
+
+it("requires explicit read and validates preview before showing private text", async () => {
+  attachmentRead.mockReset().mockResolvedValue(historicalResponse);
+  render(historicalView());
+  expect(attachmentRead).not.toHaveBeenCalled();
+  fireEvent.change(screen.getByLabelText("Historical attachment"), { target: { value: "2" } });
+  fireEvent.click(screen.getByRole("button", { name: "Preview text" }));
+  expect(await screen.findByText("private text")).toBeTruthy();
+  expect(attachmentRead).toHaveBeenCalledWith(historicalThread, historicalAssistant, 2,
+    expect.objectContaining({ revision: 1 }), expect.any(AbortSignal));
+  fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+  expect(screen.queryByText("private text")).toBeNull();
+  attachmentRead.mockResolvedValue({ ...historicalResponse, storage_uri: "private URL" });
+  fireEvent.click(screen.getByRole("button", { name: "Preview text" }));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(screen.queryByText("private text")).toBeNull();
+});
+
+it("cancels pending reads across a thread switch and withholds late bytes", async () => {
+  let complete: (value: unknown) => void = () => {};
+  attachmentRead.mockReset().mockImplementation(() => new Promise(resolve => { complete = resolve; }));
+  const view = render(historicalView());
+  fireEvent.click(screen.getByRole("button", { name: "Preview text" }));
+  const signal = attachmentRead.mock.calls[0][4] as AbortSignal;
+  view.rerender(historicalView("22222222-2222-4222-8222-222222222222"));
+  expect(signal.aborted).toBe(true);
+  await act(async () => { complete(historicalResponse); });
+  expect(screen.queryByText("private text")).toBeNull();
+  await waitFor(() => expect((screen.getByRole("button", { name: "Preview text" }) as HTMLButtonElement).disabled).toBe(false));
+});
+
+it("never reuses preview bytes for download", async () => {
+  attachmentRead.mockReset().mockResolvedValueOnce(historicalResponse).mockRejectedValueOnce(new Error("revoked"));
+  render(historicalView());
+  fireEvent.click(screen.getByRole("button", { name: "Preview text" }));
+  expect(await screen.findByText("private text")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Download text" }));
+  expect(await screen.findByRole("alert")).toBeTruthy();
+  expect(attachmentRead).toHaveBeenCalledTimes(2);
+  expect(screen.queryByText("private text")).toBeNull();
+});
+
+
+it("discards an open preview and cancels a read when the authenticated account is invalidated", async () => {
+  attachmentRead.mockReset().mockResolvedValue(historicalResponse);
+  render(historicalView());
+  fireEvent.click(screen.getByRole("button", { name: "Preview text" }));
+  expect(await screen.findByText("private text")).toBeTruthy();
+  act(() => { window.dispatchEvent(new Event("karen:auth-invalidated")); });
+  expect(screen.queryByText("private text")).toBeNull();
 });

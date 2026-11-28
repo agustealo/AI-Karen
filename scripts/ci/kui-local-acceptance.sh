@@ -95,7 +95,8 @@ if [[ "${RUN_FILE_EXPLORER_LOCAL:-0}" == '1' || "${RUN_CONTENT_INTELLIGENCE_LOCA
     }
     # This read-only mode must not accidentally arm Explorer mutations.
     for flag in KAREN_FILE_EXPLORER_MUTATION_ACCEPTANCE KAREN_FILE_EXPLORER_DELETE_ACCEPTANCE \
-        KAREN_FILE_EXPLORER_ATTACHMENT_ACCEPTANCE KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE; do
+        KAREN_FILE_EXPLORER_ATTACHMENT_ACCEPTANCE KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE \
+        KAREN_FILE_EXPLORER_OWNER_TEXT_ACCEPTANCE; do
       [[ "${!flag:-false}" != 'true' ]] || {
         echo 'Explorer mutation flags are forbidden in Content Intelligence local acceptance.' >&2; exit 2;
       }
@@ -159,6 +160,9 @@ if [[ "${RUN_FILE_EXPLORER_LOCAL:-0}" == '1' || "${RUN_CONTENT_INTELLIGENCE_LOCA
     PROVENANCE[2]='--content-intelligence'
     REPORT+=(--content-intelligence)
     BROWSER_GREP='\bKCONTENT-(LIVE|DENY-LIVE|REVOKED-LIVE):'
+  elif [[ "${KAREN_FILE_EXPLORER_OWNER_TEXT_ACCEPTANCE:-false}" == 'true' ]]; then
+    PROVENANCE[2]='--owner-text'
+    REPORT+=(--owner-text)
   fi
   check_explorer_continuity() {
     python - "$@" <<'PY'
@@ -211,6 +215,11 @@ PY
     printf 'PASS content_intelligence_local_acceptance (three scenarios; independent review still required)\n' | tee -a "$RESULTS"
   else
     printf 'PASS explorer_local_acceptance (four scenarios; independent review still required)\n' | tee -a "$RESULTS"
+    if [[ "${KAREN_FILE_EXPLORER_OWNER_TEXT_ACCEPTANCE:-false}" == 'true' ]]; then
+      printf 'PASS explorer_owner_text_acceptance (verified report marker; independent review still required)\n' | tee -a "$RESULTS"
+    else
+      printf 'NOT_RUN explorer_owner_text_acceptance (explicit opt-in required)\n' | tee -a "$RESULTS"
+    fi
   fi
   printf 'RESULTS=%s\n' "$RESULTS"
   exit 0

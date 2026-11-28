@@ -12,11 +12,14 @@ from __future__ import annotations
 import re
 
 from ai_karen_engine.core.intelligence.profile_attribute import (normalize_personal_query, requested_profile_attribute, is_profile_summary_request)
-from ai_karen_engine.core.intelligence.correction_intent import is_explicit_self_correction
+from ai_karen_engine.core.intelligence.correction_intent import (
+    explicit_self_correction_clause, is_atomic_correction_value,
+    is_explicit_self_correction,
+)
 from ai_karen_engine.core.intelligence.preference_relation import extract_favorite_assertion
 from ai_karen_engine.core.intelligence.personal_relation import extract_personal_relation
 
-from .general_fact_classifier import classify_general_user_facts
+from .general_fact_classifier import classify_general_user_facts, is_direct_general_correction_claim
 from .signal_models import MemorySignal
 
 
@@ -215,6 +218,23 @@ def memory_save_request_matches_signal(text: str, signal: MemorySignal) -> bool:
         for requested in specific_target_terms
         for semantic in semantic_terms
     )
+
+
+def is_direct_profile_correction(text: str, attribute: str) -> bool:
+    """Verify direct atomic attribution, not merely a correction preamble."""
+    clause = explicit_self_correction_clause(text)
+    if clause is None:
+        return False
+    statement = clause.rstrip(".!").strip()
+    # Existing value captures can span sentences under fullmatch. Accept
+    # only an atomic clause; compound or punctuated values need a separately
+    # attributable structured correction, not an inferred second claim.
+    if not statement or re.search(r"[.!?;:,]|\b(?:and|but|or)\b", statement, re.I):
+        return False
+    if attribute == "preferred_name":
+        match = _NAME.fullmatch(statement)
+        return match is not None and is_atomic_correction_value(match.group(1))
+    return is_direct_general_correction_claim(statement, attribute)
 
 
 def classify_explicit_user_memory(text: str) -> list[MemorySignal]:

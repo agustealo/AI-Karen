@@ -199,7 +199,8 @@ async function readKarenGovernedHistory(
         e.type !== "CUSTOM" ||
         !["karen.presentation.v1", "karen.execution_receipt.v1",
           "karen.response_integrity.v1", "karen.agent_step.v1",
-          "karen.plugin_management_preflight.v1", "karen.verified_citations.v1"].includes(String(e.name)) ||
+          "karen.plugin_management_preflight.v1", "karen.verified_citations.v1",
+          "karen.verified_attachment_history.v1"].includes(String(e.name)) ||
         typeof e.name !== "string" ||
         typeof e.messageId !== "string" || owners.get(e.messageId) !== "assistant" ||
         !e.value || typeof e.value !== "object" || Array.isArray(e.value)) {

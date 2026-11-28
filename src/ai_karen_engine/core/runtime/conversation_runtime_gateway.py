@@ -29,6 +29,8 @@ from ai_karen_engine.services.database.repositories import (
     RepositoryFactory,
 )
 from ai_karen_engine.services.database.repositories.conversation_repository import (
+    COMPLETED_ATTACHMENT_RECEIPT_KEY,
+    build_completed_attachment_receipt,
     canonical_message_digest,
     validate_draft_attachment_references,
 )
@@ -731,7 +733,8 @@ class ConversationRuntimeGateway:
                 "conversation_id": conversation_id,
                 "source": "conversation_api",
                 **{key: value for key, value in (metadata or {}).items()
-                   if key != "persona_scope_id"},
+                   if key not in {"persona_scope_id", COMPLETED_ATTACHMENT_RECEIPT_KEY,
+                                  "verified_citation_receipt_v1"}},
                 **({"persona_scope_id": existing.metadata["persona_scope_id"]}
                    if (existing.metadata or {}).get("persona_scope_id") else {}),
             },
@@ -1031,11 +1034,37 @@ class ConversationRuntimeGateway:
                 content=assistant_text,
                 metadata={
                     **{k: v for k, v in (response_metadata or {}).items()
-                       if k != "persona_scope_id"},
+                       if k not in {"persona_scope_id", COMPLETED_ATTACHMENT_RECEIPT_KEY}},
                     **common_metadata,
                     "transcript_actor": "assistant",
                 },
             )
+            if run_lease is not None:
+                from ai_karen_engine.persistence.repositories.chat_run_repository import (
+                    draft_attachment_digest_from_submission_id,
+                )
+                submission_id = run_lease.submission_id
+                if (
+                    submission_id is not None
+                    and draft_attachment_digest_from_submission_id(submission_id) is not None
+                ):
+                    try:
+                        if not context.has_runtime_attachment_scope():
+                            raise PermissionError("attachment_session_denied")
+                        refs = [
+                            {"source_id": item["source_id"], "revision": item["revision"]}
+                            for item in context.runtime_attachment_documents()
+                        ]
+                        assistant_message.metadata[COMPLETED_ATTACHMENT_RECEIPT_KEY] = (
+                            build_completed_attachment_receipt(
+                                user_message, submission_id, refs,
+                            )
+                        )
+                    except (PermissionError, ValueError, TypeError, KeyError):
+                        return TranscriptPersistenceResult(
+                            status="rejected", conversation_id=conversation_id,
+                            reason="attachment_session_denied",
+                        )
             if context.has_runtime_attachment_scope():
                 try:
                     write_result = await self._repository.add_completed_turn(
@@ -1275,6 +1304,25 @@ async def read_owned_history_evidence(
     return OwnedHistoryEvidence(
         snapshot=snapshot, recovery_run=recovery_run, attestations=attestations,
         observed_activity=observed_activity, window_has_older=window_has_older,
+    )
+
+
+async def read_owned_historical_attachment_reference(
+    context: ChatExecutionContext, *, assistant_message_id: str, ordinal: int,
+) -> dict[str, str]:
+    """Resolve provenance using the existing coherent owned history authority."""
+    from ai_karen_engine.config.runtime import get_runtime_settings
+    from ai_karen_engine.core.runtime.owned_history_projection import resolve_owned_historical_attachment
+    from ai_karen_engine.persistence.repositories.chat_run_repository import SqlChatRunRepository
+
+    await context.revalidate_runtime_attachment_session()
+    evidence = await read_owned_history_evidence(
+        context, gateway=get_conversation_runtime_gateway(),
+        ledger_factory=SqlChatRunRepository, text_mode=False,
+        include_activity=getattr(get_runtime_settings().features, "enable_ag_ui_event_journal", False),
+    )
+    return resolve_owned_historical_attachment(
+        evidence, assistant_message_id=assistant_message_id, ordinal=ordinal,
     )
 
 

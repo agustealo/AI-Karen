@@ -20,6 +20,8 @@ from ai_karen_engine.platform.memory.redis import (
     get_redis_manager,
 )
 
+from ..telemetry.metrics import record_retention_observation
+
 # Claim and publish the run identity in one Redis operation. A lost or
 # retired lease does not make an existing run identity reusable.
 _REGISTER_RUN_SCRIPT = """
@@ -204,17 +206,19 @@ local limit = tonumber(ARGV[1])
 if not limit or limit < 1 or limit > 1000 then
   return {}
 end
+-- Count index members, not confirmed receipts. Observe within the existing
+-- bounded rotation operation without a separate scan or tenant inventory.
+local count = redis.call('ZCARD', KEYS[1])
 local ids = redis.call('ZRANGE', KEYS[1], 0, limit - 1)
 local tail = redis.call('ZRANGE', KEYS[1], -1, -1, 'WITHSCORES')
-if #tail == 0 then
-  return ids
+if #tail > 0 then
+  local score = tonumber(tail[2])
+  for _, id in ipairs(ids) do
+    score = score + 1
+    redis.call('ZADD', KEYS[1], 'XX', score, id)
+  end
 end
-local score = tonumber(tail[2])
-for _, id in ipairs(ids) do
-  score = score + 1
-  redis.call('ZADD', KEYS[1], 'XX', score, id)
-end
-return ids
+return {count, ids}
 """
 
 
@@ -572,17 +576,24 @@ class RedisDistributedRunStore:
         expected = {**receipt, "tenant_id": tenant_id, "completed_at": self._iso(completed)}
         client = await self._client()
         try:
-            return bool(
-                await client.eval(
-                    _ACK_DURABLE_TERMINAL_SCRIPT,
-                    3,
-                    self._claim_key(str(receipt["run_id"])),
-                    self._run_key(str(receipt["run_id"])),
-                    self._pending_terminal_index(tenant_id),
-                    *(value for key in keys for value in (key, str(expected.get(key) or ""))),
-                    str(self._settings.run_terminal_retention_seconds),
-                )
+            result = await client.eval(
+                _ACK_DURABLE_TERMINAL_SCRIPT,
+                3,
+                self._claim_key(str(receipt["run_id"])),
+                self._run_key(str(receipt["run_id"])),
+                self._pending_terminal_index(tenant_id),
+                *(value for key in keys for value in (key, str(expected.get(key) or ""))),
+                str(self._settings.run_terminal_retention_seconds),
             )
+            if type(result) is not int or result not in {0, 1}:
+                raise DistributedRunStoreUnavailable("invalid_terminal_retention_result")
+            if result == 1:
+                # This exact receipt and release were confirmed by the script.
+                # Clock skew can make an age negative; never invent zero age.
+                record_retention_observation(
+                    "acknowledged_age", (self._now() - completed).total_seconds(),
+                )
+            return result == 1
         except RedisError as exc:
             raise DistributedRunStoreUnavailable(
                 "shared_terminal_retention_unconfirmed"
@@ -600,7 +611,18 @@ class RedisDistributedRunStore:
                 self._pending_terminal_index(tenant_id),
                 str(max(1, min(limit, 1000))),
             )
-            return [str(run_id) for run_id in result]
+            if (
+                not isinstance(result, list)
+                or len(result) != 2
+                or type(result[0]) is not int
+                or result[0] < 0
+                or not isinstance(result[1], list)
+                or len(result[1]) != min(result[0], max(1, min(limit, 1000)))
+                or any(not isinstance(run_id, str) or not run_id for run_id in result[1])
+            ):
+                raise DistributedRunStoreUnavailable("invalid_terminal_discovery_result")
+            record_retention_observation("index_entries", result[0])
+            return result[1]
         except RedisError as exc:
             raise DistributedRunStoreUnavailable(
                 "shared_terminal_discovery_unavailable"

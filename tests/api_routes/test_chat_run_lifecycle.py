@@ -831,3 +831,43 @@ async def test_coordinator_passes_exact_attachment_draft_hints_after_ownership()
         correlation_id=CORRELATION_ID, submission_id=submission,
         submitted_text="Read attachment", submitted_attachment_references=refs,
     )
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", [False, True])
+@pytest.mark.parametrize("foreign", [False, True])
+async def test_retry_coordinator_reauthorizes_before_repository(monkeypatch, mutation, foreign):
+    from unittest.mock import AsyncMock
+    from types import SimpleNamespace
+    from ai_karen_engine.core.runtime import chat_run_lifecycle
+
+    ownership = AsyncMock(side_effect=PermissionError("foreign") if foreign else None)
+    monkeypatch.setattr(chat_run_lifecycle, "get_conversation_runtime_gateway",
+                        lambda: SimpleNamespace(require_owned_conversation=ownership))
+    repo = SimpleNamespace(
+        read_failed_draft_revision=AsyncMock(return_value=7),
+        advance_failed_draft_revision=AsyncMock(return_value=8),
+    )
+    coordinator = ChatRunCoordinator(repo)
+    ctx = context()
+    async def invoke():
+        if mutation:
+            return await coordinator.advance_failed_draft_revision(
+                ctx, submission_id="draft-v1-7", submitted_text="retained", attachment_references=[],
+            )
+        return await coordinator.read_failed_draft_revision(ctx, submission_id="draft-v1-7")
+    if foreign:
+        with pytest.raises(PermissionError):
+            await invoke()
+        repo.read_failed_draft_revision.assert_not_awaited()
+        repo.advance_failed_draft_revision.assert_not_awaited()
+    else:
+        assert await invoke() == (8 if mutation else 7)
+        operation = repo.advance_failed_draft_revision if mutation else repo.read_failed_draft_revision
+        operation.assert_awaited_once_with(
+            tenant_id=TENANT_A, user_id=USER_A, conversation_id=THREAD,
+            submission_id="draft-v1-7",
+            **({"submitted_text": "retained", "attachment_references": []} if mutation else {}),
+        )
+    ownership.assert_awaited_once_with(ctx)

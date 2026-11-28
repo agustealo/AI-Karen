@@ -11,7 +11,10 @@ import {
 } from "@copilotkit/react-core/v2";
 import { useAuth } from "@/lib/useAuth";
 import { KarenBrowserSpeechPlayback } from "@/components/chat/KarenBrowserSpeechPlayback";
-import { createContext, useContext } from "react";
+import { createContext, useCallback, useContext, useLayoutEffect, useRef, useState } from "react";
+import { apiClient, captureApiPrincipalScope, isCurrentApiPrincipalScope } from "@/lib/api";
+import type { ApiPrincipalScope } from "@/lib/api";
+import { AUTH_INVALIDATED_EVENT, AUTH_USER_UPDATED_EVENT } from "@/lib/auth-events";
 import type { ComponentProps, ReactNode } from "react";
 import type { AgentStepEvent } from "@/lib/types";
 
@@ -33,6 +36,7 @@ import {
 type VerifiedPart =
   | { type: "presentation"; value: KarenPresentationEnvelope }
   | { type: "citations"; value: { urls: string[] } }
+  | { type: "attachment_history"; value: { user_message_id: string; attachment_count: number } }
   | { type: "receipt"; value: Record<string, unknown> }
   | { type: "integrity"; value: Record<string, unknown> }
   | { type: "plugin_management"; value: Record<string, unknown> }
@@ -173,9 +177,12 @@ export function parseKarenVerifiedHistory(
   }
   const assistantIds = new Set(messages.filter(m => m.role === "assistant").map(m => m.id));
   const parts = new Map<string, VerifiedPart[]>();
+  const messageOrder = new Map(messages.map((m, index) => [m.id, index]));
+  const userIds = new Set(messages.filter(m => m.role === "user").map(m => m.id));
+  const attachedUsers = new Set<string>();
   const counters = new Map<string, {
     presentation: number; receipt: number; integrity: number; pluginManagement: number; citations: number;
-    steps: number; lastStepSequence: number; stepRunId: string | null;
+    attachments: number; steps: number; lastStepSequence: number; stepRunId: string | null;
     presentationIds: Set<string>;
   }>();
   for (const candidate of value) {
@@ -189,7 +196,7 @@ export function parseKarenVerifiedHistory(
     const id = candidate.messageId;
     const seen = counters.get(id) || {
       presentation: 0, receipt: 0, integrity: 0, pluginManagement: 0, citations: 0,
-      steps: 0, lastStepSequence: 0, stepRunId: null,
+      attachments: 0, steps: 0, lastStepSequence: 0, stepRunId: null,
       presentationIds: new Set<string>(),
     };
     let part: VerifiedPart;
@@ -209,6 +216,18 @@ export function parseKarenVerifiedHistory(
         throw new Error("Unsupported verified citations");
       }
       part = { type: "citations", value: { urls: [...urls] } };
+    } else if (name === "karen.verified_attachment_history.v1") {
+      const { user_message_id, attachment_count } = candidate.value;
+      if (Object.keys(candidate.value).length !== 2 ||
+          typeof user_message_id !== "string" || !userIds.has(user_message_id) ||
+          (messageOrder.get(user_message_id) ?? Infinity) >= (messageOrder.get(id) ?? -1) ||
+          attachedUsers.has(user_message_id) ||
+          typeof attachment_count !== "number" || !Number.isInteger(attachment_count) ||
+          attachment_count < 1 || attachment_count > 12 || ++seen.attachments > 1) {
+        throw new Error("Unsupported verified attachment history");
+      }
+      attachedUsers.add(user_message_id);
+      part = { type: "attachment_history", value: { user_message_id, attachment_count } };
     } else if (name === "karen.execution_receipt.v1") {
       if (!validReceipt(candidate.value) || ++seen.receipt > 1) {
         throw new Error("Unsupported verified execution receipt");
@@ -252,14 +271,17 @@ export function parseKarenVerifiedHistory(
 }
 
 const VerifiedHistoryContext = createContext<VerifiedHistoryParts>(new Map());
+const VerifiedHistoryThreadContext = createContext<string | null>(null);
 
 export function KarenVerifiedHistoryProvider({
-  parts, children,
-}: { parts: VerifiedHistoryParts; children: ReactNode }) {
+  parts, children, conversationId = null,
+}: { parts: VerifiedHistoryParts; children: ReactNode; conversationId?: string | null }) {
   return (
-    <VerifiedHistoryContext.Provider value={parts}>
-      {children}
-    </VerifiedHistoryContext.Provider>
+    <VerifiedHistoryThreadContext.Provider value={conversationId}>
+      <VerifiedHistoryContext.Provider value={parts}>
+        {children}
+      </VerifiedHistoryContext.Provider>
+    </VerifiedHistoryThreadContext.Provider>
   );
 }
 
@@ -362,6 +384,157 @@ export function KarenCopilotUserMessage(
   );
 }
 
+type HistoricalAttachmentText = {
+  filename: string; mime_type: "text/plain"; size_bytes: number; text: string;
+};
+
+function parseHistoricalAttachmentText(value: unknown): HistoricalAttachmentText {
+  if (!record(value) || Object.keys(value).length !== 4 ||
+      typeof value.filename !== "string" ||
+      !/^[A-Za-z0-9][A-Za-z0-9._+-]{0,159}$/.test(value.filename) ||
+      !/\.(txt|md)$/i.test(value.filename) || value.mime_type !== "text/plain" ||
+      typeof value.text !== "string" || value.text.length > 65536 ||
+      !value.text.trim() || Array.from(value.text).some(char =>
+        char.charCodeAt(0) < 32 && !["\n", "\r", "\t"].includes(char)) ||
+      typeof value.size_bytes !== "number" || !Number.isInteger(value.size_bytes) ||
+      value.size_bytes < 1 || value.size_bytes > 65536 ||
+      new TextEncoder().encode(value.text).length !== value.size_bytes) {
+    throw new Error("Invalid verified attachment response");
+  }
+  return {
+    filename: value.filename, mime_type: "text/plain",
+    size_bytes: value.size_bytes, text: value.text,
+  };
+}
+
+function HistoricalAttachmentReadback({
+  threadId, messageId, count, tenantId, userId,
+}: { threadId: string; messageId: string; count: number; tenantId: string; userId: string }) {
+  const [ordinal, setOrdinal] = useState(1);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState(false);
+  const [preview, setPreview] = useState<{ value: HistoricalAttachmentText; scope: ApiPrincipalScope } | null>(null);
+  const pending = useRef<AbortController | null>(null);
+  const live = useRef(false);
+
+  const cancel = useCallback(() => {
+    pending.current?.abort();
+    pending.current = null;
+    setBusy(false);
+    setPreview(null);
+    setError(false);
+  }, []);
+
+  useLayoutEffect(() => {
+    live.current = true;
+    // A credential revision change must discard even a same-account preview.
+    window.addEventListener(AUTH_INVALIDATED_EVENT, cancel);
+    window.addEventListener(AUTH_USER_UPDATED_EVENT, cancel);
+    return () => {
+      live.current = false;
+      pending.current?.abort();
+      pending.current = null;
+      window.removeEventListener(AUTH_INVALIDATED_EVENT, cancel);
+      window.removeEventListener(AUTH_USER_UPDATED_EVENT, cancel);
+    };
+  }, [cancel]);
+
+  async function read(download: boolean) {
+    if (pending.current || !live.current) return;
+    setPreview(null);
+    setError(false);
+    const scope = captureApiPrincipalScope(tenantId, userId);
+    if (!scope) {
+      setError(true);
+      return;
+    }
+    const controller = new AbortController();
+    pending.current = controller;
+    setBusy(true);
+    const current = () => live.current && pending.current === controller &&
+      !controller.signal.aborted && isCurrentApiPrincipalScope(scope);
+    try {
+      const value = parseHistoricalAttachmentText(await apiClient.readHistoricalAttachmentText(
+        threadId, messageId, ordinal, scope, controller.signal,
+      ));
+      if (!current()) return;
+      if (download) {
+        // Never download cached preview bytes: this action has its own fresh authorization.
+        const url = URL.createObjectURL(new Blob([value.text], { type: "text/plain;charset=utf-8" }));
+        try {
+          const anchor = document.createElement("a");
+          anchor.href = url;
+          anchor.download = value.filename;
+          anchor.rel = "noopener";
+          anchor.click();
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      } else {
+        setPreview({ value, scope });
+      }
+    } catch {
+      if (current()) setError(true);
+    } finally {
+      if (live.current && pending.current === controller) {
+        pending.current = null;
+        setBusy(false);
+      }
+    }
+  }
+
+  return (
+    <div className="mt-2 space-y-2">
+      <label className="block text-sm">
+        Attachment
+        <select aria-label="Historical attachment" value={ordinal}
+          onChange={event => { cancel(); setOrdinal(Number(event.target.value)); }}
+          className="ml-2 rounded border border-input bg-background px-2 py-1">
+          {Array.from({ length: count }, (_, index) =>
+            <option key={index + 1} value={index + 1}>Attachment {index + 1}</option>)}
+        </select>
+      </label>
+      <div className="flex flex-wrap gap-2">
+        <button type="button" disabled={busy} onClick={() => void read(false)}
+          className="rounded border border-input px-3 py-1 text-sm">Preview text</button>
+        <button type="button" disabled={busy} onClick={() => void read(true)}
+          className="rounded border border-input px-3 py-1 text-sm">Download text</button>
+        {(busy || preview) && <button type="button" onClick={cancel}
+          className="rounded border border-input px-3 py-1 text-sm">{busy ? "Cancel" : "Close preview"}</button>}
+      </div>
+      {busy && <p role="status" className="text-xs">Checking current file access…</p>}
+      {error && <p role="alert" className="text-xs">Attachment unavailable. Access or the original revision could not be verified.</p>}
+      {preview && isCurrentApiPrincipalScope(preview.scope) && (
+        <div className="space-y-1 rounded border border-border p-2">
+          <p className="break-all text-sm font-medium">{preview.value.filename}</p>
+          <pre className="max-h-64 overflow-auto whitespace-pre-wrap break-words text-xs">{preview.value.text}</pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function HistoricalAttachments({ count, messageId }: { count: number; messageId: string }) {
+  const threadId = useContext(VerifiedHistoryThreadContext);
+  const { user, isAuthenticated, isLoading } = useAuth();
+  const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+  const ready = threadId && uuid.test(threadId) && uuid.test(messageId) &&
+    isAuthenticated && !isLoading && user?.tenant_id && user?.user_id;
+  return (
+    <section aria-label="Historical attachments" className="my-3 rounded-xl border border-border/70 p-3">
+      <h3 className="font-semibold text-sm">Historical attachments</h3>
+      <p className="text-sm">{count} originally submitted with this turn.</p>
+      <p className="text-xs text-muted-foreground">{ready
+        ? "Current file access is not verified. Each preview or download checks access again."
+        : "Current file access is not verified. Preview and download are unavailable here."}</p>
+      {ready && user && threadId && <HistoricalAttachmentReadback
+        key={JSON.stringify([threadId, messageId, count, user.tenant_id, user.user_id])}
+        threadId={threadId} messageId={messageId} count={count}
+        tenantId={user.tenant_id} userId={user.user_id} />}
+    </section>
+  );
+}
+
 export function KarenCopilotAssistantMessage(
   props: ComponentProps<typeof CopilotChatAssistantMessage>,
 ) {
@@ -392,6 +565,8 @@ export function KarenCopilotAssistantMessage(
                 </li>)}
               </ul>
             </section>}
+          {part.type === "attachment_history" &&
+            <HistoricalAttachments count={part.value.attachment_count} messageId={props.message.id} />}
           {part.type === "receipt" &&
             <KarenRestoredExecutionReceipt data={part.value} />}
           {part.type === "integrity" &&

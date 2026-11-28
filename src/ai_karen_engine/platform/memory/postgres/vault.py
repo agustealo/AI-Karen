@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence
 
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ai_karen_engine.core.memory.protocols import (
@@ -33,6 +33,7 @@ from ai_karen_engine.core.memory.types import (
     MemoryType,
 )
 
+from .consent_filter import recallable_memory_event
 from .ledger_models import (
     ConsentScope,
     MemoryAssertion,
@@ -284,7 +285,7 @@ class PostgresNeuroVault(VaultPort):
                 ConsentScope.user_id == user_id,
                 ConsentScope.scope_name == scope_name,
             )
-            .order_by(ConsentScope.granted_at.desc())
+            .order_by(ConsentScope.granted_at.desc(), ConsentScope.scope_id.desc())
             .limit(1)
             .with_for_update()
         )
@@ -686,6 +687,31 @@ class PostgresNeuroVault(VaultPort):
             await session.flush()
             session.add(assertion)
             await session.flush()
+            # Check after the assertion PK insert: a competing delete must
+            # finish before a replacement row can acquire that identity.
+            # The committed mutation ledger, not the missing assertion row,
+            # remains the authority for retired IDs.
+            retired_id = func.replace(
+                func.replace(
+                    func.replace(
+                        func.replace(func.lower(MemoryEvent.payload["memory_id"].astext), "urn:uuid:", ""),
+                        "-", "",
+                    ),
+                    "{", "",
+                ),
+                "}", "",
+            )
+            retired = await session.execute(
+                select(MemoryEvent.event_id).where(
+                    MemoryEvent.tenant_id == tenant_uuid,
+                    MemoryEvent.user_id == user_uuid,
+                    MemoryEvent.source_type == "neuro_vault",
+                    MemoryEvent.event_type.in_(("memory_deleted", "memory_tombstoned")),
+                    retired_id == assertion_id.hex,
+                ).limit(1)
+            )
+            if retired.scalar_one_or_none() is not None:
+                raise NeuroVaultAuthorizationError("retired memory identity cannot be reused")
 
         private_standalone = commit and context.private_execution is not None
         try:
@@ -750,6 +776,25 @@ class PostgresNeuroVault(VaultPort):
                 raise NeuroVaultAuthorizationError(
                     "idempotency collision does not match canonical memory write"
                 )
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            live = await session.execute(
+                select(MemoryEvent.event_id)
+                .join(MemoryAssertion, MemoryAssertion.event_id == MemoryEvent.event_id)
+                .where(
+                    MemoryEvent.event_id == existing.event_id,
+                    MemoryAssertion.assertion_id == assertion_id,
+                    MemoryAssertion.tenant_id == tenant_uuid,
+                    MemoryAssertion.user_id == user_uuid,
+                    MemoryAssertion.consent_state == "granted",
+                    or_(MemoryAssertion.valid_from.is_(None), MemoryAssertion.valid_from <= now),
+                    or_(MemoryAssertion.valid_to.is_(None), MemoryAssertion.valid_to > now),
+                    recallable_memory_event(
+                        tenant_id=tenant_uuid, user_id=user_uuid, now=now,
+                    ),
+                )
+            )
+            if live.scalar_one_or_none() is None:
+                raise NeuroVaultAuthorizationError("memory replay no longer authorized")
             replay = VaultWriteReceipt(
                 memory_id=str(existing_assertion.assertion_id),
                 persisted=True,
@@ -792,7 +837,7 @@ class PostgresNeuroVault(VaultPort):
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
         assertion_uuid = self._uuid(memory_id, field_name="memory_id")
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
@@ -804,7 +849,7 @@ class PostgresNeuroVault(VaultPort):
             )
             if assertion is None:
                 return VaultWriteReceipt(memory_id=memory_id, persisted=False, tombstoned=False)
-            assertion.valid_to = now
+            assertion.valid_to = min(assertion.valid_to, now) if assertion.valid_to is not None else now
             source_event = await self._scoped_event(
                 session,
                 assertion.event_id,
@@ -812,13 +857,13 @@ class PostgresNeuroVault(VaultPort):
                 user_uuid=user_uuid,
             )
             if source_event is not None:
-                source_event.valid_to = now
+                source_event.valid_to = min(source_event.valid_to, now) if source_event.valid_to is not None else now
                 source_event.updated_at = now
             event = self._mutation_event(
                 tenant_uuid=tenant_uuid,
                 user_uuid=user_uuid,
                 event_type="memory_tombstoned",
-                memory_id=memory_id,
+                memory_id=str(assertion_uuid),
                 reason=reason,
                 context=context,
             )
@@ -861,14 +906,15 @@ class PostgresNeuroVault(VaultPort):
                 user_uuid=user_uuid,
             )
             if source_event is not None:
-                source_event.valid_to = datetime.utcnow()
-                source_event.updated_at = datetime.utcnow()
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                source_event.valid_to = min(source_event.valid_to, now) if source_event.valid_to is not None else now
+                source_event.updated_at = now
 
             event = self._mutation_event(
                 tenant_uuid=tenant_uuid,
                 user_uuid=user_uuid,
                 event_type="memory_deleted",
-                memory_id=memory_id,
+                memory_id=str(assertion_uuid),
                 reason=reason,
                 context=context,
             )
@@ -893,6 +939,7 @@ class PostgresNeuroVault(VaultPort):
         *,
         context: VaultContext,
     ) -> list[MemoryEntry]:
+        """Export currently usable content; physical integrity is a separate operation."""
         self._require_capability(context, self.READ_CAPABILITY)
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
@@ -902,10 +949,21 @@ class PostgresNeuroVault(VaultPort):
 
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
-            stmt = select(MemoryAssertion).where(
-                MemoryAssertion.assertion_id.in_(ids),
-                MemoryAssertion.tenant_id == tenant_uuid,
-                MemoryAssertion.user_id == user_uuid,
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            stmt = (
+                select(MemoryAssertion)
+                .join(MemoryEvent, MemoryEvent.event_id == MemoryAssertion.event_id)
+                .where(
+                    MemoryAssertion.assertion_id.in_(ids),
+                    MemoryAssertion.tenant_id == tenant_uuid,
+                    MemoryAssertion.user_id == user_uuid,
+                    MemoryAssertion.consent_state == "granted",
+                    or_(MemoryAssertion.valid_from.is_(None), MemoryAssertion.valid_from <= now),
+                    or_(MemoryAssertion.valid_to.is_(None), MemoryAssertion.valid_to > now),
+                    recallable_memory_event(
+                        tenant_id=tenant_uuid, user_id=user_uuid, now=now,
+                    ),
+                )
             )
             result = await session.execute(stmt)
             rows = result.scalars().all()
@@ -917,6 +975,7 @@ class PostgresNeuroVault(VaultPort):
         *,
         context: VaultContext,
     ) -> Mapping[str, bool]:
+        """Check physical scoped row presence, not current content eligibility."""
         self._require_capability(context, self.READ_CAPABILITY)
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
@@ -969,7 +1028,7 @@ class PostgresNeuroVault(VaultPort):
             MemoryEvent.event_id == event_id,
             MemoryEvent.tenant_id == tenant_uuid,
             MemoryEvent.user_id == user_uuid,
-        )
+        ).with_for_update()
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -985,7 +1044,7 @@ class PostgresNeuroVault(VaultPort):
             MemoryAssertion.assertion_id == assertion_id,
             MemoryAssertion.tenant_id == tenant_uuid,
             MemoryAssertion.user_id == user_uuid,
-        )
+        ).with_for_update()
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 

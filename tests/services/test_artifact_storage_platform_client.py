@@ -788,3 +788,38 @@ async def test_revision_pinned_read_preserves_exact_current_bytes(monkeypatch):
     assert result.success and result.data.sha256 == digest
     assert result.data.text == _BODY.decode()
     assert len(bucket.signatures) == 1
+
+@pytest.mark.asyncio
+async def test_bounded_reader_reuses_initialized_private_ca_context(monkeypatch):
+    import certifi
+    from ai_karen_engine.config.artifact_storage import StorageTLSPolicy
+
+    origin = "https://storage.example.test"
+    monkeypatch.setenv("KAREN_SUPABASE_STORAGE_TLS_ORIGIN", origin)
+    monkeypatch.setenv("KAREN_SUPABASE_STORAGE_TLS_CA_FILE", certifi.where())
+    policy = StorageTLSPolicy.from_environment(origin)
+    assert policy is not None
+    store, bucket, _ = bounded_store(monkeypatch)
+    store._storage.storage_tls_policy = policy
+    instrumented = httpx.AsyncClient
+    contexts = []
+
+    def capture(*args, **kwargs):
+        contexts.append(kwargs["verify"])
+        return instrumented(*args, **kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", capture)
+    result = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER, max_bytes=65536
+    )
+    assert result.success
+    assert contexts == [policy.verify_for_origin(origin)]
+    assert len(bucket.signatures) == 1
+
+    store._storage.url = "https://other.example.test"
+    result = await store.read_owner_active_text_bounded(
+        _ARTIFACT, _TENANT, _OWNER, max_bytes=65536
+    )
+    assert not result.success
+    assert len(bucket.signatures) == 1
+    assert len(contexts) == 1

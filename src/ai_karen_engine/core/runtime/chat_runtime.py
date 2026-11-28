@@ -782,12 +782,16 @@ class ChatRuntime:
                 ),
             )
 
+        personal_claim_fence: Dict[str, Any] = {}
         try:
             grounded = self._grounded_personal_response(
                 decision, tenant_id=ctx.tenant_id, user_id=ctx.user_id
             )
             if grounded is not None and not self._is_explicit_save_turn(request):
                 text, provider_meta = grounded
+                claim_ids = provider_meta.pop("_grounded_memory_ids", ())
+                if claim_ids:
+                    personal_claim_fence["required_memory_ids"] = claim_ids
             elif self._is_explicit_save_turn(request):
                 text = await self._execute_memory_write_receipt(request, decision, plan, memory_recall_meta)
                 provider_meta = {"response_source": "memory_persistence", "actual_provider": None, "actual_model": None}
@@ -1144,7 +1148,7 @@ class ChatRuntime:
         # A source revoked after inference cannot become a durable success.
         try:
             await ChatRuntime._authorize_selected_memory_before_generation(
-                request, decision
+                request, decision, **personal_claim_fence
             )
         except asyncio.CancelledError:
             await self._observe_request_cancellation(
@@ -1180,7 +1184,7 @@ class ChatRuntime:
         # projection above is a separate concern, not transcript storage.
         try:
             await ChatRuntime._authorize_selected_memory_before_generation(
-                request, decision
+                request, decision, **personal_claim_fence
             )
         except asyncio.CancelledError:
             await self._observe_request_cancellation(
@@ -1623,11 +1627,15 @@ class ChatRuntime:
         stream_error_code = "CHAT_STREAM_ERROR"
         stream_error_type = "UpstreamStreamError"
 
+        personal_claim_fence: Dict[str, Any] = {}
         grounded = self._grounded_personal_response(
             decision, tenant_id=ctx.tenant_id, user_id=ctx.user_id
         )
         if grounded is not None and not self._is_explicit_save_turn(request):
             grounded_text, grounded_meta = grounded
+            claim_ids = grounded_meta.pop("_grounded_memory_ids", ())
+            if claim_ids:
+                personal_claim_fence["required_memory_ids"] = claim_ids
             provider_meta.update(grounded_meta)
 
             async def grounded_stream() -> AsyncIterator[ChatStreamChunk]:
@@ -1737,7 +1745,7 @@ class ChatRuntime:
                     # reasoning, graph and provider stream paths. Check before
                     # each publication, not only when the provider queues it.
                     await ChatRuntime._authorize_selected_memory_before_generation(
-                        request, decision
+                        request, decision, **personal_claim_fence
                     )
                     if chunk.content and first_content_latency_ms is None:
                         first_content_latency_ms = (
@@ -1998,7 +2006,7 @@ class ChatRuntime:
         if generation_error is None:
             try:
                 await ChatRuntime._authorize_selected_memory_before_generation(
-                    request, decision
+                    request, decision, **personal_claim_fence
                 )
             except asyncio.CancelledError:
                 await self._observe_request_cancellation(
@@ -2181,7 +2189,7 @@ class ChatRuntime:
             # source as completed at the last application-owned boundary.
             try:
                 await ChatRuntime._authorize_selected_memory_before_generation(
-                    request, decision
+                    request, decision, **personal_claim_fence
                 )
             except asyncio.CancelledError:
                 await self._observe_request_cancellation(
@@ -2915,16 +2923,29 @@ class ChatRuntime:
                 ("work_location", "work location"),
             )
             verified = []
+            verified_memory_ids: list[str] = []
             conversational = False
+            incomplete = False
             for key, _label in fields:
                 saved = evaluate_personal_evidence(
                     decision.cognitive_context,
                     tenant_id=tenant_id, user_id=user_id, attribute=key,
                 )
+                if saved.reason == "incomplete_memory_retrieval":
+                    incomplete = True
+                    continue
                 recent = evaluate_conversation_personal_evidence(
                     decision.cognitive_context,
                     tenant_id=tenant_id, user_id=user_id, attribute=key,
                 )
+                # An identity summary must not be a weaker assertion boundary
+                # than a direct question about the same fact. A disputed
+                # conversation cannot rehabilitate an older saved singleton.
+                if recent.status in {
+                    EvidenceSufficiencyStatus.CONTRADICTORY,
+                    EvidenceSufficiencyStatus.AMBIGUOUS,
+                }:
+                    continue
                 if (
                     saved.status is EvidenceSufficiencyStatus.SUPPORTED
                     and recent.status is EvidenceSufficiencyStatus.SUPPORTED
@@ -2933,6 +2954,7 @@ class ChatRuntime:
                     continue  # Do not silently promote a disputed identity.
                 if saved.status is EvidenceSufficiencyStatus.SUPPORTED:
                     verified.append((key, saved))
+                    verified_memory_ids.extend(saved.evidence_ids)
                 elif (
                     saved.status in {EvidenceSufficiencyStatus.MISSING, EvidenceSufficiencyStatus.EXPIRED}
                     and recent.status is EvidenceSufficiencyStatus.SUPPORTED
@@ -2940,9 +2962,13 @@ class ChatRuntime:
                     verified.append((key, recent))
                     conversational = True
             meta = {
-                "evidence_sufficiency": "supported" if verified else "missing",
-                "evidence_reason": "verified_identity_summary" if verified else "no_verified_identity_facts",
+                "evidence_sufficiency": "ambiguous" if incomplete else ("supported" if verified else "missing"),
+                "evidence_reason": (
+                    "incomplete_memory_retrieval" if incomplete
+                    else "verified_identity_summary" if verified else "no_verified_identity_facts"
+                ),
                 "evidence_count": sum(len(result.evidence_ids) for _, result in verified),
+                "_grounded_memory_ids": tuple(dict.fromkeys(verified_memory_ids)),
                 "response_source": (
                     "authorized_conversation_evidence"
                     if conversational else "authorized_memory_evidence"
@@ -2951,13 +2977,18 @@ class ChatRuntime:
                 "actual_model": None,
             }
             if not verified:
+                if incomplete:
+                    return "I couldn't complete saved-memory retrieval, so I can't verify your identity details right now.", meta
                 return "I don't have enough verified information saved to describe who you are.", meta
             from ai_karen_engine.core.runtime.grounded_response_composer import (
                 compose_identity_summary,
             )
 
             facts = {key: result.value for key, result in verified}
-            return compose_identity_summary(facts), meta
+            summary = compose_identity_summary(facts)
+            if incomplete:
+                summary += " I couldn't complete saved-memory retrieval, so this summary may be incomplete."
+            return summary, meta
         result = evaluate_personal_evidence(
             decision.cognitive_context,
             tenant_id=tenant_id,
@@ -2994,6 +3025,7 @@ class ChatRuntime:
                 "evidence_sufficiency": "ambiguous",
                 "evidence_reason": recent.reason,
                 "evidence_count": len(recent.evidence_ids) + len(result.evidence_ids),
+                "_grounded_memory_ids": result.evidence_ids,
                 "response_source": "authorized_memory_evidence",
                 "actual_provider": None,
                 "actual_model": None,
@@ -3028,6 +3060,7 @@ class ChatRuntime:
                 "evidence_sufficiency": "ambiguous",
                 "evidence_reason": "saved_set_and_conversation_need_reconciliation",
                 "evidence_count": len(result.evidence_ids) + len(recent.evidence_ids),
+                "_grounded_memory_ids": result.evidence_ids,
                 "response_source": "authorized_memory_evidence",
                 "actual_provider": None,
                 "actual_model": None,
@@ -3041,6 +3074,7 @@ class ChatRuntime:
                 "evidence_sufficiency": "contradictory",
                 "evidence_reason": "saved_and_conversation_disagree",
                 "evidence_count": len(result.evidence_ids) + len(recent.evidence_ids),
+                "_grounded_memory_ids": result.evidence_ids,
                 "response_source": "authorized_memory_evidence",
                 "actual_provider": None, "actual_model": None,
             }
@@ -3067,6 +3101,15 @@ class ChatRuntime:
             "evidence_sufficiency": result.status.value,
             "evidence_reason": result.reason,
             "evidence_count": len(result.evidence_ids),
+            "_grounded_memory_ids": (
+                result.evidence_ids
+                if result.status in {
+                    EvidenceSufficiencyStatus.SUPPORTED,
+                    EvidenceSufficiencyStatus.SUPPORTED_SET,
+                    EvidenceSufficiencyStatus.CONTRADICTORY,
+                    EvidenceSufficiencyStatus.EXPIRED,
+                } else ()
+            ),
             "response_source": "authorized_memory_evidence",
             "actual_provider": None,
             "actual_model": None,
@@ -3090,6 +3133,18 @@ class ChatRuntime:
                     "evidence_value_count": len(result.values),
                 },
             )
+        if result.reason == "incomplete_memory_retrieval":
+            if recent.status is EvidenceSufficiencyStatus.SUPPORTED:
+                return (
+                    f"You told me in this conversation that your {fact_label} is {recent.value}. "
+                    "I couldn't complete saved-memory retrieval to verify it.",
+                    {
+                        **metadata,
+                        "response_source": "authorized_conversation_evidence",
+                        "evidence_count": len(recent.evidence_ids),
+                    },
+                )
+            return "I couldn't complete saved-memory retrieval, so I can't verify that detail right now.", metadata
         if result.status is EvidenceSufficiencyStatus.AMBIGUOUS:
             return "Which detail about you would you like me to recall?", metadata
         if result.status is EvidenceSufficiencyStatus.CONTRADICTORY:
@@ -5356,6 +5411,8 @@ class ChatRuntime:
     async def _authorize_selected_memory_before_generation(
         request: ChatExecutionRequest,
         decision: ExecutionDecision,
+        *,
+        required_memory_ids: tuple[str, ...] = (),
     ) -> None:
         """Fail closed for selected PostgreSQL memories before model dispatch.
 
@@ -5369,12 +5426,17 @@ class ChatRuntime:
         )
 
         selected = ChatRuntime._selected_memory_for_generation(request, decision)
+        selected_ids = {str(item["id"]) for item in selected}
+        required_ids = set(required_memory_ids)
+        # A deterministic personal response must not escape the same bounded
+        # policy-approved memory selection that publication reauthorizes.
+        if not required_ids <= selected_ids:
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
         if not selected:
             return
         context = getattr(decision, "cognitive_context", None)
         if context is None:
             raise RuntimeError("memory_source_revoked_or_unverifiable")
-        selected_ids = {str(item["id"]) for item in selected}
         origins: list[dict[str, str]] = []
         seen: set[str] = set()
         for evidence in context.evidence:
@@ -5384,8 +5446,11 @@ class ChatRuntime:
                 or evidence.scope.tenant_id != request.context.tenant_id
                 or evidence.scope.user_id != request.context.user_id
                 or evidence.evidence_id not in selected_ids
-                or evidence.evidence_id in seen
             ):
+                continue
+            if evidence.evidence_id in seen:
+                if evidence.evidence_id in required_ids:
+                    raise RuntimeError("memory_source_revoked_or_unverifiable")
                 continue
             seen.add(evidence.evidence_id)
             metadata = evidence.metadata if isinstance(evidence.metadata, dict) else {}
@@ -5393,6 +5458,12 @@ class ChatRuntime:
             memory_metadata = memory_metadata if isinstance(memory_metadata, dict) else {}
             source = memory_metadata.get("source")
             origin = metadata.get("canonical_event_origin")
+            if evidence.evidence_id in required_ids and (
+                not isinstance(origin, dict)
+                or origin.get("record_id") != evidence.evidence_id
+                or not origin.get("record_updated_at")
+            ):
+                raise RuntimeError("memory_source_revoked_or_unverifiable")
             if isinstance(source, str) and source.startswith("postgres"):
                 if not isinstance(origin, dict) or not origin.get("record_updated_at"):
                     raise RuntimeError("memory_source_revoked_or_unverifiable")
@@ -5400,6 +5471,8 @@ class ChatRuntime:
                 if not isinstance(origin, dict) or not origin.get("record_updated_at"):
                     raise RuntimeError("memory_source_revoked_or_unverifiable")
                 origins.append(origin)
+        if not required_ids <= seen:
+            raise RuntimeError("memory_source_revoked_or_unverifiable")
         if not origins:
             return
         try:
@@ -6831,16 +6904,6 @@ class ChatRuntime:
             decision.policy_constraints.get("personal_evidence_attribute")
             if decision.intent == "memory.recall" else None
         )
-        md.extra["personal_recall_grounded"] = (
-            normalized.get("response_source") in {
-                "authorized_memory_evidence", "authorized_conversation_evidence",
-            }
-        )
-        md.extra["personal_recall_evidence_source"] = (
-            normalized.get("response_source")
-            if md.extra["personal_recall_grounded"] else None
-        )
-
         if memory_meta:
             md.extra.update(
                 {k: v for k, v in memory_meta.items() if k not in md.extra}
@@ -6856,10 +6919,25 @@ class ChatRuntime:
                 if k not in _CANONICAL_META_KEYS
             }
         )
+        # Response-source attribution alone is not a successful fact
+        # assertion: the same paths also explain missing or disputed facts.
+        # Derive these diagnostics after merging other metadata.
+        md.extra["personal_recall_grounded"] = (
+            decision.intent == "memory.recall"
+            and normalized.get("response_source") in (
+                "authorized_memory_evidence", "authorized_conversation_evidence",
+            )
+            and normalized.get("evidence_sufficiency") in ("supported", "supported_set")
+        )
+        md.extra["personal_recall_evidence_source"] = (
+            normalized.get("response_source")
+            if md.extra["personal_recall_grounded"] else None
+        )
         # This is private transcript evidence, not a public response extension.
         # Strip it after both memory and provider metadata merges, including
         # nonleased, failed and unverified persistence paths.
         md.extra.pop("verified_citation_receipt_v1", None)
+        md.extra.pop("_grounded_memory_ids", None)
         md.extra["consumer_insights"] = build_consumer_insights(
             prompt_telemetry=normalized.get("prompt_telemetry"),
             provider_usage=normalized.get("usage"),

@@ -8,7 +8,10 @@ from __future__ import annotations
 
 import math
 import os
-from dataclasses import dataclass
+import ssl
+from dataclasses import dataclass, field
+from pathlib import Path
+from urllib.parse import urlsplit
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,3 +106,65 @@ class ArtifactStorageConfig:
             style_use_max_document_sources=count,
             style_use_integrity_total_timeout_seconds=total,
         )
+
+@dataclass(frozen=True, slots=True)
+class StorageTLSPolicy:
+    """Opt-in, deployment-owned private CA trust for one HTTPS Storage origin.
+
+    Both signing and bounded reads use the same initialized policy. No
+    environment proxy or implicit system CA expansion is needed.
+    """
+
+    origin: str
+    _context: ssl.SSLContext = field(repr=False, compare=False)
+
+    @staticmethod
+    def _identity(raw: str, *, root_only: bool) -> tuple[str, str, int]:
+        try:
+            parts = urlsplit(raw)
+            port = parts.port
+            if (
+                any(ord(ch) <= 32 or ord(ch) == 127 for ch in raw)
+                or parts.scheme != "https"
+                or not parts.hostname
+                or (port is not None and not 1 <= port <= 65535)
+                or parts.username is not None
+                or parts.password is not None
+                or parts.fragment
+                or (root_only and (parts.path not in ("", "/") or parts.query))
+            ):
+                raise ValueError
+            return parts.scheme, parts.hostname, 443 if port is None else port
+        except (TypeError, ValueError) as exc:
+            raise ValueError("Invalid private Storage TLS origin") from exc
+
+    @classmethod
+    def from_environment(cls, origin: str) -> "StorageTLSPolicy | None":
+        configured = os.getenv("KAREN_SUPABASE_STORAGE_TLS_ORIGIN")
+        ca_file = os.getenv("KAREN_SUPABASE_STORAGE_TLS_CA_FILE")
+        if configured is None and ca_file is None:
+            return None
+        if not configured or not ca_file:
+            raise ValueError("Private Storage TLS requires origin and CA file")
+        if cls._identity(configured, root_only=True) != cls._identity(origin, root_only=True):
+            raise ValueError("Private Storage TLS origin does not match the platform")
+        if not Path(ca_file).is_absolute():
+            raise ValueError("Private Storage TLS requires an absolute CA file")
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(cafile=ca_file)
+        return cls(configured, context)
+
+    def _require_verified_context(self) -> None:
+        if self._context.verify_mode != ssl.CERT_REQUIRED or not self._context.check_hostname:
+            raise ValueError("Private Storage TLS certificate checks are required")
+
+    def require_destination(self, url: str) -> None:
+        self._require_verified_context()
+        if self._identity(url, root_only=False) != self._identity(self.origin, root_only=True):
+            raise ValueError("Private Storage TLS destination differs from the configured origin")
+
+    def verify_for_origin(self, origin: str) -> ssl.SSLContext:
+        self._require_verified_context()
+        if self._identity(origin, root_only=True) != self._identity(self.origin, root_only=True):
+            raise ValueError("Private Storage TLS origin changed")
+        return self._context

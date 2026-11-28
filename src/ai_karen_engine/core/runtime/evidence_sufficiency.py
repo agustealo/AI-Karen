@@ -40,6 +40,94 @@ class EvidenceSufficiency:
         return self.status in {EvidenceSufficiencyStatus.SUPPORTED, EvidenceSufficiencyStatus.SUPPORTED_SET}
 
 
+def _memory_recall_degraded(context: CognitiveContext) -> bool:
+    metadata = getattr(context, "metadata", {})
+    health = metadata.get("memory_retrieval_health")
+    return (
+        bool(metadata.get("memory_degraded"))
+        or metadata.get("memory_recall_status") in ("degraded", "failed", "unavailable", "error")
+        or (isinstance(health, dict) and health.get("status") == "degraded")
+    )
+
+
+def _profile_candidate_ids(context: CognitiveContext) -> set[str]:
+    return {
+        item.evidence_id
+        for item in context.evidence
+        if item.source is EvidenceSource.MEMORY
+        and item.scope is not None
+        and item.scope.tenant_id == context.tenant_id
+        and item.scope.user_id == context.user_id
+        and isinstance(getattr(item, "fact_semantics", None), EvidenceFactSemantics)
+    }
+
+
+def _profile_batch_incomplete(context: CognitiveContext) -> bool:
+    """A source receipt must survive both database and final context bounds."""
+    health = getattr(context, "metadata", {}).get("memory_retrieval_health")
+    if not isinstance(health, dict):
+        return False
+    rows = health.get("source_health")
+    if not isinstance(rows, (list, tuple)):
+        return False
+    profiles = [
+        row for row in rows
+        if isinstance(row, dict) and row.get("retriever") == "PostgresProfileRecallRetriever"
+    ]
+    if not profiles:
+        return False
+    if len(profiles) != 1:
+        return True
+    row = profiles[0]
+    count = row.get("candidate_count")
+    return (
+        row.get("candidate_batch_complete") is not True
+        or type(count) is not int
+        or count != len(_profile_candidate_ids(context))
+    )
+
+
+def _profile_sources_completed(context: CognitiveContext) -> bool:
+    """A known unrelated failure cannot invalidate an independently typed fact.
+
+    The receipt comes from runtime context assembly, never from candidate
+    metadata. Unknown/missing/duplicate sources cannot establish completeness.
+    """
+    metadata = getattr(context, "metadata", {})
+    if metadata.get("memory_recall_status") != "degraded":
+        return False
+    health = metadata.get("memory_retrieval_health")
+    if not isinstance(health, dict):
+        return False
+    rows = health.get("source_health")
+    if not isinstance(rows, (list, tuple)) or not rows:
+        return False
+    statuses = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            return False
+        name, status = row.get("retriever"), row.get("status")
+        if not isinstance(name, str) or name in statuses or status not in (
+            "success", "failed", "timeout",
+        ):
+            return False
+        statuses[name] = status
+    required = {"PostgresProfileRecallRetriever", "PostgresRecallRetriever", "HybridRetrievalRouter"}
+    unrelated = {
+        "PostgresProceduralRecallRetriever", "PostgresUserStateRecallRetriever",
+    }
+    # A successful retriever is not proof that fusion, authorization,
+    # deduplication and the final top-k preserved every profile candidate.
+    # Do not certify a singleton or set from a lossy degraded batch.
+    return (
+        not _profile_batch_incomplete(context)
+        and bool(_profile_candidate_ids(context))
+        and set(statuses) == required | unrelated
+        and all(statuses.get(name) == "success" for name in required)
+        and any(status != "success" for status in statuses.values())
+    )
+
+
 def evaluate_personal_evidence(
     context: CognitiveContext | None,
     *,
@@ -65,10 +153,16 @@ def evaluate_personal_evidence(
         or context.user_id != user_id
         or EvidenceSource.MEMORY.value not in context.authorized_sources
         or EvidenceSource.MEMORY.value in context.denied_sources
-        or EvidenceSource.MEMORY.value in context.unresolved_sources
     ):
         return EvidenceSufficiency(
             EvidenceSufficiencyStatus.MISSING, attribute, reason="memory_not_authorized_or_resolved"
+        )
+    degraded = _memory_recall_degraded(context)
+    if EvidenceSource.MEMORY.value in context.unresolved_sources:
+        return EvidenceSufficiency(
+            EvidenceSufficiencyStatus.AMBIGUOUS if degraded else EvidenceSufficiencyStatus.MISSING,
+            attribute,
+            reason="incomplete_memory_retrieval" if degraded else "memory_not_authorized_or_resolved",
         )
 
     # Query scope is supplied by CORTEX's typed interpretation, not by
@@ -164,6 +258,16 @@ def evaluate_personal_evidence(
         return EvidenceSufficiency(
             EvidenceSufficiencyStatus.CONTRADICTORY, attribute,
             evidence_ids=tuple(conflict_ids), reason="flagged_contradiction",
+        )
+    if _profile_batch_incomplete(context) or (degraded and not (
+        live
+        and _profile_sources_completed(context)
+        and all(item[2] is not None and item[2].attribute == attribute for item in live)
+    )):
+        return EvidenceSufficiency(
+            EvidenceSufficiencyStatus.AMBIGUOUS, attribute,
+            evidence_ids=tuple(item[0] for item in live),
+            reason="incomplete_memory_retrieval",
         )
     if live:
         if cardinality is None:
@@ -277,7 +381,7 @@ def evaluate_conversation_personal_evidence(
             EvidenceSufficiencyStatus.MISSING, attribute, reason="conversation_unavailable",
         )
     from ai_karen_engine.core.memory.signals.semantic_classifier import (
-        classify_explicit_user_memory,
+        classify_explicit_user_memory, is_direct_profile_correction,
     )
     facts: list[tuple[str, str, bool]] = []
     for item in context.evidence:
@@ -293,11 +397,14 @@ def evaluate_conversation_personal_evidence(
         # Classification, not a first-token guess, establishes first-person
         # attribution. This also admits "Black is my favorite color" while
         # rejecting reported speech and quotes via the shared interpreter.
+        # Admit only an anchored direct-fact match after the canonical
+        # correction preamble, never an embedded report or uncertain claim.
         if len(user_text) > 500 or (
             not user_text.casefold().startswith(
                 ("my ", "i ", "i'm ", "i’ve ", "i've ", "call me ")
             )
             and not attribute.startswith("favorite_")
+            and not is_direct_profile_correction(user_text, attribute)
         ):
             continue
         for signal in classify_explicit_user_memory(user_text):
