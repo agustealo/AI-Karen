@@ -197,6 +197,7 @@ jobs:
         run: |
           pytest tests/architecture/test_ci_dependency_authority.py -q
           pytest tests/architecture/test_application_lifecycle_authority.py -q
+          pytest tests/persistence/test_database_recovery_hold.py -q
           pytest tests/platform/observability/test_metrics_labels.py tests/platform/observability/test_prometheus_exposition.py tests/platform/observability/test_contracts_and_events.py::TestMetricsCollectorIncrements tests/architecture/test_metrics_authority.py -q
           pytest tests/architecture/test_free_plugin_release_mirrors.py -q
           pytest tests/architecture/test_main_quality_presentation_contract.py -q
