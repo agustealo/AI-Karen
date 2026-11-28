@@ -186,7 +186,7 @@ async def test_revision_pinned_text_route_enforces_current_access(monkeypatch, c
     monkeypatch.setattr(routes, "get_rbac_manager", lambda: rbac)
     revalidate = AsyncMock(side_effect=[None, PermissionError()] if case == "revoked" else None)
     monkeypatch.setattr(routes, "ChatExecutionContext",
-                        lambda **kwargs: SimpleNamespace(revalidate_runtime_attachment_session=revalidate))
+                        lambda **kwargs: SimpleNamespace(**kwargs, revalidate_runtime_attachment_session=revalidate))
     value = VerifiedArtifactText(
         artifact_id=artifact_id, tenant_id=principal.tenant_id, user_id=principal.user_id,
         filename="example.txt", mime_type="text/plain",
@@ -216,6 +216,82 @@ async def test_revision_pinned_text_route_enforces_current_access(monkeypatch, c
         assert exc.value.status_code == (403 if case == "revoked" else 404)
         assert "private test text" not in str(exc.value.detail)
     if case == "invalid":
+        read.assert_not_awaited()
+    else:
+        read.assert_awaited_once_with(
+            artifact_id, principal.tenant_id, principal.user_id,
+            max_bytes=65536, expected_sha256=revision,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["match", "missing", "revoked", "wrong_revision", "invalid", "disabled"])
+async def test_historical_attachment_route_requires_receipt_and_fresh_current_access(monkeypatch, case):
+    from unittest.mock import AsyncMock
+    from fastapi import Request, Response
+    from ai_karen_engine.core.runtime.owned_history_projection import UnreplayableHistory
+    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
+
+    artifact_id = "11111111-1111-4111-8111-111111111111"
+    thread_id = "44444444-4444-4444-8444-444444444444"
+    assistant_id = "55555555-5555-4555-8555-555555555555"
+    revision = "a" * 64
+    principal = SimpleNamespace(
+        tenant_id="22222222-2222-4222-8222-222222222222",
+        user_id="33333333-3333-4333-8333-333333333333",
+    )
+    monkeypatch.setattr(routes, "coerce_tenant_id", str)
+    monkeypatch.setattr(routes, "coerce_user_id", str)
+    monkeypatch.setattr(routes, "get_runtime_settings", lambda: SimpleNamespace(
+        features=SimpleNamespace(enable_ag_ui_bridge=case != "disabled", enable_ag_ui_durable_runs=True),
+    ))
+    monkeypatch.setattr(routes, "get_rbac_manager", lambda: SimpleNamespace(
+        has_permission=lambda *args: True, audit_access_attempt=lambda *args, **kwargs: None,
+    ))
+    revalidate = AsyncMock(side_effect=[None, None, PermissionError()] if case == "revoked" else None)
+    monkeypatch.setattr(routes, "ChatExecutionContext", lambda **kwargs: SimpleNamespace(
+        **kwargs, revalidate_runtime_attachment_session=revalidate,
+    ))
+    resolve = AsyncMock(return_value={"source_id": artifact_id, "revision": revision})
+    if case == "missing":
+        resolve.side_effect = UnreplayableHistory("unsupported_rich_history")
+    monkeypatch.setattr(routes, "read_owned_historical_attachment_reference", resolve)
+    value = VerifiedArtifactText(
+        artifact_id=artifact_id, tenant_id=principal.tenant_id, user_id=principal.user_id,
+        filename="example.txt", mime_type="text/plain",
+        sha256="b" * 64 if case == "wrong_revision" else revision, text="private text",
+    )
+    read = AsyncMock(return_value=RepositoryResult(success=True, data=value))
+    monkeypatch.setattr(routes, "_get_artifact_store", lambda: SimpleNamespace(
+        read_owner_active_text_bounded=read,
+    ))
+    request = Request({"type": "http", "path": "/artifacts/history/test",
+                       "scheme": "http", "server": ("test", 80), "headers": []})
+    response = Response()
+    if case == "match":
+        result = await routes.read_historical_attachment_text(
+            thread_id, assistant_id, 1, request, response, current_user=principal,
+        )
+        assert result == {"filename": "example.txt", "mime_type": "text/plain",
+                          "size_bytes": 12, "text": "private text"}
+        assert response.headers["Cache-Control"] == "private, no-store"
+    else:
+        with pytest.raises(HTTPException) as exc:
+            await routes.read_historical_attachment_text(
+                thread_id, assistant_id, 0 if case == "invalid" else 1,
+                request, response, current_user=principal,
+            )
+        assert exc.value.status_code == (403 if case == "revoked" else 404)
+        assert "private text" not in str(exc.value.detail)
+    if case in {"invalid", "disabled"}:
+        resolve.assert_not_awaited()
+    else:
+        resolve.assert_awaited_once()
+        context = resolve.await_args.args[0]
+        assert context.conversation_id == thread_id
+        assert context.authenticated_user is principal
+        assert resolve.await_args.kwargs == {"assistant_message_id": assistant_id, "ordinal": 1}
+    if case in {"invalid", "disabled", "missing"}:
         read.assert_not_awaited()
     else:
         read.assert_awaited_once_with(

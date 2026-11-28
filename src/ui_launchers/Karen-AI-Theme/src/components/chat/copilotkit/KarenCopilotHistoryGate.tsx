@@ -628,7 +628,7 @@ export function KarenCopilotHistoryGate({
   }
   return (
     <ScopedAgentContext.Provider value={{ ...registration, refreshVerifiedHistory, recoveryRun, revisionBoundSubmission, attachmentDraftSubmission }}>
-      <KarenVerifiedHistoryProvider parts={verifiedParts}>
+      <KarenVerifiedHistoryProvider parts={verifiedParts} conversationId={conversationId}>
         {recoveryRun && (
           <section aria-label="Saved run recovery" className="space-y-2 border-b border-border px-3 py-2">
             <p role="status" className="text-sm">

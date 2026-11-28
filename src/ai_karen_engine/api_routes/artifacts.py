@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
+from uuid import UUID
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
@@ -21,6 +22,9 @@ from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
 from ai_karen_engine.database.factory import DatabaseServiceFactory
 from ai_karen_engine.database.id_types import coerce_tenant_id, coerce_user_id
 from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+from ai_karen_engine.config.runtime import get_runtime_settings
+from ai_karen_engine.core.runtime.conversation_runtime_gateway import read_owned_historical_attachment_reference
+from ai_karen_engine.core.runtime.owned_history_projection import UnreplayableHistory
 
 logger = logging.getLogger(__name__)
 
@@ -247,18 +251,7 @@ async def list_owned_artifact_page(
     )
 
 
-@router.get("/{artifact_id}/text")
-async def read_artifact_text(
-    artifact_id: str,
-    request: Request,
-    response: Response,
-    current_user=Depends(get_chat_execution_context),
-    revision: str | None = None,
-):
-    """Return currently authorized owner text, optionally pinned to a revision."""
-    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
-    from uuid import UUID
-
+def _artifact_text_context(request: Request, current_user, *, conversation_id=None):
     tenant_id, user_id = _artifact_principal(current_user)
     rbac = get_rbac_manager()
     allowed = rbac.has_permission(current_user, Permission.DATA_READ)
@@ -269,6 +262,27 @@ async def read_artifact_text(
     )
     if not allowed:
         raise HTTPException(status_code=403, detail="Artifact access denied")
+    return ChatExecutionContext(
+        user_id=user_id, tenant_id=tenant_id, authenticated_user=current_user,
+        conversation_id=conversation_id,
+        request_id=getattr(request.state, "request_id", None),
+    )
+
+
+async def _revalidate_artifact_text_context(context: ChatExecutionContext) -> None:
+    try:
+        await context.revalidate_runtime_attachment_session()
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Artifact access denied") from None
+
+
+async def _read_verified_artifact_text(
+    context: ChatExecutionContext, artifact_id: str, revision: str | None,
+    response: Response,
+):
+    """Shared current-access boundary for direct and historical owner reads."""
+    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
+
     try:
         if str(UUID(artifact_id)) != artifact_id:
             raise ValueError("noncanonical artifact ID")
@@ -276,24 +290,13 @@ async def read_artifact_text(
             not isinstance(revision, str) or re.fullmatch(r"[a-f0-9]{64}", revision) is None
         ):
             raise ValueError("noncanonical artifact revision")
-    except ValueError:
+    except (ValueError, TypeError):
         raise HTTPException(status_code=404, detail="Artifact text unavailable") from None
-    # The existing witness-based private-data boundary rejects development
-    # identities, stale RBAC and revoked sessions. Recheck after storage I/O.
-    context = ChatExecutionContext(
-        user_id=user_id, tenant_id=tenant_id, authenticated_user=current_user,
-        request_id=getattr(request.state, "request_id", None),
-    )
-    try:
-        await context.revalidate_runtime_attachment_session()
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="Artifact access denied") from None
+    await _revalidate_artifact_text_context(context)
     store = _get_artifact_store()
-    # Preserve the existing unpinned read contract. A legacy adapter that
-    # cannot enforce the revision must never fall back to an unpinned read.
     try:
         result = await store.read_owner_active_text_bounded(
-            artifact_id, tenant_id, user_id, max_bytes=65536,
+            artifact_id, context.tenant_id, context.user_id, max_bytes=65536,
             **({"expected_sha256": revision} if revision is not None else {}),
         )
     except TypeError:
@@ -301,20 +304,76 @@ async def read_artifact_text(
     value = result.data
     if (
         not result.success or not isinstance(value, VerifiedArtifactText)
-        or (value.artifact_id, value.tenant_id, value.user_id) != (artifact_id, tenant_id, user_id)
+        or (value.artifact_id, value.tenant_id, value.user_id)
+        != (artifact_id, context.tenant_id, context.user_id)
         or (revision is not None and value.sha256 != revision)
     ):
         raise HTTPException(status_code=404, detail="Artifact text unavailable")
-    try:
-        await context.revalidate_runtime_attachment_session()
-    except PermissionError:
-        raise HTTPException(status_code=403, detail="Artifact access denied") from None
+    await _revalidate_artifact_text_context(context)
     response.headers["Cache-Control"] = "private, no-store"
     return {
         "artifact_id": value.artifact_id, "filename": value.filename,
         "mime_type": value.mime_type, "sha256": value.sha256,
         "size_bytes": len(value.text.encode("utf-8")), "text": value.text,
     }
+
+
+@router.get("/{artifact_id}/text")
+async def read_artifact_text(
+    artifact_id: str,
+    request: Request,
+    response: Response,
+    current_user=Depends(get_chat_execution_context),
+    revision: str | None = None,
+):
+    """Return currently authorized owner text, optionally pinned to a revision."""
+    context = _artifact_text_context(request, current_user)
+    return await _read_verified_artifact_text(context, artifact_id, revision, response)
+
+
+@router.get("/history/{thread_id}/{assistant_message_id}/{ordinal}/text")
+async def read_historical_attachment_text(
+    thread_id: str,
+    assistant_message_id: str,
+    ordinal: int,
+    request: Request,
+    response: Response,
+    current_user=Depends(get_chat_execution_context),
+):
+    """Resolve original provenance and reauthorize the current owner text."""
+    features = get_runtime_settings().features
+    if not (
+        features.enable_ag_ui_bridge
+        and getattr(features, "enable_ag_ui_durable_runs", False)
+    ):
+        raise HTTPException(status_code=404, detail="Artifact text unavailable")
+    try:
+        if str(UUID(thread_id)) != thread_id or str(UUID(assistant_message_id)) != assistant_message_id:
+            raise ValueError("noncanonical history identity")
+        if type(ordinal) is not int or not 1 <= ordinal <= 12:
+            raise ValueError("invalid attachment ordinal")
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=404, detail="Artifact text unavailable") from None
+    context = _artifact_text_context(request, current_user, conversation_id=thread_id)
+    await _revalidate_artifact_text_context(context)
+    try:
+        reference = await read_owned_historical_attachment_reference(
+            context, assistant_message_id=assistant_message_id, ordinal=ordinal,
+        )
+    except (PermissionError, UnreplayableHistory):
+        raise HTTPException(status_code=404, detail="Artifact text unavailable") from None
+    except Exception as exc:
+        if isinstance(exc, RuntimeError) and str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Artifact text unavailable") from None
+        logger.warning("Historical artifact provenance unavailable", extra={
+            "correlation_id": context.correlation_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Artifact text unavailable") from None
+    value = await _read_verified_artifact_text(
+        context, reference["source_id"], reference["revision"], response,
+    )
+    # Do not expose internal reference identities or revisions on this surface.
+    return {key: value[key] for key in ("filename", "mime_type", "size_bytes", "text")}
 
 
 @router.get("/{artifact_id}", response_model=ArtifactMetadataResponse)
