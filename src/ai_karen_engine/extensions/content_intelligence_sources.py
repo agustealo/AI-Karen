@@ -265,6 +265,18 @@ def validate_runtime_content_payload(
         raise ValueError("content_source_operation_invalid")
 
 
+def validate_runtime_content_output(
+    output: Any, *, admitted_payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate executor results against the detached pre-handler input."""
+    return _validate_source_output(
+        output, operation=admitted_payload["operation"],
+        authorized=_snapshot_source_documents(admitted_payload["documents"]),
+        query=admitted_payload.get("query"), left_id=admitted_payload.get("left_id"),
+        right_id=admitted_payload.get("right_id"),
+    )
+
+
 async def revalidate_runtime_content_session(
     context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
 ) -> None:
