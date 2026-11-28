@@ -343,7 +343,7 @@ class ChatRuntime:
         if decision.intent == ATTACHED_DOCUMENT_INTENT:
             from ai_karen_engine.config.runtime import get_runtime_settings
             from ai_karen_engine.core.cortex.routing_intents import parse_attached_document_command
-            from ai_karen_engine.extensions.content_intelligence_sources import (
+            from ai_karen_engine.core.runtime.document_operation_contract import (
                 runtime_content_operation_digest,
             )
 
