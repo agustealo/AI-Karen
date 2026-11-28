@@ -2453,8 +2453,8 @@ async def test_direct_governed_http_does_not_duplicate_transport_health(monkeypa
     registry = ProviderRegistryService()
     registry.register_provider_endpoint(endpoint)
     monitor = registry.health_monitor
-    observations = Mock(wraps=monitor.update_provider_health)
-    monkeypatch.setattr(monitor, "update_provider_health", observations)
+    observations = Mock(wraps=monitor._apply_provider_health)
+    monkeypatch.setattr(monitor, "_apply_provider_health", observations)
     monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
     caller_observations = Mock()
     monkeypatch.setattr(manager, "_record_provider_result", caller_observations)
@@ -2498,8 +2498,8 @@ async def test_direct_native_observation_uses_actual_library_call_and_owned_term
     registry = ProviderRegistryService()
     registry.register_provider_endpoint(endpoint)
     monitor = registry.health_monitor
-    health = Mock(wraps=monitor.update_provider_health)
-    monkeypatch.setattr(monitor, "update_provider_health", health)
+    health = Mock(wraps=monitor._apply_provider_health)
+    monkeypatch.setattr(monitor, "_apply_provider_health", health)
     monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
     collector = metrics.MetricsCollector()
     monkeypatch.setattr(metrics, "get_metrics_collector", lambda: collector)
