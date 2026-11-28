@@ -23,7 +23,7 @@ from ai_karen_engine.platform.memory.postgres.ledger_models import (
 )
 
 pytestmark = [
-    pytest.mark.asyncio,
+    pytest.mark.asyncio(loop_scope="module"),
     pytest.mark.skipif(
         os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1",
         reason="requires disposable canonical PostgreSQL memory ledger",
@@ -199,8 +199,13 @@ async def test_source_and_assertion_use_one_exclusive_utc_end_and_current_consen
 
 
 async def test_vault_export_and_tombstone_respect_monotonic_revocation() -> None:
+    from dataclasses import replace
+
     from ai_karen_engine.core.memory.protocols import VaultContext
-    from ai_karen_engine.platform.memory.postgres.vault import PostgresNeuroVault
+    from ai_karen_engine.core.memory.types import MemoryEntry, MemoryMetadata
+    from ai_karen_engine.platform.memory.postgres.vault import (
+        NeuroVaultAuthorizationError, PostgresNeuroVault,
+    )
 
     tenant, user, event_id, assertion_id = (uuid.uuid4() for _ in range(4))
     scope_id = uuid.uuid4()
@@ -210,7 +215,10 @@ async def test_vault_export_and_tombstone_respect_monotonic_revocation() -> None
     context = VaultContext(
         tenant_id=str(tenant), user_id=str(user),
         request_id=str(uuid.uuid4()), correlation_id=str(uuid.uuid4()),
-        policy_context={"memory_read_authorized": True, "memory_delete_authorized": True},
+        policy_context={
+            "memory_read_authorized": True, "memory_delete_authorized": True,
+            "memory_write_authorized": True,
+        },
     )
     vault = PostgresNeuroVault()
     ids = [str(assertion_id)]
@@ -260,7 +268,10 @@ async def test_vault_export_and_tombstone_respect_monotonic_revocation() -> None
             assertion.valid_to = earlier
 
         for _ in range(2):
-            receipt = await vault.tombstone(ids[0], reason="test expiry", context=context)
+            receipt = await vault.tombstone(
+                ids[0], reason="test expiry",
+                context=replace(context, request_id=str(uuid.uuid4())),
+            )
             assert receipt.persisted and receipt.tombstoned
             assert await vault.export(ids, context=context) == []
             async with async_transaction_scope(tenant_id=str(tenant)) as session:
@@ -274,6 +285,24 @@ async def test_vault_export_and_tombstone_respect_monotonic_revocation() -> None
         assert (await vault.delete(ids[0], reason="test delete", context=context)).persisted
         assert await vault.export(ids, context=context) == []
         assert await vault.verify_integrity(ids, context=context) == {ids[0]: False}
+        replacement = MemoryEntry(
+            id=ids[0], content="private fact",
+            metadata=MemoryMetadata(
+                tenant_id=str(tenant), user_id=str(user), source="chat_user",
+                custom={"consent_scope": scope},
+            ),
+        )
+        with pytest.raises(NeuroVaultAuthorizationError, match="retired memory identity"):
+            await vault.persist(
+                replacement, context=replace(context, request_id=str(uuid.uuid4())),
+            )
+        assert await vault.export(ids, context=context) == []
+        assert await vault.verify_integrity(ids, context=context) == {ids[0]: False}
+        # A genuinely new identity is not prohibited by an unrelated deletion.
+        fresh = replace(replacement, id=str(uuid.uuid4()))
+        assert (await vault.persist(
+            fresh, context=replace(context, request_id=str(uuid.uuid4())),
+        )).persisted
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             assert (await session.execute(select(MemoryEvent.valid_to).where(
                 MemoryEvent.event_id == event_id,

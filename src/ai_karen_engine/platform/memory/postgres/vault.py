@@ -17,7 +17,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Callable, Mapping, Sequence
 
 from sqlalchemy import delete as sa_delete
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from ai_karen_engine.core.memory.protocols import (
@@ -285,7 +285,7 @@ class PostgresNeuroVault(VaultPort):
                 ConsentScope.user_id == user_id,
                 ConsentScope.scope_name == scope_name,
             )
-            .order_by(ConsentScope.granted_at.desc())
+            .order_by(ConsentScope.granted_at.desc(), ConsentScope.scope_id.desc())
             .limit(1)
             .with_for_update()
         )
@@ -687,6 +687,31 @@ class PostgresNeuroVault(VaultPort):
             await session.flush()
             session.add(assertion)
             await session.flush()
+            # Check after the assertion PK insert: a competing delete must
+            # finish before a replacement row can acquire that identity.
+            # The committed mutation ledger, not the missing assertion row,
+            # remains the authority for retired IDs.
+            retired_id = func.replace(
+                func.replace(
+                    func.replace(
+                        func.replace(func.lower(MemoryEvent.payload["memory_id"].astext), "urn:uuid:", ""),
+                        "-", "",
+                    ),
+                    "{", "",
+                ),
+                "}", "",
+            )
+            retired = await session.execute(
+                select(MemoryEvent.event_id).where(
+                    MemoryEvent.tenant_id == tenant_uuid,
+                    MemoryEvent.user_id == user_uuid,
+                    MemoryEvent.source_type == "neuro_vault",
+                    MemoryEvent.event_type.in_(("memory_deleted", "memory_tombstoned")),
+                    retired_id == assertion_id.hex,
+                ).limit(1)
+            )
+            if retired.scalar_one_or_none() is not None:
+                raise NeuroVaultAuthorizationError("retired memory identity cannot be reused")
 
         private_standalone = commit and context.private_execution is not None
         try:
@@ -751,6 +776,25 @@ class PostgresNeuroVault(VaultPort):
                 raise NeuroVaultAuthorizationError(
                     "idempotency collision does not match canonical memory write"
                 )
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            live = await session.execute(
+                select(MemoryEvent.event_id)
+                .join(MemoryAssertion, MemoryAssertion.event_id == MemoryEvent.event_id)
+                .where(
+                    MemoryEvent.event_id == existing.event_id,
+                    MemoryAssertion.assertion_id == assertion_id,
+                    MemoryAssertion.tenant_id == tenant_uuid,
+                    MemoryAssertion.user_id == user_uuid,
+                    MemoryAssertion.consent_state == "granted",
+                    or_(MemoryAssertion.valid_from.is_(None), MemoryAssertion.valid_from <= now),
+                    or_(MemoryAssertion.valid_to.is_(None), MemoryAssertion.valid_to > now),
+                    recallable_memory_event(
+                        tenant_id=tenant_uuid, user_id=user_uuid, now=now,
+                    ),
+                )
+            )
+            if live.scalar_one_or_none() is None:
+                raise NeuroVaultAuthorizationError("memory replay no longer authorized")
             replay = VaultWriteReceipt(
                 memory_id=str(existing_assertion.assertion_id),
                 persisted=True,
@@ -819,7 +863,7 @@ class PostgresNeuroVault(VaultPort):
                 tenant_uuid=tenant_uuid,
                 user_uuid=user_uuid,
                 event_type="memory_tombstoned",
-                memory_id=memory_id,
+                memory_id=str(assertion_uuid),
                 reason=reason,
                 context=context,
             )
@@ -870,7 +914,7 @@ class PostgresNeuroVault(VaultPort):
                 tenant_uuid=tenant_uuid,
                 user_uuid=user_uuid,
                 event_type="memory_deleted",
-                memory_id=memory_id,
+                memory_id=str(assertion_uuid),
                 reason=reason,
                 context=context,
             )
