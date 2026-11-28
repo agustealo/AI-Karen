@@ -226,6 +226,7 @@ class ProviderModelsResponse(BaseModel):
     discovery_status: Literal["ready", "catalog_only", "empty"] = "empty"
     inventory_source: Literal["configured_catalog", "local_runtime", "provider_live", "ollama_native", "mixed", "none"] = "none"
     live_discovery_failed: bool = False
+    workspace_inventory_verified: bool = False
     discovered_at: str
 
 
@@ -1125,12 +1126,17 @@ async def get_provider_models(
             runtime_options=ollama_options,
         ) if normalized_id == "ollama" else saved_endpoint or configured_endpoint
     )
-    if normalized_id == "nous":
-        approved = OPENAI_COMPATIBLE_PROVIDER_DEFAULTS["nous"]["base_url"]
-        if not target_url or _discovery_url_key(target_url) != _discovery_url_key(approved):
+    governed_vendor = OPENAI_COMPATIBLE_PROVIDER_DEFAULTS.get(normalized_id)
+    if governed_vendor:
+        approved = governed_vendor["base_url"]
+        if (
+            not target_url or not configured_endpoint
+            or _discovery_url_key(target_url) != _discovery_url_key(approved)
+            or _discovery_url_key(configured_endpoint) != _discovery_url_key(approved)
+        ):
             raise HTTPException(
                 status_code=403,
-                detail="Nous Portal model discovery requires the approved endpoint",
+                detail="Vendor model discovery requires the approved endpoint",
             )
     if base_url:
         requested_key = _discovery_url_key(base_url, ollama=normalized_id == "ollama")
@@ -1146,6 +1152,7 @@ async def get_provider_models(
 
     # A configured catalog entry is not evidence of provider discovery.
     live_discovery_failed = False
+    workspace_inventory_verified = False
     by_id: Dict[str, ProviderModelPayload] = {
         model.id: ProviderModelPayload(
             id=model.id,
@@ -1202,67 +1209,65 @@ async def get_provider_models(
             logger.warning("Local model discovery unavailable for %s", normalized_id, exc_info=True)
 
         if target_url and provider.provider_type in {ProviderType.REMOTE, ProviderType.HYBRID, ProviderType.CUSTOM}:
-            from ai_karen_engine.integrations.providers.openai_compatible_provider import OpenAICompatibleProvider
+            from ai_karen_engine.core.model_runtime.provider_execution import (
+                discover_openai_compatible_model_ids,
+            )
+            from ai_karen_engine.core.model_runtime.provider_registry_service import (
+                get_provider_registry_service,
+            )
+            from ai_karen_engine.core.model_runtime.runtime_engine import EndpointKind
+
             try:
                 api_key = provider_manager.get_api_key(provider.name)
-                client = OpenAICompatibleProvider(
-                    base_url=target_url, api_key=api_key, timeout=3, max_retries=0
-                )
-                live_models = await asyncio.to_thread(client.get_models)
-                for name in live_models:
-                    # A live listing supersedes a matching configured catalog
-                    # model. Otherwise the UI would report a live ID as static.
-                    by_id[name] = ProviderModelPayload(
-                        id=name,
-                        name=name,
-                        family=normalized_id,
-                        capabilities=[],
-                        is_installed=False,
-                        source="provider_live",
-                    )
-                # An authenticated live model inventory is a positive
-                # connection observation. Write it through the existing
-                # health monitor, not a second UI or discovery health cache.
-                if live_models and api_key:
-                    from ai_karen_engine.core.model_runtime.provider_registry_service import (
-                        get_provider_registry_service,
-                    )
-                    from ai_karen_engine.core.model_runtime.runtime_engine import (
-                        EndpointKind,
-                    )
-
+                registry = None
+                endpoint = None
+                registration = None
+                if governed_vendor and api_key:
                     registry = get_provider_registry_service()
                     endpoint = registry.get_provider_endpoint(normalized_id)
-                    if endpoint is not None and endpoint.kind == EndpointKind.CLOUD_PROVIDER:
-                        registry.health_monitor.update_provider_health(
-                            normalized_id, is_healthy=True
-                        )
+                    if (
+                        endpoint is None
+                        or endpoint.kind != EndpointKind.CLOUD_PROVIDER
+                        or endpoint.tenant_scoped is not True
+                        or not endpoint.base_url
+                        or _discovery_url_key(endpoint.base_url) != _discovery_url_key(target_url)
+                    ):
+                        raise RuntimeError("workspace_inventory_endpoint_unverified")
+                    registration = registry.capture_endpoint_registration(endpoint)
+                    if registration is None:
+                        raise RuntimeError("workspace_inventory_registration_unverified")
+
+                live_models = await asyncio.to_thread(
+                    discover_openai_compatible_model_ids,
+                    target_url, api_key=api_key,
+                )
+                if registry is not None:
+                    # Request-local connection evidence, never shared health.
+                    current_provider = provider_manager.get_provider(normalized_id)
+                    current_override = _get_provider_override(normalized_id)
+                    if (
+                        current_provider is None or not current_provider.enabled
+                        or not current_provider.endpoint
+                        or _discovery_url_key(current_provider.endpoint.base_url)
+                        != _discovery_url_key(target_url)
+                        or current_override.get("base_url") != saved_endpoint
+                        or provider_manager.get_api_key(provider.name) != api_key
+                        or registry.capture_endpoint_registration(endpoint) is not registration
+                    ):
+                        raise RuntimeError("workspace_inventory_observation_superseded")
+                    workspace_inventory_verified = True
+
+                for name in live_models:
+                    by_id[name] = ProviderModelPayload(
+                        id=name, name=name, family=normalized_id,
+                        capabilities=[], is_installed=False, source="provider_live",
+                    )
             except Exception as exc:
                 live_discovery_failed = True
                 logger.warning(
                     "remote_model_discovery_unavailable",
                     extra={"provider": normalized_id, "error_type": type(exc).__name__},
                 )
-                try:
-                    from ai_karen_engine.core.model_runtime.provider_registry_service import (
-                        get_provider_registry_service,
-                    )
-                    from ai_karen_engine.core.model_runtime.runtime_engine import (
-                        EndpointKind,
-                    )
-
-                    registry = get_provider_registry_service()
-                    endpoint = registry.get_provider_endpoint(normalized_id)
-                    if endpoint is not None and endpoint.kind == EndpointKind.CLOUD_PROVIDER:
-                        registry.health_monitor.update_provider_health(
-                            normalized_id, is_healthy=False,
-                            error_type=type(exc).__name__,
-                        )
-                except Exception:
-                    logger.warning(
-                        "remote_provider_health_record_unavailable",
-                        extra={"provider": normalized_id},
-                    )
 
     sources = {model.source for model in by_id.values()}
     if normalized_id == "ollama":
@@ -1285,6 +1290,7 @@ async def get_provider_models(
         "discovery_status": discovery_status,
         "inventory_source": inventory_source,
         "live_discovery_failed": live_discovery_failed,
+        "workspace_inventory_verified": workspace_inventory_verified,
         "discovered_at": datetime.now(timezone.utc).isoformat(),
     }
 

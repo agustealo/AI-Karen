@@ -403,16 +403,21 @@ class ProviderRegistryService:
                 bool(endpoint.api_key_env),
             )
 
-    def capture_endpoint_health_registration(self, endpoint: ProviderEndpoint) -> Optional[object]:
-        """Capture registration evidence at transport admission, never a grant."""
+    def capture_endpoint_registration(self, endpoint: ProviderEndpoint) -> Optional[object]:
+        """Read opaque registration identity; never grant execution or health publication."""
         with self._lock:
             if (
-                endpoint.tenant_scoped is not False
-                or not endpoint.enabled
+                not endpoint.enabled
                 or self.get_provider_endpoint(endpoint.provider_id) != endpoint
             ):
                 return None
             return self._health_registrations.get(endpoint.provider_id)
+
+    def capture_endpoint_health_registration(self, endpoint: ProviderEndpoint) -> Optional[object]:
+        """Capture registration evidence for shared health only."""
+        if endpoint.tenant_scoped is not False:
+            return None
+        return self.capture_endpoint_registration(endpoint)
 
     def publish_endpoint_health(
         self, endpoint: ProviderEndpoint, registration: Optional[object], *,

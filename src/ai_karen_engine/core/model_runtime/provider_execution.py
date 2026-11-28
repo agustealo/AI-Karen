@@ -352,6 +352,46 @@ def _open_provider_request(request: Request, timeout: float):
     )
 
 
+def discover_openai_compatible_model_ids(
+    base_url: str, *, api_key: str | None, timeout_seconds: float = 3.0,
+) -> list[str]:
+    """Read actual /models inventory without fallback, inference, or health writes.
+
+    The caller owns endpoint and credential authorization. Never consult
+    ambient provider credentials or merge configured model hints into evidence.
+    """
+    url = base_url.rstrip("/") + "/models"
+    _require_safe_provider_destination(url)
+    headers = {"Accept": "application/json"}
+    if api_key:
+        headers["Authorization"] = f"Bearer {api_key}"
+    request = Request(url, headers=headers, method="GET")
+    max_bytes = 4 * 1024 * 1024
+    with _open_provider_request(request, timeout=timeout_seconds) as response:
+        if response.status != 200:
+            raise ProviderExecutionError("provider_inventory_unavailable")
+        raw = response.read(max_bytes + 1)
+    if len(raw) > max_bytes:
+        raise ProviderExecutionError("provider_inventory_response_too_large")
+    try:
+        body = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise ProviderExecutionError("provider_inventory_invalid_response") from None
+    if (
+        not isinstance(body, dict)
+        or body.get("error") is not None
+        or not isinstance(body.get("data"), list)
+    ):
+        raise ProviderExecutionError("provider_inventory_invalid_response")
+    ids: list[str] = []
+    for item in body["data"]:
+        model_id = item.get("id") if isinstance(item, dict) else None
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise ProviderExecutionError("provider_inventory_invalid_model")
+        ids.append(model_id)
+    return list(dict.fromkeys(ids))
+
+
 def _inherit_registered_api_path(
     runtime_url: str,
     registered_url: str | None,

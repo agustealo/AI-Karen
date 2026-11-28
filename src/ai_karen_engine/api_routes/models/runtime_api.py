@@ -11,6 +11,7 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 
 from ai_karen_engine.auth.session import get_current_user
+from ai_karen_engine.config.llm_provider_config import OPENAI_COMPATIBLE_PROVIDER_DEFAULTS
 from ai_karen_engine.api_routes.models.settings import (
     build_model_settings_payload,
     get_provider_models,
@@ -33,6 +34,7 @@ router = APIRouter(prefix="/runtime", tags=["runtime"])
 
 class ProviderHealthInfo(BaseModel):
     status: str
+    source: str = "registry"
     latency_ms: Optional[float] = None
     last_checked_at: Optional[datetime] = None
 
@@ -195,27 +197,53 @@ async def get_runtime_provider_catalog(
             # Chat availability is grounded in both a healthy configured
             # provider and an actual model inventory, not a static catalog.
             # Reuse the same live discovery implementation as Settings.
-            provider_ready = (
+            eligible = (
                 provider.get("enabled", True) is True
                 and provider.get("chat_enabled", True) is True
                 and provider.get("is_configured") is True
-                and provider.get("healthy") is True
-                # Legacy test/inventory callers may omit a health status,
-                # but the real settings payload always reports observed status.
-                and provider.get("health_status", "healthy") == "healthy"
                 and discovery_error is None
                 and provider.get("user_selectable", True) is not False
                 and provider.get("policy_allowed", True) is not False
             )
-            if provider_ready and category in {"external", "custom"}:
+            scoped_cloud = (
+                category == "external"
+                and provider_id in OPENAI_COMPATIBLE_PROVIDER_DEFAULTS
+            )
+            connection_verified = False
+            connection_checked_at = None
+            provider_ready = (
+                eligible
+                and not scoped_cloud
+                and provider.get("healthy") is True
+                and provider.get("health_status", "healthy") == "healthy"
+            )
+            if (eligible and scoped_cloud) or (
+                provider_ready and category in {"external", "custom"}
+            ):
                 try:
                     live_inventory = await asyncio.wait_for(
                         get_provider_models(provider_id, current_user=current_user),
                         timeout=5.0,
                     )
                     raw_models = live_inventory.get("models") or []
+                    if scoped_cloud:
+                        # Evidence for this catalog request only, not shared
+                        # provider health or authorization to execute inference.
+                        connection_verified = (
+                            live_inventory.get("workspace_inventory_verified") is True
+                            and bool(live_inventory.get("discovered_at"))
+                        )
+                        if connection_verified:
+                            connection_checked_at = live_inventory["discovered_at"]
+                            provider_ready = True
+                        else:
+                            discovery_error = "Workspace provider inventory unverified"
+                    elif live_inventory.get("live_discovery_failed") is True:
+                        provider_ready = False
+                        discovery_error = "Live provider model inventory unavailable"
                 except Exception as exc:
                     raw_models = []
+                    provider_ready = False
                     discovery_error = "Live provider model inventory unavailable"
                     logger.warning(
                         "runtime_catalog_remote_inventory_failed",
@@ -296,18 +324,27 @@ async def get_runtime_provider_catalog(
                     status=(
                         # A failed model inventory query must not erase a
                         # previously observed unavailable/unhealthy provider.
-                        str(provider.get("health_status"))
+                        "healthy" if connection_verified
+                        else str(provider.get("health_status"))
                         if provider.get("health_status") in {"unavailable", "unhealthy"}
                         else "degraded" if discovery_error is not None
+                        else "unknown" if scoped_cloud
                         else str(provider.get("health_status") or "unknown")
                     ),
+                    source="workspace_inventory" if connection_verified else "registry",
                     latency_ms=None,
-                    last_checked_at=provider.get("health_last_checked_at"),
+                    last_checked_at=(
+                        connection_checked_at if connection_verified
+                        else None if scoped_cloud
+                        else provider.get("health_last_checked_at")
+                    ),
                 ),
                 degradation_reason=(
                     "Chat selection disabled by administrator"
                     if provider.get("chat_enabled", True) is False
-                    else discovery_error or provider.get("degraded_reason")
+                    else discovery_error or (
+                        None if connection_verified else provider.get("degraded_reason")
+                    )
                 ),
                 allowed_for_current_user=bool(provider.get("user_selectable", True) and provider.get("policy_allowed", True)),
                 requires_api_key=bool(provider.get("api_key_env_var") or provider.get("requires_api_key")),

@@ -435,3 +435,47 @@ async def test_canonical_json_transport_owns_shared_health_once(
         key = ("structured" if structured else "text", expected)
         assert counters["kari_provider_http_observations_total"]["values"] == {key: 1.0}
         assert snapshot["histograms"]["kari_provider_http_observation_duration_seconds"]["values"][key].count == 1
+
+
+@pytest.mark.parametrize(
+    ("status", "body", "expected"),
+    [
+        (200, b'{"data":[{"id":"live"},{"id":"live"}]}', ["live"]),
+        (200, b'{"data":[]}', []),
+        (200, b'{"error":{"message":"denied"},"data":[]}', None),
+        (200, b'{"models":["static"]}', None),
+        (200, b'{"data":[{"id":null}]}', None),
+        (200, b'<html>login</html>', None),
+        (401, b'{"data":[{"id":"fake"}]}', None),
+        (302, b'{"data":[{"id":"fake"}]}', None),
+    ],
+)
+@pytest.mark.parametrize("key", [None, "explicit-test-key"])
+def test_strict_inventory_never_uses_static_ids_or_ambient_key(monkeypatch, status, body, expected, key):
+    from unittest.mock import MagicMock
+    from ai_karen_engine.core.model_runtime import provider_execution
+
+    monkeypatch.setenv("OPENAI_API_KEY", "unrelated-key")
+    monkeypatch.setenv("KARI_OPENAI_OFFLINE", "true")
+    response = MagicMock()
+    response.status = status
+    response.read.return_value = body
+    response.__enter__.return_value = response
+
+    def opener(request, timeout):
+        assert request.full_url == "https://api.example.invalid/v1/models"
+        assert request.get_method() == "GET"
+        assert request.get_header("Authorization") == (f"Bearer {key}" if key else None)
+        assert timeout == 3.0
+        return response
+
+    monkeypatch.setattr(provider_execution, "_open_provider_request", opener)
+    if expected is None:
+        with pytest.raises(provider_execution.ProviderExecutionError):
+            provider_execution.discover_openai_compatible_model_ids(
+                "https://api.example.invalid/v1", api_key=key,
+            )
+    else:
+        assert provider_execution.discover_openai_compatible_model_ids(
+            "https://api.example.invalid/v1", api_key=key,
+        ) == expected
