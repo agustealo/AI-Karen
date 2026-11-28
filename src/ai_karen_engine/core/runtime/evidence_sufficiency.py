@@ -66,6 +66,7 @@ def _profile_sources_completed(context: CognitiveContext) -> bool:
     if not isinstance(rows, (list, tuple)) or not rows:
         return False
     statuses = {}
+    profile_candidate_count = None
     for row in rows:
         if not isinstance(row, dict):
             return False
@@ -75,13 +76,29 @@ def _profile_sources_completed(context: CognitiveContext) -> bool:
         ):
             return False
         statuses[name] = status
-    required = {"PostgresProfileRecallRetriever", "PostgresRecallRetriever"}
+        if name == "PostgresProfileRecallRetriever":
+            profile_candidate_count = row.get("candidate_count")
+    required = {"PostgresProfileRecallRetriever", "PostgresRecallRetriever", "HybridRetrievalRouter"}
     unrelated = {
         "PostgresProceduralRecallRetriever", "PostgresUserStateRecallRetriever",
-        "HybridRetrievalRouter",
+    }
+    # A successful retriever is not proof that fusion, authorization,
+    # deduplication and the final top-k preserved every profile candidate.
+    # Do not certify a singleton or set from a lossy degraded batch.
+    profile_ids = {
+        item.evidence_id
+        for item in context.evidence
+        if item.source is EvidenceSource.MEMORY
+        and item.scope is not None
+        and item.scope.tenant_id == context.tenant_id
+        and item.scope.user_id == context.user_id
+        and isinstance(getattr(item, "fact_semantics", None), EvidenceFactSemantics)
     }
     return (
-        set(statuses) == required | unrelated
+        type(profile_candidate_count) is int
+        and profile_candidate_count > 0
+        and profile_candidate_count == len(profile_ids)
+        and set(statuses) == required | unrelated
         and all(statuses.get(name) == "success" for name in required)
         and any(status != "success" for status in statuses.values())
     )

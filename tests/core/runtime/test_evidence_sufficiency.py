@@ -413,7 +413,7 @@ def test_unrelated_source_failure_preserves_independently_typed_profile_only():
     ctx.metadata = {
         "memory_recall_status": "degraded", "memory_degraded": True,
         "memory_retrieval_health": {"source_health": [
-            {"retriever": "PostgresProfileRecallRetriever", "status": "success"},
+            {"retriever": "PostgresProfileRecallRetriever", "status": "success", "candidate_count": 1},
             {"retriever": "PostgresRecallRetriever", "status": "success"},
             {"retriever": "PostgresProceduralRecallRetriever", "status": "failed"},
             {"retriever": "PostgresUserStateRecallRetriever", "status": "success"},
@@ -426,6 +426,19 @@ def test_unrelated_source_failure_preserves_independently_typed_profile_only():
     )
     assert check(ctx, "birthplace").value == "Jamaica"
     assert check(ctx, "origin_location").reason == "incomplete_memory_retrieval"
+
+    # Successful source retrieval can still lose profile rows during fusion.
+    rows = ctx.metadata["memory_retrieval_health"]["source_health"]
+    rows[0]["candidate_count"] = 2
+    assert check(ctx, "birthplace").reason == "incomplete_memory_retrieval"
+    rows[0].pop("candidate_count")
+    assert not check(ctx, "birthplace").may_assert
+    rows[0]["candidate_count"] = 1
+
+    # The hybrid source can carry event-backed personal observations. It
+    # cannot be treated as an unrelated failure by this independent lane.
+    rows[-1]["status"] = "timeout"
+    assert not check(ctx, "birthplace").may_assert
 
 
 @pytest.mark.parametrize("summary", [True, False])
