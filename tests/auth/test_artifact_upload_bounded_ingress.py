@@ -184,3 +184,99 @@ def test_upload_uses_witness_issuing_ingress_dependency():
     dependencies = [dependency.call for dependency in route.dependant.dependencies]
     assert routes.get_chat_execution_context in dependencies
     assert routes.get_current_user not in dependencies
+
+
+@pytest.fixture
+def raw_upload(scoped, monkeypatch):
+    from uuid import uuid4
+    from ai_karen_engine.core.runtime.owner_text_upload import OwnerTextUploadReceipt
+
+    monkeypatch.setenv("KAREN_GOVERNED_TEXT_UPLOAD_INGRESS_ENABLED", "true")
+    monkeypatch.setenv("KAREN_GOVERNED_TEXT_UPLOAD_MAX_BYTES", "4")
+    key = str(uuid4())
+    receipt = OwnerTextUploadReceipt(str(uuid4()), str(uuid4()), "document.txt", "a" * 64, 4)
+    service = SimpleNamespace(transfer_owner_text=AsyncMock(return_value=receipt))
+    monkeypatch.setattr(routes, "get_plugin_service", AsyncMock(return_value=service))
+    headers = [
+        (b"content-type", b"text/plain"), (b"x-upload-filename", b"document.txt"),
+        (b"idempotency-key", key.encode()), (b"x-upload-destination", b"explorer"),
+        (b"x-upload-recipe", b"store_only"),
+    ]
+    def request(chunks, extra_headers=()):
+        receive = AsyncMock(side_effect=[
+            {"type": "http.request", "body": chunk, "more_body": index < len(chunks) - 1}
+            for index, chunk in enumerate(chunks)
+        ])
+        req = Request({
+            "type": "http", "path": "/artifacts/upload/text",
+            "scheme": "http", "server": ("test", 80), "headers": headers + list(extra_headers),
+            "query_string": b"",
+        }, receive=receive)
+        return req, receive
+    return SimpleNamespace(request=request, service=service, scoped=scoped, key=key, receipt=receipt)
+
+
+@pytest.mark.asyncio
+async def test_raw_transfer_disabled_without_reading_body(raw_upload, monkeypatch):
+    from fastapi import Response
+    monkeypatch.setenv("KAREN_GOVERNED_TEXT_UPLOAD_INGRESS_ENABLED", "false")
+    req, receive = raw_upload.request([b"1234"])
+    with pytest.raises(HTTPException) as exc:
+        await routes.transfer_owner_text(req, Response(), raw_upload.scoped.principal)
+    assert exc.value.status_code == 404
+    receive.assert_not_awaited()
+    raw_upload.service.transfer_owner_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_raw_transfer_counts_actual_chunks_before_runtime(raw_upload):
+    from fastapi import Response
+    req, receive = raw_upload.request([b"123", b"45", b"not-consumed"])
+    with pytest.raises(HTTPException) as exc:
+        await routes.transfer_owner_text(req, Response(), raw_upload.scoped.principal)
+    assert exc.value.status_code == 413
+    assert receive.await_count == 2
+    raw_upload.service.transfer_owner_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_raw_transfer_rejects_declared_oversize_before_read(raw_upload):
+    from fastapi import Response
+    req, receive = raw_upload.request([b"1234"], [(b"content-length", b"5")])
+    with pytest.raises(HTTPException) as exc:
+        await routes.transfer_owner_text(req, Response(), raw_upload.scoped.principal)
+    assert exc.value.status_code == 413
+    receive.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_raw_transfer_revocation_after_body_denies_runtime(raw_upload):
+    from fastapi import Response
+    raw_upload.scoped.revalidate.side_effect = [None, PermissionError()]
+    req, receive = raw_upload.request([b"1234"])
+    with pytest.raises(HTTPException) as exc:
+        await routes.transfer_owner_text(req, Response(), raw_upload.scoped.principal)
+    assert exc.value.status_code == 403
+    receive.assert_awaited_once()
+    raw_upload.service.transfer_owner_text.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_raw_transfer_returns_only_verified_receipt(raw_upload):
+    from fastapi import Response
+    req, receive = raw_upload.request([b"12", b"34"])
+    response = Response()
+    result = await routes.transfer_owner_text(req, response, raw_upload.scoped.principal)
+    assert result.artifact_id == raw_upload.receipt.artifact_id
+    assert response.headers["cache-control"] == "no-store"
+    args, kwargs = raw_upload.service.transfer_owner_text.await_args
+    assert args[0].authenticated_user is raw_upload.scoped.principal
+    assert kwargs == dict(destination="explorer", recipe="store_only",
+                          filename="document.txt", data=b"1234", idempotency_key=raw_upload.key)
+    assert receive.await_count == 2
+
+
+def test_raw_transfer_has_no_framework_body_parser():
+    route = next(route for route in routes.router.routes if route.path == "/artifacts/upload/text")
+    assert route.body_field is None
+    assert routes.get_chat_execution_context in [d.call for d in route.dependant.dependencies]

@@ -25,6 +25,7 @@ class ArtifactStorageConfig:
     chat_attachment_max_source_bytes: int = 32768
     chat_attachment_max_total_bytes: int = 131072
     chat_attachment_integrity_total_timeout_seconds: float = 15.0
+    governed_text_upload_ingress_enabled: bool = False
     governed_text_upload_max_bytes: int = 65536
     governed_text_upload_ttl_seconds: int = 3600
     governed_text_upload_deadline_seconds: int = 60
@@ -32,6 +33,8 @@ class ArtifactStorageConfig:
     upload_admission_daily_bytes: int = 8 * 1024 * 1024
 
     def __post_init__(self) -> None:
+        if type(self.governed_text_upload_ingress_enabled) is not bool:
+            raise ValueError("Invalid governed text upload ingress flag")
         if (
             type(self.upload_admission_daily_sessions) is not int
             or not 1 <= self.upload_admission_daily_sessions <= 100000
@@ -120,6 +123,10 @@ class ArtifactStorageConfig:
         except (ValueError, TypeError, OverflowError) as exc:
             raise ValueError("Invalid chat attachment admission configuration") from exc
         try:
+            raw_ingress = os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_INGRESS_ENABLED", "false").lower()
+            if raw_ingress not in {"true", "false"}:
+                raise ValueError("Invalid governed text upload ingress flag")
+            upload_ingress = raw_ingress == "true"
             upload_max = int(os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_MAX_BYTES", "65536"))
             upload_ttl = int(os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_TTL_SECONDS", "3600"))
             upload_deadline = int(os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_DEADLINE_SECONDS", "60"))
@@ -130,6 +137,7 @@ class ArtifactStorageConfig:
         return cls(
             upload_admission_daily_sessions=admission_sessions,
             upload_admission_daily_bytes=admission_bytes,
+            governed_text_upload_ingress_enabled=upload_ingress,
             governed_text_upload_max_bytes=upload_max,
             governed_text_upload_ttl_seconds=upload_ttl,
             governed_text_upload_deadline_seconds=upload_deadline,

@@ -7,16 +7,18 @@ and purge operations through the canonical ArtifactStore contract.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
-from uuid import UUID
+from uuid import UUID, uuid4
 from typing import List, Optional
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
+from starlette.requests import ClientDisconnect
 
 from ai_karen_engine.auth.session import get_current_user
-from ai_karen_engine.core.services.dependencies import get_chat_execution_context
+from ai_karen_engine.core.services.dependencies import get_chat_execution_context, get_plugin_service
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
 from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
 from ai_karen_engine.database.factory import DatabaseServiceFactory
@@ -39,6 +41,14 @@ class ArtifactUploadResponse(BaseModel):
     mime_type: str
     size_bytes: int
     sha256: str
+
+
+class OwnerTextTransferResponse(BaseModel):
+    session_id: str
+    artifact_id: str
+    filename: str
+    sha256: str
+    size_bytes: int
 
 
 class ArtifactMetadataResponse(BaseModel):
@@ -91,6 +101,109 @@ async def _require_owned_artifact(store, artifact_id: str, tenant_id: str, user_
     ):
         raise HTTPException(status_code=404, detail="Artifact not found")
     return artifact
+
+
+@router.post("/upload/text", response_model=OwnerTextTransferResponse)
+async def transfer_owner_text(
+    request: Request,
+    response: Response,
+    current_user=Depends(get_chat_execution_context),
+):
+    """Bounded raw UTF-8 ingress; delegate every durable operation to runtime.
+
+    This narrowly scoped, default-off contract is not a general multipart
+    upload API. Headers identify the exact destination, recipe and retry key,
+    never the authenticated owner, session or conversation.
+    """
+    from ai_karen_engine.core.runtime.owner_text_upload import OwnerTextUploadReceipt
+    from ai_karen_engine.services.database.repositories.upload_session import UploadSessionConflict
+
+    try:
+        config = ArtifactStorageConfig.from_environment()
+    except ValueError:
+        raise HTTPException(status_code=503, detail="Upload unavailable") from None
+    if not config.governed_text_upload_ingress_enabled:
+        raise HTTPException(status_code=404, detail="Upload unavailable")
+    context = _artifact_access_context(request, current_user, write=True)
+    if not context.request_id:
+        context.request_id = str(uuid4())
+
+    def required_header(name: str, max_length: int) -> str:
+        values = request.headers.getlist(name)
+        if len(values) != 1 or not 1 <= len(values[0]) <= max_length:
+            raise HTTPException(status_code=422, detail="Invalid upload headers")
+        return values[0]
+
+    if request.query_params:
+        raise HTTPException(status_code=422, detail="Upload query parameters are not supported")
+    content_type = required_header("content-type", 80).lower()
+    if content_type not in {"text/plain", "text/plain; charset=utf-8"}:
+        raise HTTPException(status_code=415, detail="Only UTF-8 plain text is supported")
+    if request.headers.getlist("content-encoding"):
+        raise HTTPException(status_code=415, detail="Encoded upload bodies are not supported")
+    filename = required_header("x-upload-filename", 160)
+    key = required_header("idempotency-key", 36)
+    destination = required_header("x-upload-destination", 32)
+    recipe = required_header("x-upload-recipe", 32)
+    try:
+        if str(UUID(key)) != key:
+            raise ValueError
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid upload idempotency key") from None
+    limit = config.governed_text_upload_max_bytes
+    declared = request.headers.getlist("content-length")
+    if declared:
+        if len(declared) != 1 or re.fullmatch(r"[0-9]{1,20}", declared[0]) is None:
+            raise HTTPException(status_code=422, detail="Invalid upload content length")
+        if int(declared[0]) > limit:
+            raise HTTPException(status_code=413, detail="Upload exceeds byte limit")
+
+    # Authenticate before consuming any body bytes. No FastAPI File/Body
+    # dependency is used: the bounded stream is the only body consumer.
+    try:
+        await context.revalidate_runtime_artifact_write_session()
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Upload access denied") from None
+    data = bytearray()
+    try:
+        async with asyncio.timeout(config.governed_text_upload_deadline_seconds):
+            async for chunk in request.stream():
+                if len(chunk) > limit - len(data):
+                    raise HTTPException(status_code=413, detail="Upload exceeds byte limit")
+                data.extend(chunk)
+    except TimeoutError:
+        raise HTTPException(status_code=408, detail="Upload body deadline exceeded") from None
+    except ClientDisconnect:
+        raise HTTPException(status_code=400, detail="Upload body interrupted") from None
+    if declared and len(data) != int(declared[0]):
+        raise HTTPException(status_code=422, detail="Upload content length mismatch")
+    try:
+        await context.revalidate_runtime_artifact_write_session()
+        service = await get_plugin_service()
+        receipt = await service.transfer_owner_text(
+            context, destination=destination, recipe=recipe, filename=filename,
+            data=bytes(data), idempotency_key=key,
+        )
+        if not isinstance(receipt, OwnerTextUploadReceipt):
+            raise RuntimeError("Unverified transfer receipt")
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Upload access denied") from None
+    except UploadSessionConflict:
+        raise HTTPException(status_code=409, detail="Upload key conflicts with existing transfer") from None
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid upload payload") from None
+    except Exception as exc:
+        logger.warning("Owner upload outcome unavailable", extra={
+            "request_id": context.request_id, "correlation_id": context.correlation_id,
+            "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Upload outcome unavailable; reuse the same key") from None
+
+    response.headers["Cache-Control"] = "no-store"
+    return OwnerTextTransferResponse(
+        session_id=receipt.session_id, artifact_id=receipt.artifact_id,
+        filename=receipt.filename, sha256=receipt.sha256, size_bytes=receipt.size_bytes,
+    )
 
 
 @router.post("/upload", response_model=ArtifactUploadResponse)

@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28 UTC: KFILE-UPLOAD-U2E bounded text ingress
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** existing artifact router gains relative POST /upload/text, default-off `KAREN_GOVERNED_TEXT_UPLOAD_INGRESS_ENABLED=true` required for deliberate local opt-in. Raw UTF-8 text, exact headers x-upload-filename, idempotency-key (canonical UUID), x-upload-destination, x-upload-recipe. No query identity, multipart or encoded body. Declared and actual byte limits, bounded body read, durable session before/after stream, canonical PluginService delegation, sanitized errors and verified receipt no-store. Existing global ASGI limit remains. No live flag change or discovery transfer advertising. This is not the complete general upload-session API.
+- **Proof:** dedicated artifact workflow includes ingress regressions for default-off, actual chunks, declared oversize, post-body revocation, receipt and no framework body parser. Staged only; no exact-head execution. Runtime singleton startup wiring, actual HTTP/proxy/middleware and live Storage acceptance still need verification.
+
 ### 2026-11-28 UTC: KFILE-UPLOAD-U2D4 bind host transfer to durable lifecycle evidence
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** existing kernel observation checks reused under the exact active host request; mutation finalization still denies any active execution. Transfer retains local admission and shared PostgreSQL enabled revision fence, rechecks session/principal, canonical manifest and durable revision before state transitions/write/receipt; outer config deadline covers admission and pool checkout. No implicit lifecycle bootstrap, public route, activation or new authority.
