@@ -20,6 +20,7 @@ from ai_karen_engine.config.agent_medusa import (
 )
 from ai_karen_engine.core.logging import get_logger
 
+from ..telemetry.metrics import record_retention_event
 from .distributed_run_store import (
     DistributedRunAdmissionCancelled,
     DistributedRunAdmissionRejected,
@@ -1361,16 +1362,34 @@ class MedusaRunManager:
         if acknowledge is None:
             return False
         try:
-            return await asyncio.wait_for(
+            acknowledged = await asyncio.wait_for(
                 acknowledge(tenant_id=tenant_id, receipt=durable),
                 timeout=self._settings.run_heartbeat_interval_seconds,
             )
-        except (DistributedRunStoreUnavailable, TimeoutError, ValueError):
+        except asyncio.CancelledError:
+            record_retention_event("acknowledgement", "cancelled")
+            raise
+        except (DistributedRunStoreUnavailable, TimeoutError, ValueError) as exc:
+            outcome = (
+                "timeout"
+                if isinstance(exc, TimeoutError)
+                else "invalid" if isinstance(exc, ValueError) else "unavailable"
+            )
+            record_retention_event("acknowledgement", outcome)
             logger.warning(
                 "Medusa terminal retention acknowledgement deferred",
-                extra={"run_id": durable.get("run_id"), "tenant_id": tenant_id},
+                extra={
+                    "run_id": durable.get("run_id"),
+                    "tenant_id": tenant_id,
+                    "retention_outcome": outcome,
+                },
             )
             return False
+        record_retention_event(
+            "acknowledgement",
+            "acknowledged" if acknowledged else "not_confirmed",
+        )
+        return acknowledged
 
     async def _retry_local_retention(self, run: ExecutionRun) -> None:
         if (
@@ -1406,14 +1425,20 @@ class MedusaRunManager:
                 # Rotate only the item actually attempted. A time-budget
                 # interruption must not skip the remainder of a whole batch.
                 run_ids = await discover(tenant_id=tenant_id, limit=1)
-                if not run_ids or run_ids[0] in seen:
-                    break
+                if not run_ids:
+                    record_retention_event("repair_batch", "empty")
+                    return
+                if run_ids[0] in seen:
+                    record_retention_event("repair_batch", "cycle")
+                    return
                 run_id = run_ids[0]
                 seen.add(run_id)
                 durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
-                if durable is None or (
-                    user_id is not None and durable.get("user_id") != user_id
-                ):
+                if durable is None:
+                    record_retention_event("repair_candidate", "durable_missing")
+                    continue
+                if user_id is not None and durable.get("user_id") != user_id:
+                    record_retention_event("repair_candidate", "scope_skipped")
                     continue
                 if durable.get("status") not in {
                     "completed",
@@ -1421,21 +1446,28 @@ class MedusaRunManager:
                     "cancelled",
                     "orphaned",
                 }:
+                    record_retention_event("repair_candidate", "not_terminal")
                     continue
                 await self._release_terminal_retention(tenant_id, durable)
+            record_retention_event("repair_batch", "batch_limit")
 
         try:
             await asyncio.wait_for(
                 repair(), timeout=self._settings.run_heartbeat_interval_seconds
             )
+        except asyncio.CancelledError:
+            record_retention_event("repair_batch", "cancelled")
+            raise
         except (
             DistributedRunStoreUnavailable,
             DurableRunLedgerUnavailable,
             TimeoutError,
-        ):
+        ) as exc:
+            outcome = "timeout" if isinstance(exc, TimeoutError) else "unavailable"
+            record_retention_event("repair_batch", outcome)
             logger.warning(
                 "Medusa terminal retention batch deferred",
-                extra={"tenant_id": tenant_id},
+                extra={"tenant_id": tenant_id, "retention_outcome": outcome},
             )
 
     async def _recover_local_terminal_view(self, run: ExecutionRun) -> None:

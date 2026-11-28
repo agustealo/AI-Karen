@@ -1133,3 +1133,124 @@ async def test_admission_denial_survives_durable_cleanup_failure():
         assert ledger.records["denied"]["status"] == "created"
     finally:
         await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "outcome"),
+    [
+        (True, "acknowledged"),
+        (False, "not_confirmed"),
+        (DistributedRunStoreUnavailable("private"), "unavailable"),
+        (TimeoutError("private"), "timeout"),
+        (ValueError("private"), "invalid"),
+        (asyncio.CancelledError(), "cancelled"),
+    ],
+)
+async def test_retention_acknowledgement_metrics_preserve_authority(result, outcome):
+    from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
+    name = "kari_medusa_terminal_retention_events_total"
+    labels = ("acknowledgement", outcome)
+    collector = get_metrics_collector()
+
+    def count():
+        return (
+            collector.snapshot()["counters"]
+            .get(name, {})
+            .get("values", {})
+            .get(labels, 0)
+        )
+
+    before = count()
+    tenant = "11111111-1111-1111-1111-111111111111"
+    store = SharedTruthStore()
+    store.acknowledge_durable_terminal = (
+        AsyncMock(side_effect=result)
+        if isinstance(result, BaseException)
+        else AsyncMock(return_value=result)
+    )
+    manager = MedusaRunManager(
+        settings=_settings(distributed=True),
+        distributed_store=store,
+        durable_ledger=InMemoryDurableLedger(),
+    )
+    receipt = {"tenant_id": tenant, "run_id": "private-receipt"}
+    if isinstance(result, asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            await manager._release_terminal_retention(tenant, receipt)
+    else:
+        assert await manager._release_terminal_retention(tenant, receipt) is (
+            result is True
+        )
+    assert count() == before + 1
+    series = collector.snapshot()["counters"][name]
+    assert series["label_names"] == ("operation", "outcome")
+    assert "private-receipt" not in repr(series)
+    assert tenant not in repr(series)
+
+
+@pytest.mark.asyncio
+async def test_retention_repair_reports_attempts_without_inventing_backlog():
+    from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
+    name = "kari_medusa_terminal_retention_events_total"
+    collector = get_metrics_collector()
+
+    def counts():
+        return collector.snapshot()["counters"].get(name, {}).get("values", {})
+
+    before = counts()
+    tenant = "11111111-1111-1111-1111-111111111111"
+    ledger = InMemoryDurableLedger()
+    ledger.get = AsyncMock(
+        side_effect=[
+            None,
+            {"user_id": "another-user", "status": "completed"},
+            {"user_id": "owner", "status": "running"},
+            {"user_id": "owner", "tenant_id": tenant, "status": "completed"},
+        ]
+    )
+    store = SharedTruthStore()
+    store.pending_terminal_ids = AsyncMock(
+        side_effect=[
+            ["missing"],
+            ["foreign"],
+            ["active"],
+            ["terminal"],
+            ["missing"],
+        ]
+    )
+    store.acknowledge_durable_terminal = AsyncMock(return_value=True)
+    manager = MedusaRunManager(
+        settings=_settings(distributed=True),
+        distributed_store=store,
+        durable_ledger=ledger,
+    )
+    await manager._retry_tenant_retention(tenant, user_id="owner")
+    after = counts()
+    for labels in [
+        ("repair_candidate", "durable_missing"),
+        ("repair_candidate", "scope_skipped"),
+        ("repair_candidate", "not_terminal"),
+        ("acknowledgement", "acknowledged"),
+        ("repair_batch", "cycle"),
+    ]:
+        assert after[labels] == before.get(labels, 0) + 1
+    store.acknowledge_durable_terminal.assert_awaited_once()
+    assert store.pending_terminal_ids.await_count == 5
+
+
+def test_retention_metric_ignores_unbounded_labels_and_collector_failure(monkeypatch):
+    from ai_karen_engine.agent_medusa.telemetry import metrics
+    from ai_karen_engine.platform.observability.metrics import MetricsCollector
+
+    collector = MetricsCollector()
+    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: collector)
+    metrics.record_retention_event("tenant-secret", "acknowledged")
+    metrics.record_retention_event("acknowledgement", "raw-private-error")
+    assert collector.snapshot()["counters"] == {}
+    monkeypatch.setattr(
+        metrics, "get_metrics_collector", MagicMock(side_effect=RuntimeError)
+    )
+    metrics.record_retention_event("acknowledgement", "acknowledged")

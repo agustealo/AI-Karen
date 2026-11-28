@@ -29,6 +29,8 @@ from ai_karen_engine.services.database.repositories import (
     RepositoryFactory,
 )
 from ai_karen_engine.services.database.repositories.conversation_repository import (
+    COMPLETED_ATTACHMENT_RECEIPT_KEY,
+    build_completed_attachment_receipt,
     canonical_message_digest,
     validate_draft_attachment_references,
 )
@@ -731,7 +733,8 @@ class ConversationRuntimeGateway:
                 "conversation_id": conversation_id,
                 "source": "conversation_api",
                 **{key: value for key, value in (metadata or {}).items()
-                   if key != "persona_scope_id"},
+                   if key not in {"persona_scope_id", COMPLETED_ATTACHMENT_RECEIPT_KEY,
+                                  "verified_citation_receipt_v1"}},
                 **({"persona_scope_id": existing.metadata["persona_scope_id"]}
                    if (existing.metadata or {}).get("persona_scope_id") else {}),
             },
@@ -1031,11 +1034,37 @@ class ConversationRuntimeGateway:
                 content=assistant_text,
                 metadata={
                     **{k: v for k, v in (response_metadata or {}).items()
-                       if k != "persona_scope_id"},
+                       if k not in {"persona_scope_id", COMPLETED_ATTACHMENT_RECEIPT_KEY}},
                     **common_metadata,
                     "transcript_actor": "assistant",
                 },
             )
+            if run_lease is not None:
+                from ai_karen_engine.persistence.repositories.chat_run_repository import (
+                    draft_attachment_digest_from_submission_id,
+                )
+                submission_id = run_lease.submission_id
+                if (
+                    submission_id is not None
+                    and draft_attachment_digest_from_submission_id(submission_id) is not None
+                ):
+                    try:
+                        if not context.has_runtime_attachment_scope():
+                            raise PermissionError("attachment_session_denied")
+                        refs = [
+                            {"source_id": item["source_id"], "revision": item["revision"]}
+                            for item in context.runtime_attachment_documents()
+                        ]
+                        assistant_message.metadata[COMPLETED_ATTACHMENT_RECEIPT_KEY] = (
+                            build_completed_attachment_receipt(
+                                user_message, submission_id, refs,
+                            )
+                        )
+                    except (PermissionError, ValueError, TypeError, KeyError):
+                        return TranscriptPersistenceResult(
+                            status="rejected", conversation_id=conversation_id,
+                            reason="attachment_session_denied",
+                        )
             if context.has_runtime_attachment_scope():
                 try:
                     write_result = await self._repository.add_completed_turn(

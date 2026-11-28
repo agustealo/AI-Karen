@@ -217,6 +217,9 @@ class ConversationListResponse(BaseModel):
 
 def _canonical_message_to_response(message: Any) -> MessageResponse:
     metadata = redact_revocable_code_metadata(dict(getattr(message, "metadata", {}) or {}))
+    # Private attestation is not a legacy transcript DTO or a file access grant.
+    metadata.pop("verified_attachment_receipt_v1", None)
+    metadata.pop("verified_citation_receipt_v1", None)
     return MessageResponse(
         id=str(message.id),
         role=str(message.role),

@@ -110,6 +110,49 @@ def draft_attachment_selection_digest(value: object) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+COMPLETED_ATTACHMENT_RECEIPT_KEY = "verified_attachment_receipt_v1"
+
+
+def build_completed_attachment_receipt(
+    user_message: Message, submission_id: str, references: object,
+) -> dict[str, Any]:
+    """Bind an exact user message and ordered selection; grants no file access."""
+    from ai_karen_engine.persistence.repositories.chat_run_repository import (
+        draft_attachment_digest_from_submission_id,
+    )
+
+    selected = validate_draft_attachment_references(references)
+    digest = draft_attachment_digest_from_submission_id(submission_id)
+    if (
+        user_message.role != "user"
+        or not selected
+        or digest is None
+        or draft_attachment_selection_digest(selected) != digest
+    ):
+        raise ValueError("attachment_session_denied")
+    return {
+        "schema_version": 1,
+        "submission_id": submission_id,
+        "user_message_id": user_message.id,
+        "user_message_digest": canonical_message_digest(user_message),
+        "references": selected,
+    }
+
+
+def verify_completed_attachment_receipt(
+    receipt: object, user_message: Message, submission_id: str, references: object,
+) -> bool:
+    """Compare against independently authorized evidence, not receipt assertions."""
+    if not isinstance(receipt, dict) or type(receipt.get("schema_version")) is not int:
+        return False
+    try:
+        return receipt == build_completed_attachment_receipt(
+            user_message, submission_id, references,
+        )
+    except (ValueError, TypeError, OverflowError):
+        return False
+
+
 @dataclass
 class ConversationQuery:
     """Query parameters for conversations."""
