@@ -416,6 +416,8 @@ def test_unrelated_source_failure_preserves_independently_typed_profile_only():
             {"retriever": "PostgresProfileRecallRetriever", "status": "success"},
             {"retriever": "PostgresRecallRetriever", "status": "success"},
             {"retriever": "PostgresProceduralRecallRetriever", "status": "failed"},
+            {"retriever": "PostgresUserStateRecallRetriever", "status": "success"},
+            {"retriever": "HybridRetrievalRouter", "status": "success"},
         ]},
     }
     assert not check(ctx, "birthplace").may_assert
@@ -449,3 +451,33 @@ def test_grounded_response_reports_unavailable_recall_not_missing_saved_memory(s
     assert "Jamaica" not in answer
     assert meta["evidence_sufficiency"] == "ambiguous"
     assert meta["evidence_reason"] == "incomplete_memory_retrieval"
+
+
+def test_incomplete_saved_recall_attributes_recent_statement_without_certifying_it():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    ctx = context()
+    ctx.authorized_sources.append("conversation")
+    ctx.metadata = {"memory_recall_status": "failed", "memory_degraded": True}
+    ctx.unresolved_sources = ["memory"]
+    ctx.evidence.append(ContextEvidence(
+        evidence_id="recent-name", source=EvidenceSource.CONVERSATION,
+        content="My name is Alice.",
+        scope=EvidenceScope(tenant_id="tenant", user_id="user"),
+        metadata={"role": "user"},
+    ))
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_attribute": "preferred_name"},
+    )
+    decision.cognitive_context = ctx
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "couldn't complete saved-memory retrieval" in answer
+    assert meta["evidence_sufficiency"] == "ambiguous"
+    # Regardless of conversation availability, no saved value is certified.
+    if "Alice" in answer:
+        assert "You told me in this conversation" in answer
+        assert meta["response_source"] == "authorized_conversation_evidence"

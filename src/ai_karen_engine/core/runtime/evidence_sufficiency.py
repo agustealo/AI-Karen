@@ -42,10 +42,11 @@ class EvidenceSufficiency:
 
 def _memory_recall_degraded(context: CognitiveContext) -> bool:
     metadata = getattr(context, "metadata", {})
+    health = metadata.get("memory_retrieval_health")
     return (
         bool(metadata.get("memory_degraded"))
-        or metadata.get("memory_recall_status") in {"degraded", "failed", "unavailable", "error"}
-        or (metadata.get("memory_retrieval_health") or {}).get("status") == "degraded"
+        or metadata.get("memory_recall_status") in ("degraded", "failed", "unavailable", "error")
+        or (isinstance(health, dict) and health.get("status") == "degraded")
     )
 
 
@@ -69,9 +70,9 @@ def _profile_sources_completed(context: CognitiveContext) -> bool:
         if not isinstance(row, dict):
             return False
         name, status = row.get("retriever"), row.get("status")
-        if not isinstance(name, str) or name in statuses or status not in {
+        if not isinstance(name, str) or name in statuses or status not in (
             "success", "failed", "timeout",
-        }:
+        ):
             return False
         statuses[name] = status
     required = {"PostgresProfileRecallRetriever", "PostgresRecallRetriever"}
@@ -80,7 +81,7 @@ def _profile_sources_completed(context: CognitiveContext) -> bool:
         "HybridRetrievalRouter",
     }
     return (
-        set(statuses) <= required | unrelated
+        set(statuses) == required | unrelated
         and all(statuses.get(name) == "success" for name in required)
         and any(status != "success" for status in statuses.values())
     )
