@@ -24,7 +24,7 @@ from ai_karen_engine.platform.memory.postgres.ledger_models import (
 )
 
 pytestmark = [
-    pytest.mark.asyncio,
+    pytest.mark.asyncio(loop_scope="module"),
     pytest.mark.skipif(
         os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1",
         reason="requires disposable canonical PostgreSQL memory ledger",
