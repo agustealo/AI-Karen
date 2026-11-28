@@ -658,3 +658,81 @@ async def test_runtime_policy_document_operation_commitment(monkeypatch, scenari
         assert not policy.verifies_chat_model_policy(
             context=runtime, plan=replace(auth, resource_scope=altered),
         )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", [
+    "analyze", "search", "compare", "empty_search", "wrong_count",
+    "no_attachment", "metadata_override", "graph_override",
+])
+async def test_explicit_document_routing_policy_contract(monkeypatch, scenario):
+    from ai_karen_engine.core.cortex.context_stages import build_context_requirements
+    from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+    from ai_karen_engine.core.cortex.memory_formation import request_memory_formation
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext, ChatExecutionRequest
+    from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+    from ai_karen_engine.extensions.content_intelligence_sources import runtime_content_operation_digest
+
+    commands = {
+        "analyze": "Analyze my attached documents",
+        "search": "Search my attached documents for: latest vendor folder",
+        "compare": "Compare my attached documents",
+        "empty_search": "Search my attached documents for:",
+        "wrong_count": "Compare my attached documents",
+    }
+    refs = [dict(item) for item in REFS]
+    if scenario == "compare":
+        refs.append({"source_id": "44444444-4444-4444-8444-000000000002", "revision": DIGEST})
+    if scenario == "no_attachment":
+        refs = []
+    meta = (
+        {"clarification_effective_query": "Analyze another source"}
+        if scenario == "metadata_override" else
+        {"graph_required": True} if scenario == "graph_override" else {}
+    )
+    request = ChatExecutionRequest(
+        messages=[{"role": "user", "content": commands.get(scenario, commands["analyze"])}],
+        context=ChatExecutionContext(
+            user_id=OWNER, tenant_id=TENANT, session_id="session", correlation_id="corr",
+            roles=["user"], permissions=["data:read"],
+        ),
+        attachment_references=refs, metadata=meta,
+    )
+
+    async def unexpected_analysis(*args, **kwargs):
+        pytest.fail("Private document command must not be sent to ML intent analysis")
+
+    monkeypatch.setattr(CortexExecutionDecider, "_analyze_request", unexpected_analysis)
+    cortex = CortexExecutionDecider(force_graph=False)
+    cognitive = await cortex.decide(request)
+    assert cognitive.intent == "content-intelligence"
+    assert cognitive.max_model_calls == 0
+    assert cognitive.plugin_candidates == ["content-intelligence"]
+    assert request_memory_formation(request, cognitive).required_capabilities == [
+        "content-intelligence", "data:read",
+    ]
+    requirements = build_context_requirements(request, cognitive)
+    assert not requirements.requirements
+    policy = RuntimePolicyEnforcer()
+    pipeline = RuntimeDecisionPipeline(cortex=cortex, policy=policy)
+    policy_request = pipeline._build_execution_policy_request(request, cognitive)
+    decision = await policy.evaluate(policy_request)
+    assert decision.allowed is (scenario in {"analyze", "search", "compare"})
+    if decision.allowed:
+        assert decision.runtime_constraints["document_operation_digest"] == (
+            runtime_content_operation_digest(refs, policy_request.document_operation)
+        )
+
+
+def test_document_command_grammar_does_not_select_from_history_or_prose():
+    from ai_karen_engine.core.cortex.routing_intents import parse_attached_document_command
+
+    for query in (
+        "Explain how to analyze my attached documents",
+        "What does 'search my attached documents for:' mean?",
+        "Analyze my attached documents and email them",
+        "Compare documents on the internet",
+        None,
+    ):
+        assert parse_attached_document_command(query, REFS) is None
