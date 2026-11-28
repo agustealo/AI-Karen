@@ -7,6 +7,8 @@ from typing import Any, Dict, List, Optional
 from ai_karen_engine.core.intelligence import get_intelligence_runtime
 from ai_karen_engine.core.cortex.routing_intents import (
     GENERATED_TEXT_ARTIFACT_CAPABILITY,
+    ATTACHED_DOCUMENT_INTENT,
+    parse_attached_document_command,
     parse_owner_generated_text_request,
     parse_research_handoff_question,
     resolve_capability_decision,
@@ -84,6 +86,41 @@ class CortexExecutionDecider:
              if item.get("role") == "user"),
             None,
         )
+        document_command = parse_attached_document_command(
+            latest_user, request.attachment_references,
+        )
+        if document_command is not None:
+            # Search arguments are inert private data, not an ML intent prompt.
+            # This exact route cannot inherit incidental tools or memory hints.
+            incompatible = self._force_graph or any(meta.get(key) for key in (
+                "graph_required", "force_graph", "workflow_required", "agent_delegation",
+                "tool_requirements", "plugin_candidates", "required_capabilities",
+                "requested_agents", "reasoning_modes", "memory_recall_required",
+                "memory_write_requested", "requires_resumability",
+                "requires_parallel_execution", "workflow_id", "requires_human_gate",
+                "approval_id", "clarification_effective_query",
+            )) or getattr(request, "search_retrieval_options", None) is not None or (
+                meta.get("original_user_input") not in (None, latest_user)
+                or getattr(request, "research_continuation_question", None) is not None
+            )
+            forbidden = list(meta.get("forbidden_capabilities") or [])
+            if incompatible:
+                forbidden.append(ATTACHED_DOCUMENT_INTENT)
+            return ExecutionDecision(
+                intent=ATTACHED_DOCUMENT_INTENT,
+                intent_confidence=1.0,
+                required_capabilities=[ATTACHED_DOCUMENT_INTENT, "data:read"],
+                forbidden_capabilities=list(dict.fromkeys(forbidden)),
+                plugin_candidates=[ATTACHED_DOCUMENT_INTENT],
+                max_model_calls=0,
+                max_steps=1,
+                reason_codes=["explicit_attached_document_operation"],
+                policy_constraints={
+                    "direct_capability": True,
+                    "memory_write_requested": False,
+                    "memory_write_denied": True,
+                },
+            )
         explicit_artifact = parse_owner_generated_text_request(latest_user) is not None
         user_content = (
             latest_user if explicit_artifact else
