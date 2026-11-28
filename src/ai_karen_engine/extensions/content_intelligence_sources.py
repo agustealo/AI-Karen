@@ -56,11 +56,10 @@ class ContentSourceHost:
         self._kernel = kernel
 
     @staticmethod
-    async def admit_owner_access(
-        *, kernel: Kernel, context: ExtensionExecutionContext,
-        plan: AuthorizedExecutionPlan,
+    def _require_standalone_owner_access(
+        context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
     ) -> None:
-        """Check scoped runtime and kernel admission before any source read."""
+        """Do not reinterpret a scoped chat grant as standalone owner access."""
         if (
             not isinstance(context, ExtensionExecutionContext)
             or not isinstance(plan, AuthorizedExecutionPlan)
@@ -77,8 +76,18 @@ class ContentSourceHost:
             or PLUGIN not in context.allowed_capabilities
             or "data:read" not in context.allowed_capabilities
             or context.resource_scope != {}
+            or plan.resource_scope != {}
+            or context.runtime_authority(PLUGIN) is not None
         ):
             raise PermissionError("content_source_authorization_required")
+
+    @staticmethod
+    async def admit_owner_access(
+        *, kernel: Kernel, context: ExtensionExecutionContext,
+        plan: AuthorizedExecutionPlan,
+    ) -> None:
+        """Check standalone scope and kernel admission before any source read."""
+        ContentSourceHost._require_standalone_owner_access(context, plan)
         record = kernel.get_record(PLUGIN)
         if (
             not isinstance(record, dict)
@@ -97,6 +106,7 @@ class ContentSourceHost:
         ))
         if getattr(admission, "status", None) != "admitted":
             raise PermissionError("content_source_kernel_admission_denied")
+        ContentSourceHost._require_standalone_owner_access(context, plan)
 
     async def execute_owner_text(
         self, *, context: ExtensionExecutionContext,
@@ -137,9 +147,11 @@ class ContentSourceHost:
         total_chars = 0
         # Use the validated snapshot, not caller-owned containers after an await.
         for source_id, revision in selection:
+            self._require_standalone_owner_access(context, plan)
             response = await self._store.read_owner_active_code(
                 source_id, context.tenant_id, context.user_id,
             )
+            self._require_standalone_owner_access(context, plan)
             if not getattr(response, "success", False):
                 raise PermissionError("content_source_unavailable")
             artifact = getattr(response, "data", None)
@@ -181,10 +193,12 @@ class ContentSourceHost:
             payload["query"] = query
         if operation == "compare":
             payload.update({"left_id": left_id, "right_id": right_id})
+        self._require_standalone_owner_access(context, plan)
         result = await self._kernel.execute(ExtensionExecutionRequest(
             plugin_id=PLUGIN, capability="execute", payload=payload,
             context=context, authorized_plan=plan,
         ))
+        self._require_standalone_owner_access(context, plan)
         if getattr(result, "status", None) != "success":
             raise PermissionError("content_source_execution_denied")
         output = getattr(result, "payload", None)

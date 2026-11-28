@@ -936,6 +936,50 @@ def test_postbind_mutations_of_root_model_permissions_fail_closed():
     assert scope.meter.model_calls == 0
 
 
+@pytest.mark.parametrize("inflated", [False, True])
+def test_postbind_root_budget_replacement_denies_context_authority(inflated):
+    admission = _scope(calls=1)
+    context, plan, meter = admission.authenticated_context, admission.plan, admission.meter
+    original = plan.budget
+    assert context.original_runtime_model_plan(meter) is plan
+    plan.budget = replace(
+        original,
+        max_duration_ms=original.max_duration_ms * (2 if inflated else 1),
+    )
+    assert meter.retains_initial_budget_limits()
+    assert context.original_runtime_model_plan(meter) is None
+    assert not context.is_runtime_model_plan_authorized(plan, meter)
+    with pytest.raises(PermissionError, match="runtime_model_execution_authority_invalid"):
+        context.register_runtime_model_child_plan(
+            replace(plan, budget=original), meter,
+        )
+    assert meter.model_calls == meter.tool_calls == 0
+    plan.budget = original
+    assert context.original_runtime_model_plan(meter) is plan
+    assert context.is_runtime_model_plan_authorized(plan, meter)
+
+
+@pytest.mark.parametrize("inflated", [False, True])
+def test_postbind_child_budget_replacement_denies_only_child_authority(inflated):
+    admission = _scope(calls=1, allowed_tools=("approved-tool",))
+    context, root, meter = admission.authenticated_context, admission.plan, admission.meter
+    child = replace(root, allowed_tools=[])
+    context.register_runtime_model_child_plan(child, meter)
+    assert context.is_runtime_model_plan_authorized(child, meter)
+    child.budget = replace(
+        root.budget,
+        max_duration_ms=root.budget.max_duration_ms * (2 if inflated else 1),
+    )
+    assert context.original_runtime_model_plan(meter) is root
+    assert context.is_runtime_model_plan_authorized(root, meter)
+    assert not context.is_runtime_model_plan_authorized(child, meter)
+    with pytest.raises(PermissionError, match="runtime_model_execution_authority_invalid"):
+        context.register_runtime_model_child_plan(child, meter)
+    assert meter.model_calls == meter.tool_calls == 0
+    child.budget = root.budget
+    assert context.is_runtime_model_plan_authorized(child, meter)
+
+
 def test_runtime_context_binding_is_not_serialized_or_cloned():
     from dataclasses import asdict
 

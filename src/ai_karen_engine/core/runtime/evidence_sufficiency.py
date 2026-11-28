@@ -381,7 +381,7 @@ def evaluate_conversation_personal_evidence(
             EvidenceSufficiencyStatus.MISSING, attribute, reason="conversation_unavailable",
         )
     from ai_karen_engine.core.memory.signals.semantic_classifier import (
-        classify_explicit_user_memory,
+        classify_explicit_user_memory, is_direct_profile_correction,
     )
     facts: list[tuple[str, str, bool]] = []
     for item in context.evidence:
@@ -397,11 +397,14 @@ def evaluate_conversation_personal_evidence(
         # Classification, not a first-token guess, establishes first-person
         # attribution. This also admits "Black is my favorite color" while
         # rejecting reported speech and quotes via the shared interpreter.
+        # Admit only an anchored direct-fact match after the canonical
+        # correction preamble, never an embedded report or uncertain claim.
         if len(user_text) > 500 or (
             not user_text.casefold().startswith(
                 ("my ", "i ", "i'm ", "i’ve ", "i've ", "call me ")
             )
             and not attribute.startswith("favorite_")
+            and not is_direct_profile_correction(user_text, attribute)
         ):
             continue
         for signal in classify_explicit_user_memory(user_text):
