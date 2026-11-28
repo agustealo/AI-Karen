@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type Page, type Request, type TestInfo } from "@playwright/test";
 import { expect, test } from "./fixtures/verified-search-deployment";
-import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import { readAuthorizedSameOriginJson, signInApprovedKaren } from "./fixtures/approved-karen-login";
 
 /**
  * Real authenticated File Explorer acceptance. No mocked routes, files,
@@ -1414,18 +1414,7 @@ test("KEXP-A7-ATTACHED-CONTENT: real picker, revision-bound submission and model
   // or source body is returned to the runner or attached to test reports.
   async function read(path: string): Promise<unknown> {
     if (new URL(page.url()).origin !== origin.origin) throw new Error("Unexpected browser origin");
-    const result = await page.evaluate(async (path) => {
-      const url = new URL(path, location.origin);
-      if (url.origin !== location.origin || !url.pathname.startsWith("/api/")) {
-        throw new Error("Invalid acceptance read");
-      }
-      const token = localStorage.getItem("access_token");
-      const response = await fetch(url.pathname + url.search, {
-        credentials: "same-origin", cache: "no-store", redirect: "error",
-        headers: token ? { Authorization: "Bearer " + token } : {},
-      });
-      return { ok: response.ok, body: response.ok ? await response.json() : null };
-    }, path);
+    const result = await readAuthorizedSameOriginJson(page, path);
     expect(result.ok, "Canonical authenticated read must succeed").toBe(true);
     return result.body;
   }
@@ -1495,7 +1484,9 @@ test("KEXP-A7-ATTACHED-CONTENT: real picker, revision-bound submission and model
   await composer.fill(prompt);
   await expect.poll(async () => {
     const draft = await read(draftPath) as Draft;
-    return draft.text === prompt && JSON.stringify(draft.attachment_references) === JSON.stringify(refs) &&
+    return draft.text === prompt && draft.attachment_references.length === 1 &&
+      draft.attachment_references[0].source_id === refs[0].source_id &&
+      draft.attachment_references[0].revision === refs[0].revision &&
       draft.revision > initial.revision;
   }, { timeout: 30000 }).toBe(true);
   const saved = await read(draftPath) as Draft;
@@ -1511,7 +1502,10 @@ test("KEXP-A7-ATTACHED-CONTENT: real picker, revision-bound submission and model
   expect(run.refs).toEqual(refs);
   const statusPath = "/api/copilotkit/agent/default/submissions/" + thread + "/" + run.submissionId + "/status";
   await expect.poll(async () => {
-    const result = await read(statusPath) as Record<string, unknown>;
+    const observation = await readAuthorizedSameOriginJson(page, statusPath);
+    if (observation.status === 404) return false;
+    expect(observation.ok).toBe(true);
+    const result = observation.body as Record<string, unknown>;
     return result.status === "completed" && result.runId === run.runId && result.submissionId === run.submissionId;
   }, { timeout: 180000 }).toBe(true);
   let assistantId = "";

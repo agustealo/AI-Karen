@@ -51,3 +51,58 @@ export async function signInApprovedKaren(
   await expect(page).toHaveURL(new RegExp("/dashboard(?:[/?#]|$)"), { timeout: 30000 });
   expect(new URL(page.url()).origin).toBe(approved.origin);
 }
+
+/**
+ * Canonical read through the actual signed-in browser. The access token
+ * stays in its origin; never return it to the runner or follow redirects.
+ * The only mutation supported here is an explicit disposable draft seed.
+ */
+type ApprovedApiResult = { ok: boolean; status: number; body: unknown };
+type DraftSeed = { text: ""; expected_revision: number; attachment_references: Array<{ source_id: string; revision: string }> };
+
+async function authorizedSameOriginJson(
+  page: Page, apiPath: string, draftSeed?: DraftSeed,
+): Promise<ApprovedApiResult> {
+  const configured = process.env.KAREN_BASE_URL;
+  if (!configured || new URL(page.url()).origin !== new URL(configured).origin) {
+    throw new Error("Refusing authenticated request outside approved origin");
+  }
+  return page.evaluate(async ({ path, approved, seed }) => {
+    const url = new URL(path, window.location.origin);
+    if (window.location.origin !== approved || url.origin !== approved ||
+        !url.pathname.startsWith("/api/") ||
+        (seed !== undefined && (!/^\/api\/conversations\/[a-f0-9-]{36}\/draft$/.test(url.pathname) || url.search))) {
+      throw new Error("Refusing unapproved authenticated API request");
+    }
+    const accessToken = window.localStorage.getItem("access_token");
+    const response = await window.fetch(url.pathname + url.search, {
+      method: seed === undefined ? "GET" : "PUT",
+      credentials: "same-origin", cache: "no-store", redirect: "error",
+      headers: {
+        ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
+        ...(seed === undefined ? {} : { "Content-Type": "application/json" }),
+      },
+      ...(seed === undefined ? {} : { body: JSON.stringify(seed) }),
+    });
+    return { ok: response.ok, status: response.status, body: response.ok ? await response.json() : null };
+  }, { path: apiPath, approved: new URL(configured).origin, seed: draftSeed });
+}
+
+export async function readAuthorizedSameOriginJson(page: Page, apiPath: string): Promise<ApprovedApiResult> {
+  return authorizedSameOriginJson(page, apiPath);
+}
+
+export async function seedApprovedAcceptanceDraft(
+  page: Page, apiPath: string, seed: DraftSeed,
+): Promise<ApprovedApiResult> {
+  if (process.env.KAREN_KEXP_RETRY_ATTACHMENT_REQUIRED !== "true" ||
+      process.env.KAREN_SANITIZED_ACCOUNT !== "true" ||
+      process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
+      !Number.isSafeInteger(seed.expected_revision) || seed.expected_revision < 0 ||
+      seed.text !== "" || seed.attachment_references.length !== 1 ||
+      seed.attachment_references[0].source_id !== process.env.KAREN_KEXP_RETRY_SOURCE_ID ||
+      seed.attachment_references[0].revision !== process.env.KAREN_KEXP_RETRY_SOURCE_REVISION) {
+    throw new Error("Draft seed must use the explicitly approved disposable attachment");
+  }
+  return authorizedSameOriginJson(page, apiPath, seed);
+}

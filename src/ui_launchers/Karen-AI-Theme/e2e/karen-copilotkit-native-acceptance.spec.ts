@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures/verified-search-deployment";
-import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import { readAuthorizedSameOriginJson, seedApprovedAcceptanceDraft, signInApprovedKaren } from "./fixtures/approved-karen-login";
 import type { APIRequestContext, Route } from "@playwright/test";
 import { createHash } from "node:crypto";
 
@@ -537,7 +537,13 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   }
   if (!email || !password) throw new Error("Approved sanitized sign-in required");
   test.setTimeout(retryRequired ? 360000 : 240000);
+  if (retryRequired) {
+    const deployment = await page.request.get("/api/deployment-revision", { maxRedirects: 0, maxRetries: 0 });
+    expect(deployment.status()).toBe(200);
+    expect(await deployment.json()).toEqual({ status: "ok", revision: process.env.KAREN_CHAT_BOOT_REVISION });
+  }
   await signInApprovedKaren(page, email, password);
+  const read = (path: string) => readAuthorizedSameOriginJson(page, path);
 
   const inferenceRequests: string[] = [];
   const retryMutations: string[] = [];
@@ -548,9 +554,9 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     if (pathname.startsWith("/api/copilotkit/agent/default/draft-retry/")) retryMutations.push(pathname);
   });
 
-  const capabilities = await page.request.get("/api/chat/ag-ui/capabilities");
-  expect(capabilities.status()).toBe(200);
-  const flags = await capabilities.json() as {
+  const capabilities = await read("/api/chat/ag-ui/capabilities");
+  expect(capabilities.status).toBe(200);
+  const flags = capabilities.body as {
     enabled: boolean; governed_history: boolean; attachment_draft_submission?: boolean;
   };
   expect(flags.enabled, "Real execution must use enabled canonical AG-UI").toBe(true);
@@ -568,17 +574,18 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   }
 
   const prefix = "/api/copilotkit/threads/" + encodeURIComponent(dedicatedThread);
-  const before = await page.request.get(prefix + "/messages");
-  expect(before.status()).toBe(200);
-  const original = await before.json() as {
+  const before = await read(prefix + "/messages");
+  expect(before.status).toBe(200);
+  const original = before.body as {
     threadId: string; messages: Array<{ id: string; role: string; content: string }>;
   };
   expect(original.threadId).toBe(dedicatedThread);
   expect(original.messages, "Live Stop uses an empty disposable conversation").toEqual([]);
   const draftUrl = "/api/conversations/" + encodeURIComponent(dedicatedThread) + "/draft";
-  const draft = await page.request.get(draftUrl);
-  expect(draft.status()).toBe(200);
-  const initialDraft = await draft.json() as {
+  const draftReadUrl = retryRequired ? draftUrl + "?include_attachments=true" : draftUrl;
+  const draft = await read(draftReadUrl);
+  expect(draft.status).toBe(200);
+  const initialDraft = draft.body as {
     text: string; revision: number; attachment_references: Array<{ source_id: string; revision: string }>;
   };
   expect(initialDraft.text, "Disposable conversation must have no unsent text").toBe("");
@@ -588,11 +595,11 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     // reference through the genuine owner-scoped CAS; do not create or mock
     // an artifact. This is attachment recovery, not file-picker proof.
     expect(Number.isSafeInteger(initialDraft.revision)).toBe(true);
-    const seeded = await page.request.put(draftUrl, { data: {
+    const seeded = await seedApprovedAcceptanceDraft(page, draftUrl, {
       text: "", expected_revision: initialDraft.revision, attachment_references: refs,
-    }});
-    expect(seeded.status()).toBe(200);
-    expect(await seeded.json()).toMatchObject({
+    });
+    expect(seeded.status).toBe(200);
+    expect(seeded.body).toMatchObject({
       text: "", revision: initialDraft.revision + 1, attachment_references: refs,
     });
   }
@@ -615,9 +622,9 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   }
   await composer.fill(prompt);
   await expect.poll(async () => {
-    const value = await page.request.get(draftUrl);
-    expect(value.status()).toBe(200);
-    return (await value.json() as { text: string }).text;
+    const value = await read(draftReadUrl);
+    expect(value.status).toBe(200);
+    return (value.body as { text: string }).text;
   }, { timeout: 20000 }).toBe(prompt);
 
   // Observe the real SDK transport POST. Never log prompt, cookies or streamed
@@ -643,10 +650,10 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   const runStatusUrl = "/api/copilotkit/agent/default/runs/" +
     dedicatedThread + "/" + payload.runId + "/status";
   await expect.poll(async () => {
-    const status = await page.request.get(runStatusUrl);
-    if (status.status() === 404) return "not-admitted";
-    expect(status.status(), "Canonical run status must be readable").toBe(200);
-    const body = await status.json() as {
+    const status = await read(runStatusUrl);
+    if (status.status === 404) return "not-admitted";
+    expect(status.status, "Canonical run status must be readable").toBe(200);
+    const body = status.body as {
       status: string; cancel_requested: boolean; cancellation_confirmed: boolean;
     };
     expect(body.cancel_requested).toBe(false);
@@ -708,14 +715,14 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   // UI, not only in a server JSON payload.
   await expect(native.getByTestId("karen-copilot-stop-status"))
     .toContainText("Karen confirmed this run was cancelled.");
-  const terminal = await page.request.get(runStatusUrl);
-  expect(terminal.status(), "Read-only canonical run status must be available").toBe(200);
-  expect(await terminal.json()).toEqual({
+  const terminal = await read(runStatusUrl);
+  expect(terminal.status, "Read-only canonical run status must be available").toBe(200);
+  expect(terminal.body).toEqual({
     status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
   });
-  const stored = await page.request.get(prefix + "/messages");
-  expect(stored.status()).toBe(200);
-  const persisted = await stored.json() as {
+  const stored = await read(prefix + "/messages");
+  expect(stored.status).toBe(200);
+  const persisted = stored.body as {
     threadId: string; messages: Array<{ id: string; role: string; content: string }>;
   };
   expect(persisted.threadId).toBe(dedicatedThread);
@@ -738,9 +745,9 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     const revision = Number(identity[1]);
     expect(Number.isSafeInteger(revision) && revision < Number.MAX_SAFE_INTEGER - 1).toBe(true);
     const readDraft = async () => {
-      const result = await page.request.get(draftUrl);
-      expect(result.status()).toBe(200);
-      return await result.json() as {
+      const result = await read(draftReadUrl);
+      expect(result.status).toBe(200);
+      return result.body as {
         text: string; revision: number;
         attachment_references: Array<{ source_id: string; revision: string }>;
       };
@@ -749,17 +756,17 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     await expect.poll(readDraft, { timeout: 20000 }).toMatchObject(retained);
     const statusPath = "/api/copilotkit/agent/default/submissions/" +
       dedicatedThread + "/" + submissionId + "/status";
-    const statusReceipt = await page.request.get(statusPath);
-    expect(statusReceipt.status()).toBe(200);
-    expect(await statusReceipt.json()).toMatchObject({
+    const statusReceipt = await read(statusPath);
+    expect(statusReceipt.status).toBe(200);
+    expect(statusReceipt.body).toMatchObject({
       runId: payload.runId, submissionId, status: "cancelled",
       cancel_requested: true, cancellation_confirmed: true,
     });
     const retryPath = "/api/copilotkit/agent/default/draft-retry/" +
       dedicatedThread + "/" + submissionId;
-    const eligible = await page.request.get(retryPath);
-    expect(eligible.status()).toBe(200);
-    expect(await eligible.json()).toEqual({
+    const eligible = await read(retryPath);
+    expect(eligible.status).toBe(200);
+    expect(eligible.body).toEqual({
       submission_id: submissionId, eligible: true,
       prepared_revision: null, prepared_current: false,
     });
@@ -843,9 +850,9 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     }
     await expect(composer).toHaveValue(prompt);
     expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
-    const causal = await page.request.get(retryPath);
-    expect(causal.status()).toBe(200);
-    expect(await causal.json()).toEqual({
+    const causal = await read(retryPath);
+    expect(causal.status).toBe(200);
+    expect(causal.body).toEqual({
       submission_id: submissionId, eligible: false,
       prepared_revision: revision + 1, prepared_current: true,
     });
@@ -858,9 +865,9 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
     expect(inferenceRequests).toEqual(["/api/copilotkit/agent/default/run"]);
     expect(retryMutations).toEqual([retryPath]);
-    const after = await page.request.get(prefix + "/messages");
-    expect(after.status()).toBe(200);
-    expect(await after.json()).toMatchObject({ threadId: dedicatedThread, messages: persisted.messages });
+    const after = await read(prefix + "/messages");
+    expect(after.status).toBe(200);
+    expect(after.body).toMatchObject({ threadId: dedicatedThread, messages: persisted.messages });
     // No successor execution or cleanup; preserve actual evidence.
   }
   // The disposable conversation is intentionally retained as audit evidence.
