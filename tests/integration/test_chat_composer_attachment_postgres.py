@@ -906,9 +906,18 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         )).data == {**newer.data, "revision": 8}
         failed_retry = await admit("retry-fails", 8, [active_ref], newer.data["text"])
         assert failed_retry is not None
+        assert await retry_observation(cancelled) == {
+            "eligible": False, "prepared_revision": 8, "prepared_current": False,
+        }
         assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
         assert await retry_eligibility(failed_retry) is None
         assert await runs.finish(failed_retry, status="failed", error_code="CHAT_TEST_TERMINAL")
+        # The successor's failed terminal state retains the same draft and
+        # removes the unresolved fence, but it has already been admitted.
+        # Only the successor can now authorize another retry preparation.
+        assert await retry_observation(cancelled) == {
+            "eligible": False, "prepared_revision": 8, "prepared_current": False,
+        }
         assert await retry_eligibility(failed_retry) == 8
         # A successful database commit followed by a lost response must
         # not allow the old submission to advance a second time.

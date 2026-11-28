@@ -1164,6 +1164,13 @@ class SqlChatRunRepository:
             "conversation": _uuid(conversation_id),
             "submission_id": submission_id, "revision": revision,
         }
+        # An existing successor execution, even terminal and retaining its
+        # draft, owns its own recovery identity. Do not advertise it as a
+        # fresh prepared submission from the original failed run.
+        scope["successor_id"] = (
+            f"draft-v2-{revision + 1}-{digest}" if digest is not None
+            else f"draft-v1-{revision + 1}"
+        )
         observation: dict[str, Any] = {
             "eligible": False, "prepared_revision": None, "prepared_current": False,
         }
@@ -1178,6 +1185,15 @@ class SqlChatRunRepository:
                   AND d.conversation_id = r.conversation_id
                   AND d.revision = COALESCE(r.retry_prepared_revision, :revision)
                   AND {_DRAFT_RETRY_NO_UNRESOLVED}
+                  AND (
+                    r.retry_prepared_revision IS NULL OR NOT EXISTS (
+                        SELECT 1 FROM public.runtime_chat_runs successor
+                        WHERE successor.tenant_id = r.tenant_id
+                          AND successor.user_id = r.user_id
+                          AND successor.conversation_id = r.conversation_id
+                          AND successor.submission_id = :successor_id
+                    )
+                  )
                 WHERE r.tenant_id = CAST(:tenant AS uuid)
                   AND r.user_id = CAST(:owner AS uuid)
                   AND r.conversation_id = CAST(:conversation AS uuid)
