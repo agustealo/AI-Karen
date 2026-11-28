@@ -37,7 +37,36 @@ Redis recovery means cache warmup and STM/session degradation/recreation, not da
 6. Warm Redis cache
 7. Validate application health endpoints
 
-## 5. References
+## 5. Governed-memory recovery admission (open acceptance boundary)
+
+A backup snapshot predating a committed consent withdrawal or memory retirement
+cannot independently prove current authorization. Do not admit a recovered
+memory authority to consumer traffic until recovery has been reconciled against
+a trusted revocation cutoff that was not rolled back with the snapshot.
+
+The implementation and disposable restore proof are outstanding. The existing
+restore checksum and destructive-action confirmation are not proof of this
+boundary. Operators must treat missing or unverifiable reconciliation evidence
+as a recovery hold, not as permission to serve governed memory.
+
+Required acceptance:
+
+- Restore a pre-revocation backup into an isolated disposable database after
+  committing a deletion or consent withdrawal. Reconcile against an independently
+  retained authoritative cutoff (or verified WAL recovery through that cutoff).
+- Deny recall, export, stale idempotent replay and retired identity reuse.
+- Verify that missing, older, incomplete or unverifiable recovery evidence
+  cannot authorize service admission. Preserve tenant isolation and audit records.
+- Rebuild Redis and other derived projections from currently authorized sources;
+  do not use restored Redis snapshots as durable memory truth.
+- Exercise a delayed producer after revocation as well as independent readers.
+  Read-side denial does not establish physical erasure of stale cached bytes.
+
+No claim of physical erasure of historical backups or atomic database-to-wire
+authorization is made. This is an operator hold and acceptance specification,
+not an implemented automated recovery admission gate.
+
+## 6. References
 
 - `docs/operations/platform-health.md`
 - `docs/operations/storage-integrity.md`
