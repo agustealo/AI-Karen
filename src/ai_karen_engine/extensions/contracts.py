@@ -310,6 +310,9 @@ class ExtensionExecutionContext:
             and self.correlation_id == runtime_context.correlation_id
             and self.conversation_id == runtime_context.conversation_id
             and self.policy_decision_id == plan.policy_decision_id
+            # A runtime-bound invocation may project, but never substitute,
+            # the resource selection granted by its original plan.
+            and self.resource_scope == plan.resource_scope
             and plugin_id in plan.allowed_plugins
             and set(self.allowed_capabilities).issubset(plan.allowed_capabilities)
             and plan.matches_execution_scope(

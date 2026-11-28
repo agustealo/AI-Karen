@@ -300,9 +300,42 @@ async def test_vault_export_and_tombstone_respect_monotonic_revocation() -> None
         assert await vault.verify_integrity(ids, context=context) == {ids[0]: False}
         # A genuinely new identity is not prohibited by an unrelated deletion.
         fresh = replace(replacement, id=str(uuid.uuid4()))
-        assert (await vault.persist(
-            fresh, context=replace(context, request_id=str(uuid.uuid4())),
-        )).persisted
+        fresh_context = replace(context, request_id=str(uuid.uuid4()))
+        first = await vault.persist(fresh, context=fresh_context)
+        assert first.persisted
+        replay = await vault.persist(fresh, context=fresh_context)
+        assert replay.persisted and replay.metadata["idempotent_replay"] is True
+        assert replay.metadata["event_id"] == first.metadata["event_id"]
+
+        # Revoking only the canonical event must also invalidate a replay
+        # whose assertion row remains granted and current.
+        fresh_event_id = uuid.UUID(first.metadata["event_id"])
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            fresh_event = (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.event_id == fresh_event_id,
+            ))).scalar_one()
+            fresh_event.consent_state = "revoked"
+        with pytest.raises(NeuroVaultAuthorizationError, match="memory replay no longer authorized"):
+            await vault.persist(fresh, context=fresh_context)
+        assert await vault.export([fresh.id], context=context) == []
+        assert await vault.verify_integrity([fresh.id], context=context) == {fresh.id: True}
+
+        # Source validity is an independent boundary from the assertion.
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            fresh_event = (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.event_id == fresh_event_id,
+            ))).scalar_one()
+            fresh_event.consent_state = "granted"
+            fresh_event.valid_to = earlier
+        with pytest.raises(NeuroVaultAuthorizationError, match="memory replay no longer authorized"):
+            await vault.persist(fresh, context=fresh_context)
+        assert await vault.export([fresh.id], context=context) == []
+        foreign_context = replace(context, user_id=str(uuid.uuid4()))
+        assert await vault.export([fresh.id], context=foreign_context) == []
+        assert not (await vault.delete(fresh.id, reason="foreign principal", context=foreign_context)).persisted
+        denied_context = replace(context, policy_context={"denied": True})
+        with pytest.raises(NeuroVaultAuthorizationError):
+            await vault.export([fresh.id], context=denied_context)
         async with async_transaction_scope(tenant_id=str(tenant)) as session:
             assert (await session.execute(select(MemoryEvent.valid_to).where(
                 MemoryEvent.event_id == event_id,

@@ -993,7 +993,16 @@ async def _retention_retry_acceptance(
     store = DeferredStore(settings=settings, redis_manager=redis)
     index = store._pending_terminal_index(tenant_id)
     # Prove the rotating discovery cursor advances past an unrepaired item.
+    from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
+    def histogram_sample(name: str):
+        return get_metrics_collector().snapshot()["histograms"].get(name, {}).get("values", {}).get(())
+
+    count_name = "kari_medusa_terminal_retention_index_entries_observed"
+    age_name = "kari_medusa_terminal_retention_acknowledged_age_seconds"
     await client.zadd(index, {"probe-a": 0, "probe-b": 1, "probe-c": 2})
+    count_before = histogram_sample(count_name)
+    observed_count = await client.zcard(index)
     try:
         assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
             "probe-a"
@@ -1007,6 +1016,9 @@ async def _retention_retry_acceptance(
         assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == [
             "probe-a"
         ]
+        count_after = histogram_sample(count_name)
+        assert count_after.count == (count_before.count if count_before else 0) + 4
+        assert count_after.total == (count_before.total if count_before else 0) + 4 * observed_count
     finally:
         await client.zrem(index, "probe-a", "probe-b", "probe-c")
     for mode in ("owner_get", "fresh_list"):
@@ -1030,6 +1042,7 @@ async def _retention_retry_acceptance(
             assert await client.zscore(index, run.run_id) is not None
             assert await client.pttl(index) == -1
             store.fail_ack = False
+            age_before = histogram_sample(age_name)
             if mode == "owner_get":
                 assert (await owner.get(**scope))["status"] == "completed"
                 assert store.attempts == before + 2
@@ -1049,6 +1062,9 @@ async def _retention_retry_acceptance(
                 )
             assert await client.pttl(key) > 0
             assert await client.zscore(index, run.run_id) is None
+            age_after = histogram_sample(age_name)
+            assert age_after.count == (age_before.count if age_before else 0) + 1
+            assert age_after.total >= (age_before.total if age_before else 0)
             durable = await ledger.get(**scope)
             assert durable is not None and durable["outcome_status"] == "success"
             previous_ttl = await client.pttl(key)
