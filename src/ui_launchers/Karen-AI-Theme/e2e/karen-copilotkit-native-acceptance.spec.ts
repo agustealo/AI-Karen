@@ -1,6 +1,7 @@
 import { expect, test } from "./fixtures/verified-search-deployment";
 import { signInApprovedKaren } from "./fixtures/approved-karen-login";
-import type { APIRequestContext } from "@playwright/test";
+import type { APIRequestContext, Route } from "@playwright/test";
+import { createHash } from "node:crypto";
 
 // This visits a REAL isolated candidate on a sanitized reviewed deployment.
 // Default scenarios never execute a model. One separately operator-approved
@@ -11,6 +12,10 @@ test.use({ trace: "off", screenshot: "off", video: "off" });
 const required = process.env.KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED === "true";
 const retryRequired = process.env.KAREN_KEXP_RETRY_ACCEPTANCE_REQUIRED === "true";
 const retryLostResponse = process.env.KAREN_KEXP_RETRY_LOST_RESPONSE_REQUIRED === "true";
+const retryAttachment = process.env.KAREN_KEXP_RETRY_ATTACHMENT_REQUIRED === "true";
+if (retryAttachment && !retryRequired) {
+  throw new Error("Attachment-bound retry proof requires explicit KEXP retry acceptance");
+}
 if (retryLostResponse && !retryRequired) {
   throw new Error("Lost retry response proof requires explicit KEXP retry acceptance");
 }
@@ -546,10 +551,21 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   const capabilities = await page.request.get("/api/chat/ag-ui/capabilities");
   expect(capabilities.status()).toBe(200);
   const flags = await capabilities.json() as {
-    enabled: boolean; governed_history: boolean;
+    enabled: boolean; governed_history: boolean; attachment_draft_submission?: boolean;
   };
   expect(flags.enabled, "Real execution must use enabled canonical AG-UI").toBe(true);
   expect(flags.governed_history, "Positive stop needs durable run admission").toBe(true);
+  const refs: Array<{ source_id: string; revision: string }> = [];
+  if (retryAttachment) {
+    expect(flags.attachment_draft_submission, "Attachment proof must not silently fall back to text").toBe(true);
+    const source = process.env.KAREN_KEXP_RETRY_SOURCE_ID;
+    const revision = process.env.KAREN_KEXP_RETRY_SOURCE_REVISION;
+    if (!source || !UUID.test(source) || source !== source.toLowerCase() ||
+        !revision || !/^[a-f0-9]{64}$/.test(revision)) {
+      throw new Error("Attachment proof requires a reviewed existing sanitized owned source and exact revision");
+    }
+    refs.push({ source_id: source, revision });
+  }
 
   const prefix = "/api/copilotkit/threads/" + encodeURIComponent(dedicatedThread);
   const before = await page.request.get(prefix + "/messages");
@@ -562,8 +578,24 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   const draftUrl = "/api/conversations/" + encodeURIComponent(dedicatedThread) + "/draft";
   const draft = await page.request.get(draftUrl);
   expect(draft.status()).toBe(200);
-  expect((await draft.json() as { text: string }).text,
-    "Disposable conversation must not contain another person's unsent draft").toBe("");
+  const initialDraft = await draft.json() as {
+    text: string; revision: number; attachment_references: Array<{ source_id: string; revision: string }>;
+  };
+  expect(initialDraft.text, "Disposable conversation must have no unsent text").toBe("");
+  if (retryRequired) expect(initialDraft.attachment_references).toEqual([]);
+  if (retryAttachment) {
+    // The standalone native preview has no file picker. Seed only a reviewed
+    // reference through the genuine owner-scoped CAS; do not create or mock
+    // an artifact. This is attachment recovery, not file-picker proof.
+    expect(Number.isSafeInteger(initialDraft.revision)).toBe(true);
+    const seeded = await page.request.put(draftUrl, { data: {
+      text: "", expected_revision: initialDraft.revision, attachment_references: refs,
+    }});
+    expect(seeded.status()).toBe(200);
+    expect(await seeded.json()).toMatchObject({
+      text: "", revision: initialDraft.revision + 1, attachment_references: refs,
+    });
+  }
 
   await page.goto("/acceptance/copilotkit/" + encodeURIComponent(dedicatedThread));
   const native = page.getByTestId("karen-copilot-controlled-chat");
@@ -575,6 +607,12 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   const composer = sdkChat.locator("textarea");
   await expect(composer, "Native SDK must expose exactly one composer").toHaveCount(1);
   const prompt = "CK-07F3 approved disposable model cancellation: explain a detailed multi-stage thought experiment about sorting 100000 numbered tiles.";
+  const attachmentRegion = native.getByRole("region", { name: "Draft attachments" });
+  if (retryAttachment) {
+    await expect(attachmentRegion).toBeVisible();
+    await expect(attachmentRegion).toContainText("References saved");
+    await expect(attachmentRegion.getByRole("button", { name: "Remove file reference " + refs[0].source_id })).toBeVisible();
+  }
   await composer.fill(prompt);
   await expect.poll(async () => {
     const value = await page.request.get(draftUrl);
@@ -593,8 +631,10 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   const runRequest = await submitted;
   const payload = runRequest.postDataJSON() as {
     threadId: string; runId: string; messages?: Array<{ id: string; role: string }>;
+    forwardedProps?: { attachment_references?: unknown };
   };
   expect(payload.threadId).toBe(dedicatedThread);
+  if (retryAttachment) expect(payload.forwardedProps?.attachment_references).toEqual(refs);
   expect(RUN_ID.test(payload.runId), "Observe a real SDK-issued run identity").toBe(true);
 
   // A client transport packet alone does not establish that Karen admitted
@@ -685,9 +725,17 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   if (retryRequired) {
     // This is a real ledger-bound submission, not a generated test identity.
     const submissionId = payload.messages?.filter(message => message.role === "user").at(-1)?.id;
-    expect(submissionId).toMatch(/^draft-v1-[1-9][0-9]{0,15}$/);
-    if (!submissionId) throw new Error("Missing governed original submission identity");
-    const revision = Number(submissionId.slice("draft-v1-".length));
+    const identity = submissionId?.match(retryAttachment
+      ? /^draft-v2-([1-9][0-9]{0,15})-([a-f0-9]{64})$/
+      : /^draft-v1-([1-9][0-9]{0,15})$/);
+    if (!submissionId || !identity) throw new Error("Missing exact governed original submission identity");
+    if (retryAttachment) {
+      const expectedDigest = createHash("sha256").update(JSON.stringify(refs.map(
+        ({ revision, source_id }) => ({ revision, source_id }),
+      )), "utf8").digest("hex");
+      expect(identity[2]).toBe(expectedDigest);
+    }
+    const revision = Number(identity[1]);
     expect(Number.isSafeInteger(revision) && revision < Number.MAX_SAFE_INTEGER - 1).toBe(true);
     const readDraft = async () => {
       const result = await page.request.get(draftUrl);
@@ -697,7 +745,7 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
         attachment_references: Array<{ source_id: string; revision: string }>;
       };
     };
-    const retained = { text: prompt, revision, attachment_references: [] };
+    const retained = { text: prompt, revision, attachment_references: refs };
     await expect.poll(readDraft, { timeout: 20000 }).toMatchObject(retained);
     const statusPath = "/api/copilotkit/agent/default/submissions/" +
       dedicatedThread + "/" + submissionId + "/status";
@@ -740,7 +788,7 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
       const target = origin + retryPath;
       const receipts: Array<{ status: number; body: unknown }> = [];
       let forwarded = 0;
-      const handler: Parameters<typeof page.route>[1] = async route => {
+      const handler = async (route: Route) => {
         if (route.request().method() !== "POST") {
           await route.fallback();
           return;
@@ -803,6 +851,10 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     });
     await page.reload();
     await expect(composer).toHaveValue(prompt, { timeout: 30000 });
+    if (retryAttachment) {
+      await expect(attachmentRegion).toContainText("References saved");
+      await expect(attachmentRegion.getByRole("button", { name: "Remove file reference " + refs[0].source_id })).toBeVisible();
+    }
     expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
     expect(inferenceRequests).toEqual(["/api/copilotkit/agent/default/run"]);
     expect(retryMutations).toEqual([retryPath]);
