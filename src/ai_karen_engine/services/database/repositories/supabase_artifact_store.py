@@ -33,6 +33,7 @@ from ai_karen_engine.services.database.repositories.artifact_store import (
     ArtifactFolder,
     ArtifactUploadRequest,
     VerifiedArtifactText,
+    validate_reserved_text_payload,
     RepositoryResult,
 )
 from ai_karen_engine.services.database.repositories.observability import instrument_repository
@@ -523,23 +524,15 @@ class SupabaseArtifactStore(ArtifactStore):
                 isinstance(value, str) and self._canonical_uuid_value(value)
                 for value in (session_id, lease_token, request.tenant_id, request.user_id)
             )
-            or not isinstance(data, bytes)
-            or not 1 <= len(data) <= 65536
             or request.content_type != "text/plain"
-            or not isinstance(request.filename, str)
-            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", request.filename) is None
-            or not request.filename.lower().endswith((".txt", ".md"))
         ):
             return RepositoryResult(success=False, error=unavailable)
         try:
             try:
-                body = data.decode("utf-8", errors="strict")
-            except UnicodeError:
+                validate_reserved_text_payload(request.filename, data)
+            except ValueError:
                 return RepositoryResult(success=False, error=unavailable)
-            if not body.strip() or any(
-                ord(char) < 32 and char not in "\n\r\t" for char in body
-            ):
-                return RepositoryResult(success=False, error=unavailable)
+            assert isinstance(data, bytes)
             # Freeze validated data and metadata before yielding to the ledger.
             # Another coroutine must not mutate the payload after digest admission.
             try:

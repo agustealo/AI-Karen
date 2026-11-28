@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28: KFILE-UPLOAD-U2B2 internal bounded text transfer
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** stage owner-library store-only runtime orchestration on the existing canonical ArtifactStore and UploadSessionRepository factory. Shared inert text profile, principal-derived manifest and idempotency, fresh durable permission checks, CAS staging, one-time writer and verified committed readback. No API, UI, plugin activation, new database or general binary upload. Config: KAREN_GOVERNED_TEXT_UPLOAD_MAX_BYTES (65536, 1–65536), KAREN_GOVERNED_TEXT_UPLOAD_TTL_SECONDS (3600, 1–86400), KAREN_GOVERNED_TEXT_UPLOAD_DEADLINE_SECONDS (60, 1–300 and strictly less than TTL); invalid values fail closed. Expired session keys remain unavailable via create_or_get; no automatic new write.
+- **Proof:** source staging only, no executed tests yet. Preserve PR #1383 exact head `5ea6ce74278df0d8da740a95564d278c3629476a` while First-Boot runs. Unit contract covers fresh/repeated/uncertain receipt, live lease denial, revocation and invalid manifest. Destination/plugin admission, quota accounting, actual transfer/Storage TLS, signed browser proof, and independent review outstanding. No production activation.
+
 ### 2026-11-28: KFILE-UPLOAD-U2B1 committed receipt readback, PR #1383
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** reuse the existing owner-scoped upload ledger and canonical bounded Storage reader for read-only retrieval of an already committed reserved text receipt. Require the exact reserved artifact, active file row, owner, digest, size and Storage key; share the pinned byte-verification helper with uncertain reconciliation. No mutation, replay, client exposure, new store or schema. Unit regressions and disposable PostgreSQL cases cover repeated readback, owner denial, archival and substituted proof.

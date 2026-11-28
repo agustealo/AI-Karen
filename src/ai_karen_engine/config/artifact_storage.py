@@ -25,8 +25,21 @@ class ArtifactStorageConfig:
     chat_attachment_max_source_bytes: int = 32768
     chat_attachment_max_total_bytes: int = 131072
     chat_attachment_integrity_total_timeout_seconds: float = 15.0
+    governed_text_upload_max_bytes: int = 65536
+    governed_text_upload_ttl_seconds: int = 3600
+    governed_text_upload_deadline_seconds: int = 60
 
     def __post_init__(self) -> None:
+        if (
+            type(self.governed_text_upload_max_bytes) is not int
+            or not 1 <= self.governed_text_upload_max_bytes <= 65536
+            or type(self.governed_text_upload_ttl_seconds) is not int
+            or not 1 <= self.governed_text_upload_ttl_seconds <= 86400
+            or type(self.governed_text_upload_deadline_seconds) is not int
+            or not 1 <= self.governed_text_upload_deadline_seconds <= 300
+            or self.governed_text_upload_deadline_seconds >= self.governed_text_upload_ttl_seconds
+        ):
+            raise ValueError("Invalid governed text upload configuration")
         if (
             type(self.chat_attachment_max_source_bytes) is not int
             or not 1 <= self.chat_attachment_max_source_bytes <= 65536
@@ -97,7 +110,16 @@ class ArtifactStorageConfig:
             chat_deadline = 15.0 if raw_chat_deadline is None else float(raw_chat_deadline)
         except (ValueError, TypeError, OverflowError) as exc:
             raise ValueError("Invalid chat attachment admission configuration") from exc
+        try:
+            upload_max = int(os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_MAX_BYTES", "65536"))
+            upload_ttl = int(os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_TTL_SECONDS", "3600"))
+            upload_deadline = int(os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_DEADLINE_SECONDS", "60"))
+        except (ValueError, TypeError, OverflowError) as exc:
+            raise ValueError("Invalid governed text upload configuration") from exc
         return cls(
+            governed_text_upload_max_bytes=upload_max,
+            governed_text_upload_ttl_seconds=upload_ttl,
+            governed_text_upload_deadline_seconds=upload_deadline,
             chat_attachment_max_source_bytes=chat_source,
             chat_attachment_max_total_bytes=chat_total,
             chat_attachment_integrity_total_timeout_seconds=chat_deadline,

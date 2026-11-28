@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, Optional, Sequence, BinaryIO
@@ -46,6 +47,24 @@ class ArtifactUploadRequest:
     content_type: str = "application/octet-stream"
     data: Optional[bytes] = None
     metadata: Dict[str, Any] = field(default_factory=dict)
+
+
+def validate_reserved_text_payload(filename: str, data: bytes | None, *, max_bytes: int = 65536) -> None:
+    """Canonical inert UTF-8 transfer profile, shared by admission and writer."""
+    if (
+        type(max_bytes) is not int or not 1 <= max_bytes <= 65536
+        or not isinstance(data, bytes) or not 1 <= len(data) <= max_bytes
+        or not isinstance(filename, str)
+        or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", filename) is None
+        or not filename.lower().endswith((".txt", ".md"))
+    ):
+        raise ValueError("Invalid reserved text payload")
+    try:
+        body = data.decode("utf-8", errors="strict")
+    except UnicodeError:
+        raise ValueError("Invalid reserved text payload") from None
+    if not body.strip() or any(ord(char) < 32 and char not in "\n\r\t" for char in body):
+        raise ValueError("Invalid reserved text payload")
 
 
 @dataclass(frozen=True, slots=True)
