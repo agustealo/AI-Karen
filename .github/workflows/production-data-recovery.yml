@@ -9,6 +9,7 @@ on:
       - "scripts/deploy/database-backup.sh"
       - "scripts/deploy/postgres-recovery-client.sh"
       - "scripts/deploy/database-recovery-cutoff.sh"
+      - "scripts/deploy/database-recovery-replay.py"
       - "scripts/deploy/database-restore.sh"
       - "scripts/deploy/migrate-production-database.sh"
       - "tests/architecture/test_production_data_recovery_contract.py"
@@ -21,6 +22,7 @@ on:
       - "scripts/deploy/database-backup.sh"
       - "scripts/deploy/postgres-recovery-client.sh"
       - "scripts/deploy/database-recovery-cutoff.sh"
+      - "scripts/deploy/database-recovery-replay.py"
       - "scripts/deploy/database-restore.sh"
       - "scripts/deploy/migrate-production-database.sh"
       - "tests/architecture/test_production_data_recovery_contract.py"
@@ -49,6 +51,7 @@ jobs:
         run: |
           bash -n scripts/deploy/postgres-recovery-client.sh
           bash -n scripts/deploy/database-recovery-cutoff.sh
+          python -m py_compile scripts/deploy/database-recovery-replay.py
           bash -n scripts/deploy/database-backup.sh
           bash -n scripts/deploy/database-restore.sh
           bash -n scripts/deploy/migrate-production-database.sh

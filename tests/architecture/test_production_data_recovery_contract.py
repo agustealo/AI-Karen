@@ -147,3 +147,32 @@ def test_recovery_cutoff_is_physical_evidence_not_admission():
     assert "timeline_hex" in script
     assert "postgres_physical_wal_cutoff" in script
     assert "recovery hold remains" in script
+
+
+def test_recovery_replay_requires_digest_before_database_access(tmp_path):
+    receipt = tmp_path / "cutoff.json"
+    receipt.write_text("{}", encoding="utf-8")
+    result = subprocess.run(
+        ["python", str(REPO_ROOT / "scripts/deploy/database-recovery-replay.py")],
+        env={
+            **os.environ,
+            "RECOVERY_CUTOFF_FILE": str(receipt),
+            "RECOVERY_CUTOFF_SHA256": "0" * 64,
+            "RECOVERY_DATABASE_URL": "",
+        },
+        capture_output=True, text=True, timeout=5, check=False,
+    )
+    assert result.returncode == 2
+    assert "digest mismatch" in result.stderr
+    assert result.stdout == ""
+
+
+def test_recovery_replay_is_observation_not_admission():
+    script = _read("scripts/deploy/database-recovery-replay.py")
+    assert "pg_get_wal_replay_pause_state()" in script
+    assert "pg_last_wal_replay_lsn()" in script
+    assert "pg_stat_wal_receiver" in script
+    assert "pg_control_checkpoint()" in script
+    assert '"admission_verified": False' in script
+    workflow = _read(".github/workflows/live-postgres-memory-proof.yml")
+    assert 'KAREN_TEST_PHYSICAL_REPLAY: "1"' in workflow

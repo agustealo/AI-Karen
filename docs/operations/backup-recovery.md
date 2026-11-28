@@ -92,6 +92,36 @@ WAL availability and service admission enforcement remain separate requirements.
 Managed-service PITR must supply equivalent trusted lineage evidence; support
 and privileges are not assumed.
 
+### Paused standby replay observation
+
+The same-timeline streaming recovery diagnostic accepts a receipt and the
+expected digest obtained independently from the trusted recovery inventory:
+
+```bash
+RECOVERY_DATABASE_URL='postgresql://isolated-standby...' \
+RECOVERY_CUTOFF_FILE='/secure/recovery/final-cutoff.json' \
+RECOVERY_CUTOFF_SHA256='<digest from trusted inventory>' \
+  python3 scripts/deploy/database-recovery-replay.py
+```
+
+The command rejects absent or malformed evidence, digest mismatches, a primary
+or promoted target, mismatched cluster/database identity, mismatched timeline,
+an unpaused target, or receive/replay positions below the required cutoff.
+It requires a live same-timeline streaming receiver and a paused read-only
+standby; archive-only recovery, timeline transitions, and managed PITR need a
+separate verified evidence path. A digest is not a signature or freshness
+proof: the expected digest must come from the independently authenticated final
+inventory, not from the same untrusted file. A matching observation is not
+exclusive custody, a lease against promotion or replay resume, verification of
+the upstream's trust, proof of immutable retention, or permission to serve.
+The JSON output explicitly reports admission_verified=false.
+
+The disposable CI diagnostic creates a physical standby from the synthetic
+test cluster, pauses it before revocation, tests denial at the old replay
+position, then resumes and pauses after the cutoff and checks the committed
+deletion and consent rows. No production database is cloned or promoted.
+Automated runtime admission remains outstanding.
+
 Required acceptance:
 
 - Restore a pre-revocation backup into an isolated disposable database after
