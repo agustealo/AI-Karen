@@ -38,6 +38,12 @@ DATABASE_URL='postgresql://...' \
 
 The command writes a PostgreSQL custom-format dump, SHA-256 checksum, and non-secret metadata beneath `KAREN_BACKUP_ROOT` or `./backups/postgres`.
 
+Backup and restore require PostgreSQL client binaries matching the connected
+server major. The shared selection helper discovers the server version; set
+`KAREN_POSTGRES_BIN_DIR` to the matching installed client directory if needed.
+Missing or mismatched clients fail closed. Cross-major migration is outside this
+recovery contract.
+
 This command covers the primary PostgreSQL store only. **Redis, Milvus, Elasticsearch**, object storage, model artifacts, and external services are separate recovery domains whenever they are deployed and must never be represented as protected by this PostgreSQL backup. Milvus and Elasticsearch are not part of the current canonical AI Karen memory architecture; naming them here documents backup boundaries rather than making them runtime dependencies.
 
 ## Restore Contract
@@ -51,7 +57,12 @@ CONFIRM_RESTORE='I_UNDERSTAND_THIS_IS_DESTRUCTIVE' \
   bash scripts/deploy/database-restore.sh
 ```
 
-Verify restore behavior against an isolated recovery or staging database before using the procedure for an incident.
+Restore into an exclusively offline, fresh recovery database. The command
+checks the selected archive digest, refuses existing application relations,
+and stages the restore atomically. A successful restore is not authorization
+to serve recovered memories. Reconcile post-snapshot revocations and verify
+the recovery cutoff before admission (see [recovery runbook](../docs/operations/backup-recovery.md)).
+The target emptiness check is not a network isolation or concurrent-access lease.
 
 ## Storage Bucket Setup
 
