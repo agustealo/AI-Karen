@@ -37,7 +37,9 @@ from ai_karen_engine.core.runtime.policy.runtime_policy import (
 from ai_karen_engine.persistence.repositories import chat_run_repository
 from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
 from ai_karen_engine.services.database.repositories.conversation_repository import (
+    COMPLETED_ATTACHMENT_RECEIPT_KEY,
     Message,
+    build_completed_attachment_receipt,
     canonical_message_digest,
     draft_attachment_selection_digest,
 )
@@ -357,7 +359,7 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
             return ctx
 
         def pair(run, content):
-            return [
+            messages = [
                 Message(
                     id=str(uuid4()), conversation_id=conversation, tenant_id=tenant,
                     role=role, content=value, metadata={
@@ -369,6 +371,10 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
                 )
                 for role, value in (("user", content), ("assistant", "Controlled response"))
             ]
+            messages[1].metadata[COMPLETED_ATTACHMENT_RECEIPT_KEY] = (
+                build_completed_attachment_receipt(messages[0], run.submission_id, [active_ref])
+            )
+            return messages
 
         async def readback(run, ctx, messages):
             return await repo.read_committed_turn(
@@ -403,6 +409,16 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         assert (await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
         )).data == attached.data
+
+        # The caller cannot substitute a different historical receipt even with
+        # an otherwise valid private execution and lease.
+        receipt = messages[1].metadata.pop(COMPLETED_ATTACHMENT_RECEIPT_KEY)
+        forged = await repo.add_completed_turn(
+            *messages, run_lease=completing, private_execution=ctx,
+        )
+        assert not forged.success and forged.error == "attachment_session_denied"
+        assert await observe(completing) == ("running", 0)
+        messages[1].metadata[COMPLETED_ATTACHMENT_RECEIPT_KEY] = receipt
 
         # A real database error during retirement must roll back BOTH messages
         # and the already-staged terminal UPDATE, not just the draft change.
@@ -461,6 +477,45 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         assert await observe(completing) == ("completed", 2)
         recovered = await readback(completing, ctx, messages)
         assert recovered.success and recovered.data is True
+        attachment_gateway = ConversationRuntimeGateway(repository=repo)
+
+        async def attached_history(*, text_only=False):
+            snapshot = await attachment_gateway.get_owned_snapshot(ctx, message_limit=501)
+            proofs = await runs.completed_replay_attestations(
+                tenant_id=tenant, user_id=owner, conversation_id=conversation,
+            )
+            return project_owned_history(snapshot, attestations=proofs,
+                                         text_continuation=text_only)
+
+        original_history = await attached_history()
+        assert [event for event in original_history["replayEvents"]
+                if event["name"] == "karen.verified_attachment_history.v1"] == [{
+            "type": "CUSTOM", "name": "karen.verified_attachment_history.v1",
+            "messageId": messages[1].id,
+            "value": {"user_message_id": messages[0].id, "attachment_count": 1},
+        }]
+        assert active_ref["source_id"] not in str(original_history)
+        assert active_ref["revision"] not in str(original_history)
+        assert (await attached_history(text_only=True))["replayEvents"] == []
+        async with engine.begin() as conn:
+            saved = (await conn.execute(text(
+                "SELECT message_metadata FROM public.messages WHERE message_id = CAST(:id AS uuid)"
+            ), {"id": messages[1].id})).scalar_one()
+            assert saved[COMPLETED_ATTACHMENT_RECEIPT_KEY] == receipt
+            await conn.execute(text(
+                "UPDATE public.messages SET message_metadata = message_metadata || "
+                "'{\"tampered\": true}'::jsonb WHERE message_id = CAST(:id AS uuid)"
+            ), {"id": messages[0].id})
+        assert not (await readback(completing, ctx, messages)).success
+        with pytest.raises(UnreplayableHistory):
+            await attached_history()
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "UPDATE public.messages SET message_metadata = message_metadata - 'tampered' "
+                "WHERE message_id = CAST(:id AS uuid)"
+            ), {"id": messages[0].id})
+        assert (await readback(completing, ctx, messages)).success
+        assert await attached_history() == original_history
         retired = await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
         )
@@ -789,8 +844,35 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         assert await retry(cancelled, newer.data["text"], [active_ref], principal=other_owner) is None
         assert await retry(cancelled, newer.data["text"], [active_ref], tid=other_tenant) is None
         assert await retry(cancelled, "different text", [active_ref]) is None
+        # A failure after the SQL UPDATE but before commit must roll back
+        # the revision, preserving eligibility. Observe the write inside
+        # the actual transaction before injecting the failure.
+        @asynccontextmanager
+        async def rollback_retry_scope(tenant_id, *, user_id):
+            async with real_scope(tenant_id, user_id=user_id) as session:
+                yield session
+                revision = (await session.execute(text("""
+                    SELECT revision FROM public.conversation_composer_drafts
+                    WHERE tenant_id = CAST(:tenant AS uuid)
+                      AND user_id = CAST(:owner AS uuid)
+                      AND conversation_id = CAST(:conversation AS uuid)
+                """), {"tenant": tenant, "owner": owner,
+                       "conversation": conversation})).scalar_one()
+                assert revision == 8
+                raise RuntimeError("controlled retry rollback")
+
+        with monkeypatch.context() as fault:
+            fault.setattr(chat_run_repository, "async_transaction_scope", rollback_retry_scope)
+            with pytest.raises(RuntimeError, match="controlled retry rollback"):
+                await retry(cancelled, newer.data["text"], [active_ref])
+        assert await retry_eligibility(cancelled) == 7
+        assert await observe(cancelled) == ("cancelled", 0)
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == newer.data
+
         # Two explicit retry requests for the same original identity may
-        # produce at most one revision advance, even with a lost response.
+        # produce at most one revision advance.
         retried = await asyncio.gather(
             retry(cancelled, newer.data["text"], [active_ref]),
             retry(cancelled, newer.data["text"], [active_ref]),
@@ -808,13 +890,47 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         assert await retry_eligibility(failed_retry) is None
         assert await runs.finish(failed_retry, status="failed", error_code="CHAT_TEST_TERMINAL")
         assert await retry_eligibility(failed_retry) == 8
-        assert await retry(failed_retry, newer.data["text"], [active_ref]) == 9
+        # A successful database commit followed by a lost response must
+        # not allow the old submission to advance a second time.
+        @asynccontextmanager
+        async def lost_retry_receipt_scope(tenant_id, *, user_id):
+            async with real_scope(tenant_id, user_id=user_id) as session:
+                yield session
+            raise RuntimeError("controlled lost retry receipt")
+
+        with monkeypatch.context() as fault:
+            fault.setattr(chat_run_repository, "async_transaction_scope", lost_retry_receipt_scope)
+            with pytest.raises(RuntimeError, match="controlled lost retry receipt"):
+                await retry(failed_retry, newer.data["text"], [active_ref])
+        assert await retry_eligibility(failed_retry) is None
+        assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == {**newer.data, "revision": 9}
         assert await observe(failed_retry) == ("failed", 0)
         assert await admit("retry-original-replay", 8, [active_ref], newer.data["text"]) is None
         # A newer explicit edit is never overwritten by retry recovery.
         latest = await write(9, [active_ref], "Newer retry draft")
         assert latest.success and latest.data["revision"] == 10
         assert await retry(failed_retry, newer.data["text"], [active_ref]) is None
+        assert (await repo.get_composer_draft_with_attachments(
+            conversation, tenant, user_id=owner,
+        )).data == latest.data
+        # Expired leases and orphaned rows remain unresolved, not retryable.
+        expired = await admit("retry-expired", 10, [active_ref], latest.data["text"])
+        assert expired is not None
+        async with real_scope(tenant, user_id=owner) as session:
+            await session.execute(text("""
+                UPDATE public.runtime_chat_runs
+                SET lease_expires_at = NOW() - INTERVAL '1 second'
+                WHERE execution_id = CAST(:execution AS uuid)
+            """), {"execution": expired.execution_id})
+        assert await retry_eligibility(expired) is None
+        assert await retry(expired, latest.data["text"], [active_ref]) is None
+        assert await admit("retry-orphan-reconcile", 10, [active_ref], latest.data["text"]) is None
+        assert await observe(expired) == ("orphaned", 0)
+        assert await retry_eligibility(expired) is None
+        assert await retry(expired, latest.data["text"], [active_ref]) is None
         assert (await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
         )).data == latest.data
