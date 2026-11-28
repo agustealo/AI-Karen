@@ -621,3 +621,87 @@ async def test_executor_rejects_runtime_authority_for_unrelated_plugin(monkeypat
     result = await service.execute(_request(plan=plan))
     assert result.error_code == "extension_runtime_authority_invalid"
     assert handler.calls == 0
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario,expected_code,expected_calls,expected_timeout",
+    [
+        ("unstarted", "budget_exhausted", 0, None),
+        ("expired_before", "budget_exhausted", 0, None),
+        ("expired_after", "budget_exhausted", 1, 2.0),
+        ("valid", None, 1, 2.0),
+        ("shorter_override", None, 1, 1.0),
+        ("authority_changed", "extension_runtime_authority_invalid", 1, 2.0),
+    ],
+)
+async def test_runtime_bound_extension_uses_original_deadline(
+    monkeypatch, scenario, expected_code, expected_calls, expected_timeout,
+):
+    import asyncio
+    from dataclasses import replace
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+    class SearchRegistry(FakeRegistry):
+        def get(self, plugin_id):
+            return super().get("echo") if plugin_id == "intelligent-search" else None
+
+    handler = FakeHandler()
+    plan = _plan(allowed_plugins=["intelligent-search"])
+    meter = ExecutionBudgetMeter(plan.budget)
+    context = _context()
+    runtime_context = ChatExecutionContext(
+        user_id=context.user_id, tenant_id=context.tenant_id,
+        session_id=context.session_id, correlation_id=context.correlation_id,
+        request_id="chat-request",
+    )
+    context = replace(context, conversation_id=runtime_context.conversation_id)
+    active = True
+    monkeypatch.setattr(
+        ChatExecutionContext, "is_runtime_model_plan_authorized",
+        lambda self, p, m: active and self is runtime_context and p is plan and m is meter,
+    )
+    context.bind_runtime_authority(runtime_context, plan, meter, "intelligent-search")
+    if scenario != "unstarted":
+        assert await meter.reserve_tool_call()
+        readings = iter({
+            "expired_before": [0.0],
+            "expired_after": [2000.0, 0.0],
+            "valid": [2000.0, 1000.0],
+            "shorter_override": [2000.0, 1000.0],
+            "authority_changed": [2000.0, 1000.0],
+        }[scenario])
+
+        async def remaining():
+            nonlocal active
+            if scenario == "authority_changed" and handler.calls:
+                active = False
+            return next(readings)
+
+        monkeypatch.setattr(meter, "remaining_admitted_duration_ms", remaining)
+
+    original_wait_for = asyncio.wait_for
+    timeouts = []
+
+    async def observe_timeout(awaitable, timeout):
+        timeouts.append(timeout)
+        return await original_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", observe_timeout)
+    manifest = _manifest().model_copy(update={"id": "intelligent-search"})
+    service = ExtensionExecutionService(
+        registry=SearchRegistry(handler=handler, manifest=manifest),
+        lifecycle=FakeLifecycle(),
+    )
+    request = replace(
+        _request(plan=plan, context=context), plugin_id="intelligent-search",
+        timeout_override_ms=1000 if scenario == "shorter_override" else 10000,
+    )
+    result = await service.execute(request)
+    assert result.error_code == expected_code
+    assert result.status == ("success" if expected_code is None else "failed")
+    if expected_code is not None:
+        assert result.payload is None
+    assert handler.calls == expected_calls
+    assert timeouts == ([] if expected_timeout is None else [expected_timeout])
+    assert meter.tool_calls == (0 if scenario == "unstarted" else 1)
