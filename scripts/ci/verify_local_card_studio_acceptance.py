@@ -347,8 +347,19 @@ def main() -> int:
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--file-explorer", action="store_true")
     mode.add_argument("--content-intelligence", action="store_true")
+    mode.add_argument("--owner-text", action="store_true")
     args = parser.parse_args()
-    artifact_local = args.file_explorer or args.content_intelligence
+    artifact_local = args.file_explorer or args.content_intelligence or args.owner_text
+    require_local_storage = args.content_intelligence or args.owner_text
+    scenario, prefix = (
+        ("file-explorer-owner-text", "LOCAL_FILE_EXPLORER_OWNER_TEXT_PROVENANCE")
+        if args.owner_text else
+        ("content-intelligence", "LOCAL_CONTENT_INTELLIGENCE_PROVENANCE")
+        if args.content_intelligence else
+        ("file-explorer", "LOCAL_FILE_EXPLORER_PROVENANCE")
+        if args.file_explorer else
+        ("card-studio", "LOCAL_CARD_STUDIO_PROVENANCE")
+    )
 
     try:
         if len(args.sha) != 40 or any(ch not in "0123456789abcdef" for ch in args.sha):
@@ -366,7 +377,7 @@ def main() -> int:
             database = "kcard_" + args.sha[:12]
         api = inspect_container(
             args.project, args.sha, "api", explorer_database=database, env_path=env_path,
-            require_local_storage=args.content_intelligence,
+            require_local_storage=require_local_storage,
         )
         web = inspect_container(
             args.project, args.sha, "web", explorer_database=database, env_path=env_path
@@ -381,8 +392,7 @@ def main() -> int:
 
         evidence = {
             "decision": "PASS",
-            "scenario": ("content-intelligence" if args.content_intelligence
-                         else "file-explorer" if args.file_explorer else "card-studio"),
+            "scenario": scenario,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "source_sha": args.sha,
             "project": args.project,
@@ -390,7 +400,7 @@ def main() -> int:
             "containers": {"api": api, "web": web},
             "supabase_database": supabase_database,
         }
-        if args.content_intelligence:
+        if require_local_storage:
             evidence["supabase_storage"] = verify_local_storage_gateway(
                 supabase_database["container_id"], api["storage_origin"],
             )
@@ -398,16 +408,13 @@ def main() -> int:
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")
         evidence_path.chmod(0o600)
-        print("LOCAL_CONTENT_INTELLIGENCE_PROVENANCE_PASS" if args.content_intelligence
-              else "LOCAL_FILE_EXPLORER_PROVENANCE_PASS" if args.file_explorer
-              else "LOCAL_CARD_STUDIO_PROVENANCE_PASS")
+        print(f"{prefix}_PASS")
         return 0
     except GuardError as exc:
-        prefix = "LOCAL_CONTENT_INTELLIGENCE_PROVENANCE_FAIL" if args.content_intelligence else "LOCAL_FILE_EXPLORER_PROVENANCE_FAIL" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_FAIL"
-        print(f"{prefix}: {exc}")
+        print(f"{prefix}_FAIL: {exc}")
         return 1
     except (OSError, ValueError, subprocess.TimeoutExpired):
-        print("LOCAL_CONTENT_INTELLIGENCE_PROVENANCE_FAIL" if args.content_intelligence else "LOCAL_FILE_EXPLORER_PROVENANCE_FAIL" if args.file_explorer else "LOCAL_CARD_STUDIO_PROVENANCE_FAIL")
+        print(f"{prefix}_FAIL")
         return 1
 
 
