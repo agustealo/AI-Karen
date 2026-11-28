@@ -766,7 +766,7 @@ async def test_runtime_bound_extension_uses_original_deadline(
         ("valid", None, 1),
         ("forged_digest", "invalid_output", 1),
         ("output_alias", None, 1),
-        ("mutated_query", "invalid_output", 1),
+        ("mutated_query", "extension_runtime_authority_invalid", 1),
         ("wrong_operation", "extension_runtime_authority_invalid", 0),
         ("wrong_query", "extension_runtime_authority_invalid", 0),
         ("missing_commitment", "extension_runtime_authority_invalid", 0),
