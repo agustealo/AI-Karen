@@ -34,6 +34,26 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 
+class DatabaseRecoveryHold(RuntimeError):
+    """Explicit recovery hold cannot be treated as ordinary degraded startup."""
+
+
+def require_database_recovery_not_held() -> None:
+    """Check process-owned recovery mode; never infer release from a receipt.
+
+    Normal is the existing deployment default. Operators must set hold before
+    launching any recovering application process; external isolation is still
+    mandatory. Invalid or empty values fail closed.
+    """
+    mode = os.environ.get("KAREN_DATABASE_RECOVERY_MODE", "normal")
+    if mode != "normal":
+        logger.error(
+            "Database recovery hold prevents application execution",
+            extra={"component": "postgres", "error_code": "database_recovery_hold"},
+        )
+        raise DatabaseRecoveryHold("Database recovery hold: application execution denied")
+
+
 class SupabaseSettings(BaseSettings):
     """Supabase platform key configuration.
 
@@ -435,6 +455,8 @@ def refresh_database_settings() -> DatabaseSettings:
 
 
 __all__ = [
+    "DatabaseRecoveryHold",
+    "require_database_recovery_not_held",
     "SupabaseSettings",
     "PostgresSettings",
     "PoolSettings",

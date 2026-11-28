@@ -244,6 +244,8 @@ services:
       KARI_SKIP_AUTO_INIT: "false"
       ALLOW_PUBLIC_COPILOT: "${ALLOW_PUBLIC_COPILOT:-false}"
 
+      # Preserve an explicit empty/invalid mode for the runtime to reject.
+      KAREN_DATABASE_RECOVERY_MODE: "${KAREN_DATABASE_RECOVERY_MODE-normal}"
       # Canonical database: explicit operator-owned Supabase connection.
       # The local startup preflight validates one effective identity across
       # synchronous, async and legacy DB_* settings before any containers start.

@@ -298,10 +298,13 @@ async def shutdown_application_runtime(app: FastAPI) -> None:
 
 def create_application_lifespan(settings: Any):
     """Create the canonical app lifespan around existing service startup."""
+    from ai_karen_engine.config.database import require_database_recovery_not_held
     from ai_karen_engine.server.startup import on_shutdown, on_startup
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Outside the cleanup/degraded startup boundary: nothing was acquired.
+        require_database_recovery_not_held()
         try:
             await on_startup(settings, app)
             # One Redis singleton, initialized before memory or session users
