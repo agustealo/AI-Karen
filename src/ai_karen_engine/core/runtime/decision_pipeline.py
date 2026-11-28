@@ -34,6 +34,9 @@ from ai_karen_engine.core.cortex.context_stages import (
     scoped_conflict_evidence_ids,
 )
 from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+from ai_karen_engine.core.cortex.routing_intents import (
+    ATTACHED_DOCUMENT_INTENT, parse_attached_document_command,
+)
 from ai_karen_engine.core.cortex.memory_formation import request_memory_formation
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
 from ai_karen_engine.core.runtime.policy.runtime_policy import chat_tool_call_limit
@@ -361,6 +364,13 @@ class RuntimeDecisionPipeline:
             permissions=list(ctx.permissions or []),
             action=cognitive.intent or "general_assist",
             attachment_references=[dict(item) for item in request.attachment_references],
+            document_operation=(
+                parse_attached_document_command(
+                    next((item.get("content") for item in reversed(request.messages)
+                          if item.get("role") == "user"), None),
+                    request.attachment_references,
+                ) if cognitive.intent == ATTACHED_DOCUMENT_INTENT else None
+            ),
             requested_capabilities=list(dict.fromkeys([
                 *cognitive.required_capabilities,
                 *(["data:read"] if request.attachment_references else []),
