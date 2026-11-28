@@ -1357,9 +1357,9 @@ async def test_attachment_evidence_publication_denies_substituted_record(field, 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("scenario", [
     "ordinary", "stream", "disabled", "changed_query", "revoked",
-    "role_changed", "expired", "exhausted",
+    "role_changed", "expired", "exhausted", "real_ordinary", "real_stream",
 ])
-async def test_governed_document_dispatch_reuses_original_grant(monkeypatch, scenario):
+async def test_governed_document_dispatch_reuses_original_grant(monkeypatch, tmp_path, scenario):
     from ai_karen_engine.config import runtime as runtime_config
     from ai_karen_engine.core.runtime import direct_capability_executor as direct_module
     from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
@@ -1395,9 +1395,16 @@ async def test_governed_document_dispatch_reuses_original_grant(monkeypatch, sce
     ctx.bind_runtime_attachment_scope(plan, meter, request.attachment_references)
     ctx.bind_runtime_attachment_documents(plan, meter, [verified(ctx)])
 
-    monkeypatch.setattr(runtime_config, "get_runtime_settings", lambda: SimpleNamespace(
-        features=SimpleNamespace(enable_chat_document_operations=scenario != "disabled"),
-    ))
+    real_kernel = scenario.startswith("real_")
+    if real_kernel:
+        monkeypatch.setattr(
+            runtime_config.get_runtime_settings().features,
+            "enable_chat_document_operations", True,
+        )
+    else:
+        monkeypatch.setattr(runtime_config, "get_runtime_settings", lambda: SimpleNamespace(
+            features=SimpleNamespace(enable_chat_document_operations=scenario != "disabled"),
+        ))
     service = PluginService()
     calls = []
 
@@ -1429,7 +1436,23 @@ async def test_governed_document_dispatch_reuses_original_grant(monkeypatch, sce
             })
 
     issuer = await auth_service.get_auth_service()
-    service.kernel = ControlledKernel()
+    if real_kernel:
+        import shutil
+        from ai_karen_engine.extensions import plugin_kernel as kernel_module
+
+        # Use the genuine package in a disposable built-in root. Never write
+        # lifecycle markers into the checked-out or running plugin directory.
+        root = tmp_path / "plugins"
+        source = kernel_module.PluginKernel.canonical_extensions_root() / "content-intelligence"
+        shutil.copytree(source, root / "content-intelligence", ignore=shutil.ignore_patterns(
+            "__pycache__", ".karen-manual-enabled", ".karen-manual-disabled",
+        ))
+        monkeypatch.setattr(kernel_module, "_CANONICAL_PLUGIN_ROOT", root)
+        service.kernel = kernel_module.PluginKernel(root)
+        await service.kernel.initialize()
+        assert await service.kernel.enable("content-intelligence")
+    else:
+        service.kernel = ControlledKernel()
     service.initialized = True
     monkeypatch.setattr(direct_module, "get_plugin_service", lambda: service)
     executor = direct_module.DirectCapabilityExecutor()
@@ -1463,23 +1486,30 @@ async def test_governed_document_dispatch_reuses_original_grant(monkeypatch, sce
         assert len(calls) == (1 if scenario in {"revoked", "role_changed"} else 0)
         return
 
-    if scenario == "ordinary":
-        result = await executor.execute(request=request, decision=decision, plan=plan, meter=meter)
-        answer, metadata = await runtime._compose_direct_capability_answer(
-            request, decision, plan, meter, result, result.normalized_metadata(),
-        )
-    else:
-        metadata = {}
-        chunks = [chunk async for chunk in runtime._run_direct_capability_stream(
-            request, decision, plan, meter, _meta=metadata,
-        )]
-        assert len(chunks) == 1
-        answer = chunks[0].content
-    assert BODY in answer
-    assert "lexical" in answer.lower()
-    assert metadata["actual_provider"] is None
-    assert metadata["actual_model"] is None
-    assert metadata["structured_content"] == {}
-    assert meter.tool_calls == 1
-    assert meter.model_calls == 0
-    assert len(calls) == 1
+    try:
+        if scenario in {"ordinary", "real_ordinary"}:
+            result = await executor.execute(request=request, decision=decision, plan=plan, meter=meter)
+            answer, metadata = await runtime._compose_direct_capability_answer(
+                request, decision, plan, meter, result, result.normalized_metadata(),
+            )
+        else:
+            metadata = {}
+            chunks = [chunk async for chunk in runtime._run_direct_capability_stream(
+                request, decision, plan, meter, _meta=metadata,
+            )]
+            assert len(chunks) == 1
+            answer = chunks[0].content
+        assert BODY in answer
+        assert "lexical" in answer.lower()
+        assert metadata["actual_provider"] is None
+        assert metadata["actual_model"] is None
+        assert metadata["structured_content"] == {}
+        assert meter.tool_calls == 1
+        assert meter.model_calls == 0
+        if real_kernel:
+            assert service.kernel.active_executions() == {}
+        else:
+            assert len(calls) == 1
+    finally:
+        if real_kernel:
+            await service.kernel.cleanup()
