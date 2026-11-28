@@ -94,6 +94,7 @@ jobs:
       - name: Verify migration authority and tenant isolation
         run: |
           python - <<'PY'
+          import ast
           from pathlib import Path
 
           base_migration = Path('supabase/migrations/20260828042000_12_agent_medusa_run_ledger.sql').read_text()
@@ -116,7 +117,26 @@ jobs:
           assert 'redis_reconciliation' in repository
           assert 'list_reconcilable' in manager
           assert '_reconcile_tenant_stale' not in manager
-          assert 'run_orphan_grace_seconds' not in manager
+          # Grace is a negative eligibility guard, never independent expiry authority.
+          # Behavioral tests above require Redis expiry evidence, admission provenance,
+          # a stable owned row and reobservation before inferred orphan repair.
+          grace_owners = [
+              node for node in ast.walk(ast.parse(manager))
+              if isinstance(node, ast.AsyncFunctionDef)
+              and node.name == '_reconcile_tenant_from_redis'
+          ]
+          assert len(grace_owners) == 1
+          expiry_guards = [
+              node for node in ast.walk(grace_owners[0])
+              if isinstance(node, ast.If)
+              and ast.dump(node.test) == ast.dump(ast.parse(
+                  "shared_status == 'orphaned' and not shared.get('completed_at')",
+                  mode='eval',
+              ).body)
+          ]
+          assert len(expiry_guards) == 1
+          assert manager.count('run_orphan_grace_seconds') == 1
+          assert 'run_orphan_grace_seconds' in ast.unparse(expiry_guards[0])
           assert 'metadata.create_all' not in repository
           assert 'CREATE TABLE' not in repository
           assert not adapter.exists(), 'fake Medusa persistence adapter must remain deleted'
