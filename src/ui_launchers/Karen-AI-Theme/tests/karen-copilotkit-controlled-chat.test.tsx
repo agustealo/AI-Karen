@@ -1670,6 +1670,41 @@ describe("KEXP-042A.6D5 retained run recovery", () => {
     },
   );
 
+  it.each(["current", "historical", "wrong revision", "changed readback"] as const)(
+    "reconciles lost preparation only with current causal receipt and exact readback (%s)", async fault => {
+      sdk.revisionBoundSubmission = true;
+      sdk.runAgent.mockRejectedValueOnce(new Error("Connection lost"));
+      sdk.readRetryDraft.mockResolvedValue(snapshot);
+      render(<KarenCopilotControlledChat conversationId={THREAD} />);
+      act(() => { input().onChange(text); input().onSubmitMessage(text); });
+      await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+      sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({ submission_id: id, eligible: true });
+      fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Prepare failed draft for retry" })).toBeTruthy());
+      sdk.post.mockRejectedValueOnce(new Error("Lost response"));
+      fireEvent.click(screen.getByRole("button", { name: "Prepare failed draft for retry" }));
+      await waitFor(() => expect(screen.getByText(/Retry preparation could not be verified/)).toBeTruthy());
+      const successor = { ...snapshot, submissionId: next };
+      sdk.readRetryDraft.mockResolvedValueOnce(null).mockResolvedValueOnce(successor)
+        .mockResolvedValueOnce(fault === "changed readback" ? null : successor);
+      sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({
+        submission_id: id, eligible: false, prepared_revision: fault === "wrong revision" ? 9 : 8,
+        prepared_current: fault !== "historical",
+      }).mockRejectedValueOnce(new Error("No attested successor run"));
+      fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+      if (fault === "current") {
+        await waitFor(() => expect(screen.getByText(/Retry preparation was recovered and verified/)).toBeTruthy());
+        expect(screen.queryByRole("region", { name: "Unverified run recovery" })).toBeNull();
+      } else {
+        await waitFor(() => expect(screen.getByText(/retry receipt is unavailable/)).toBeTruthy());
+        act(() => input().onSubmitMessage(text));
+        expect(screen.getByRole("region", { name: "Unverified run recovery" })).toBeTruthy();
+      }
+      expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+      expect(sdk.post).toHaveBeenCalledTimes(1);
+    },
+  );
+
   it("does not replay a lost retry mutation and discovers a positively attested successor run", async () => {
     sdk.revisionBoundSubmission = true;
     sdk.runAgent.mockRejectedValueOnce(new Error("Connection lost"));
@@ -1684,7 +1719,9 @@ describe("KEXP-042A.6D5 retained run recovery", () => {
     fireEvent.click(screen.getByRole("button", { name: "Prepare failed draft for retry" }));
     await waitFor(() => expect(screen.getByText(/Retry preparation could not be verified/)).toBeTruthy());
     sdk.readRetryDraft.mockResolvedValueOnce(null).mockResolvedValueOnce({ ...snapshot, submissionId: next });
-    sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({ ...receipt, runId: "next-run", submissionId: next });
+    sdk.get.mockResolvedValueOnce(receipt)
+      .mockResolvedValueOnce({ submission_id: id, eligible: false })
+      .mockResolvedValueOnce({ ...receipt, runId: "next-run", submissionId: next });
     fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
     await waitFor(() => expect(screen.getByText(/newer saved submission was verified/)).toBeTruthy());
     expect(sdk.get).toHaveBeenLastCalledWith("/api/copilotkit/agent/default/submissions/" + THREAD + "/" + next + "/status");

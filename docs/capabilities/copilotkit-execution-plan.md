@@ -466,6 +466,12 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-27: KEXP-042A.6C–6D6 governed attachment submission and recovery, PR #1383
+
+- **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** existing controller uses the canonical persisted-draft v2 snapshot and per-run reference hints under explicit verified capability. Ordinary governed failure and reload recovery use exact owner-scoped submission status, read-only draft identity, verified history and explicit retry preparation. Lost retry response requires causal backend receipt with current successor and fresh matching draft readback; no automatic replay or inference. Existing gateway validates the optional receipt fields together and never invents evidence for an older backend. Original draft/ledger/runtime owners retained.
+- **Proof:** prior head `d5b1b018cdfcdd344f95c9b5ecaac75a5f846bdc` passed Chat System Burn, DEV_FAST and KAREN Presentation Contract, and the Main Quality frontend/classifier/deployment jobs; backend stopped at the required convergence-ledger update. This entry corrects that gate. Added proxy/controlled-composer causal receipt regressions; fresh exact-head tests and independent review required. Depends on #1384 and the staged A.6D6 backend/migration. No signed-in browser, Storage/model or production activation claim; checklist tasks remain open.
+
+
 ### 2026-11-24: KIS-UX-02B governed general search, PR #1292
 
 - **KCON-213 / KCON-260 / KCON-750, SOURCE_CANDIDATE:** Reuses ChatRuntime and CORTEX admission for typed general-search retrieval options in HTTP/SSE; propagates the original authorized plan and cumulative execution meter through primary retrieval and eligible Intelligent Search fallback. Source-matched supporting citations in the three synchronized plugin UI distributions are not claim-level verification. Unsupported specialized/crawl options retain the existing plugin path; runtime denial does not trigger a UI retry. No new orchestrator or provider registry.

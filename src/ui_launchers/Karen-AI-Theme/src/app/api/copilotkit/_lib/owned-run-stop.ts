@@ -301,9 +301,22 @@ export async function relayKarenOwnedDraftRetry(
         (mutation ? values.revision !== target.revision + 1 : typeof values.eligible !== "boolean")) {
       throw new Error("receipt");
     }
+    // Old backends may omit both causal fields. Never synthesize them
+    // from eligibility or a current draft revision.
+    const causal = !mutation && ("prepared_revision" in values || "prepared_current" in values);
+    if (causal && (
+        typeof values.prepared_current !== "boolean" ||
+        (values.prepared_revision !== null && values.prepared_revision !== target.revision + 1) ||
+        (values.eligible === true && values.prepared_revision !== null) ||
+        (values.prepared_current === true && values.prepared_revision === null))) {
+      throw new Error("receipt");
+    }
     return NextResponse.json({
       submission_id: target.submissionId,
-      ...(mutation ? { revision: values.revision } : { eligible: values.eligible }),
+      ...(mutation ? { revision: values.revision } : {
+        eligible: values.eligible,
+        ...(causal ? { prepared_revision: values.prepared_revision, prepared_current: values.prepared_current } : {}),
+      }),
     }, { headers: { "Cache-Control": "private, no-store" } });
   } catch {
     return NextResponse.json({ detail: "Invalid draft retry receipt" }, { status: 503 });

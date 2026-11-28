@@ -571,8 +571,34 @@ export function KarenCopilotControlledChat({
               if (!mounted.current || finalityHoldRef.current !== hold || retryScope.current !== scope ||
                   agent.threadId !== conversationId) return;
               if (successor && sameRetainedContent(attempt.snapshot, successor)) {
-                // A successor is not proof that our POST committed. Observe
-                // its own ledger identity; never resend POST or infer absence.
+                // Causal receipt is separate from the successor draft. Only
+                // the canonical backend may attest the committed preparation
+                // and that its successor is current with no unresolved run.
+                const causal: unknown = await apiClient.get(
+                  "/api/copilotkit/agent/default/draft-retry/" + conversationId + "/" + id,
+                );
+                if (!mounted.current || finalityHoldRef.current !== hold || retryScope.current !== scope ||
+                    agent.threadId !== conversationId || agent.isRunning) return;
+                if (causal && typeof causal === "object" && !Array.isArray(causal)) {
+                  const observed = causal as Record<string, unknown>;
+                  if (observed.submission_id === id && observed.eligible === false &&
+                      observed.prepared_revision === identity.revision + 1 &&
+                      observed.prepared_current === true) {
+                    const verified = await readRetainedRetryDraft(identity.next);
+                    if (!mounted.current || finalityHoldRef.current !== hold || retryScope.current !== scope ||
+                        agent.threadId !== conversationId || agent.isRunning) return;
+                    if (verified && sameRetainedContent(attempt.snapshot, verified)) {
+                      finalityHoldRef.current = null;
+                      setFinalityHold(null);
+                      retryAttempt.current = null;
+                      setError(null);
+                      setFinalityFeedback("Retry preparation was recovered and verified. Review the draft and select Send when ready.");
+                      return;
+                    }
+                  }
+                }
+                // Without causal evidence, only a positive successor run
+                // observation may establish another recovery hold.
                 try {
                   const nextStatus: unknown = await apiClient.get(
                     "/api/copilotkit/agent/default/submissions/" + conversationId + "/" + identity.next + "/status",

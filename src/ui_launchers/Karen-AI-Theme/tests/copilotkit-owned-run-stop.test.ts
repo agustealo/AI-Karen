@@ -437,6 +437,27 @@ describe("CopilotKit governed draft retry gateway", () => {
     expect(await response.json()).toEqual({ submission_id: identity, eligible });
     expect(seen).toEqual([AUTH, FLAGS, upstream + identity]);
   });
+  it.each([true, false])("projects durable receipt separately from current eligibility (%s)", async (current) => {
+    mockRetry(() => Response.json({
+      submission_id: identity, eligible: false, prepared_revision: 8, prepared_current: current,
+      private: "never forward",
+    }));
+    const response = await GET(request("GET"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      submission_id: identity, eligible: false, prepared_revision: 8, prepared_current: current,
+    });
+  });
+  it.each([
+    { eligible: true, prepared_revision: 8, prepared_current: true },
+    { eligible: false, prepared_revision: 9, prepared_current: true },
+    { eligible: false, prepared_revision: null, prepared_current: true },
+    { eligible: false, prepared_revision: 8 },
+    { eligible: false, prepared_current: false },
+  ])("rejects inconsistent causal receipt %j", async (fields) => {
+    mockRetry(() => Response.json({ submission_id: identity, ...fields }));
+    expect((await GET(request("GET"))).status).toBe(503);
+  });
   it("prepares exact next revision without invoking SDK", async () => {
     const seen = mockRetry(() => Response.json({ submission_id: identity, revision: 8 }), "POST");
     const response = await POST(request("POST"));
