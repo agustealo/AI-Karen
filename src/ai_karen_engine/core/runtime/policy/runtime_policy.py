@@ -1334,10 +1334,11 @@ class RuntimePolicyEnforcer:
         # A scoped document operation is a distinct, explicit read-only grant.
         # Do not infer it from attachments, plugin hints or a generic chat action.
         document_digest = None
-        document_requested = request.document_operation is not None or (
-            bool(authorized_attachments) and (
-                request.action == "content-intelligence"
-                or "content-intelligence" in request.requested_capabilities
+        document_requested = (
+            request.document_operation is not None
+            or request.action == "content-intelligence"
+            or bool(authorized_attachments) and (
+                "content-intelligence" in request.requested_capabilities
                 or "content-intelligence" in (request.execution_topology.get("plugin_candidates") or [])
                 or request.plugin_id == "content-intelligence"
                 or request.extension_id == "content-intelligence"
