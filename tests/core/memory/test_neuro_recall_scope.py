@@ -9,7 +9,7 @@ from ai_karen_engine.core.memory.retrieval.neuro_recall import (
     RecallRequest,
     RecallScopeError,
 )
-from ai_karen_engine.core.memory.types import MemoryEntry, MemoryMetadata
+from ai_karen_engine.core.memory.types import MemoryEntry, MemoryMetadata, RecallCandidateBatch
 
 
 class _FakeRetriever:
@@ -1054,3 +1054,21 @@ async def test_derived_projection_permission_revocation_rechecked(
     assert denied.memories == ()
     assert denied.provenance == ()
     assert authorizer.calls == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("complete", [False, True])
+async def test_source_coverage_receipt_survives_neuro_recall(complete):
+    class BoundedSource:
+        async def recall(self, query):
+            return RecallCandidateBatch(
+                [_memory("fact", "tenant-1", "user-1")], complete=complete,
+            )
+
+    result = await NeuroRecall(BoundedSource()).recall(RecallRequest(
+        query="Who am I?", tenant_id="tenant-1", user_id="user-1",
+    ))
+    assert len(result.memories) == 1
+    assert result.source_health[0]["candidate_batch_complete"] is complete
+    assert result.source_health[0]["candidate_count"] == 1
+    assert not result.degraded  # coverage is distinct from source availability
