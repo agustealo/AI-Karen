@@ -10,7 +10,7 @@ from sqlalchemy import or_, select
 
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
-from .consent_filter import recallable_memory_event
+from .consent_filter import non_profile_memory_event, recallable_memory_event
 from .ledger_models import (
     MemoryAssertion, MemoryEvent, MemoryOpenLoop, MemoryProspectiveItem,
     MemoryUserGoal, ProfileFact,
@@ -31,7 +31,9 @@ class PostgresEventSource:
         tenant_id: str,
         user_id: str,
         event_ids: Iterable[str],
+        for_current_recall: bool = False,
     ) -> dict[str, dict]:
+        """Expand authorized events; generic recall excludes profile-owned evidence."""
         try:
             tenant_uuid = uuid.UUID(str(tenant_id))
             user_uuid = uuid.UUID(str(user_id))
@@ -57,6 +59,10 @@ class PostgresEventSource:
                     now=datetime.now(timezone.utc).replace(tzinfo=None),
                 ),
             )
+            if for_current_recall:
+                stmt = stmt.where(non_profile_memory_event(
+                    tenant_id=tenant_uuid, user_id=user_uuid,
+                ))
             rows = (await session.execute(stmt)).scalars().all()
 
         return {
@@ -155,6 +161,10 @@ class PostgresEventSource:
                     predicate.extend((
                         or_(model.valid_from.is_(None), model.valid_from <= now),
                         or_(model.valid_to.is_(None), model.valid_to > now),
+                    ))
+                if kind in {"memory_event", "memory_assertion"}:
+                    predicate.append(non_profile_memory_event(
+                        tenant_id=tenant, user_id=user,
                     ))
                 if kind == "memory_assertion":
                     predicate.append(MemoryAssertion.consent_state == "granted")

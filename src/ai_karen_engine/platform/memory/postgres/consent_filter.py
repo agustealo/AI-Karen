@@ -13,7 +13,7 @@ from datetime import datetime
 
 from sqlalchemy import and_, func, or_, select, true
 
-from .ledger_models import ConsentScope, MemoryEvent
+from .ledger_models import ConsentScope, MemoryEvent, ProfileFact
 
 
 def recallable_memory_event(
@@ -58,4 +58,30 @@ def recallable_memory_event(
     )
 
 
-__all__ = ["recallable_memory_event"]
+def non_profile_memory_event(*, tenant_id: uuid.UUID, user_id: uuid.UUID):
+    """Exclude profile-owned observations from current generic recall.
+
+    Formation owns the signal stamp; legacy projections establish ownership
+    through their scoped event relationship, even after supersession.
+    Historical event reads deliberately do not apply this predicate.
+    """
+    profile_projection = (
+        select(ProfileFact.fact_id)
+        .where(
+            ProfileFact.event_id == MemoryEvent.event_id,
+            ProfileFact.tenant_id == tenant_id,
+            ProfileFact.user_id == user_id,
+        )
+        .correlate(MemoryEvent)
+        .exists()
+    )
+    return and_(
+        func.coalesce(
+            MemoryEvent.payload["metadata"]["custom"]["signal_type"].astext,
+            "",
+        ).notin_(("identity_fact", "profile_fact", "preference")),
+        ~profile_projection,
+    )
+
+
+__all__ = ["recallable_memory_event", "non_profile_memory_event"]
