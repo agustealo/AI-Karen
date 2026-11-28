@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28: KFILE-UPLOAD-U1B admission-only extension discovery
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** default-disabled first-party File Upload catalog manifest; no UI/API/Storage permissions, hooks or generic execution. Existing PluginService obtains current owner-create session and canonical RBAC, evaluates RuntimePolicy, invokes PluginKernel.admit, revalidates current session and lifecycle, then projects the sole bounded store-only owner-library destination with transfer_available=false. No upload execution grant or activation. Tests cover manifest, missing entitlements, unregistered actions, disabled kernel, and lifecycle changes.
+- **Proof:** staged on current quota candidate; previous transfer head passed 16/16 workflows before quota promotion. Fresh quota CI preserved; discovery tests not yet run. Transfer ingress, destination execution policy, lifecycle lease, live Storage/browser acceptance and independent review outstanding.
+
 ### 2026-11-28: KFILE-UPLOAD-U2C1 durable admission budget
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** serialize per-tenant/owner upload-session creation under a PostgreSQL transaction advisory lock and fresh READ COMMITTED snapshot. Count all admitted manifests over the preceding 24 hours (including failed/cancelled), with validated KAREN_UPLOAD_ADMISSION_DAILY_SESSIONS (128, range 1–100000) and KAREN_UPLOAD_ADMISSION_DAILY_BYTES (8388608, range 1–1099511627776) settings. Existing matching unexpired keys remain free; expired keys never restart. This is a ledger admission budget, not a total Storage capacity quota, tenant-wide budget, or plugin authorization. No new store, table, API or grant. File Upload extension is not installed; no substitute File Explorer grant.

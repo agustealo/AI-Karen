@@ -155,6 +155,92 @@ class PluginService:
             raise RuntimeError("Plugin kernel is not initialized")
         return self.kernel
 
+    async def discover_owner_upload_destinations(
+        self, context: ChatExecutionContext,
+    ) -> list[dict[str, Any]]:
+        """Read-only admission projection; no transfer or activation grant."""
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+        from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+
+        await context.revalidate_runtime_artifact_write_session()
+        principal = context.require_authenticated_user()
+        tenant, owner = context.tenant_id, context.user_id
+        if (
+            not context.request_id or not context.correlation_id
+            or not all(isinstance(value, str) and str(uuid.UUID(value)) == value
+                       for value in (tenant, owner))
+        ):
+            raise PermissionError("file_upload_identity_required")
+        manager = get_rbac_manager()
+        permissions = sorted(permission.value for permission in manager.get_user_permissions(principal))
+        roles = list(principal.roles or [])
+        capabilities = [
+            "file-upload", "file_upload.discover",
+            Permission.DATA_READ.value, Permission.ARTIFACT_CREATE_OWN.value,
+        ]
+        if not set(capabilities[2:]).issubset(permissions):
+            raise PermissionError("file_upload_permission_denied")
+        config = ArtifactStorageConfig.from_environment()
+        await self._ensure_initialized()
+        kernel = self._get_kernel()
+        record = kernel.get_record("file-upload")
+        if (
+            not isinstance(record, dict) or record.get("status") != "enabled"
+            or record.get("dependencies_resolved") is not True
+        ):
+            return []
+        decision = await self._policy_enforcer.evaluate(PolicyEvaluationRequest(
+            user_id=owner, tenant_id=tenant, session_id=context.session_id,
+            correlation_id=context.correlation_id, roles=roles,
+            permissions=permissions, action="plugin_execution", plugin_id="file-upload",
+            requested_capabilities=capabilities,
+        ))
+        if not decision.allowed or decision.requires_human_gate:
+            raise PermissionError("file_upload_policy_denied")
+        plan = decision.to_authorized_plan()
+        if (
+            set(plan.allowed_plugins) != {"file-upload"}
+            or set(plan.allowed_capabilities) != set(capabilities)
+            or plan.approval_requirements
+            or not plan.matches_execution_scope(
+                user_id=owner, tenant_id=tenant, session_id=context.session_id,
+                policy_decision_id=decision.decision_id,
+            )
+        ):
+            raise PermissionError("file_upload_policy_scope_denied")
+        admission = await kernel.admit(ExtensionExecutionRequest(
+            plugin_id="file-upload", capability="execute", payload={"operation": "discover"},
+            context=ExtensionExecutionContext(
+                request_id=context.request_id, correlation_id=context.correlation_id,
+                user_id=owner, tenant_id=tenant, session_id=context.session_id,
+                policy_decision_id=decision.decision_id,
+                allowed_capabilities=list(plan.allowed_capabilities),
+                audit_context={"origin": "authenticated_file_upload_discovery",
+                               "user_roles": roles, "permissions": permissions},
+            ),
+            authorized_plan=plan,
+        ))
+        if admission.status != "admitted":
+            raise PermissionError("file_upload_kernel_denied")
+        await context.revalidate_runtime_artifact_write_session()
+        if context.require_authenticated_user() is not principal or (
+            context.tenant_id, context.user_id
+        ) != (tenant, owner):
+            raise PermissionError("file_upload_identity_changed")
+        # A lifecycle change during admission cannot advertise a destination.
+        current = kernel.get_record("file-upload")
+        if (
+            not isinstance(current, dict) or current.get("status") != "enabled"
+            or current.get("dependencies_resolved") is not True
+        ):
+            return []
+        return [{
+            "id": "explorer", "kind": "owner_library", "recipes": ["store_only"],
+            "mime_types": ["text/plain"], "extensions": [".txt", ".md"],
+            "max_bytes": config.governed_text_upload_max_bytes,
+            "transfer_available": False, "unavailable_reason": "transfer_ingress_not_registered",
+        }]
+
     async def _prepare_file_explorer(
         self, *, user_id: str, tenant_id: str, roles: List[str],
         permissions: List[str], request_id: str, correlation_id: str,

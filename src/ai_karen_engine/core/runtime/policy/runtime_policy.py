@@ -1313,6 +1313,30 @@ class RuntimePolicyEnforcer:
         else:
             authorized_attachments = []
 
+        # File Upload is admission-only until a separately governed transfer
+        # ingress is registered. Neither a requested plugin nor a capability
+        # string alone can establish an owner-create entitlement.
+        upload_actions = {
+            capability for capability in request.requested_capabilities
+            if isinstance(capability, str) and capability.startswith("file_upload.")
+        }
+        if request.plugin_id == "file-upload" or request.extension_id == "file-upload" or upload_actions:
+            from ai_karen_engine.auth.rbac_middleware import Permission
+
+            required = {Permission.DATA_READ.value, Permission.ARTIFACT_CREATE_OWN.value}
+            if (
+                request.plugin_id != "file-upload" or request.action != "plugin_execution"
+                or set(request.requested_capabilities) != {"file-upload", "file_upload.discover", *required}
+                or not required.issubset(request.permissions)
+                or request.tool_id or request.extension_id
+            ):
+                return PolicyDecision(
+                    decision_id=decision_id, policy_version=policy_version, allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=list(request.requested_capabilities),
+                    evaluated_at=evaluated_at,
+                )
+
         # Explorer mutations are owner-only and must not inherit broad data
         # write/delete authority. Unknown future actions default to denial.
         explorer_actions = {
