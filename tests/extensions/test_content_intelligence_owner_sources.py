@@ -127,6 +127,8 @@ async def test_owner_text_only_reaches_kernel_after_verified_read():
     (context(user_id=OTHER), plan()),
     (context(tenant_id=OTHER), plan()),
     (context(resource_scope={"override": "yes"}), plan()),
+    (context(), plan(resource_scope={"attachment_references": REFS})),
+    (context(), plan(resource_scope={"override": "yes"})),
     (context(allowed_capabilities=[]), plan()),
     (context(), plan(allowed_plugins=[])),
     (context(), plan(allowed_capabilities=["content-intelligence"])),
@@ -460,3 +462,44 @@ async def test_owner_selection_remains_pinned_during_storage_read():
     assert answer["left_id"] == FILE_ID
     assert answer["right_id"] == second_id
     assert answer["left_sha256"] == answer["right_sha256"] == DIGEST
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("boundary", ["admission", "read", "execution"])
+@pytest.mark.parametrize("scope_owner", ["plan", "context"])
+async def test_standalone_scope_change_cannot_continue_owner_access(boundary, scope_owner):
+    ctx, auth = context(), plan()
+
+    def mutate_scope():
+        target = auth if scope_owner == "plan" else ctx
+        target.resource_scope["attachment_references"] = REFS
+
+    class ScopeChangingStore(Store):
+        async def read_owner_active_code(self, *args):
+            response = await super().read_owner_active_code(*args)
+            if boundary == "read":
+                mutate_scope()
+            return response
+
+    class ScopeChangingKernel(Kernel):
+        async def admit(self, request):
+            result = await super().admit(request)
+            if boundary == "admission":
+                mutate_scope()
+            return result
+
+        async def execute(self, request):
+            result = await super().execute(request)
+            if boundary == "execution":
+                mutate_scope()
+            return result
+
+    store, kernel = ScopeChangingStore(), ScopeChangingKernel()
+    with pytest.raises(PermissionError, match="content_source_authorization_required"):
+        await ContentSourceHost(store=store, kernel=kernel).execute_owner_text(
+            context=ctx, plan=auth, operation="analyze", references=REFS,
+        )
+    assert len(store.calls) == (0 if boundary == "admission" else 1)
+    assert [kind for kind, _ in kernel.calls] == (
+        ["admit", "execute"] if boundary == "execution" else ["admit"]
+    )

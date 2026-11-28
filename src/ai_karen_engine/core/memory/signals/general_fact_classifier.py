@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import re
 
-from ai_karen_engine.core.intelligence.correction_intent import is_explicit_self_correction
+from ai_karen_engine.core.intelligence.correction_intent import (
+    is_atomic_correction_value, is_explicit_self_correction,
+)
 
 from .signal_models import MemorySignal
 
@@ -111,6 +113,27 @@ _LOCATION_PATTERNS = (
         r"(?i)\bi(?:'m| am)\s+(?:originally\s+)?from\s+(.+?)(?=\s+(?:and|but)\s+(?:i\b|born\b)|[,.!?;]|$)"
     )),
 )
+
+
+def is_direct_general_correction_claim(clause: str, attribute: str) -> bool:
+    """Require an atomic anchored match of an existing direct-fact grammar.
+
+    Limit the additional correction admission to employer and location
+    predicates whose classifiers provide a concrete first-person pattern.
+    Other classifiers must establish their own direct attribution first.
+    """
+    patterns = (
+        (_EMPLOYER,) if attribute == "employer"
+        else tuple(pattern for key, _, pattern in _LOCATION_PATTERNS if key == attribute)
+    )
+    statement = clause.rstrip(".!").strip()
+    if not statement:
+        return False
+    return any(
+        is_atomic_correction_value(match.group(1))
+        for pattern in patterns
+        if (match := pattern.fullmatch(statement)) is not None
+    )
 
 
 def classify_general_user_facts(text: str) -> list[MemorySignal]:
