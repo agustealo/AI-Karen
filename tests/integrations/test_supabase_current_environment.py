@@ -137,3 +137,54 @@ def test_private_storage_tls_real_sdk_uses_origin_bound_http_client(monkeypatch)
     finally:
         platform.reset()
     assert created[0][0].is_closed
+
+
+def test_canonical_database_factory_preserves_storage_platform_and_tls_policy(monkeypatch):
+    """The API factory must use the same platform contract as the runtime factory."""
+    import ssl
+    from types import SimpleNamespace
+
+    import pytest
+
+    from ai_karen_engine.config.artifact_storage import StorageTLSPolicy
+    from ai_karen_engine.database.factory import DatabaseServiceFactory
+    from ai_karen_engine.integrations import supabase_client
+    from ai_karen_engine.services.database.repositories.supabase_artifact_store import (
+        SupabaseArtifactStore,
+    )
+
+    origin = "https://storage.example.test:8443"
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+    policy = StorageTLSPolicy(origin, context)
+    bucket = object()
+    requested_buckets = []
+
+    def from_(name):
+        requested_buckets.append(name)
+        return bucket
+
+    platform = SimpleNamespace(
+        storage=SimpleNamespace(from_=from_), url=origin, storage_tls_policy=policy,
+    )
+    monkeypatch.setattr(supabase_client, "get_supabase_platform", lambda: platform)
+
+    factory = DatabaseServiceFactory()
+    factory._services["database_client"] = SimpleNamespace(get_async_session=lambda: None)
+    assert factory.create_canonical_repositories() is not None
+    store = factory.get_service("artifact_store")
+    assert isinstance(store, SupabaseArtifactStore)
+    assert store._storage is platform
+    assert store._storage.url == origin
+    assert store._storage.storage_tls_policy.verify_for_origin(origin) is context
+    assert store._bucket() is bucket
+    assert requested_buckets == ["artifacts"]
+
+    # An unavailable SDK must not produce a fallback bucket or drop the policy.
+    platform.storage = None
+    assert factory.create_canonical_repositories() is not None
+    unavailable = factory.get_service("artifact_store")
+    assert isinstance(unavailable, SupabaseArtifactStore)
+    assert unavailable._storage is platform
+    with pytest.raises(RuntimeError, match="Storage capability is unavailable"):
+        unavailable._bucket()
+    assert requested_buckets == ["artifacts"]

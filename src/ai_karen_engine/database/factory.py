@@ -193,11 +193,11 @@ class DatabaseServiceFactory:
                 return None
 
             supabase_platform = get_supabase_platform()
-            storage_client = supabase_platform.storage
-
+            # ArtifactStore needs the initialized platform, not its raw SDK
+            # Storage object: the platform owns the bucket, origin and TLS policy.
             factory = RepositoryFactory(
                 session_factory=session_factory,
-                storage_client=storage_client,
+                storage_client=supabase_platform,
                 hierarchy_transaction=async_transaction_scope,
             )
 

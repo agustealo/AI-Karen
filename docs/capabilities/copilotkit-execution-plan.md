@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-27: KEXP-042A.7 canonical Storage factory correction, PR #1383
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** the existing DatabaseServiceFactory supplied the raw SDK Storage client to RepositoryFactory, whereas SupabaseArtifactStore requires the initialized platform wrapper for bucket access, configured origin and private CA policy. Pass that same wrapper used by the canonical runtime repository factory; add a factory regression for policy/bucket identity and unavailable Storage denial. No new client, upload route, TLS implementation or release workflow. #1408 owns local HTTPS gateway/CA provenance; retain that separate acceptance gate.
+- **Proof:** prior #1383 head `460344ee8e87cc1ce81a29d29e0a5b4fc4d1fd50` passed 6/6 source workflows; new exact-head CI and independent review required. Actual governed upload, direct real Storage/TLS transport and signed browser execution remain NOT_RUN. Existing picker acceptance uses a pre-provisioned artifact; legacy multipart ingress is not proof of governed consumer upload. No production mutation or activation.
+
 ### 2026-11-27: KEXP-042A.7 protected signed Docker dispatch, PR #1383
 
 - **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** extend the existing main-only signed Docker host/browser/host chain with explicit approved recovery variants and attached-content scenario. Scoped secrets, sanitized account and exact reviewed SHA remain mandatory. Reuse the existing Playwright report validator to require exactly one passed Chromium execution, no skip, retry or unexpected result. Private temporary evidence is removed on exit; no credential-bearing report upload.
