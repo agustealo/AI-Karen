@@ -20,7 +20,10 @@ from ai_karen_engine.core.runtime.attested_agent_activity import (
     InvalidAgentActivity, project_attested_agent_activity,
 )
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatStreamChunk
-from ai_karen_engine.core.runtime.conversation_runtime_gateway import ConversationSnapshot
+from ai_karen_engine.core.runtime.conversation_runtime_gateway import (
+    ConversationSnapshot,
+    OwnedHistoryEvidence,
+)
 from ai_karen_engine.core.runtime.presentation_contract import (
     contains_revocable_code_artifact,
     is_public_source_url,
@@ -33,6 +36,7 @@ from ai_karen_engine.services.database.repositories.conversation_repository impo
     COMPLETED_ATTACHMENT_RECEIPT_KEY,
     Message,
     canonical_message_digest,
+    validate_draft_attachment_references,
     verify_completed_attachment_receipt,
 )
 from ai_karen_engine.services.response.response_contracts import ResponseContract
@@ -684,3 +688,49 @@ def project_owned_history(
     if length > _MAX_BYTES:
         raise UnreplayableHistory("history_byte_limit")
     return result
+
+
+def resolve_owned_historical_attachment(
+    evidence: OwnedHistoryEvidence, *, assistant_message_id: str, ordinal: int,
+) -> dict[str, str]:
+    """Resolve a private revision reference, never permission to read file bytes.
+
+    Callers must obtain evidence from read_owned_history_evidence using the
+    authenticated principal and requested conversation, not client metadata.
+    Reuse the entire governed rich projection as the admission boundary:
+    unsupported, incomplete or tampered history must not mint a reference.
+    Ordinals are one-based and scoped to the exact completed assistant turn.
+    The returned private reference is for the server-side ArtifactStore only.
+    """
+    if (
+        not isinstance(assistant_message_id, str)
+        or not assistant_message_id.strip()
+        or len(assistant_message_id) > 200
+        or type(ordinal) is not int
+        or not 1 <= ordinal <= 12
+        or evidence.window_has_older
+    ):
+        raise UnreplayableHistory("unsupported_rich_history")
+    projected = project_owned_history(
+        evidence.snapshot, attestations=evidence.attestations,
+        observed_activity=evidence.observed_activity,
+    )
+    matches = [
+        event for event in projected["replayEvents"]
+        if event["name"] == "karen.verified_attachment_history.v1"
+        and event["messageId"] == assistant_message_id
+    ]
+    if len(matches) != 1 or ordinal > matches[0]["value"]["attachment_count"]:
+        raise UnreplayableHistory("unsupported_rich_history")
+    assistant = next(
+        (message for message in evidence.snapshot.messages
+         if message.id == assistant_message_id and message.role == "assistant"),
+        None,
+    )
+    if assistant is None:
+        raise UnreplayableHistory("unsupported_rich_history")
+    # Projection has verified the full assistant digest and the exact original
+    # user message, scope and ordered selection. Copy only the selected pair.
+    receipt = assistant.metadata[COMPLETED_ATTACHMENT_RECEIPT_KEY]
+    references = validate_draft_attachment_references(receipt["references"])
+    return references[ordinal - 1]

@@ -1,3 +1,4 @@
+import math
 import time
 import logging
 from collections import defaultdict, deque
@@ -35,6 +36,38 @@ def record_retention_event(operation: str, outcome: str) -> None:
     except Exception:
         # Observability must never interrupt receipt recovery or cancellation.
         logger.debug("Medusa retention metric unavailable")
+
+
+_RETENTION_OBSERVATIONS = {
+    "index_entries": (
+        "kari_medusa_terminal_retention_index_entries_observed",
+        "Observed tenant index member count per discovery operation, including stale members",
+        (0, 1, 5, 10, 50, 100, 500, 1000, 10000),
+    ),
+    "acknowledged_age": (
+        "kari_medusa_terminal_retention_acknowledged_age_seconds",
+        "Wall clock age from exact receipt completion to confirmed retention release",
+        (0, 1, 5, 30, 60, 300, 1800, 3600, 86400),
+    ),
+}
+
+
+def record_retention_observation(kind: str, value: int | float) -> None:
+    """Aggregate observations only; no latest tenant gauge or oldest-age claim."""
+    try:
+        spec = _RETENTION_OBSERVATIONS.get(kind)
+        if spec is None or type(value) not in {int, float}:
+            return
+        if not math.isfinite(value) or value < 0:
+            return
+        if kind == "index_entries" and type(value) is not int:
+            return
+        name, description, buckets = spec
+        get_metrics_collector().histogram(
+            name, description, (), buckets,
+        ).labels().observe(value)
+    except Exception:
+        logger.debug("Medusa retention observation metric unavailable")
 
 
 class MedusaMetrics:

@@ -1781,6 +1781,93 @@ async def _read_ag_ui_status(
     )
 
 
+class AGUIDraftRetryRequest(BaseModel):
+    """Explicit retry preparation; this request cannot start a model run."""
+
+    model_config = ConfigDict(extra="forbid", strict=True)
+    submitted_text: StrictStr = Field(min_length=1, max_length=10000)
+    attachment_references: list[dict[StrictStr, StrictStr]] = Field(max_length=12)
+
+    @field_validator("attachment_references")
+    @classmethod
+    def validate_references(cls, value: list[dict[str, str]]) -> list[dict[str, str]]:
+        return validate_draft_attachment_references(value)
+
+
+async def _ag_ui_draft_retry(
+    thread_id: str, submission_id: str, user: Dict[str, Any],
+    payload: Optional[AGUIDraftRetryRequest],
+) -> JSONResponse:
+    features = get_runtime_settings().features
+    if not features.enable_ag_ui_bridge or not getattr(features, "enable_ag_ui_durable_runs", False):
+        raise HTTPException(status_code=404, detail="Draft retry unavailable")
+    try:
+        thread = str(uuid.UUID(thread_id))
+        revision = draft_revision_from_submission_id(submission_id)
+        if revision is None or revision >= 9007199254740990:
+            raise ValueError("invalid_draft_retry_identity")
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="Invalid draft retry identity") from exc
+    request_id = str(uuid.uuid4())
+    context = _execution_context(
+        user=user, session_id=thread, conversation_id=thread,
+        request_id=request_id, correlation_id=request_id,
+    )
+    try:
+        coordinator = get_chat_run_coordinator()
+        if payload is None:
+            result = await coordinator.read_failed_draft_revision(
+                context, submission_id=submission_id,
+            )
+        else:
+            result = await coordinator.advance_failed_draft_revision(
+                context, submission_id=submission_id,
+                submitted_text=payload.submitted_text,
+                attachment_references=payload.attachment_references,
+            )
+    except PermissionError as exc:
+        raise HTTPException(status_code=404, detail="Draft retry unavailable") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Invalid draft retry request") from exc
+    except Exception as exc:
+        if isinstance(exc, RuntimeError) and str(exc) == "conversation_not_found":
+            raise HTTPException(status_code=404, detail="Draft retry unavailable") from exc
+        logger.error("Draft retry unavailable", extra={
+            "correlation_id": request_id, "error_type": type(exc).__name__,
+        })
+        raise HTTPException(status_code=503, detail="Draft retry unavailable") from exc
+    expected = revision if payload is None else revision + 1
+    if result is not None and (type(result) is not int or result != expected):
+        raise HTTPException(status_code=503, detail="Invalid draft retry receipt")
+    if payload is not None and result is None:
+        raise HTTPException(status_code=409, detail="Draft retry is no longer eligible")
+    return JSONResponse(
+        content={
+            "submission_id": submission_id,
+            **({"eligible": result is not None} if payload is None else {"revision": result}),
+        },
+        headers={"Cache-Control": "private, no-store"},
+    )
+
+
+@router.get("/chat/ag-ui/draft-retry/{thread_id}/{submission_id}")
+async def get_ag_ui_draft_retry(
+    thread_id: str, submission_id: str,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Observe an owned retained draft, without advancing or executing it."""
+    return await _ag_ui_draft_retry(thread_id, submission_id, user, None)
+
+
+@router.post("/chat/ag-ui/draft-retry/{thread_id}/{submission_id}")
+async def post_ag_ui_draft_retry(
+    thread_id: str, submission_id: str, payload: AGUIDraftRetryRequest,
+    user: Dict[str, Any] = Depends(bypass_user_context_func),
+):
+    """Prepare exactly one new draft revision; execution remains separate."""
+    return await _ag_ui_draft_retry(thread_id, submission_id, user, payload)
+
+
 @router.post("/chat/ag-ui/runs/{thread_id}/{run_id}/cancel")
 async def cancel_ag_ui_chat_run(
     thread_id: str,

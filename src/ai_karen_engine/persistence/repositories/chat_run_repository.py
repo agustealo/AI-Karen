@@ -104,6 +104,34 @@ def draft_attachment_digest_from_submission_id(submission_id: Optional[str]) -> 
     return submission_id.rsplit("-", 1)[1]
 
 
+def _retry_draft_revision(submission_id: str) -> int:
+    if not isinstance(submission_id, str):
+        raise ValueError("invalid_draft_retry_identity")
+    revision = draft_revision_from_submission_id(submission_id)
+    if revision is None or revision >= 9007199254740990:
+        raise ValueError("invalid_draft_retry_identity")
+    return revision
+
+
+# Shared predicates for observation and mutation. Only the transaction
+# performing the CAS can authorize the revision advance.
+_DRAFT_RETRY_TERMINAL = """
+    status IN ('failed', 'cancelled')
+    AND terminal_at IS NOT NULL
+    AND lease_token IS NULL AND lease_expires_at IS NULL
+    AND user_message_id IS NULL AND assistant_message_id IS NULL
+    AND assistant_message_digest IS NULL
+"""
+_DRAFT_RETRY_NO_UNRESOLVED = """
+    NOT EXISTS (
+        SELECT 1 FROM public.runtime_chat_runs r
+        WHERE r.tenant_id = d.tenant_id AND r.user_id = d.user_id
+          AND r.conversation_id = d.conversation_id
+          AND r.status IN ('running', 'cancelling', 'orphaned')
+    )
+"""
+
+
 class DraftSubmissionConflict(Exception):
     """The original owned draft no longer matches the submitted turn."""
 
@@ -1118,6 +1146,135 @@ class SqlChatRunRepository:
                 conversation_id=scope["conversation"],
             )
         return status
+
+    async def read_failed_draft_revision(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+        submission_id: str,
+    ) -> Optional[int]:
+        """Observe exact retained retry eligibility without granting mutation."""
+        revision = _retry_draft_revision(submission_id)
+        digest = draft_attachment_digest_from_submission_id(submission_id)
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            draft_attachment_selection_digest,
+            validate_draft_attachment_references,
+        )
+
+        scope = {
+            "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
+            "conversation": _uuid(conversation_id),
+            "submission_id": submission_id, "revision": revision,
+        }
+        async with async_transaction_scope(
+            scope["tenant"], user_id=scope["owner"],
+        ) as session:
+            result = await session.execute(text(f"""
+                SELECT d.draft_text, d.attachment_references
+                FROM public.conversation_composer_drafts d
+                WHERE d.tenant_id = CAST(:tenant AS uuid)
+                  AND d.user_id = CAST(:owner AS uuid)
+                  AND d.conversation_id = CAST(:conversation AS uuid)
+                  AND d.revision = :revision
+                  AND EXISTS (
+                    SELECT 1 FROM public.runtime_chat_runs r
+                    WHERE r.tenant_id = d.tenant_id AND r.user_id = d.user_id
+                      AND r.conversation_id = d.conversation_id
+                      AND r.submission_id = :submission_id
+                      AND {_DRAFT_RETRY_TERMINAL}
+                  )
+                  AND {_DRAFT_RETRY_NO_UNRESOLVED}
+            """), scope)
+            row = result.mappings().one_or_none()
+            if row is None:
+                return None
+            saved = row["draft_text"]
+            refs = validate_draft_attachment_references(row["attachment_references"])
+            if (
+                not isinstance(saved, str) or not saved.strip()
+                or len(saved.strip()) > 10000
+                or (digest is None and refs)
+                or (digest is not None and (
+                    not refs or draft_attachment_selection_digest(refs) != digest
+                ))
+            ):
+                return None
+            return revision
+
+    async def advance_failed_draft_revision(
+        self, *, tenant_id: str, user_id: str, conversation_id: str,
+        submission_id: str, submitted_text: str,
+        attachment_references: list[dict[str, str]],
+    ) -> Optional[int]:
+        """Advance exactly one retained failed/cancelled draft; never execute.
+
+        The caller must have authorized an explicit retry of this submission.
+        The original ledger row remains immutable. A repeated or lost-receipt
+        request cannot advance twice because the original revision is fenced.
+        Normal admission still checks the new revision and all runtime policy.
+        """
+        revision = _retry_draft_revision(submission_id)
+        digest = draft_attachment_digest_from_submission_id(submission_id)
+        from ai_karen_engine.services.database.repositories.conversation_repository import (
+            draft_attachment_selection_digest,
+            validate_draft_attachment_references,
+        )
+        from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
+            PostgresConversationRepository,
+        )
+
+        selected = validate_draft_attachment_references(attachment_references)
+        if (
+            not isinstance(submitted_text, str) or not submitted_text.strip()
+            or len(submitted_text) > 10000
+            or (digest is None and selected)
+            or (digest is not None and (
+                not selected or draft_attachment_selection_digest(selected) != digest
+            ))
+        ):
+            raise ValueError("invalid_draft_retry_identity")
+        scope = {
+            "tenant": _uuid(tenant_id), "owner": _uuid(user_id),
+            "conversation": _uuid(conversation_id),
+            "submission_id": submission_id, "revision": revision,
+        }
+        async with async_transaction_scope(
+            scope["tenant"], user_id=scope["owner"],
+        ) as session:
+            # Ledger row before draft lock, as with admission/completion.
+            # Require durable terminal evidence with no transcript binding or
+            # residual lease. An expired/interrupted run is not retryable.
+            eligible = await session.execute(text(f"""
+                SELECT execution_id FROM public.runtime_chat_runs
+                WHERE tenant_id = CAST(:tenant AS uuid)
+                  AND user_id = CAST(:owner AS uuid)
+                  AND conversation_id = CAST(:conversation AS uuid)
+                  AND submission_id = :submission_id
+                  AND {_DRAFT_RETRY_TERMINAL}
+                FOR UPDATE
+            """), scope)
+            if eligible.scalar_one_or_none() is None:
+                return None
+            if not await PostgresConversationRepository.lock_matching_submission_draft(
+                session, tenant_id=scope["tenant"], user_id=scope["owner"],
+                conversation_id=scope["conversation"], revision=revision,
+                submitted_text=submitted_text, attachment_references=selected,
+            ):
+                return None
+            # Do not rewrite the retained text or references. An unresolved
+            # conversation run still owns its fence. A concurrent admission
+            # of the old revision must subsequently fail the exact draft lock;
+            # admission of the new revision still uses the unique run ledger.
+            advanced = await session.execute(text(f"""
+                UPDATE public.conversation_composer_drafts d
+                SET revision = d.revision + 1, updated_at = clock_timestamp()
+                WHERE d.tenant_id = CAST(:tenant AS uuid)
+                  AND d.user_id = CAST(:owner AS uuid)
+                  AND d.conversation_id = CAST(:conversation AS uuid)
+                  AND d.revision = :revision
+                  AND {_DRAFT_RETRY_NO_UNRESOLVED}
+                RETURNING revision
+            """), scope)
+            result = advanced.scalar_one_or_none()
+            return int(result) if result is not None else None
 
     async def read_status(
         self, *, tenant_id: str, user_id: str, conversation_id: str,
