@@ -67,7 +67,7 @@ async def test_name_recall_sql_scopes_consent_active_facts_and_target(monkeypatc
     assert "preferred_name" in values
     assert tenant_id in values
     assert user_id in values
-    assert 1 in values
+    assert session.statement._limit_clause.value == 2
 
 
 @pytest.mark.asyncio
@@ -85,3 +85,43 @@ async def test_profile_recall_invalid_identity_does_not_query_database(monkeypat
         top_k=1,
     )
     assert await profile_retriever.PostgresProfileRecallRetriever().recall(query) == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("size, mismatch, expected_count, complete", [
+    (0, False, 0, True),
+    (1, False, 1, True),
+    (2, False, 1, False),
+    (1, True, 0, False),
+    (2, True, 0, False),
+])
+async def test_profile_source_receipt_is_measured_before_filtering(
+    monkeypatch, size, mismatch, expected_count, complete,
+):
+    from ai_karen_engine.core.memory.types import MemoryEntry, RecallCandidateBatch
+
+    row = SimpleNamespace(source_type="chat_user", source_ref="source")
+    rows = [(row, "other" if mismatch else "chat_user", "source")] * size
+
+    class Session:
+        async def execute(self, statement):
+            assert statement._limit_clause.value == 2
+            return SimpleNamespace(all=lambda: rows)
+
+    @asynccontextmanager
+    async def scoped_session(*, tenant_id):
+        yield Session()
+
+    monkeypatch.setattr(profile_retriever, "async_transaction_scope", scoped_session)
+    monkeypatch.setattr(
+        profile_retriever.PostgresProfileRecallRetriever, "_entry",
+        staticmethod(lambda *args: MemoryEntry(id="fact", content="preferred_name: Alice")),
+    )
+    query = SimpleNamespace(
+        text="What's my name?", tenant_id=str(uuid.uuid4()),
+        user_id=str(uuid.uuid4()), top_k=1,
+    )
+    result = await profile_retriever.PostgresProfileRecallRetriever().recall(query)
+    assert isinstance(result, RecallCandidateBatch)
+    assert len(result) == expected_count
+    assert result.complete is complete

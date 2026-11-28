@@ -7,3 +7,5 @@ langchain-core
 croniter
 tzdata
 psutil
+# Real Supabase Storage SDK signing and origin-bound transport proof.
+supabase==2.32.0

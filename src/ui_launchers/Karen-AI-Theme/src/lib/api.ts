@@ -617,6 +617,7 @@ class ApiClient {
     responseKind: 'json' | 'blob' = 'json',
     principalScope?: ApiPrincipalScope,
     boundedWait = false,
+    maxResponseBytes?: number,
   ): Promise<T> {
     const assertScope = () => {
       if (boundedWait && init.signal?.aborted) throw new DOMException('Request cancelled', 'AbortError');
@@ -684,6 +685,36 @@ class ApiClient {
       assertScope();
       // Settle the bounded transport only after the complete response has
       // been consumed. Never parse or expose denial details to the caller.
+      if (maxResponseBytes !== undefined) {
+        if (!response.ok || !response.body) {
+          await response.body?.cancel().catch(() => {});
+          assertScope();
+          throw new ApiError(response.status, 'Private read unavailable');
+        }
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder('utf-8', { fatal: true });
+        let bytes = 0;
+        let body = '';
+        try {
+          while (true) {
+            assertScope();
+            const chunk = await reader.read();
+            assertScope();
+            if (chunk.done) break;
+            bytes += chunk.value.byteLength;
+            if (bytes > maxResponseBytes) throw new Error('Private response exceeds its byte bound');
+            body += decoder.decode(chunk.value, { stream: true });
+          }
+          body += decoder.decode();
+          assertScope();
+          return JSON.parse(body) as T;
+        } catch (error) {
+          await reader.cancel().catch(() => {});
+          throw error;
+        } finally {
+          reader.releaseLock();
+        }
+      }
       const text = await response.text();
       assertScope();
       if (!response.ok) throw new ApiError(response.status, 'Inbox invalidation unavailable');
@@ -933,6 +964,23 @@ class ApiClient {
 
   async get<T>(endpoint: string, principalScope?: ApiPrincipalScope): Promise<T> {
     return this.request<T>(endpoint, {}, false, 'json', principalScope);
+  }
+
+  /** Explicit private read: no refresh/retry/fallback, and fence the original principal. */
+  async readHistoricalAttachmentText(
+    threadId: string, messageId: string, ordinal: number,
+    principalScope: ApiPrincipalScope, signal: AbortSignal,
+  ): Promise<unknown> {
+    const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
+    if (!this.isBrowser() || !principalScope || !signal ||
+        !uuid.test(threadId) || !uuid.test(messageId) ||
+        !Number.isInteger(ordinal) || ordinal < 1 || ordinal > 12) {
+      throw new Error('Invalid historical attachment request');
+    }
+    return this.request<unknown>(
+      '/api/artifacts/history/' + threadId + '/' + messageId + '/' + ordinal + '/text',
+      { method: 'GET', signal }, false, 'json', principalScope, true, 400 * 1024,
+    );
   }
 
   async waitForInboxInvalidation(principalScope: ApiPrincipalScope, signal: AbortSignal): Promise<unknown> {

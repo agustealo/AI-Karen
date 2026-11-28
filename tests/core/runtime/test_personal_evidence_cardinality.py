@@ -261,3 +261,18 @@ def test_saved_set_agrees_with_multiple_authenticated_conversation_members():
     assert "Nina Simone" not in answer
     assert meta["evidence_sufficiency"] == "ambiguous"
     assert meta["evidence_reason"] == "set_correction_requires_reconciliation"
+
+
+def test_partial_profile_retrieval_cannot_certify_saved_set():
+    ctx = context(trusted_set("Bob Marley"))
+    ctx.metadata = {
+        "memory_recall_status": "degraded", "memory_degraded": True,
+        "memory_retrieval_health": {"source_health": [
+            {"retriever": "PostgresProfileRecallRetriever", "status": "timeout"},
+            {"retriever": "PostgresRecallRetriever", "status": "success"},
+        ]},
+    }
+    result = check(ctx)
+    assert result.status is EvidenceSufficiencyStatus.AMBIGUOUS
+    assert result.reason == "incomplete_memory_retrieval"
+    assert not result.may_assert and not result.values

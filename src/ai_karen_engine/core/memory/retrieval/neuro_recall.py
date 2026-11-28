@@ -22,7 +22,7 @@ from ai_karen_engine.core.memory.neuro import (
     evaluate_guardrails,
 )
 from ai_karen_engine.core.memory.neuro.scoring import blended_score
-from ai_karen_engine.core.memory.types import MemoryEntry, MemoryQuery
+from ai_karen_engine.core.memory.types import MemoryEntry, MemoryQuery, RecallCandidateBatch
 
 logger = get_logger(__name__)
 
@@ -220,6 +220,8 @@ class NeuroRecall:
                 continue
             source_health.append({
                 **source, "status": "success", "candidate_count": len(value),
+                **({"candidate_batch_complete": value.complete}
+                   if isinstance(value, RecallCandidateBatch) else {}),
             })
             raw_candidates.extend(value)
 

@@ -331,6 +331,9 @@ jobs:
           assert report["identity_isolation"] == "passed"
           assert report["session_isolation"] == "passed"
           assert report["revocation"] == "event_derived_redis_and_graph_denied"
+          assert report["delayed_stm_publication"] in (
+              "stale_cache_recall_denied", "publication_denied",
+          )
           assert report["checked_out_after_cleanup"] == 0
           print("Real Redis/graph/PostgreSQL composition evidence validated.")
           PY
