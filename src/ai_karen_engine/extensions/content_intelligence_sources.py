@@ -86,7 +86,7 @@ def _validate_source_operation(
 
 
 def runtime_content_operation_digest(
-    references: list[dict[str, str]], operation: dict[str, Any],
+    references: list[dict[str, str]], operation: Any,
 ) -> str:
     """Bind a validated operation and its arguments without publishing private query text."""
     if not isinstance(operation, dict):
