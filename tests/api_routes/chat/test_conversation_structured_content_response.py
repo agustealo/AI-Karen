@@ -228,3 +228,17 @@ async def test_owned_conversation_response_fences_legacy_code_but_keeps_safe_pro
         tenant_id="tenant-a", user_ctx={"user_id": "owner"},
     )
     assert "REVOKED_SOURCE_SENTINEL" not in result.model_dump_json()
+
+
+
+def test_legacy_message_dto_withholds_private_completed_receipts():
+    metadata = {
+        "verified_attachment_receipt_v1": {"references": [{"source_id": "PRIVATE_REFERENCE_SENTINEL"}]},
+        "verified_citation_receipt_v1": {"request_id": "PRIVATE_CITATION_SENTINEL"},
+        "actual_provider": "local",
+    }
+    response = _canonical_message_to_response(message_with_metadata(metadata))
+    assert response.metadata == {"actual_provider": "local"}
+    assert "PRIVATE_REFERENCE_SENTINEL" not in response.model_dump_json()
+    assert "PRIVATE_CITATION_SENTINEL" not in response.model_dump_json()
+    assert len(metadata) == 3
