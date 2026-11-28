@@ -141,6 +141,10 @@ class ProviderRegistryService:
             provider_id: object() for provider_id in self._provider_endpoints
         }
 
+        # Effective HTTP destination is part of the existing registration
+        # identity, not a second health cache. Never expose these URLs.
+        self._health_registration_destinations: Dict[str, Optional[str]] = {}
+
         # Canonical health state owner — no dependency on integrations routing
         from ai_karen_engine.core.model_runtime.provider_health_monitor import (
             ProviderHealthMonitor,
@@ -149,6 +153,8 @@ class ProviderRegistryService:
         self.llm_router = None
 
         self._lock = threading.RLock()
+        for provider_id in self._provider_endpoints:
+            self.refresh_endpoint_health_identity(provider_id)
         self._fallback_chains: Dict[str, FallbackChain] = {}
         self._provider_status_cache: Dict[str, ProviderStatus] = {}
         self._cache_ttl = 60  # 1 minute cache TTL
@@ -396,12 +402,35 @@ class ProviderRegistryService:
                 # different server/model configuration sharing its ID.
                 self.health_monitor.invalidate_provider(endpoint.provider_id)
                 self._health_registrations[endpoint.provider_id] = object()
+                self._health_registration_destinations.pop(endpoint.provider_id, None)
             self._provider_endpoints[endpoint.provider_id] = endpoint
+            self.refresh_endpoint_health_identity(endpoint.provider_id)
             self._update_provider_status(
                 endpoint.provider_id,
                 self._endpoint_to_capabilities(endpoint),
                 bool(endpoint.api_key_env),
             )
+
+    def refresh_endpoint_health_identity(self, provider_id: str) -> None:
+        """Retire health and registration evidence on observed HTTP destination drift.
+
+        Use the same effective URL resolver as transport. This does not read
+        provider health or perform network I/O, including when called by the
+        monitor. Environment changes that are never observed cannot be fenced.
+        """
+        with self._lock:
+            endpoint = self._provider_endpoints.get(provider_id)
+            if endpoint is None or endpoint.protocol is not EndpointProtocol.OPENAI_COMPATIBLE:
+                return
+            from ai_karen_engine.core.model_runtime.provider_execution import _resolve_base_url
+
+            destination = _resolve_base_url(endpoint)
+            if provider_id in self._health_registration_destinations and (
+                self._health_registration_destinations[provider_id] != destination
+            ):
+                self.health_monitor.invalidate_provider(provider_id)
+                self._health_registrations[provider_id] = object()
+            self._health_registration_destinations[provider_id] = destination
 
     def capture_endpoint_registration(self, endpoint: ProviderEndpoint) -> Optional[object]:
         """Read opaque registration identity; never grant execution or health publication."""
@@ -411,6 +440,7 @@ class ProviderRegistryService:
                 or self.get_provider_endpoint(endpoint.provider_id) != endpoint
             ):
                 return None
+            self.refresh_endpoint_health_identity(endpoint.provider_id)
             return self._health_registrations.get(endpoint.provider_id)
 
     def capture_endpoint_health_registration(
@@ -423,11 +453,10 @@ class ProviderRegistryService:
             registration = self.capture_endpoint_registration(endpoint)
             if registration is None:
                 return None
-            if wire_base_url is not None:
-                from ai_karen_engine.core.model_runtime.provider_execution import _resolve_base_url
-
-                if _resolve_base_url(endpoint) != wire_base_url:
-                    return None
+            if wire_base_url is not None and (
+                self._health_registration_destinations.get(endpoint.provider_id) != wire_base_url
+            ):
+                return None
             return registration
 
     def publish_endpoint_health(
@@ -633,6 +662,7 @@ class ProviderRegistryService:
             if existing is not None and existing.metadata.get(
                 "configuration_owner"
             ) != "llm_provider_config":
+                self.refresh_endpoint_health_identity(provider_id)
                 return existing
 
             try:
@@ -648,11 +678,14 @@ class ProviderRegistryService:
                 if existing is not None:
                     self._provider_endpoints.pop(provider_id, None)
                     self._health_registrations.pop(provider_id, None)
+                    self._health_registration_destinations.pop(provider_id, None)
                     self._provider_status_cache.pop(provider_id, None)
                     self.health_monitor.invalidate_provider(provider_id)
                 return None
             if existing != configured:
                 self.register_provider_endpoint(configured)
+            else:
+                self.refresh_endpoint_health_identity(provider_id)
             return configured
 
     def list_provider_endpoints(self) -> List[ProviderEndpoint]:

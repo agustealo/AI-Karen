@@ -266,6 +266,15 @@ class ProviderHealthMonitor:
         Returns a ProviderHealthInfo with UNKNOWN status if not yet checked.
         """
         provider_key = self._provider_key(provider_id)
+        self._refresh_health_identity(provider_key)
+        return self._read_cached_provider_health(provider_key)
+
+    def _refresh_health_identity(self, provider_key: str) -> None:
+        refresh = getattr(self._registry, "refresh_endpoint_health_identity", None)
+        if callable(refresh):
+            refresh(provider_key)
+
+    def _read_cached_provider_health(self, provider_key: str) -> ProviderHealthInfo:
         cached = self._health_cache.get(provider_key)
         if cached is not None:
             cache_age = (
@@ -307,7 +316,10 @@ class ProviderHealthMonitor:
 
         # An expired snapshot is UNKNOWN to readers. A fresh observation
         # must not silently suppress a transition from that visible state.
-        prev_status = self.get_provider_health(provider_key).health_status
+        # Registry-fenced publication has already admitted the observation.
+        # Do not advance the destination generation between that check and
+        # this write. Subsequent reads retire a now-superseded observation.
+        prev_status = self._read_cached_provider_health(provider_key).health_status
 
         if is_healthy:
             health_info.health_status = HealthStatus.HEALTHY
@@ -536,6 +548,8 @@ class ProviderHealthMonitor:
 
     def get_cache_stats(self) -> Dict[str, Any]:
         """Get statistics about the health cache."""
+        for provider_key in tuple(self._health_cache):
+            self._refresh_health_identity(provider_key)
         now = datetime.utcnow()
         stats: Dict[str, Any] = {
             "total_providers": len(self._health_cache),
@@ -548,7 +562,7 @@ class ProviderHealthMonitor:
         }
 
         response_times: List[float] = []
-        for provider_name, info in self._health_cache.items():
+        for provider_name, info in tuple(self._health_cache.items()):
             if info.health_status == HealthStatus.HEALTHY:
                 stats["healthy_count"] += 1
             elif info.health_status == HealthStatus.DEGRADED:

@@ -556,3 +556,85 @@ def test_wire_destination_rechecked_inside_registry_publication(monkeypatch):
     )
     assert original(endpoint, fresh, is_healthy=True, response_time=0.1, wire_base_url=new_url)
     assert monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.HEALTHY
+
+
+
+@pytest.mark.parametrize("success", [True, False])
+@pytest.mark.parametrize("reader", ["monitor", "snapshot", "aggregate", "cache_stats", "registry"])
+def test_observed_destination_drift_retires_cached_health_and_registration(monkeypatch, success, reader):
+    old_url = "http://localhost:11434/v1"
+    new_url = "http://localhost:11435/v1"
+    monkeypatch.setenv("OLLAMA_BASE_URL", old_url)
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    monitor = registry.health_monitor
+    token = monitor.capture_endpoint_registration(endpoint, wire_base_url=old_url)
+    assert token is not None
+    for _ in range(5):
+        assert monitor.record_shared_http_execution(
+            endpoint, transport="text", outcome="success" if success else "http_server_error",
+            response_time=0.1, registration=token, wire_base_url=old_url,
+        )
+    assert monitor.get_provider_health(endpoint.provider_id).health_status is (
+        HealthStatus.HEALTHY if success else HealthStatus.UNHEALTHY
+    )
+    monitor.record_provider_interaction("lmstudio-desktop", success=True)
+    other = monitor.get_provider_health("lmstudio-desktop")
+    monkeypatch.setenv("OLLAMA_BASE_URL", new_url)
+    if reader == "monitor":
+        assert monitor.get_provider_health("ollama").health_status is HealthStatus.UNKNOWN
+    elif reader == "snapshot":
+        assert registry.get_provider_health_snapshot(endpoint.provider_id)["status"] == "unknown"
+    elif reader == "aggregate":
+        assert monitor.get_all_provider_health()[endpoint.provider_id].health_status is HealthStatus.UNKNOWN
+    elif reader == "cache_stats":
+        assert monitor.get_cache_stats()["total_providers"] == 1
+    else:
+        assert registry.get_provider_endpoint(endpoint.provider_id) == endpoint
+
+    info = monitor.get_provider_health(endpoint.provider_id)
+    assert info.health_status is HealthStatus.UNKNOWN
+    assert info.last_checked_at is None and info.latency_ms is None
+    assert info.consecutive_failures == 0
+    assert monitor.get_provider_health("lmstudio-desktop") is other
+    new_token = monitor.capture_endpoint_registration(endpoint, wire_base_url=new_url)
+    assert new_token is not None and new_token is not token
+    assert not monitor.record_shared_http_execution(
+        endpoint, transport="text", outcome="success", response_time=0.1,
+        registration=token, wire_base_url=old_url,
+    )
+    # Observed ABA cannot revive the original token or its cached health.
+    monkeypatch.setenv("OLLAMA_BASE_URL", old_url)
+    fresh = monitor.capture_endpoint_registration(endpoint, wire_base_url=old_url)
+    assert fresh is not None and fresh is not token and fresh is not new_token
+    assert not monitor.record_shared_http_execution(
+        endpoint, transport="text", outcome="success", response_time=0.1,
+        registration=token, wire_base_url=old_url,
+    )
+    assert monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.UNKNOWN
+    assert monitor.record_shared_http_execution(
+        endpoint, transport="text", outcome="http_server_error", response_time=0.2,
+        registration=fresh, wire_base_url=old_url,
+    )
+    info = monitor.get_provider_health(endpoint.provider_id)
+    assert info.health_status is HealthStatus.DEGRADED
+    assert info.consecutive_failures == 1
+
+
+def test_equivalent_effective_destination_preserves_health_generation(monkeypatch):
+    url = "http://localhost:11434/v1"
+    monkeypatch.setenv("OLLAMA_BASE_URL", url)
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    monitor = registry.health_monitor
+    token = monitor.capture_endpoint_registration(endpoint, wire_base_url=url)
+    assert token is not None
+    assert monitor.record_shared_http_execution(
+        endpoint, transport="sse", outcome="success", response_time=0.1,
+        registration=token, wire_base_url=url,
+    )
+    monkeypatch.setenv("OLLAMA_BASE_URL", url + "/")
+    assert monitor.capture_endpoint_registration(endpoint, wire_base_url=url) is token
+    assert monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.HEALTHY
