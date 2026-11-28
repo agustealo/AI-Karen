@@ -199,6 +199,58 @@ async def test_execute_success_with_matching_authorized_plan():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "code", "detail"),
+    [
+        ("input", "invalid_input", "Extension input failed schema validation"),
+        ("output", "invalid_output", "Extension output failed schema validation"),
+        ("handler", "execution_error", "Extension handler failed"),
+        ("typed", "extension_error", "Extension handler failed"),
+    ],
+)
+async def test_payload_diagnostics_do_not_escape_executor(failure, code, detail, caplog):
+    from ai_karen_engine.extensions.errors import ExtensionError
+
+    private_marker = "private-document-diagnostic-marker"
+    audit = []
+
+    class DiagnosticHandler(FakeHandler):
+        async def execute(self, payload, context):
+            self.calls += 1
+            if failure == "handler":
+                raise RuntimeError(private_marker)
+            if failure == "typed":
+                raise ExtensionError(private_marker)
+            return {"echo": "hello", private_marker: "private"}
+
+    handler = DiagnosticHandler()
+    manifest = _manifest()
+    manifest.input_schema["additionalProperties"] = False
+    manifest.output_schema["additionalProperties"] = False
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(handler=handler, manifest=manifest),
+        lifecycle=FakeLifecycle(),
+        audit_sink=audit.append,
+    )
+    request = _request(plan=_plan())
+    if failure == "input":
+        request.payload[private_marker] = "private"
+    with caplog.at_level("INFO"):
+        result = await service.execute(request)
+
+    assert result.status == "failed"
+    assert result.error_code == code
+    assert result.error_detail == detail
+    assert result.payload is None
+    assert handler.calls == (0 if failure == "input" else 1)
+    assert audit[-1]["error_code"] == code
+    assert audit[-1]["detail"] == detail
+    assert private_marker not in repr(audit)
+    assert private_marker not in caplog.text
+    assert private_marker not in repr(result)
+
+
+@pytest.mark.asyncio
 async def test_missing_authorized_plan_denied_before_handler():
     handler = FakeHandler()
     service = ExtensionExecutionService(
@@ -621,3 +673,87 @@ async def test_executor_rejects_runtime_authority_for_unrelated_plugin(monkeypat
     result = await service.execute(_request(plan=plan))
     assert result.error_code == "extension_runtime_authority_invalid"
     assert handler.calls == 0
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario,expected_code,expected_calls,expected_timeout",
+    [
+        ("unstarted", "budget_exhausted", 0, None),
+        ("expired_before", "budget_exhausted", 0, None),
+        ("expired_after", "budget_exhausted", 1, 2.0),
+        ("valid", None, 1, 2.0),
+        ("shorter_override", None, 1, 1.0),
+        ("authority_changed", "extension_runtime_authority_invalid", 1, 2.0),
+    ],
+)
+async def test_runtime_bound_extension_uses_original_deadline(
+    monkeypatch, scenario, expected_code, expected_calls, expected_timeout,
+):
+    import asyncio
+    from dataclasses import replace
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+    class SearchRegistry(FakeRegistry):
+        def get(self, plugin_id):
+            return super().get("echo") if plugin_id == "intelligent-search" else None
+
+    handler = FakeHandler()
+    plan = _plan(allowed_plugins=["intelligent-search"])
+    meter = ExecutionBudgetMeter(plan.budget)
+    context = _context()
+    runtime_context = ChatExecutionContext(
+        user_id=context.user_id, tenant_id=context.tenant_id,
+        session_id=context.session_id, correlation_id=context.correlation_id,
+        request_id="chat-request",
+    )
+    context = replace(context, conversation_id=runtime_context.conversation_id)
+    active = True
+    monkeypatch.setattr(
+        ChatExecutionContext, "is_runtime_model_plan_authorized",
+        lambda self, p, m: active and self is runtime_context and p is plan and m is meter,
+    )
+    context.bind_runtime_authority(runtime_context, plan, meter, "intelligent-search")
+    if scenario != "unstarted":
+        assert await meter.reserve_tool_call()
+        readings = iter({
+            "expired_before": [0.0],
+            "expired_after": [2000.0, 0.0],
+            "valid": [2000.0, 1000.0],
+            "shorter_override": [2000.0, 1000.0],
+            "authority_changed": [2000.0, 1000.0],
+        }[scenario])
+
+        async def remaining():
+            nonlocal active
+            if scenario == "authority_changed" and handler.calls:
+                active = False
+            return next(readings)
+
+        monkeypatch.setattr(meter, "remaining_admitted_duration_ms", remaining)
+
+    original_wait_for = asyncio.wait_for
+    timeouts = []
+
+    async def observe_timeout(awaitable, timeout):
+        timeouts.append(timeout)
+        return await original_wait_for(awaitable, timeout)
+
+    monkeypatch.setattr(asyncio, "wait_for", observe_timeout)
+    manifest = _manifest().model_copy(update={"id": "intelligent-search"})
+    service = ExtensionExecutionService(
+        registry=SearchRegistry(handler=handler, manifest=manifest),
+        lifecycle=FakeLifecycle(),
+    )
+    request = replace(
+        _request(plan=plan, context=context), plugin_id="intelligent-search",
+        timeout_override_ms=1000 if scenario == "shorter_override" else 10000,
+    )
+    result = await service.execute(request)
+    assert result.error_code == expected_code
+    assert result.status == ("success" if expected_code is None else "failed")
+    if expected_code is not None:
+        assert result.payload is None
+    assert handler.calls == expected_calls
+    assert timeouts == ([] if expected_timeout is None else [expected_timeout])
+    assert meter.tool_calls == (0 if scenario == "unstarted" else 1)

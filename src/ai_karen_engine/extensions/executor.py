@@ -384,7 +384,7 @@ class ExtensionExecutionService:
                 start,
                 execution_id,
                 "invalid_input",
-                "; ".join(input_errors),
+                "Extension input failed schema validation",
                 trust_tier,
                 result_trust,
                 data_classification,
@@ -474,18 +474,26 @@ class ExtensionExecutionService:
             )
 
         timeout_ms = self._get_timeout(request, manifest, capability_obj)
-        try:
-            if runtime_authority is not None:
-                current_authority = context.runtime_authority(plugin_id)
-                if current_authority is None or current_authority[0] is not plan or current_authority[1] is not runtime_authority[1]:
-                    raise PermissionError("extension_runtime_authority_invalid")
-        except PermissionError:
-            return self._fail_with_provenance(
-                request, start, execution_id,
-                "extension_runtime_authority_invalid",
-                "Extension runtime authority changed before invocation",
-                trust_tier, result_trust, data_classification,
-            )
+        if runtime_authority is not None:
+            try:
+                remaining_ms = await self._remaining_runtime_duration_ms(
+                    context, plugin_id, runtime_authority,
+                )
+            except PermissionError:
+                return self._fail_with_provenance(
+                    request, start, execution_id,
+                    "extension_runtime_authority_invalid",
+                    "Extension runtime authority changed",
+                    trust_tier, result_trust, data_classification,
+                )
+            if remaining_ms <= 0:
+                return self._fail_with_provenance(
+                    request, start, execution_id,
+                    "budget_exhausted",
+                    "Original execution deadline exhausted",
+                    trust_tier, result_trust, data_classification,
+                )
+            timeout_ms = min(timeout_ms, remaining_ms)
         try:
             raw_result = await asyncio.wait_for(
                 self._invoke(handler, request), timeout=timeout_ms / 1000.0
@@ -508,18 +516,18 @@ class ExtensionExecutionService:
                 start,
                 execution_id,
                 exc.error_code,
-                str(exc),
+                "Extension handler failed",
                 trust_tier,
                 result_trust,
                 data_classification,
             )
-        except Exception as exc:
+        except Exception:
             return self._fail_with_provenance(
                 request,
                 start,
                 execution_id,
                 "execution_error",
-                str(exc),
+                "Extension handler failed",
                 trust_tier,
                 result_trust,
                 data_classification,
@@ -532,11 +540,33 @@ class ExtensionExecutionService:
                 start,
                 execution_id,
                 "invalid_output",
-                "; ".join(output_errors),
+                "Extension output failed schema validation",
                 trust_tier,
                 result_trust,
                 data_classification,
             )
+
+        # A cancellation-resistant handler can return after wait_for's deadline.
+        # Recheck the original grant and clock before publishing any success.
+        if runtime_authority is not None:
+            try:
+                remaining_ms = await self._remaining_runtime_duration_ms(
+                    context, plugin_id, runtime_authority,
+                )
+            except PermissionError:
+                return self._fail_with_provenance(
+                    request, start, execution_id,
+                    "extension_runtime_authority_invalid",
+                    "Extension runtime authority changed",
+                    trust_tier, result_trust, data_classification,
+                )
+            if remaining_ms <= 0:
+                return self._fail_with_provenance(
+                    request, start, execution_id,
+                    "budget_exhausted",
+                    "Original execution deadline exhausted",
+                    trust_tier, result_trust, data_classification,
+                )
 
         latency_ms = (time.perf_counter() - start) * 1000.0
 
@@ -604,6 +634,18 @@ class ExtensionExecutionService:
         if capability and capability.required_permissions:
             return capability.required_permissions
         return manifest.required_permissions
+
+    @staticmethod
+    async def _remaining_runtime_duration_ms(
+        context: ExtensionExecutionContext, plugin_id: str,
+        authority: tuple[Any, Any],
+    ) -> int:
+        """Read the already-admitted clock without renewing it or reserving again."""
+        remaining = await authority[1].remaining_admitted_duration_ms()
+        current = context.runtime_authority(plugin_id)
+        if current is None or current[0] is not authority[0] or current[1] is not authority[1]:
+            raise PermissionError("extension_runtime_authority_invalid")
+        return max(0, int(remaining))
 
     def _get_timeout(self, request: ExtensionExecutionRequest, manifest: ExtensionManifest, capability: Optional[ExtensionCapability]) -> int:
         """Get timeout preferring request override over capability and manifest defaults."""

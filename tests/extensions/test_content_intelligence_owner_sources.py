@@ -503,3 +503,24 @@ async def test_standalone_scope_change_cannot_continue_owner_access(boundary, sc
     assert [kind for kind, _ in kernel.calls] == (
         ["admit", "execute"] if boundary == "execution" else ["admit"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,options,error", [
+    ("unknown", {}, "operation_invalid"),
+    ("search", {}, "query_invalid"),
+    ("search", {"query": " "}, "query_invalid"),
+    ("search", {"query": "x" * 513}, "query_invalid"),
+    ("analyze", {"query": "vendor"}, "unused_query"),
+    ("compare", {"left_id": FILE_ID, "right_id": FILE_ID}, "comparison_invalid"),
+    ("analyze", {"left_id": FILE_ID}, "unused_selection"),
+])
+async def test_invalid_operation_shape_denied_before_admission(operation, options, error):
+    store, kernel = Store(), Kernel()
+    with pytest.raises(ValueError, match=error):
+        await ContentSourceHost(store=store, kernel=kernel).execute_owner_text(
+            context=context(), plan=plan(), operation=operation, references=REFS,
+            **options,
+        )
+    assert not store.calls
+    assert not kernel.calls

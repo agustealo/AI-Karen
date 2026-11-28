@@ -48,6 +48,158 @@ def _sha(value: Any) -> bool:
     )
 
 
+def _validate_source_operation(
+    operation: str, references: list[dict[str, str]], *,
+    query: str | None, left_id: str | None, right_id: str | None,
+) -> list[tuple[str, str]]:
+    """Validate operation shape and pin selection before any await."""
+    if operation not in {"analyze", "search", "compare"}:
+        raise ValueError("content_source_operation_invalid")
+    if not isinstance(references, list) or not 1 <= len(references) <= MAX_CONTENT_SOURCE_REFERENCES:
+        raise ValueError("content_source_count_invalid")
+    ids: set[str] = set()
+    selection: list[tuple[str, str]] = []
+    for ref in references:
+        if (
+            not isinstance(ref, dict)
+            or set(ref) != {"source_id", "revision"}
+            or not _uuid(ref["source_id"])
+            or not _sha(ref["revision"])
+            or ref["source_id"] in ids
+        ):
+            raise PermissionError("content_source_reference_invalid")
+        ids.add(ref["source_id"])
+        selection.append((ref["source_id"], ref["revision"]))
+    if operation == "search":
+        if not isinstance(query, str) or not 1 <= len(query.strip()) <= 512:
+            raise ValueError("content_source_query_invalid")
+    elif query is not None:
+        raise ValueError("content_source_unused_query")
+    if operation == "compare":
+        if left_id not in ids or right_id not in ids or left_id == right_id:
+            raise ValueError("content_source_comparison_invalid")
+    elif left_id is not None or right_id is not None:
+        raise ValueError("content_source_unused_selection")
+    return selection
+
+
+def _snapshot_source_documents(
+    documents: list[dict[str, str]],
+) -> dict[str, dict[str, Any]]:
+    """Detach lineage evidence from mutable handler input."""
+    # Freeze authorization evidence before invoking the mutable plugin
+    # kernel. A handler may replace its input document fields in place;
+    # that must never redefine which source/revision was authorized.
+    return {
+        document["id"]: {
+            "name": document["name"],
+            "sha256": hashlib.sha256(document["text"].encode("utf-8")).hexdigest(),
+            "characters": len(document["text"]),
+            "text": document["text"],
+        }
+        for document in documents
+    }
+
+
+def _validate_source_output(
+    output: Any, *, operation: str, authorized: dict[str, dict[str, Any]],
+    query: str | None, left_id: str | None, right_id: str | None,
+) -> dict[str, Any]:
+    """Validate source lineage, not independent analytical correctness."""
+    if (
+        not isinstance(output, dict)
+        or output.get("operation") != operation
+        or output.get("persisted") is not False
+    ):
+        raise RuntimeError("content_source_output_invalid")
+
+    # Kernel status is not source-lineage evidence. Check the returned
+    # reference identities against the bytes already authorized and read.
+    # No output may add, substitute or re-label an owner source.
+    if operation == "analyze":
+        analyzed = output.get("documents")
+        if not isinstance(analyzed, list) or len(analyzed) != len(authorized):
+            raise RuntimeError("content_source_output_invalid")
+        returned_ids: set[str] = set()
+        for item in analyzed:
+            if not isinstance(item, dict):
+                raise RuntimeError("content_source_output_invalid")
+            identifier = item.get("id")
+            original = authorized.get(identifier) if isinstance(identifier, str) else None
+            if (
+                original is None or identifier in returned_ids
+                or item.get("name") != original["name"]
+                # Owner-text admission never authorizes a folder. The
+                # canonical engine emits null; non-null labels are forged.
+                or item.get("folder_id") is not None
+                or item.get("sha256") != original["sha256"]
+                or type(item.get("characters")) is not int
+                or item["characters"] != original["characters"]
+                or not isinstance(item.get("top_terms"), list)
+                or len(item["top_terms"]) > 12
+                or any(
+                    not isinstance(term, dict)
+                    or not isinstance(term.get("term"), str)
+                    or not term["term"]
+                    or type(term.get("count")) is not int
+                    or term["count"] < 1
+                    for term in item["top_terms"]
+                )
+            ):
+                raise RuntimeError("content_source_output_invalid")
+            returned_ids.add(identifier)
+        # The analysis engine may return document-pair relationships.
+        # Validate every embedded source reference against the same
+        # pre-kernel authorized snapshot used for document receipts.
+        relationships = output.get("relationships", [])
+        if not isinstance(relationships, list) or len(relationships) > 66:
+            raise RuntimeError("content_source_output_invalid")
+        for relationship in relationships:
+            if (
+                not isinstance(relationship, dict)
+                or not isinstance(relationship.get("left_id"), str)
+                or not isinstance(relationship.get("right_id"), str)
+                or relationship["left_id"] not in authorized
+                or relationship["right_id"] not in authorized
+                or relationship["left_id"] == relationship["right_id"]
+            ):
+                raise RuntimeError("content_source_output_invalid")
+    elif operation == "compare":
+        if (
+            output.get("left_id") != left_id
+            or output.get("right_id") != right_id
+            or output.get("left_sha256") != authorized[left_id]["sha256"]
+            or output.get("right_sha256") != authorized[right_id]["sha256"]
+        ):
+            raise RuntimeError("content_source_output_invalid")
+    else:
+        matches = output.get("matches")
+        if (
+            output.get("query") != query
+            or not isinstance(matches, list)
+            or len(matches) > 12
+        ):
+            raise RuntimeError("content_source_output_invalid")
+        for hit in matches:
+            if not isinstance(hit, dict):
+                raise RuntimeError("content_source_output_invalid")
+            identifier = hit.get("document_id")
+            original = authorized.get(identifier) if isinstance(identifier, str) else None
+            start, end, excerpt = hit.get("offset"), hit.get("end_offset"), hit.get("excerpt")
+            if (
+                original is None
+                or hit.get("document_name") != original["name"]
+                or hit.get("folder_id") is not None
+                or hit.get("sha256") != original["sha256"]
+                or type(start) is not int
+                or type(end) is not int
+                or not 0 <= start < end <= original["characters"]
+                or excerpt != original["text"][start:end]
+            ):
+                raise RuntimeError("content_source_output_invalid")
+    return output
+
+
 class ContentSourceHost:
     """Bridge a trusted authorized plan to the existing owner-text repository."""
 
@@ -114,33 +266,9 @@ class ContentSourceHost:
         references: list[dict[str, str]], query: str | None = None,
         left_id: str | None = None, right_id: str | None = None,
     ) -> dict[str, Any]:
-        if operation not in {"analyze", "search", "compare"}:
-            raise ValueError("content_source_operation_invalid")
-        if not isinstance(references, list) or not 1 <= len(references) <= MAX_CONTENT_SOURCE_REFERENCES:
-            raise ValueError("content_source_count_invalid")
-        ids: set[str] = set()
-        selection: list[tuple[str, str]] = []
-        for ref in references:
-            if (
-                not isinstance(ref, dict)
-                or set(ref) != {"source_id", "revision"}
-                or not _uuid(ref["source_id"])
-                or not _sha(ref["revision"])
-                or ref["source_id"] in ids
-            ):
-                raise PermissionError("content_source_reference_invalid")
-            ids.add(ref["source_id"])
-            selection.append((ref["source_id"], ref["revision"]))
-        if operation == "search":
-            if not isinstance(query, str) or not 1 <= len(query.strip()) <= 512:
-                raise ValueError("content_source_query_invalid")
-        elif query is not None:
-            raise ValueError("content_source_unused_query")
-        if operation == "compare":
-            if left_id not in ids or right_id not in ids or left_id == right_id:
-                raise ValueError("content_source_comparison_invalid")
-        elif left_id is not None or right_id is not None:
-            raise ValueError("content_source_unused_selection")
+        selection = _validate_source_operation(
+            operation, references, query=query, left_id=left_id, right_id=right_id,
+        )
 
         await self.admit_owner_access(kernel=self._kernel, context=context, plan=plan)
         documents: list[dict[str, str]] = []
@@ -176,18 +304,7 @@ class ContentSourceHost:
                 "id": source_id, "name": artifact.filename,
                 "text": artifact.text,
             })
-        # Freeze authorization evidence before invoking the mutable plugin
-        # kernel. A handler may replace its input document fields in place;
-        # that must never redefine which source/revision was authorized.
-        authorized = {
-            document["id"]: {
-                "name": document["name"],
-                "sha256": hashlib.sha256(document["text"].encode("utf-8")).hexdigest(),
-                "characters": len(document["text"]),
-                "text": document["text"],
-            }
-            for document in documents
-        }
+        authorized = _snapshot_source_documents(documents)
         payload: dict[str, Any] = {"operation": operation, "documents": documents}
         if operation == "search":
             payload["query"] = query
@@ -202,97 +319,10 @@ class ContentSourceHost:
         if getattr(result, "status", None) != "success":
             raise PermissionError("content_source_execution_denied")
         output = getattr(result, "payload", None)
-        if (
-            not isinstance(output, dict)
-            or output.get("operation") != operation
-            or output.get("persisted") is not False
-        ):
-            raise RuntimeError("content_source_output_invalid")
-
-        # Kernel status is not source-lineage evidence. Check the returned
-        # reference identities against the bytes already authorized and read.
-        # No output may add, substitute or re-label an owner source.
-        if operation == "analyze":
-            analyzed = output.get("documents")
-            if not isinstance(analyzed, list) or len(analyzed) != len(authorized):
-                raise RuntimeError("content_source_output_invalid")
-            returned_ids: set[str] = set()
-            for item in analyzed:
-                if not isinstance(item, dict):
-                    raise RuntimeError("content_source_output_invalid")
-                identifier = item.get("id")
-                original = authorized.get(identifier) if isinstance(identifier, str) else None
-                if (
-                    original is None or identifier in returned_ids
-                    or item.get("name") != original["name"]
-                    # Owner-text admission never authorizes a folder. The
-                    # canonical engine emits null; non-null labels are forged.
-                    or item.get("folder_id") is not None
-                    or item.get("sha256") != original["sha256"]
-                    or type(item.get("characters")) is not int
-                    or item["characters"] != original["characters"]
-                    or not isinstance(item.get("top_terms"), list)
-                    or len(item["top_terms"]) > 12
-                    or any(
-                        not isinstance(term, dict)
-                        or not isinstance(term.get("term"), str)
-                        or not term["term"]
-                        or type(term.get("count")) is not int
-                        or term["count"] < 1
-                        for term in item["top_terms"]
-                    )
-                ):
-                    raise RuntimeError("content_source_output_invalid")
-                returned_ids.add(identifier)
-            # The analysis engine may return document-pair relationships.
-            # Validate every embedded source reference against the same
-            # pre-kernel authorized snapshot used for document receipts.
-            relationships = output.get("relationships", [])
-            if not isinstance(relationships, list) or len(relationships) > 66:
-                raise RuntimeError("content_source_output_invalid")
-            for relationship in relationships:
-                if (
-                    not isinstance(relationship, dict)
-                    or not isinstance(relationship.get("left_id"), str)
-                    or not isinstance(relationship.get("right_id"), str)
-                    or relationship["left_id"] not in authorized
-                    or relationship["right_id"] not in authorized
-                    or relationship["left_id"] == relationship["right_id"]
-                ):
-                    raise RuntimeError("content_source_output_invalid")
-        elif operation == "compare":
-            if (
-                output.get("left_id") != left_id
-                or output.get("right_id") != right_id
-                or output.get("left_sha256") != authorized[left_id]["sha256"]
-                or output.get("right_sha256") != authorized[right_id]["sha256"]
-            ):
-                raise RuntimeError("content_source_output_invalid")
-        else:
-            matches = output.get("matches")
-            if (
-                output.get("query") != query
-                or not isinstance(matches, list)
-                or len(matches) > 12
-            ):
-                raise RuntimeError("content_source_output_invalid")
-            for hit in matches:
-                if not isinstance(hit, dict):
-                    raise RuntimeError("content_source_output_invalid")
-                identifier = hit.get("document_id")
-                original = authorized.get(identifier) if isinstance(identifier, str) else None
-                start, end, excerpt = hit.get("offset"), hit.get("end_offset"), hit.get("excerpt")
-                if (
-                    original is None
-                    or hit.get("document_name") != original["name"]
-                    or hit.get("folder_id") is not None
-                    or hit.get("sha256") != original["sha256"]
-                    or type(start) is not int
-                    or type(end) is not int
-                    or not 0 <= start < end <= original["characters"]
-                    or excerpt != original["text"][start:end]
-                ):
-                    raise RuntimeError("content_source_output_invalid")
+        output = _validate_source_output(
+            output, operation=operation, authorized=authorized, query=query,
+            left_id=left_id, right_id=right_id,
+        )
         logger.info("content_source_execution_completed", extra={
             "request_id": context.request_id,
             "correlation_id": context.correlation_id,
