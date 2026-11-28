@@ -339,6 +339,12 @@ class ChatRuntime:
         plan: AuthorizedExecutionPlan,
     ) -> None:
         """Reject execution paths without a verified attachment prompt contract."""
+        from ai_karen_engine.core.cortex.routing_intents import ATTACHED_DOCUMENT_INTENT
+
+        # Dispatch and publication are not yet certified. Keep this explicit
+        # denial until the shared direct-capability execution path is wired.
+        if decision.intent == ATTACHED_DOCUMENT_INTENT:
+            raise AttachmentAdmissionDenied("attachment_document_dispatch_unavailable")
         if not ChatRuntime._attachment_restriction_required(request):
             return
         if (
