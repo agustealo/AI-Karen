@@ -464,8 +464,16 @@ class ProviderRegistryService:
         is_healthy: bool, response_time: Optional[float], error_code: Optional[str] = None,
         wire_base_url: Optional[str] = None,
     ) -> bool:
-        """Compare and publish against the same registration critical section."""
-        if registration is None:
+        """Compare and publish against the same registration critical section.
+
+        HTTP observations require the admitted wire destination even when a
+        caller already holds the current registration token. Native observations
+        have no HTTP destination and retain their existing registration fence.
+        """
+        if registration is None or (
+            endpoint.protocol is EndpointProtocol.OPENAI_COMPATIBLE
+            and not wire_base_url
+        ):
             return False
         with self._lock:
             if self.capture_endpoint_health_registration(

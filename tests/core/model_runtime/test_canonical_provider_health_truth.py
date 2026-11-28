@@ -493,7 +493,10 @@ def test_transport_health_publication_is_registration_fenced(monkeypatch, transp
         assert current is not None
         fresh = monitor.capture_endpoint_registration(current)
         assert fresh is not None and fresh is not token
-        assert original(current, fresh, is_healthy=True, response_time=0.1)
+        assert original(
+            current, fresh, is_healthy=True, response_time=0.1,
+            wire_base_url=_resolve_base_url(current) if transport == "http" else None,
+        )
         assert monitor.get_provider_health(provider).health_status is HealthStatus.HEALTHY
 
 
@@ -638,3 +641,30 @@ def test_equivalent_effective_destination_preserves_health_generation(monkeypatc
     monkeypatch.setenv("OLLAMA_BASE_URL", url + "/")
     assert monitor.capture_endpoint_registration(endpoint, wire_base_url=url) is token
     assert monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.HEALTHY
+
+
+
+@pytest.mark.parametrize("wire_url", [None, "", "http://localhost:11435/v1"])
+@pytest.mark.parametrize("success", [True, False])
+def test_registry_publication_requires_http_wire_destination(monkeypatch, wire_url, success):
+    monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    monitor = registry.health_monitor
+    # An otherwise valid opaque registration cannot substitute for the
+    # transport's observed wire identity at the final publication boundary.
+    registration = registry.capture_endpoint_health_registration(endpoint)
+    assert registration is not None
+    assert not registry.publish_endpoint_health(
+        endpoint, registration, is_healthy=success, response_time=0.1,
+        wire_base_url=wire_url,
+    )
+    assert monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.UNKNOWN
+    assert registry.publish_endpoint_health(
+        endpoint, registration, is_healthy=success, response_time=0.1,
+        wire_base_url="http://localhost:11434/v1",
+    )
+    assert monitor.get_provider_health(endpoint.provider_id).health_status is (
+        HealthStatus.HEALTHY if success else HealthStatus.DEGRADED
+    )
