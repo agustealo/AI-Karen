@@ -32,8 +32,14 @@ class SpecialistBase:
         self.logger.info(f"Specialist {self.contract.agent_id} starting execution")
         try:
             return await self._process(input_data, context or {}, execution=execution)
-        except Exception as e:
-            self.logger.error(f"Execution failed: {str(e)}", exc_info=True)
+        except Exception as exc:
+            self.logger.error(
+                "medusa_specialist_execution_failed",
+                extra={
+                    "agent_id": self.contract.agent_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
             raise
 
     async def _process(

@@ -62,6 +62,12 @@ class ExpressionTask:
         default=None, repr=False, compare=False,
     )
 
+    # Runtime/CORTEX capabilities above describe authorized work, not
+    # endpoint features. Only explicitly typed provider requirements are
+    # consumed by endpoint selection; they never grant runtime permissions.
+    required_provider_capabilities: list[str] = field(default_factory=list)
+    forbidden_provider_capabilities: list[str] = field(default_factory=list)
+
     async def require_remaining_execution_ms(self) -> float:
         """Read the original execution deadline without renewing its budget."""
         if self.remaining_execution_ms is None:

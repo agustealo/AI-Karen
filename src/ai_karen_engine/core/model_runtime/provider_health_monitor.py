@@ -502,6 +502,12 @@ class ProviderHealthMonitor:
                 healthy.append(provider_id)
         return healthy
 
+    def invalidate_provider(self, provider_id: str) -> None:
+        """Discard observations for a replaced or withdrawn endpoint identity."""
+        provider_key = self._provider_key(provider_id)
+        self._health_cache.pop(provider_key, None)
+        self._prev_statuses.pop(provider_key, None)
+
     def clear_cache(self) -> None:
         """Clear the health state cache."""
         self._health_cache.clear()

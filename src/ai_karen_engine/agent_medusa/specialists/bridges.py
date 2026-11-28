@@ -31,31 +31,6 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
-def resolve_prompt_text(
-    prompt_contract_id: Optional[str],
-    prompt_version: Optional[str],
-    fallback: str,
-) -> str:
-    """Resolve a prompt contract's text from PromptRegistry, else fallback."""
-    if prompt_contract_id:
-        try:
-            from ...core.runtime.prompt.prompt_assembler import get_prompt_registry
-
-            definition = get_prompt_registry().get(prompt_contract_id, prompt_version)
-            if definition and definition.system_instructions:
-                return definition.system_instructions
-        except Exception as exc:
-            logger.warning(
-                "Prompt contract resolution failed; using registered fallback text",
-                extra={
-                    "prompt_contract_id": prompt_contract_id,
-                    "prompt_version": prompt_version,
-                    "error_type": type(exc).__name__,
-                },
-            )
-    return fallback
-
-
 class CanonicalGenerationExecutor:
     """Specialist adapter to the canonical expression/model execution owner."""
 
@@ -131,7 +106,12 @@ class CanonicalGenerationExecutor:
                 prompt_version=request.prompt_version,
                 token_budget=plan.budget.max_input_tokens,
             )
-            assembled = await prompt_runtime.assemble_prompt(prompt_request)
+            if request.prompt_contract_id is not None or request.prompt_version is not None:
+                assembled = await prompt_runtime.assemble_prompt(
+                    prompt_request, require_registered=True
+                )
+            else:
+                assembled = await prompt_runtime.assemble_prompt(prompt_request)
             if assembled.token_estimate > plan.budget.max_input_tokens:
                 raise PermissionError("specialist_generation_input_budget_exceeded")
             max_tokens = min(

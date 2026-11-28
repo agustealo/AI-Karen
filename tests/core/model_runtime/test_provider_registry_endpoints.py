@@ -66,6 +66,10 @@ def _load_module(name: str, path: pathlib.Path):
                 self._health_cache = {}
                 self._prev_statuses = {}
 
+            def invalidate_provider(self, provider_id):
+                self._health_cache.pop(provider_id, None)
+                self._prev_statuses.pop(provider_id, None)
+
             def get_all_provider_names(self):
                 return []
 

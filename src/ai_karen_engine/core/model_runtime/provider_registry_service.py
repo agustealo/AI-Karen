@@ -384,6 +384,11 @@ class ProviderRegistryService:
     def register_provider_endpoint(self, endpoint: ProviderEndpoint) -> None:
         """Register a canonical provider endpoint."""
         with self._lock:
+            previous = self._provider_endpoints.get(endpoint.provider_id)
+            if previous != endpoint:
+                # Observations describe the previous registration, not a
+                # different server/model configuration sharing its ID.
+                self.health_monitor.invalidate_provider(endpoint.provider_id)
             self._provider_endpoints[endpoint.provider_id] = endpoint
             self._update_provider_status(
                 endpoint.provider_id,
@@ -590,6 +595,7 @@ class ProviderRegistryService:
                 if existing is not None:
                     self._provider_endpoints.pop(provider_id, None)
                     self._provider_status_cache.pop(provider_id, None)
+                    self.health_monitor.invalidate_provider(provider_id)
                 return None
             if existing != configured:
                 self.register_provider_endpoint(configured)

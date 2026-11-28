@@ -305,3 +305,97 @@ def test_aggregate_health_preserves_all_five_states_and_observation_time(monkeyp
         row["last_check"] for row in summary["providers"].values()
         if row["last_check"] is not None
     )
+
+
+
+def test_endpoint_replacement_discards_old_health_and_keeps_registration_eligible():
+    from dataclasses import replace
+
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    monitor = registry.health_monitor
+    assert monitor.record_shared_http_execution(
+        endpoint, transport="text", outcome="success", response_time=0.1,
+    )
+    monitor.record_provider_interaction("lmstudio-desktop", success=True)
+    replacement = replace(endpoint, base_url="http://127.0.0.1:11435/v1")
+    registry.register_provider_endpoint(replacement)
+
+    snapshot = registry.get_provider_health_snapshot("ollama-local")
+    assert snapshot["status"] == "unknown"
+    assert snapshot["last_check"] is None
+    assert snapshot["response_time"] is None
+    assert snapshot["is_available"] is True
+    assert monitor.get_provider_health("ollama").health_status is HealthStatus.UNKNOWN
+    assert monitor.get_provider_health("lmstudio-desktop").health_status is HealthStatus.HEALTHY
+    # Completion against the superseded endpoint cannot restore its evidence.
+    assert not monitor.record_shared_http_execution(
+        endpoint, transport="text", outcome="success", response_time=0.1,
+    )
+    assert monitor.get_provider_health("ollama-local").health_status is HealthStatus.UNKNOWN
+    assert monitor.record_shared_http_execution(
+        replacement, transport="text", outcome="success", response_time=0.2,
+    )
+    assert registry.get_provider_health_snapshot("ollama-local")["status"] == "healthy"
+
+
+def test_identical_endpoint_registration_preserves_health_observation():
+    from dataclasses import replace
+
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    monitor = registry.health_monitor
+    monitor.record_provider_interaction(endpoint.provider_id, success=True)
+    before = monitor.get_provider_health(endpoint.provider_id)
+    registry.register_provider_endpoint(replace(endpoint))
+    assert monitor.get_provider_health(endpoint.provider_id) is before
+
+
+def test_replacing_failed_endpoint_does_not_inherit_old_failure():
+    from dataclasses import replace
+
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    for _ in range(5):
+        registry.health_monitor.record_provider_interaction(endpoint.provider_id, success=False)
+    assert not registry.get_provider_status(endpoint.provider_id).is_available
+    registry.register_provider_endpoint(replace(endpoint, default_model="new-model"))
+    status = registry.get_provider_status(endpoint.provider_id)
+    assert status.health_status is HealthStatus.UNKNOWN
+    assert status.is_available
+    assert registry.health_monitor.get_provider_health(endpoint.provider_id).consecutive_failures == 0
+
+
+def test_disable_and_reenable_endpoint_does_not_restore_prior_health():
+    from dataclasses import replace
+
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    registry.health_monitor.record_provider_interaction(endpoint.provider_id, success=True)
+    registry.register_provider_endpoint(replace(endpoint, enabled=False))
+    assert registry.get_provider_status(endpoint.provider_id).health_status is HealthStatus.UNAVAILABLE
+    registry.register_provider_endpoint(endpoint)
+    assert registry.get_provider_status(endpoint.provider_id).health_status is HealthStatus.UNKNOWN
+
+
+def test_withdrawn_configured_endpoint_discards_observed_health(monkeypatch):
+    from dataclasses import replace
+
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    configured = replace(
+        endpoint, provider_id="withdrawn_test", metadata={"configuration_owner": "llm_provider_config"},
+    )
+    monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: configured)
+    registry.register_provider_endpoint(configured)
+    registry.health_monitor.record_provider_interaction(configured.provider_id, success=True)
+    monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: None)
+    assert registry.get_provider_endpoint(configured.provider_id) is None
+    assert registry.health_monitor.get_provider_health(configured.provider_id).health_status is HealthStatus.UNKNOWN
+    monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: configured)
+    assert registry.get_provider_status(configured.provider_id).health_status is HealthStatus.UNKNOWN

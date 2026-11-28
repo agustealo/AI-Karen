@@ -339,7 +339,24 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         # The supplied canonical registry owns capability normalization.
         # Keep the endpoint adapter compatible with independent registry
         # substitutes that expose only declared capabilities.
-        required_caps = {"chat_completion", "text_generation"}
+        required_caps = {"chat_completion", "text_generation"} | {
+            str(value).strip().lower() for value in task.required_provider_capabilities
+        }
+        forbidden_caps = {
+            str(value).strip().lower() for value in task.forbidden_provider_capabilities
+        }
+
+        def matches_capabilities(endpoint: Any) -> bool:
+            normalize = getattr(registry, "effective_endpoint_capabilities", None)
+            capabilities = (
+                normalize(endpoint)
+                if callable(normalize)
+                else {str(value).strip().lower() for value in endpoint.capabilities}
+            )
+            return required_caps.issubset(capabilities) and not (
+                forbidden_caps & capabilities
+            )
+
         preferred = str(task.preferred_provider or "").strip()
 
         if preferred and preferred.lower() != "auto":
@@ -362,15 +379,7 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
                     continue
                 if task.local_only and provider_endpoint_requires_external_permission(endpoint):
                     continue
-                resolve_capabilities = getattr(
-                    registry, "effective_endpoint_capabilities", None,
-                )
-                cap_lower = (
-                    resolve_capabilities(endpoint)
-                    if callable(resolve_capabilities)
-                    else {str(value).strip().lower() for value in endpoint.capabilities}
-                )
-                if not required_caps.issubset(cap_lower):
+                if not matches_capabilities(endpoint):
                     continue
                 status = registry.get_provider_status(candidate_id)
                 if not status or status.is_available:
@@ -383,7 +392,9 @@ class OpenAICompatibleEngine(BaseExpressionEngine):
         targets = [
             target
             for target in targets
-            if self._matches_engine_locality(target, is_cloud)
+            if target.enabled
+            and self._matches_engine_locality(target, is_cloud)
+            and matches_capabilities(target)
             and (not task.local_only or not provider_endpoint_requires_external_permission(target))
         ]
         return targets[0].provider_id if targets else None

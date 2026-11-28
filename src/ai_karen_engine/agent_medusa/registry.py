@@ -35,7 +35,7 @@ class MedusaRegistry:
             description="Analyzes complex requests and provides structured insights.",
             implementation_id="karen.agent.analyst.native",
             prompt_contract_id="karen.agent.analyst.intent",
-            prompt_version="v1",
+            prompt_version="v1.0.0",
             capabilities=[
                 AgentCapability(type=AgentCapabilityType.REASONING, name="Analysis", description="Structured analysis"),
                 AgentCapability(type=AgentCapabilityType.DATA_ANALYSIS, name="Data Analysis", description="Analyzing data sets")
@@ -63,7 +63,7 @@ class MedusaRegistry:
                 "karen.agent.researcher.deepagents"
                 if deep_research else "karen.agent.researcher.synthesis"
             ),
-            prompt_version="v1.0.0" if deep_research else "v1",
+            prompt_version="v1.0.0",
             capabilities=[
                 AgentCapability(type=AgentCapabilityType.RESEARCH, name="Deep Research", description="Web and memory research"),
                 AgentCapability(type=AgentCapabilityType.WEB_BROWSING, name="Web Browsing", description="Accessing web information")
