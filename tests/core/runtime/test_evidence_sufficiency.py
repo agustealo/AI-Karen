@@ -413,7 +413,7 @@ def test_unrelated_source_failure_preserves_independently_typed_profile_only():
     ctx.metadata = {
         "memory_recall_status": "degraded", "memory_degraded": True,
         "memory_retrieval_health": {"source_health": [
-            {"retriever": "PostgresProfileRecallRetriever", "status": "success", "candidate_count": 1},
+            {"retriever": "PostgresProfileRecallRetriever", "status": "success", "candidate_count": 1, "candidate_batch_complete": True},
             {"retriever": "PostgresRecallRetriever", "status": "success"},
             {"retriever": "PostgresProceduralRecallRetriever", "status": "failed"},
             {"retriever": "PostgresUserStateRecallRetriever", "status": "success"},
@@ -494,3 +494,32 @@ def test_incomplete_saved_recall_attributes_recent_statement_without_certifying_
     assert "Alice" in answer
     assert "You told me in this conversation" in answer
     assert meta["response_source"] == "authorized_conversation_evidence"
+
+
+@pytest.mark.parametrize("complete,count,expected", [
+    (True, 1, Status.SUPPORTED),
+    (False, 1, Status.AMBIGUOUS),
+    (True, 2, Status.AMBIGUOUS),
+    (None, 1, Status.AMBIGUOUS),
+])
+def test_healthy_source_does_not_certify_truncated_profile_batch(complete, count, expected):
+    from ai_karen_engine.core.context.contracts import EvidenceFactSemantics
+    from ai_karen_engine.core.memory.semantic_contract import FactCardinality
+
+    item = evidence("birthplace", "Jamaica")
+    item.fact_semantics = EvidenceFactSemantics(
+        attribute="birthplace", cardinality=FactCardinality.SINGLETON,
+    )
+    ctx = context(item)
+    ctx.metadata = {
+        "memory_recall_status": "success",
+        "memory_retrieval_health": {"source_health": [{
+            "retriever": "PostgresProfileRecallRetriever", "status": "success",
+            "candidate_count": count, "candidate_batch_complete": complete,
+        }]},
+    }
+    result = check(ctx, "birthplace")
+    assert result.status is expected
+    if expected is Status.AMBIGUOUS:
+        assert result.reason == "incomplete_memory_retrieval"
+        assert not result.may_assert

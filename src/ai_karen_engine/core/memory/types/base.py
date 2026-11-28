@@ -269,6 +269,18 @@ class MemoryEntry:
         }
 
 
+class RecallCandidateBatch(list[MemoryEntry]):
+    """List-compatible candidate batch with an observed source coverage receipt.
+
+    Only a source that inspects its bounded result may set complete=True.
+    This is source coverage, not authorization or final selection completeness.
+    """
+
+    def __init__(self, candidates: list[MemoryEntry], *, complete: bool) -> None:
+        super().__init__(candidates)
+        self.complete = complete
+
+
 @dataclass
 class MemoryQuery:
     """Unified memory query structure with explicit session scope."""
@@ -411,6 +423,7 @@ __all__ = [
     "MemoryPriority",
     "MemoryQuery",
     "MemoryQueryResult",
+    "RecallCandidateBatch",
     "MemoryStatus",
     "MemoryType",
     "MemoryVisibility",

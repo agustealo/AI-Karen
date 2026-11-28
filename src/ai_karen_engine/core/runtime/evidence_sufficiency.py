@@ -50,6 +50,43 @@ def _memory_recall_degraded(context: CognitiveContext) -> bool:
     )
 
 
+def _profile_candidate_ids(context: CognitiveContext) -> set[str]:
+    return {
+        item.evidence_id
+        for item in context.evidence
+        if item.source is EvidenceSource.MEMORY
+        and item.scope is not None
+        and item.scope.tenant_id == context.tenant_id
+        and item.scope.user_id == context.user_id
+        and isinstance(getattr(item, "fact_semantics", None), EvidenceFactSemantics)
+    }
+
+
+def _profile_batch_incomplete(context: CognitiveContext) -> bool:
+    """A source receipt must survive both database and final context bounds."""
+    health = getattr(context, "metadata", {}).get("memory_retrieval_health")
+    if not isinstance(health, dict):
+        return False
+    rows = health.get("source_health")
+    if not isinstance(rows, (list, tuple)):
+        return False
+    profiles = [
+        row for row in rows
+        if isinstance(row, dict) and row.get("retriever") == "PostgresProfileRecallRetriever"
+    ]
+    if not profiles:
+        return False
+    if len(profiles) != 1:
+        return True
+    row = profiles[0]
+    count = row.get("candidate_count")
+    return (
+        row.get("candidate_batch_complete") is not True
+        or type(count) is not int
+        or count != len(_profile_candidate_ids(context))
+    )
+
+
 def _profile_sources_completed(context: CognitiveContext) -> bool:
     """A known unrelated failure cannot invalidate an independently typed fact.
 
@@ -85,15 +122,7 @@ def _profile_sources_completed(context: CognitiveContext) -> bool:
     # A successful retriever is not proof that fusion, authorization,
     # deduplication and the final top-k preserved every profile candidate.
     # Do not certify a singleton or set from a lossy degraded batch.
-    profile_ids = {
-        item.evidence_id
-        for item in context.evidence
-        if item.source is EvidenceSource.MEMORY
-        and item.scope is not None
-        and item.scope.tenant_id == context.tenant_id
-        and item.scope.user_id == context.user_id
-        and isinstance(getattr(item, "fact_semantics", None), EvidenceFactSemantics)
-    }
+    profile_ids = _profile_candidate_ids(context)
     return (
         type(profile_candidate_count) is int
         and profile_candidate_count > 0
@@ -235,11 +264,11 @@ def evaluate_personal_evidence(
             EvidenceSufficiencyStatus.CONTRADICTORY, attribute,
             evidence_ids=tuple(conflict_ids), reason="flagged_contradiction",
         )
-    if degraded and not (
+    if _profile_batch_incomplete(context) or (degraded and not (
         live
         and _profile_sources_completed(context)
         and all(item[2] is not None and item[2].attribute == attribute for item in live)
-    ):
+    )):
         return EvidenceSufficiency(
             EvidenceSufficiencyStatus.AMBIGUOUS, attribute,
             evidence_ids=tuple(item[0] for item in live),
