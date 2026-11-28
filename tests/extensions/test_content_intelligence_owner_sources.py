@@ -503,3 +503,236 @@ async def test_standalone_scope_change_cannot_continue_owner_access(boundary, sc
     assert [kind for kind, _ in kernel.calls] == (
         ["admit", "execute"] if boundary == "execution" else ["admit"]
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation,options,error", [
+    ("unknown", {}, "operation_invalid"),
+    ("search", {}, "query_invalid"),
+    ("search", {"query": " "}, "query_invalid"),
+    ("search", {"query": "x" * 513}, "query_invalid"),
+    ("analyze", {"query": "vendor"}, "unused_query"),
+    ("compare", {"left_id": FILE_ID, "right_id": FILE_ID}, "comparison_invalid"),
+    ("analyze", {"left_id": FILE_ID}, "unused_selection"),
+])
+async def test_invalid_operation_shape_denied_before_admission(operation, options, error):
+    store, kernel = Store(), Kernel()
+    with pytest.raises(ValueError, match=error):
+        await ContentSourceHost(store=store, kernel=kernel).execute_owner_text(
+            context=context(), plan=plan(), operation=operation, references=REFS,
+            **options,
+        )
+    assert not store.calls
+    assert not kernel.calls
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["valid", "unbound", "revoked", "forged_result"])
+async def test_runtime_source_host_uses_only_pinned_evidence(monkeypatch, scenario):
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
+
+    from ai_karen_engine.extensions.content_intelligence_sources import runtime_content_operation_digest
+
+    scope = {"attachment_references": REFS, "document_operation_digest":
+             runtime_content_operation_digest(REFS, {"operation": "analyze"})}
+    auth = plan(resource_scope=scope)
+    meter = ExecutionBudgetMeter(auth.budget)
+    meter.start()
+    runtime = ChatExecutionContext(
+        user_id=OWNER, tenant_id=TENANT, session_id="session",
+        correlation_id="corr", request_id="chat-request", roles=["user"],
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "is_runtime_model_plan_authorized",
+        lambda self, p, m: self is runtime and p is auth and m is meter,
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "original_runtime_model_plan",
+        lambda self, m: auth if self is runtime and m is meter else None,
+    )
+    monkeypatch.setattr(ChatExecutionContext, "require_runtime_attachment_read_permission", lambda self: None)
+    runtime.bind_runtime_attachment_scope(auth, meter, REFS)
+    runtime.bind_runtime_attachment_documents(auth, meter, [
+        VerifiedArtifactText(FILE_ID, TENANT, OWNER, "notes.txt", "text/plain", DIGEST, TEXT)
+    ])
+    ctx = context(
+        conversation_id=runtime.conversation_id,
+        resource_scope=dict(scope),
+        audit_context={"user_roles": ["user"]},
+    )
+    if scenario != "unbound":
+        ctx.bind_runtime_authority(runtime, auth, meter, "content-intelligence")
+    checks = 0
+
+    async def revalidate(self, **kwargs):
+        nonlocal checks
+        checks += 1
+        if scenario == "revoked" and checks > 1:
+            raise PermissionError("session_revoked")
+
+    monkeypatch.setattr(ChatExecutionContext, "revalidate_runtime_attachment_session", revalidate)
+    kernel = Kernel()
+    if scenario == "forged_result":
+        kernel = TamperingKernel(lambda payload: payload["documents"][0].update({"sha256": "0" * 64}))
+    if scenario == "valid":
+        result = await ContentSourceHost.execute_runtime_text(
+            kernel=kernel, context=ctx, plan=auth, operation="analyze",
+        )
+        assert result["documents"][0]["sha256"] == DIGEST
+        assert len(kernel.calls) == 1
+        assert kernel.calls[0][1].payload["documents"] == [
+            {"id": FILE_ID, "name": "notes.txt", "text": TEXT}
+        ]
+        assert kernel.calls[0][1].authorized_plan is auth
+        assert checks == 2
+    else:
+        with pytest.raises((PermissionError, RuntimeError)):
+            await ContentSourceHost.execute_runtime_text(
+                kernel=kernel, context=ctx, plan=auth, operation="analyze",
+            )
+        assert len(kernel.calls) == (0 if scenario == "unbound" else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", [
+    "valid", "missing_operation", "invalid_operation", "wrong_action",
+    "missing_attachment", "extra_plugin", "graph", "model_budget", "no_read_permission",
+])
+async def test_runtime_policy_document_operation_commitment(monkeypatch, scenario):
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.policy.runtime_policy import (
+        PolicyEvaluationRequest, RuntimePolicyEnforcer,
+    )
+    from ai_karen_engine.extensions.content_intelligence_sources import (
+        runtime_content_operation_digest,
+    )
+
+    operation = {"operation": "search", "query": "vendor"}
+    topology = {"plugin_candidates": ["content-intelligence"], "tool_requirements": []}
+    if scenario == "extra_plugin":
+        topology["plugin_candidates"].append("intelligent-search")
+    if scenario == "graph":
+        topology["graph_required"] = True
+    req = PolicyEvaluationRequest(
+        user_id=OWNER, tenant_id=TENANT, session_id="session", correlation_id="corr",
+        permissions=[] if scenario == "no_read_permission" else ["data:read"],
+        action="general_assist" if scenario == "wrong_action" else "content-intelligence",
+        attachment_references=[] if scenario == "missing_attachment" else REFS,
+        document_operation=(
+            None if scenario == "missing_operation" else
+            {"operation": "search", "query": ""} if scenario == "invalid_operation"
+            else operation
+        ),
+        requested_capabilities=["content-intelligence", "data:read"],
+        execution_topology=topology,
+        max_model_calls=1 if scenario == "model_budget" else 0,
+    )
+    policy = RuntimePolicyEnforcer()
+    decision = await policy.evaluate(req)
+    assert decision.allowed is (scenario == "valid")
+    if not decision.allowed:
+        return
+
+    digest = runtime_content_operation_digest(REFS, operation)
+    assert decision.runtime_constraints["document_operation_digest"] == digest
+    assert "vendor" not in str(decision.runtime_constraints)
+    auth = decision.to_authorized_plan()
+    assert auth.resource_scope == {
+        "attachment_references": REFS, "document_operation_digest": digest,
+    }
+    assert auth.budget.max_tool_calls == 1
+    assert auth.budget.max_model_calls == 0
+
+    # The issuer is real; isolate the separate authenticated-ingress witness.
+    runtime = ChatExecutionContext(
+        user_id=OWNER, tenant_id=TENANT, session_id="session", correlation_id="corr",
+    )
+    monkeypatch.setattr(ChatExecutionContext, "require_authenticated_user", lambda self: None)
+    policy.bind_chat_model_policy(context=runtime, decision=decision)
+    assert policy.verifies_chat_model_policy(context=runtime, plan=auth)
+    for altered in (
+        {"attachment_references": REFS},
+        {"attachment_references": REFS, "document_operation_digest": "0" * 64},
+    ):
+        assert not policy.verifies_chat_model_policy(
+            context=runtime, plan=replace(auth, resource_scope=altered),
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", [
+    "analyze", "search", "compare", "empty_search", "wrong_count",
+    "no_attachment", "metadata_override", "graph_override",
+])
+async def test_explicit_document_routing_policy_contract(monkeypatch, scenario):
+    from ai_karen_engine.core.cortex.context_stages import build_context_requirements
+    from ai_karen_engine.core.cortex.executive import CortexExecutionDecider
+    from ai_karen_engine.core.cortex.memory_formation import request_memory_formation
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext, ChatExecutionRequest
+    from ai_karen_engine.core.runtime.decision_pipeline import RuntimeDecisionPipeline
+    from ai_karen_engine.core.runtime.policy.runtime_policy import RuntimePolicyEnforcer
+    from ai_karen_engine.extensions.content_intelligence_sources import runtime_content_operation_digest
+
+    commands = {
+        "analyze": "Analyze my attached documents",
+        "search": "Search my attached documents for: latest vendor folder",
+        "compare": "Compare my attached documents",
+        "empty_search": "Search my attached documents for:",
+        "wrong_count": "Compare my attached documents",
+    }
+    refs = [dict(item) for item in REFS]
+    if scenario == "compare":
+        refs.append({"source_id": "44444444-4444-4444-8444-000000000002", "revision": DIGEST})
+    if scenario == "no_attachment":
+        refs = []
+    meta = (
+        {"clarification_effective_query": "Analyze another source"}
+        if scenario == "metadata_override" else
+        {"graph_required": True} if scenario == "graph_override" else {}
+    )
+    request = ChatExecutionRequest(
+        messages=[{"role": "user", "content": commands.get(scenario, commands["analyze"])}],
+        context=ChatExecutionContext(
+            user_id=OWNER, tenant_id=TENANT, session_id="session", correlation_id="corr",
+            roles=["user"], permissions=["data:read"],
+        ),
+        attachment_references=refs, metadata=meta,
+    )
+
+    async def unexpected_analysis(*args, **kwargs):
+        pytest.fail("Private document command must not be sent to ML intent analysis")
+
+    monkeypatch.setattr(CortexExecutionDecider, "_analyze_request", unexpected_analysis)
+    cortex = CortexExecutionDecider(force_graph=False)
+    cognitive = await cortex.decide(request)
+    assert cognitive.intent == "content-intelligence"
+    assert cognitive.max_model_calls == 0
+    assert cognitive.plugin_candidates == ["content-intelligence"]
+    assert request_memory_formation(request, cognitive).required_capabilities == [
+        "content-intelligence", "data:read",
+    ]
+    requirements = build_context_requirements(request, cognitive)
+    assert not requirements.requirements
+    policy = RuntimePolicyEnforcer()
+    pipeline = RuntimeDecisionPipeline(cortex=cortex, policy=policy)
+    policy_request = pipeline._build_execution_policy_request(request, cognitive)
+    decision = await policy.evaluate(policy_request)
+    assert decision.allowed is (scenario in {"analyze", "search", "compare"})
+    if decision.allowed:
+        assert decision.runtime_constraints["document_operation_digest"] == (
+            runtime_content_operation_digest(refs, policy_request.document_operation)
+        )
+
+
+def test_document_command_grammar_does_not_select_from_history_or_prose():
+    from ai_karen_engine.core.cortex.routing_intents import parse_attached_document_command
+
+    for query in (
+        "Explain how to analyze my attached documents",
+        "What does 'search my attached documents for:' mean?",
+        "Analyze my attached documents and email them",
+        "Compare documents on the internet",
+        None,
+    ):
+        assert parse_attached_document_command(query, REFS) is None

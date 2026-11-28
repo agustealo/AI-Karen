@@ -1352,3 +1352,164 @@ async def test_attachment_evidence_publication_denies_substituted_record(field, 
         context.runtime_attachment_evidence()
     context.bind_runtime_attachment_documents(plan, meter, [record])
     assert context.runtime_attachment_evidence() == (record,)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", [
+    "ordinary", "stream", "disabled", "changed_query", "revoked",
+    "role_changed", "expired", "exhausted", "real_ordinary", "real_stream",
+])
+async def test_governed_document_dispatch_reuses_original_grant(monkeypatch, tmp_path, scenario):
+    from ai_karen_engine.config import runtime as runtime_config
+    from ai_karen_engine.core.runtime import direct_capability_executor as direct_module
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+    from ai_karen_engine.services.plugin_service import PluginService
+
+    request, _, _ = await authority(bind=False)
+    ctx = request.context
+    ctx.roles = ["admin"]
+    ctx.authenticated_user.roles = ["admin"]
+    request.messages = [{"role": "user", "content": "Search my attached documents for: document"}]
+    policy = RuntimePolicyEnforcer()
+    # Reuse the fixture's authenticated session, but a fresh request context
+    # is necessary because the prior policy decision cannot be rebound.
+    ctx = replace(ctx)
+    request.context = ctx
+    policy_result = await policy.evaluate(PolicyEvaluationRequest(
+        user_id=ctx.user_id, tenant_id=ctx.tenant_id,
+        session_id=ctx.session_id, correlation_id=ctx.correlation_id,
+        roles=ctx.roles, permissions=["data:read"],
+        action="content-intelligence",
+        requested_capabilities=["content-intelligence", "data:read"],
+        attachment_references=request.attachment_references,
+        document_operation={"operation": "search", "query": "document"},
+        execution_topology={"plugin_candidates": ["content-intelligence"], "tool_requirements": []},
+        max_model_calls=0,
+    ))
+    assert policy_result.allowed
+    policy.bind_chat_model_policy(context=ctx, decision=policy_result)
+    plan = policy_result.to_authorized_plan()
+    meter = ExecutionBudgetMeter(plan.budget)
+    ctx.bind_runtime_model_authority(plan, meter)
+    meter.start()
+    ctx.bind_runtime_attachment_scope(plan, meter, request.attachment_references)
+    ctx.bind_runtime_attachment_documents(plan, meter, [verified(ctx)])
+
+    real_kernel = scenario.startswith("real_")
+    if real_kernel:
+        monkeypatch.setattr(
+            runtime_config.get_runtime_settings().features,
+            "enable_chat_document_operations", True,
+        )
+    else:
+        monkeypatch.setattr(runtime_config, "get_runtime_settings", lambda: SimpleNamespace(
+            features=SimpleNamespace(enable_chat_document_operations=scenario != "disabled"),
+        ))
+    service = PluginService()
+    calls = []
+
+    class ControlledKernel:
+        def get_record(self, plugin):
+            assert plugin == "content-intelligence"
+            return {"status": "enabled", "dependencies_resolved": True}
+
+        async def execute(self, invocation):
+            assert invocation.authorized_plan is plan
+            assert invocation.context.runtime_authority("content-intelligence") == (plan, meter)
+            # The real executor's reservation and lineage contracts are tested
+            # separately; here the kernel seam is intentionally controlled.
+            if not await meter.reserve_tool_call():
+                return SimpleNamespace(status="denied", payload=None)
+            calls.append(invocation)
+            if scenario == "revoked":
+                issuer.revalidate_session_identity.return_value = None
+            if scenario == "role_changed":
+                issuer.revalidate_session_identity.return_value.roles = ["user"]
+            doc = invocation.payload["documents"][0]
+            return SimpleNamespace(status="success", payload={
+                "operation": "search", "query": invocation.payload["query"],
+                "matches": [{
+                    "document_id": doc["id"], "document_name": doc["name"],
+                    "folder_id": None, "sha256": DIGEST,
+                    "offset": 0, "end_offset": len(BODY), "excerpt": BODY,
+                }], "persisted": False,
+            })
+
+    issuer = await auth_service.get_auth_service()
+    if real_kernel:
+        import shutil
+        from ai_karen_engine.extensions import plugin_kernel as kernel_module
+
+        # Use the genuine package in a disposable built-in root. Never write
+        # lifecycle markers into the checked-out or running plugin directory.
+        root = tmp_path / "plugins"
+        source = kernel_module.PluginKernel.canonical_extensions_root() / "content-intelligence"
+        shutil.copytree(source, root / "content-intelligence", ignore=shutil.ignore_patterns(
+            "__pycache__", ".karen-manual-enabled", ".karen-manual-disabled",
+        ))
+        monkeypatch.setattr(kernel_module, "_CANONICAL_PLUGIN_ROOT", root)
+        service.kernel = kernel_module.PluginKernel(root)
+        await service.kernel.initialize()
+        assert await service.kernel.enable("content-intelligence")
+    else:
+        service.kernel = ControlledKernel()
+    service.initialized = True
+    monkeypatch.setattr(direct_module, "get_plugin_service", lambda: service)
+    executor = direct_module.DirectCapabilityExecutor()
+    monkeypatch.setattr(direct_module, "get_direct_capability_executor", lambda: executor)
+    import ai_karen_engine.core.runtime.chat_runtime as chat_module
+    monkeypatch.setattr(chat_module, "get_direct_capability_executor", lambda: executor)
+    runtime = object.__new__(ChatRuntime)
+    decision = ExecutionDecision(
+        intent="content-intelligence", max_model_calls=0,
+        required_capabilities=["content-intelligence", "data:read"],
+        plugin_candidates=["content-intelligence"],
+        policy_constraints={"direct_capability": True},
+    )
+    if scenario == "changed_query":
+        request.messages[0]["content"] = "Search my attached documents for: changed"
+    if scenario == "expired":
+        monkeypatch.setattr(meter, "remaining_admitted_duration_ms", AsyncMock(return_value=0))
+    if scenario == "exhausted":
+        assert await meter.reserve_tool_call()
+
+    if scenario in {"disabled", "changed_query"}:
+        with pytest.raises(AttachmentAdmissionDenied):
+            runtime._require_supported_attachment_execution(request, decision, plan)
+        assert not calls
+        return
+
+    runtime._require_supported_attachment_execution(request, decision, plan)
+    if scenario in {"revoked", "role_changed", "expired", "exhausted"}:
+        with pytest.raises(PermissionError):
+            await executor.execute(request=request, decision=decision, plan=plan, meter=meter)
+        assert len(calls) == (1 if scenario in {"revoked", "role_changed"} else 0)
+        return
+
+    try:
+        if scenario in {"ordinary", "real_ordinary"}:
+            result = await executor.execute(request=request, decision=decision, plan=plan, meter=meter)
+            answer, metadata = await runtime._compose_direct_capability_answer(
+                request, decision, plan, meter, result, result.normalized_metadata(),
+            )
+        else:
+            metadata = {}
+            chunks = [chunk async for chunk in runtime._run_direct_capability_stream(
+                request, decision, plan, meter, _meta=metadata,
+            )]
+            assert len(chunks) == 1
+            answer = chunks[0].content
+        assert BODY in answer
+        assert "lexical" in answer.lower()
+        assert metadata["actual_provider"] is None
+        assert metadata["actual_model"] is None
+        assert metadata["structured_content"] == {}
+        assert meter.tool_calls == 1
+        assert meter.model_calls == 0
+        if real_kernel:
+            assert service.kernel.active_executions() == {}
+        else:
+            assert len(calls) == 1
+    finally:
+        if real_kernel:
+            await service.kernel.cleanup()

@@ -13,6 +13,38 @@ _OWNER_CODE_ARTIFACT_COMMAND = re.compile(
 )
 
 
+ATTACHED_DOCUMENT_INTENT = "content-intelligence"
+
+
+def parse_attached_document_command(
+    query: Any, references: list[dict[str, str]],
+) -> Optional[Dict[str, Any]]:
+    """Recognize explicit current-turn commands; selection grants no access.
+
+    An invalid comparison or empty search remains a document request so the
+    policy issuer can deny it instead of silently switching to model chat.
+    """
+    if not isinstance(query, str):
+        return None
+    text = query.strip()
+    if text.casefold() == "analyze my attached documents":
+        return {"operation": "analyze"}
+    if text.casefold() == "compare my attached documents":
+        ids = [
+            item.get("source_id") for item in references
+            if isinstance(item, dict)
+        ] if isinstance(references, list) and len(references) == 2 else []
+        return {
+            "operation": "compare",
+            "left_id": ids[0] if len(ids) == 2 else None,
+            "right_id": ids[1] if len(ids) == 2 else None,
+        }
+    prefix = "search my attached documents for:"
+    if text.casefold().startswith(prefix):
+        return {"operation": "search", "query": text[len(prefix):].strip()}
+    return None
+
+
 def parse_owner_code_artifact_view(query: str) -> Optional[str]:
     """Recognize an explicit owner-file lookup, never grant access.
 
@@ -118,6 +150,13 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
         "patterns": [],
         "required_capability": GENERATED_TEXT_ARTIFACT_CAPABILITY,
         "requires_live_data": False,
+        "allow_llm_only": False,
+    },
+    ATTACHED_DOCUMENT_INTENT: {
+        "triggers": [],
+        "patterns": [],
+        "required_capability": ATTACHED_DOCUMENT_INTENT,
+        "requires_live_data": True,
         "allow_llm_only": False,
     },
     "artifact.code.read": {

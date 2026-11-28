@@ -525,6 +525,55 @@ class PluginService:
             "max_selection": MAX_CONTENT_SOURCE_REFERENCES,
         }
 
+    async def execute_chat_content_operation(
+        self, *, runtime_context: "ChatExecutionContext",
+        plan: AuthorizedExecutionPlan, meter: Any, operation: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Project the original runtime grant into the existing kernel; no fresh policy or read."""
+        from ai_karen_engine.config.runtime import get_runtime_settings
+        from ai_karen_engine.extensions.content_intelligence_sources import (
+            ContentSourceHost, PLUGIN, runtime_content_operation_digest,
+        )
+
+        if not get_runtime_settings().features.enable_chat_document_operations:
+            raise PermissionError("content_source_chat_disabled")
+        principal = runtime_context.require_authenticated_user()
+        references = plan.resource_scope.get("attachment_references", [])
+        if (
+            runtime_context.original_runtime_model_plan(meter) is not plan
+            or not runtime_context.has_runtime_attachment_scope()
+            or runtime_content_operation_digest(references, operation)
+            != plan.resource_scope.get("document_operation_digest")
+        ):
+            raise PermissionError("content_source_authorization_required")
+        # No asynchronous initialization may replace the original operation.
+        operation = dict(operation)
+        context = ExtensionExecutionContext(
+            request_id=str(uuid.uuid4()),
+            correlation_id=runtime_context.correlation_id,
+            conversation_id=runtime_context.conversation_id,
+            session_id=runtime_context.session_id,
+            user_id=runtime_context.user_id, tenant_id=runtime_context.tenant_id,
+            policy_decision_id=plan.policy_decision_id,
+            allowed_capabilities=list(plan.allowed_capabilities),
+            resource_scope={
+                "attachment_references": [dict(item) for item in references],
+                "document_operation_digest": plan.resource_scope["document_operation_digest"],
+            },
+            audit_context={"origin": "chat_runtime_content",
+                           "user_roles": list(principal.roles),
+                           "permissions": list(principal.permissions)},
+        )
+        context.bind_runtime_authority(runtime_context, plan, meter, PLUGIN)
+        remaining = await meter.remaining_admitted_duration_ms()
+        if remaining <= 0:
+            raise PermissionError("content_source_execution_deadline")
+        async with asyncio.timeout(remaining / 1000):
+            await self._ensure_initialized()
+            return await ContentSourceHost.execute_runtime_text(
+                kernel=self._get_kernel(), context=context, plan=plan, **operation,
+            )
+
     async def analyze_content_owner_sources(
         self,
         *,

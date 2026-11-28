@@ -193,6 +193,8 @@ class FeatureFlags:
     enable_ag_ui_event_journal: bool = False
     # KCOG-01C1B: read-only alternative-mode permission check, never exploration.
     enable_verification_strategy_policy_probe: bool = False
+    # Isolated local acceptance only until governed document publication is certified.
+    enable_chat_document_operations: bool = False
     enable_memory_integration: bool = True
     enable_proactive_suggestions: bool = True
     enable_performance_optimization: bool = True
@@ -518,6 +520,13 @@ class RuntimeSettings:
         if env_ag_ui_event_journal is not None:
             self.features.enable_ag_ui_event_journal = as_bool(env_ag_ui_event_journal)
 
+        env_document_operations = env("KARI_ENABLE_CHAT_DOCUMENT_OPERATIONS")
+        if env_document_operations is not None:
+            normalized = env_document_operations.strip().lower()
+            if normalized not in {"1", "0", "true", "false", "yes", "no", "on", "off"}:
+                raise ValueError("KARI_ENABLE_CHAT_DOCUMENT_OPERATIONS must be a boolean")
+            self.features.enable_chat_document_operations = normalized in {"1", "true", "yes", "on"}
+
         env_strategy_probe = env("KARI_ENABLE_VERIFICATION_STRATEGY_POLICY_PROBE")
         if env_strategy_probe is not None:
             normalized = env_strategy_probe.strip().lower()
@@ -614,6 +623,9 @@ class RuntimeSettings:
 
         if not 2400 <= self.task_verification.max_answer_chars <= 262144:
             issues.append("Task review answer limit must be between 2400 and 262144 characters")
+
+        if not isinstance(self.features.enable_chat_document_operations, bool):
+            issues.append("Chat document operations flag must be boolean")
 
         if not isinstance(self.features.enable_verification_strategy_policy_probe, bool):
             issues.append("Verification strategy policy probe flag must be boolean")

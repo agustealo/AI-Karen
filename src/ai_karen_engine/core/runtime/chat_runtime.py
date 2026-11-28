@@ -9,6 +9,7 @@ import uuid
 from typing import Any, AsyncIterator, Awaitable, Callable, Dict, List, Optional, Tuple
 
 from ai_karen_engine.core.logging import get_logger
+from ai_karen_engine.core.cortex.routing_intents import ATTACHED_DOCUMENT_INTENT
 from ai_karen_engine.core.runtime.chat_runtime_contract import (
     ChatExecutionContext,
     ChatExecutionRequest,
@@ -339,6 +340,39 @@ class ChatRuntime:
         plan: AuthorizedExecutionPlan,
     ) -> None:
         """Reject execution paths without a verified attachment prompt contract."""
+        if decision.intent == ATTACHED_DOCUMENT_INTENT:
+            from ai_karen_engine.config.runtime import get_runtime_settings
+            from ai_karen_engine.core.cortex.routing_intents import parse_attached_document_command
+            from ai_karen_engine.core.runtime.document_operation_contract import (
+                runtime_content_operation_digest,
+            )
+
+            try:
+                operation = parse_attached_document_command(
+                    next((item.get("content") for item in reversed(request.messages)
+                          if item.get("role") == "user"), None),
+                    request.attachment_references,
+                )
+                if (
+                    not get_runtime_settings().features.enable_chat_document_operations
+                    or not request.attachment_references
+                    or not get_direct_capability_executor().can_handle(decision)
+                    or decision.topology.value != "direct"
+                    or decision.is_graph_required
+                    or decision.memory_recall_required or decision.memory_write_allowed
+                    or decision.requires_human_gate or decision.reasoning_modes
+                    or plan.budget.max_model_calls != 0 or plan.budget.max_tool_calls != 1
+                    or set(plan.allowed_plugins) != {ATTACHED_DOCUMENT_INTENT}
+                    or set(plan.allowed_capabilities) != {ATTACHED_DOCUMENT_INTENT, "data:read"}
+                    or plan.allowed_tools or plan.allowed_agents
+                    or plan.resource_scope.get("attachment_references") != request.attachment_references
+                    or runtime_content_operation_digest(request.attachment_references, operation)
+                    != plan.resource_scope.get("document_operation_digest")
+                ):
+                    raise PermissionError("attachment_document_dispatch_unavailable")
+            except (PermissionError, ValueError, TypeError):
+                raise AttachmentAdmissionDenied("attachment_document_dispatch_unavailable") from None
+            return
         if not ChatRuntime._attachment_restriction_required(request):
             return
         if (
@@ -690,6 +724,8 @@ class ChatRuntime:
         request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
         try:
+            if decision.intent == ATTACHED_DOCUMENT_INTENT:
+                self._require_supported_attachment_execution(request, decision, plan)
             await self._admit_attachments(request, plan, meter)
             self._require_supported_attachment_execution(request, decision, plan)
         except AttachmentAdmissionDenied:
@@ -1300,6 +1336,22 @@ class ChatRuntime:
             memory_recall_count=memory_recall_meta.get("memory_recall_count", 0),
         )
 
+        if (
+            decision.intent == ATTACHED_DOCUMENT_INTENT
+            and not await self._private_evidence_authorized(request, plan, meter)
+        ):
+            self._emitter.emit(
+                RuntimeEventType.REQUEST_FAILED, status="denied",
+                metadata={"error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+            )
+            return ChatExecutionResult(
+                answer="", status=ChatExecutionStatus.ERROR,
+                metadata=ChatRuntimeMetadata(
+                    correlation_id=ctx.correlation_id,
+                    degraded_mode=True, degradation_reason="attachment_session_denied",
+                    extra={"error_code": "CHAT_ATTACHMENT_SESSION_DENIED"},
+                ),
+            )
         result = self._build_result(
             request,
             decision,
@@ -1516,6 +1568,8 @@ class ChatRuntime:
         request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
         try:
+            if decision.intent == ATTACHED_DOCUMENT_INTENT:
+                self._require_supported_attachment_execution(request, decision, plan)
             await self._admit_attachments(request, plan, meter)
             self._require_supported_attachment_execution(request, decision, plan)
         except AttachmentAdmissionDenied:
@@ -1747,6 +1801,11 @@ class ChatRuntime:
                     await ChatRuntime._authorize_selected_memory_before_generation(
                         request, decision, **personal_claim_fence
                     )
+                    if (
+                        decision.intent == ATTACHED_DOCUMENT_INTENT
+                        and not await self._private_evidence_authorized(request, plan, meter)
+                    ):
+                        raise AttachmentAdmissionDenied("attachment_session_denied")
                     if chunk.content and first_content_latency_ms is None:
                         first_content_latency_ms = (
                             time.perf_counter() - ingress_started
@@ -3157,11 +3216,14 @@ class ChatRuntime:
         from ai_karen_engine.core.memory.signals.semantic_classifier import (
             is_explicit_memory_save_request,
         )
-        from ai_karen_engine.core.cortex.routing_intents import parse_owner_generated_text_request
+        from ai_karen_engine.core.cortex.routing_intents import (
+            parse_attached_document_command, parse_owner_generated_text_request,
+        )
 
         user_text = self._extract_user_message(request.messages)
         return (
             parse_owner_generated_text_request(user_text) is None
+            and parse_attached_document_command(user_text, request.attachment_references) is None
             and is_explicit_memory_save_request(user_text)
         )
 
@@ -4107,6 +4169,8 @@ class ChatRuntime:
                     dict(item) for item in
                     (policy_constraints.get("attachment_references") or [])
                 ],
+                **({"document_operation_digest": policy_constraints["document_operation_digest"]}
+                   if policy_constraints.get("document_operation_digest") is not None else {}),
             } if policy_constraints.get("attachment_references") else {},
             budget=budget,
             memory_scope=decision.memory_scope,
@@ -4995,6 +5059,13 @@ class ChatRuntime:
         """One answer and presentation composition path for both transports."""
         accepted = dict(metadata)
         answer = result.text
+        if decision.intent == ATTACHED_DOCUMENT_INTENT:
+            if not result.success or result.source_id != ATTACHED_DOCUMENT_INTENT:
+                raise AttachmentAdmissionDenied("attachment_document_execution_denied")
+            if not await self._private_evidence_authorized(request, plan, meter):
+                raise AttachmentAdmissionDenied("attachment_session_denied")
+            accepted["answer_composition_status"] = "source_observation"
+            return answer, accepted
         if decision.intent in {"search.general", "search.weather", "time.current"}:
             # A failed or denied capability must not be classified as grounded
             # evidence or a model response merely because text was returned.

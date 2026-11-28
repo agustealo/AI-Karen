@@ -17,7 +17,9 @@ from ai_karen_engine.core.context.contracts import (
     EvidenceContradictionStatus,
     EvidenceSource,
 )
-from ai_karen_engine.core.cortex.routing_intents import GENERATED_TEXT_ARTIFACT_CAPABILITY
+from ai_karen_engine.core.cortex.routing_intents import (
+    ATTACHED_DOCUMENT_INTENT, GENERATED_TEXT_ARTIFACT_CAPABILITY,
+)
 from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionRequest
 from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision, ExecutionTopology
 
@@ -95,7 +97,9 @@ def build_context_requirements(
                 )
             )
 
-    if ctx.conversation_id and preliminary.intent != GENERATED_TEXT_ARTIFACT_CAPABILITY:
+    if ctx.conversation_id and preliminary.intent not in {
+        GENERATED_TEXT_ARTIFACT_CAPABILITY, ATTACHED_DOCUMENT_INTENT,
+    }:
         history_limit = get_conversation_context_settings().history_limit
         requirements.append(
             ContextRequirement(

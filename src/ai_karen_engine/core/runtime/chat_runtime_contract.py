@@ -339,6 +339,16 @@ class ChatExecutionContext:
         )
         if not manager.has_permission(fresh, Permission.DATA_READ):
             raise PermissionError("runtime_attachment_read_permission_revoked")
+        # An admitted document operation also relies on the plugin's original
+        # role projection. A changed account role must not reuse that grant.
+        runtime_binding = self.__dict__.get("_runtime_model_authority")
+        if isinstance(runtime_binding, tuple) and len(runtime_binding) == 2:
+            root = runtime_binding[0]
+            if root.resource_scope.get("document_operation_digest") is not None and (
+                set(fresh.roles) != set(principal.roles)
+                or set(principal.roles) != set(self.roles)
+            ):
+                raise PermissionError("runtime_attachment_roles_changed")
         if self.require_authenticated_user() is not principal or vars(principal).get(
             "_runtime_session_witness"
         ) is not grant:
