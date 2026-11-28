@@ -15,6 +15,7 @@ on:
       - "supabase/migrations/**"
       - "scripts/ci/start-postgres-container.sh"
       - "scripts/deploy/database-backup.sh"
+      - "scripts/deploy/postgres-recovery-client.sh"
       - "scripts/deploy/database-restore.sh"
       - "tests/core/memory/**"
       - "tests/platform/memory/**"
@@ -253,6 +254,17 @@ jobs:
           pytest tests/integration/test_live_memory_cross_process_revocation.py -q -rs
           pytest tests/core/runtime/test_chat_runtime_stream_contract.py -k live_postgres_revocation_between_stream_chunks_denies_publication -q -rs
           pytest tests/integration/test_live_automation_task_claims.py -q -rs
+      - name: Ensure server-matched PostgreSQL recovery tools
+        run: |
+          major="$(psql -X -qAt --set=ON_ERROR_STOP=1 --dbname="$DATABASE_URL" --command='SHOW server_version_num')"
+          [[ "$major" =~ ^[1-9][0-9]{5}$ ]]
+          major="$((major / 10000))"
+          if [[ ! -x "/usr/lib/postgresql/$major/bin/pg_dump" || ! -x "/usr/lib/postgresql/$major/bin/pg_restore" ]]; then
+            sudo apt-get update
+            sudo apt-get install -y "postgresql-client-$major"
+          fi
+          "/usr/lib/postgresql/$major/bin/pg_dump" --version
+          "/usr/lib/postgresql/$major/bin/pg_restore" --version
       - name: Prove isolated backup restore and expose consent rollback boundary
         env:
           KAREN_TEST_DISPOSABLE_DATABASE: "1"

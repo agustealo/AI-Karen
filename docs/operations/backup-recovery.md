@@ -49,6 +49,10 @@ refuses targets containing existing application relations, and restores in a
 single transaction. Use an exclusively offline, fresh target; the catalog
 preflight is not a lease against concurrent access or proof of network isolation.
 A successful command reports staging only, never consumer admission.
+Backup and restore require PostgreSQL clients matching the connected server major;
+set KAREN_POSTGRES_BIN_DIR to an installed matching client directory if needed.
+The fresh-target restore does not use DROP/clean options. Major-version upgrades
+require a separate verified migration procedure.
 
 The disposable backup/restore regression deliberately demonstrates the unsafe
 pre-reconciliation state: an older snapshot can restore retired/revoked memory

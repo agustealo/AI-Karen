@@ -7,16 +7,9 @@ set -euo pipefail
 
 : "${DATABASE_URL:?DATABASE_URL is required}"
 
-if [ -d "/usr/lib/postgresql/17/bin" ]; then
-  export PATH="/usr/lib/postgresql/17/bin:$PATH"
-fi
-
-if ! command -v pg_dump >/dev/null 2>&1; then
-  echo "error: pg_dump is required" >&2
-  exit 2
-fi
-
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/postgres-recovery-client.sh"
+select_postgres_recovery_client "${DATABASE_URL}" pg_dump || exit 2
 REPO_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 BACKUP_ROOT="${KAREN_BACKUP_ROOT:-./backups/postgres}"
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -61,6 +54,7 @@ sha256sum --check "${CHECKSUM_FILE}" >/dev/null
 cat > "${METADATA_FILE}" <<EOF
 created_at_utc=${STAMP}
 format=postgres_custom
+postgres_server_major=${POSTGRES_RECOVERY_SERVER_MAJOR}
 schema_authority=supabase/migrations
 release_revision=${release_revision}
 migration_revision=${migration_revision}

@@ -8,18 +8,9 @@ set -euo pipefail
 : "${RESTORE_DATABASE_URL:?RESTORE_DATABASE_URL is required}"
 : "${BACKUP_FILE:?BACKUP_FILE is required}"
 
-if [ -d "/usr/lib/postgresql/17/bin" ]; then
-  export PATH="/usr/lib/postgresql/17/bin:$PATH"
-fi
-
 if [[ "${CONFIRM_RESTORE:-}" != "I_UNDERSTAND_THIS_IS_DESTRUCTIVE" ]]; then
   echo "error: set CONFIRM_RESTORE=I_UNDERSTAND_THIS_IS_DESTRUCTIVE" >&2
   exit 2
-fi
-
-if ! command -v pg_restore >/dev/null 2>&1; then
-  echo "error: pg_restore is required" >&2
-  exit 3
 fi
 
 if [[ ! -s "${BACKUP_FILE}" ]]; then
@@ -52,10 +43,9 @@ fi
 # existing application relations, including the live consent/retirement ledger.
 # This is an emptiness check, NOT proof of network isolation or an admission
 # lease. Operators must keep the target exclusively offline until reconciled.
-if ! command -v psql >/dev/null 2>&1; then
-  echo "error: psql is required for restore target preflight" >&2
-  exit 3
-fi
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+source "${SCRIPT_DIR}/postgres-recovery-client.sh"
+select_postgres_recovery_client "${RESTORE_DATABASE_URL}" pg_restore || exit 3
 target_empty="$(psql -X -qAt --set=ON_ERROR_STOP=1 \
   --dbname="${RESTORE_DATABASE_URL}" --command="
     SELECT NOT EXISTS (
@@ -73,8 +63,6 @@ fi
 # A failed restore must not commit a partially loaded authority.
 pg_restore \
   --dbname="${RESTORE_DATABASE_URL}" \
-  --clean \
-  --if-exists \
   --no-owner \
   --no-privileges \
   --single-transaction \

@@ -38,6 +38,12 @@ DATABASE_URL='postgresql://...' \
 
 The command writes a PostgreSQL custom-format dump, SHA-256 checksum, and non-secret metadata beneath `KAREN_BACKUP_ROOT` or `./backups/postgres`.
 
+Backup and restore require PostgreSQL client binaries matching the connected
+server major. The shared selection helper discovers the server version; set
+`KAREN_POSTGRES_BIN_DIR` to the matching installed client directory if needed.
+Missing or mismatched clients fail closed. Cross-major migration is outside this
+recovery contract.
+
 This command covers the primary PostgreSQL store only. **Redis, Milvus, Elasticsearch**, object storage, model artifacts, and external services are separate recovery domains whenever they are deployed and must never be represented as protected by this PostgreSQL backup. Milvus and Elasticsearch are not part of the current canonical AI Karen memory architecture; naming them here documents backup boundaries rather than making them runtime dependencies.
 
 ## Restore Contract
