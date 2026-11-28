@@ -6855,16 +6855,6 @@ class ChatRuntime:
             decision.policy_constraints.get("personal_evidence_attribute")
             if decision.intent == "memory.recall" else None
         )
-        md.extra["personal_recall_grounded"] = (
-            normalized.get("response_source") in {
-                "authorized_memory_evidence", "authorized_conversation_evidence",
-            }
-        )
-        md.extra["personal_recall_evidence_source"] = (
-            normalized.get("response_source")
-            if md.extra["personal_recall_grounded"] else None
-        )
-
         if memory_meta:
             md.extra.update(
                 {k: v for k, v in memory_meta.items() if k not in md.extra}
@@ -6879,6 +6869,20 @@ class ChatRuntime:
                 for k, v in normalized.items()
                 if k not in _CANONICAL_META_KEYS
             }
+        )
+        # Response-source attribution alone is not a successful fact
+        # assertion: the same paths also explain missing or disputed facts.
+        # Derive these diagnostics after merging other metadata.
+        md.extra["personal_recall_grounded"] = (
+            decision.intent == "memory.recall"
+            and normalized.get("response_source") in (
+                "authorized_memory_evidence", "authorized_conversation_evidence",
+            )
+            and normalized.get("evidence_sufficiency") in ("supported", "supported_set")
+        )
+        md.extra["personal_recall_evidence_source"] = (
+            normalized.get("response_source")
+            if md.extra["personal_recall_grounded"] else None
         )
         # This is private transcript evidence, not a public response extension.
         # Strip it after both memory and provider metadata merges, including
