@@ -129,8 +129,6 @@ class PolicyEvaluationRequest:
     resource: Optional[str] = None
     # Host-normalized selected artifact revisions, not client-granted access.
     attachment_references: List[Dict[str, str]] = field(default_factory=list)
-    # Explicit host-selected operation; never a capability or source grant by itself.
-    document_operation: Optional[Dict[str, Any]] = field(default=None, repr=False)
     requested_capabilities: List[str] = field(default_factory=list)
     forbidden_capabilities: List[str] = field(default_factory=list)
     requested_reasoning_modes: List[str] = field(default_factory=list)
@@ -144,6 +142,8 @@ class PolicyEvaluationRequest:
     environment: str = "production"
     resource_scope: PolicyResourceScope | FileExplorerOperationScope | None = None
     execution_topology: Dict[str, Any] = field(default_factory=dict)
+    # Explicit host-selected operation; never a capability or source grant by itself.
+    document_operation: Optional[Dict[str, Any]] = field(default=None, repr=False)
 
 
 @dataclass
@@ -992,6 +992,12 @@ class RuntimePolicyEnforcer:
                 or (issued_attachments and "data:read" not in plan.allowed_capabilities)
                 or plan.resource_scope.get("document_operation_digest")
                 != constraints.get("document_operation_digest")
+            ):
+                return False
+            if constraints.get("document_operation_digest") is not None and (
+                set(plan.resource_scope) != {"attachment_references", "document_operation_digest"}
+                or not {"content-intelligence", "data:read"}.issubset(plan.allowed_capabilities)
+                or set(plan.allowed_plugins) != {"content-intelligence"}
             ):
                 return False
             # A standalone coordinator must not self-issue tool/plugin/agent
