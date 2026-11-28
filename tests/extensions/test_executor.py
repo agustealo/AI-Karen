@@ -621,3 +621,62 @@ async def test_executor_rejects_runtime_authority_for_unrelated_plugin(monkeypat
     result = await service.execute(_request(plan=plan))
     assert result.error_code == "extension_runtime_authority_invalid"
     assert handler.calls == 0
+
+@pytest.mark.asyncio
+async def test_host_admission_validates_payload_without_handler_execution():
+    handler = FakeHandler()
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(handler=handler), lifecycle=FakeLifecycle(),
+    )
+    request = _request(plan=_plan())
+    request.payload = {}
+    assert (await service.admit(request)).status == "admitted"
+    denied = await service.admit(request, validate_payload=True)
+    assert denied.status == "failed"
+    assert denied.error_code == "invalid_input"
+    assert handler.calls == 0
+    request.payload = {"message": "host operation"}
+    assert (await service.admit(request, validate_payload=True)).status == "admitted"
+    assert handler.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_host_operation_holds_existing_lifecycle_pin_until_exit(tmp_path):
+    from ai_karen_engine.extensions.plugin_kernel import PluginKernel
+
+    handler = FakeHandler()
+    kernel = PluginKernel(tmp_path)
+    kernel.executor = ExtensionExecutionService(
+        registry=FakeRegistry(handler=handler), lifecycle=FakeLifecycle(),
+    )
+    request = _request(plan=_plan())
+    async with kernel.admitted_host_operation(request):
+        assert kernel.active_executions() == {"req-1": "echo"}
+        with pytest.raises(RuntimeError, match="active"):
+            await kernel.refresh()
+        with pytest.raises(RuntimeError, match="already active"):
+            await kernel.admit(request)
+        with pytest.raises(RuntimeError, match="active"):
+            await kernel.cleanup()
+    assert kernel.active_executions() == {}
+    assert handler.calls == 0
+
+
+@pytest.mark.asyncio
+async def test_host_operation_releases_pin_on_failure_and_denial(tmp_path):
+    from ai_karen_engine.extensions.plugin_kernel import PluginKernel
+
+    kernel = PluginKernel(tmp_path)
+    kernel.executor = ExtensionExecutionService(
+        registry=FakeRegistry(), lifecycle=FakeLifecycle(),
+    )
+    request = _request(plan=_plan())
+    with pytest.raises(ValueError, match="host failed"):
+        async with kernel.admitted_host_operation(request):
+            raise ValueError("host failed")
+    assert kernel.active_executions() == {}
+    denied = _request(plan=None)
+    with pytest.raises(PermissionError, match="plugin_host_admission_denied"):
+        async with kernel.admitted_host_operation(denied):
+            pytest.fail("Denied host operation must never execute")
+    assert kernel.active_executions() == {}

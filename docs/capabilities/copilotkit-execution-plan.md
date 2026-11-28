@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28: KFILE-UPLOAD-U2D1 host-operation lifecycle fence
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** reuse one PluginKernel active-execution scope across execute, probe admission and a new trusted host-operation admission context. Host scope retains the existing lifecycle marker until exit, requires actual payload validation using the canonical executor, rejects denied admission and releases on exception. No new policy grant, plugin handler execution, public endpoint or distributed lease. Unit regressions cover probe compatibility, schema denial, no handler invocation, active marker and refresh/cleanup/duplicate request denial, and failure cleanup.
+- **Proof:** quota repair `4b83dec2682e44609243be46e60374d78d473751` CK-GEN PostgreSQL job 140864990739 passed 163 tests, 2 opt-in live Storage tests skipped. Preserve its active CI. Host fence staged, fresh CI not run; transfer policy, live lifecycle cross-worker fencing, bounded HTTP ingress and Storage/browser proof remain outstanding.
+
 ### 2026-11-28: KFILE-UPLOAD-U1B admission-only extension discovery
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** default-disabled first-party File Upload catalog manifest; no UI/API/Storage permissions, hooks or generic execution. Existing PluginService obtains current owner-create session and canonical RBAC, evaluates RuntimePolicy, invokes PluginKernel.admit, revalidates current session and lifecycle, then projects the sole bounded store-only owner-library destination with transfer_available=false. No upload execution grant or activation. Tests cover manifest, missing entitlements, unregistered actions, disabled kernel, and lifecycle changes.

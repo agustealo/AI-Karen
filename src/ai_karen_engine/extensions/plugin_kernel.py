@@ -14,6 +14,8 @@ import json
 import logging
 import os
 import uuid
+from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Optional
@@ -1091,35 +1093,52 @@ class PluginKernel:
             await self._retire_loaded_plugin(plugin_id, instance)
         return True
 
-    async def execute(
-        self,
-        request: ExtensionExecutionRequest,
-    ) -> ExtensionExecutionResult:
-        # Serialize the admission marker with refresh/disable, not the model
-        # or plugin execution itself. Unrelated plugins may execute in parallel.
+    @asynccontextmanager
+    async def _execution_scope(
+        self, request: ExtensionExecutionRequest,
+    ) -> AsyncIterator[ExtensionExecutionService]:
+        """Pin one invocation to the existing local lifecycle authority."""
+        request_id = request.context.request_id
+        plugin_id = request.plugin_id
         async with self._state_lock:
-            if request.context.request_id in self._active:
+            if request_id in self._active:
                 raise RuntimeError("Plugin execution request ID already active")
-            self._active[request.context.request_id] = request.plugin_id
+            self._active[request_id] = plugin_id
             executor = self.executor
         try:
-            return await executor.execute(request)
+            yield executor
         finally:
-            self._active.pop(request.context.request_id, None)
+            self._active.pop(request_id, None)
+
+    async def execute(
+        self, request: ExtensionExecutionRequest,
+    ) -> ExtensionExecutionResult:
+        async with self._execution_scope(request) as executor:
+            return await executor.execute(request)
 
     async def admit(
         self, request: ExtensionExecutionRequest,
     ) -> ExtensionExecutionResult:
         """Use the canonical executor gates without running extension code."""
-        async with self._state_lock:
-            if request.context.request_id in self._active:
-                raise RuntimeError("Plugin execution request ID already active")
-            self._active[request.context.request_id] = request.plugin_id
-            executor = self.executor
-        try:
+        async with self._execution_scope(request) as executor:
             return await executor.admit(request)
-        finally:
-            self._active.pop(request.context.request_id, None)
+
+    @asynccontextmanager
+    async def admitted_host_operation(
+        self, request: ExtensionExecutionRequest,
+    ) -> AsyncIterator[ExtensionExecutionResult]:
+        """Keep lifecycle admission pinned for a trusted host operation.
+
+        Unlike probe-only admission, require an actual invocation payload.
+        No handler is executed and no runtime/session permission is minted.
+        The caller must enforce the fresh authenticated operation authority.
+        This is process-local; it does not establish a distributed lease.
+        """
+        async with self._execution_scope(request) as executor:
+            result = await executor.admit(request, validate_payload=True)
+            if result.status != "admitted":
+                raise PermissionError("plugin_host_admission_denied")
+            yield result
 
     def active_executions(self) -> Dict[str, str]:
         return dict(self._active)
