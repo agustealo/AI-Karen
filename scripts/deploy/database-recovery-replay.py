@@ -106,14 +106,19 @@ def observe():
             "bash", "-c",
             'set -euo pipefail; source "$1"; '
             'select_postgres_recovery_client "$RECOVERY_DATABASE_URL" psql; '
-            'exec psql -X -qAt --set=ON_ERROR_STOP=1 --dbname="$RECOVERY_DATABASE_URL"',
-            "bash", str(helper),
+            'exec psql -X -qAt --set=ON_ERROR_STOP=1 --dbname="$RECOVERY_DATABASE_URL" --command="$2"',
+            "bash", str(helper), _SQL,
         ],
-        input=_SQL, text=True, capture_output=True, check=False, timeout=30,
+        # The compatibility probe may itself use an stdin-forwarding wrapper.
+        # Never share a SQL input stream with that probe.
+        stdin=subprocess.DEVNULL, text=True, capture_output=True, check=False, timeout=30,
     )
     if result.returncode:
         raise RecoveryHold("standby observation unavailable")
-    return json.loads(result.stdout, object_pairs_hook=unique_object)
+    try:
+        return json.loads(result.stdout, object_pairs_hook=unique_object)
+    except (ValueError, TypeError):
+        raise RecoveryHold("standby observation is not valid JSON") from None
 
 
 def verify(receipt, observation):

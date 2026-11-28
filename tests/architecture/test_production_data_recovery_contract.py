@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 import subprocess
 from pathlib import Path
@@ -176,3 +178,51 @@ def test_recovery_replay_is_observation_not_admission():
     assert '"admission_verified": False' in script
     workflow = _read(".github/workflows/live-postgres-memory-proof.yml")
     assert 'KAREN_TEST_PHYSICAL_REPLAY: "1"' in workflow
+
+
+def test_recovery_replay_probe_cannot_consume_observation_query(tmp_path):
+    # A client wrapper such as docker exec -i can consume the input stream
+    # during the version probe. Only an explicit --command may carry the SQL.
+    receipt = tmp_path / "cutoff.json"
+    payload = {
+        "schema_version": 1,
+        "evidence_type": "postgres_physical_wal_cutoff",
+        "system_identifier": "123",
+        "database_name": "fixture",
+        "database_oid": "456",
+        "server_major": 16,
+        "timeline_hex": "00000001",
+        "required_lsn": "0/100",
+        "observed_flush_lsn": "0/100",
+        "captured_at": "2026-11-28T00:00:00Z",
+    }
+    receipt.write_text(json.dumps(payload), encoding="utf-8")
+    binary = tmp_path / "psql"
+    binary.write_text(
+        '#!/bin/bash\n'
+        'set -eu\n'
+        'cat >/dev/null\n'
+        'if [[ "$1" == "--version" ]]; then echo "psql (PostgreSQL) 16.9"; exit; fi\n'
+        'for arg in "$@"; do\n'
+        '  if [[ "$arg" == "SHOW server_version_num" ]]; then echo 160009; exit; fi\n'
+        '  if [[ "$arg" == --command=*pg_is_in_recovery* ]]; then\n'
+        '    echo \'{"in_recovery": false, "read_only": false}\'; exit; fi\n'
+        'done\n'
+        'exit 3\n',
+        encoding="utf-8",
+    )
+    binary.chmod(0o700)
+    result = subprocess.run(
+        ["python", str(REPO_ROOT / "scripts/deploy/database-recovery-replay.py")],
+        env={
+            **os.environ,
+            "KAREN_POSTGRES_BIN_DIR": str(tmp_path),
+            "RECOVERY_CUTOFF_FILE": str(receipt),
+            "RECOVERY_CUTOFF_SHA256": hashlib.sha256(receipt.read_bytes()).hexdigest(),
+            "RECOVERY_DATABASE_URL": "postgresql://example.invalid/fixture",
+        },
+        capture_output=True, text=True, timeout=5, check=False,
+    )
+    assert result.returncode == 2
+    assert "not a paused read-only physical standby" in result.stderr
+    assert result.stdout == ""
