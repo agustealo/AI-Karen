@@ -539,6 +539,9 @@ class ExtensionExecutionService:
             raw_result = await asyncio.wait_for(
                 self._invoke(handler, request), timeout=timeout_ms / 1000.0
             )
+            if admitted_content_payload is not None:
+                # Detach handler-owned output before schema checks or session awaits.
+                raw_result = deepcopy(raw_result)
         except asyncio.TimeoutError:
             error = ExtensionTimeoutError(plugin_id, timeout_ms)
             return self._fail_with_provenance(
@@ -611,7 +614,7 @@ class ExtensionExecutionService:
                 if request.payload != admitted_content_payload:
                     raise RuntimeError("content_source_input_changed")
                 raw_result = validate_runtime_content_output(
-                    deepcopy(raw_result), admitted_payload=admitted_content_payload,
+                    raw_result, admitted_payload=admitted_content_payload,
                 )
             except (RuntimeError, ValueError, TypeError):
                 return self._fail_with_provenance(
