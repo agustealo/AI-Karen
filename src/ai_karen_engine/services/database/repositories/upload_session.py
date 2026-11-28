@@ -139,11 +139,12 @@ class UploadSessionRepository:
                      idempotency_key_hash, manifest_sha256, expected_bytes,
                      expected_sha256, expires_at)
                 SELECT :tenant_id, :owner_user_id, :destination_id, :recipe,
-                       :idempotency_key_hash, :manifest_sha256, :expected_bytes,
+                       :idempotency_key_hash, :manifest_sha256, CAST(:expected_bytes AS BIGINT),
                        :expected_sha256, :expires_at
                 WHERE (
                     SELECT count(*) < :admission_sessions
-                       AND COALESCE(sum(expected_bytes), 0) + :expected_bytes <= :admission_bytes
+                       AND COALESCE(sum(expected_bytes), 0) + CAST(:expected_bytes AS BIGINT)
+                           <= CAST(:admission_bytes AS BIGINT)
                     FROM public.artifact_upload_sessions
                     WHERE tenant_id = :tenant_id AND owner_user_id = :owner_user_id
                       AND created_at > clock_timestamp() - interval '24 hours'
