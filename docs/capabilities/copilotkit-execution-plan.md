@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28 UTC: KFILE-UPLOAD-U2F1 canonical runtime initialization
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** resolve upload runtime through the existing global database factory, lazily initialize its canonical repositories if absent, reuse the established service, invalidate stale upload service before a failed rebuild, publish only after repository construction succeeds. Database initialization now returns false on failed canonical construction. PluginService delegates through that resolver. Constructed dependencies do not certify live Storage or transfer readiness; discovery remains unavailable until readiness proof exists.
+- **Proof:** factory regressions for cold resolution, reuse, canonical dependencies, absent SDK and failed rebuild; add exact test file to artifact workflow triggers and invocation. Staged; no execution on this head. No production settings or activation changed.
+
 ### 2026-11-28 UTC: KFILE-UPLOAD-U2E bounded text ingress
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** existing artifact router gains relative POST /upload/text, default-off `KAREN_GOVERNED_TEXT_UPLOAD_INGRESS_ENABLED=true` required for deliberate local opt-in. Raw UTF-8 text, exact headers x-upload-filename, idempotency-key (canonical UUID), x-upload-destination, x-upload-recipe. No query identity, multipart or encoded body. Declared and actual byte limits, bounded body read, durable session before/after stream, canonical PluginService delegation, sanitized errors and verified receipt no-store. Existing global ASGI limit remains. No live flag change or discovery transfer advertising. This is not the complete general upload-session API.

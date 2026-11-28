@@ -188,3 +188,47 @@ def test_canonical_database_factory_preserves_storage_platform_and_tls_policy(mo
     with pytest.raises(RuntimeError, match="Storage capability is unavailable"):
         unavailable._bucket()
     assert requested_buckets == ["artifacts"]
+
+
+def test_owner_text_upload_resolves_cold_canonical_factory_and_reuses_runtime(monkeypatch):
+    from types import SimpleNamespace
+
+    from ai_karen_engine.database import factory as module
+    from ai_karen_engine.integrations import supabase_client
+
+    factory = module.DatabaseServiceFactory()
+    factory._services["database_client"] = SimpleNamespace(get_async_session=lambda: None)
+    platform = SimpleNamespace(storage=None, url=None, storage_tls_policy=None)
+    monkeypatch.setattr(supabase_client, "get_supabase_platform", lambda: platform)
+    monkeypatch.setattr(module, "get_database_service_factory", lambda: factory)
+
+    runtime = module.get_owner_text_upload_service()
+    assert runtime is not None
+    assert runtime._artifacts is factory.get_service("artifact_store")
+    assert runtime._sessions is factory.get_service("upload_session_repository")
+    assert module.get_owner_text_upload_service() is runtime
+
+    # Missing Storage remains a dependency failure, not an initialized bucket.
+    import pytest
+    with pytest.raises(RuntimeError, match="Storage capability is unavailable"):
+        runtime._artifacts._bucket()
+
+
+def test_failed_canonical_rebuild_invalidates_upload_runtime(monkeypatch):
+    from types import SimpleNamespace
+    from ai_karen_engine.database import factory as module
+    from ai_karen_engine.integrations import supabase_client
+
+    factory = module.DatabaseServiceFactory()
+    factory._services["database_client"] = SimpleNamespace(get_async_session=lambda: None)
+    monkeypatch.setattr(module, "get_database_service_factory", lambda: factory)
+    monkeypatch.setattr(supabase_client, "get_supabase_platform", lambda: SimpleNamespace(storage=None))
+    assert module.get_owner_text_upload_service() is not None
+
+    def unavailable():
+        raise RuntimeError("platform unavailable")
+    monkeypatch.setattr(supabase_client, "get_supabase_platform", unavailable)
+    assert factory.create_canonical_repositories() is None
+    assert factory.get_service("owner_text_upload") is None
+    assert module.get_owner_text_upload_service() is None
+    assert factory.initialize_database() is False

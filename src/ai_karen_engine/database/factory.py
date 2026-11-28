@@ -175,6 +175,8 @@ class DatabaseServiceFactory:
 
     def create_canonical_repositories(self):
         """Create canonical DATA-CONVERGE-1 repositories."""
+        # A failed reconstruction must not leave an old upload service advertised.
+        self._services.pop("owner_text_upload", None)
         try:
             from ai_karen_engine.services.database.repositories import RepositoryFactory
             from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
@@ -210,7 +212,7 @@ class DatabaseServiceFactory:
             self._services["artifact_store"] = factory.create_artifact_store()
             self._services["upload_session_repository"] = factory.create_upload_session_repository()
             from ai_karen_engine.core.runtime.owner_text_upload import OwnerTextUploadService
-            self._services["owner_text_upload"] = OwnerTextUploadService(
+            owner_text_upload = OwnerTextUploadService(
                 sessions=self._services["upload_session_repository"],
                 artifacts=self._services["artifact_store"],
             )
@@ -227,6 +229,7 @@ class DatabaseServiceFactory:
             )
 
             logger.info("Canonical repositories created successfully")
+            self._services["owner_text_upload"] = owner_text_upload
             return factory
 
         except Exception as e:
@@ -252,7 +255,9 @@ class DatabaseServiceFactory:
                 return False
 
             # Initialize canonical repositories and Supabase platform
-            self.create_canonical_repositories()
+            if self.create_canonical_repositories() is None:
+                logger.error("Canonical database repository initialization failed")
+                return False
 
             # Runtime initialization never seeds identities or tenant-scoped RBAC.
             # Schema/baseline data are migration-owned; first-user creation belongs
@@ -357,6 +362,24 @@ def get_database_service_factory(
     return _global_factory
 
 
+def get_owner_text_upload_service():
+    """Resolve the canonical upload runtime without a second factory or registry.
+
+    Startup may already have constructed the repositories. A cold local
+    runtime may initialize them through this same factory; failure is explicit.
+    A constructed service is not evidence that remote Storage is healthy.
+    """
+    from ai_karen_engine.core.runtime.owner_text_upload import OwnerTextUploadService
+
+    factory = get_database_service_factory()
+    service = factory.get_service("owner_text_upload")
+    if service is None:
+        if factory.create_canonical_repositories() is None:
+            return None
+        service = factory.get_service("owner_text_upload")
+    return service if isinstance(service, OwnerTextUploadService) else None
+
+
 def get_database_client():
     """Get or create global database client."""
     factory = get_database_service_factory()
@@ -429,6 +452,7 @@ __all__ = [
     "DatabaseServiceFactory",
     "get_database_service_factory",
     "get_database_client",
+    "get_owner_text_upload_service",
     "get_conversation_manager",
     "get_memory_manager",
     "get_tenant_manager",

@@ -267,7 +267,7 @@ class PluginService:
         filename: str, data: bytes, idempotency_key: str,
     ):
         """Internal host transfer; no caller-supplied policy or identity grant."""
-        from ai_karen_engine.database.factory import get_database_service_factory
+        from ai_karen_engine.database.factory import get_owner_text_upload_service
         from ai_karen_engine.core.runtime.owner_text_upload import (
             OwnerTextUploadService, UploadOutcomeUnavailable,
         )
@@ -316,7 +316,7 @@ class PluginService:
                             await check_durable()
 
                         await authorize()
-                        runtime = get_database_service_factory().get_service("owner_text_upload")
+                        runtime = get_owner_text_upload_service()
                         if not isinstance(runtime, OwnerTextUploadService):
                             raise RuntimeError("file_upload_runtime_unavailable")
                         receipt = await runtime.save(

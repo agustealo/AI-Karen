@@ -10,6 +10,8 @@ on:
       - "src/ai_karen_engine/services/database/repositories/artifact_store.py"
       - "tests/services/test_upload_session_repository.py"
       - "src/ai_karen_engine/core/runtime/owner_text_upload.py"
+      - "src/ai_karen_engine/database/factory.py"
+      - "tests/integrations/test_supabase_current_environment.py"
       - "tests/core/runtime/test_owner_text_upload.py"
       - "src/ai_karen_engine/api_routes/artifacts.py"
       - "tests/auth/test_artifact_upload_bounded_ingress.py"
@@ -35,6 +37,8 @@ on:
       - "src/ai_karen_engine/services/database/repositories/artifact_store.py"
       - "tests/services/test_upload_session_repository.py"
       - "src/ai_karen_engine/core/runtime/owner_text_upload.py"
+      - "src/ai_karen_engine/database/factory.py"
+      - "tests/integrations/test_supabase_current_environment.py"
       - "tests/core/runtime/test_owner_text_upload.py"
       - "src/ai_karen_engine/api_routes/artifacts.py"
       - "tests/auth/test_artifact_upload_bounded_ingress.py"
@@ -287,6 +291,7 @@ jobs:
             tests/services/test_artifact_storage_platform_client.py \
             tests/services/test_upload_session_repository.py \
             tests/core/runtime/test_owner_text_upload.py \
+            tests/integrations/test_supabase_current_environment.py \
             tests/auth/test_artifact_upload_bounded_ingress.py \
             tests/services/test_artifact_upload_compensation.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
