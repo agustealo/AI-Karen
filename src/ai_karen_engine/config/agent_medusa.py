@@ -114,6 +114,18 @@ class AgentMedusaRuntimeSettings:
             raise AgentMedusaConfigError("worker_id must not be empty")
 
 
+    def validate_production_redis_admission(self) -> None:
+        """Reject unguarded shared admission at a production authority boundary."""
+        if (
+            self.distributed_run_control_enabled
+            and self.run_redis_admission_reserve_bytes == 0
+        ):
+            raise AgentMedusaConfigError(
+                "KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES must be positive "
+                "for production shared run coordination"
+            )
+
+
 _SETTINGS: AgentMedusaRuntimeSettings | None = None
 
 
@@ -122,7 +134,19 @@ def get_agent_medusa_runtime_settings() -> AgentMedusaRuntimeSettings:
 
     global _SETTINGS
     if _SETTINGS is None:
-        _SETTINGS = AgentMedusaRuntimeSettings(
+        from .runtime import (
+            Environment,
+            get_runtime_settings,
+            production_environment_declared,
+        )
+
+        # An explicit production alias cannot be masked by a local override.
+        # Do not import ASGI/server settings from the execution config owner.
+        production = (
+            get_runtime_settings().environment == Environment.PRODUCTION
+            or production_environment_declared()
+        )
+        settings = AgentMedusaRuntimeSettings(
             deepagents_research_enabled=_env_bool(
                 "KAREN_MEDUSA_DEEPAGENTS_RESEARCH_ENABLED", False
             ),
@@ -152,11 +176,15 @@ def get_agent_medusa_runtime_settings() -> AgentMedusaRuntimeSettings:
                 "KAREN_MEDUSA_RUN_RECONCILIATION_BATCH_SIZE", 100
             ),
             run_redis_admission_reserve_bytes=_env_int(
-                "KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES", 0
+                "KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES",
+                16 * 1024 * 1024 if production else 0,
             ),
             run_key_prefix=os.getenv("KAREN_MEDUSA_RUN_KEY_PREFIX", "kari:medusa:runs"),
             worker_id=os.getenv("KAREN_WORKER_ID", _default_worker_id()),
         )
+        if production:
+            settings.validate_production_redis_admission()
+        _SETTINGS = settings
     return _SETTINGS
 
 

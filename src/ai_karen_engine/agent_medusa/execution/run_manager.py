@@ -18,6 +18,7 @@ from ai_karen_engine.config.agent_medusa import (
     AgentMedusaRuntimeSettings,
     get_agent_medusa_runtime_settings,
 )
+from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
 from ai_karen_engine.core.logging import get_logger
 
 from ..telemetry.metrics import record_retention_event
@@ -176,7 +177,7 @@ class MedusaRunManager:
                     ExecutionRunStatus.ORPHANED,
                 }
             ):
-                raise RuntimeError(f"Medusa run already active or unresolved: {run_id}")
+                raise ExecutionAdmissionRejected("medusa_local_registration_conflict")
             run = ExecutionRun(
                 run_id=run_id,
                 correlation_id=correlation_id,
@@ -204,16 +205,24 @@ class MedusaRunManager:
                     created_at=started_at,
                 )
                 run.durable_registered = True
-        except Exception:
-            async with self._lock:
-                if self._runs.get(run_id) is run:
-                    self._runs.pop(run_id, None)
-            if self._settings.durable_run_ledger_required:
-                raise
-            logger.exception(
-                "Medusa durable run registration degraded",
-                extra={"run_id": run_id, "correlation_id": correlation_id},
+        except asyncio.CancelledError:
+            await self._finish_cancelled_admission(
+                run,
+                error_type="DurableRegistrationUnconfirmed",
+                persist_failure=False,
             )
+            raise
+        except Exception as exc:
+            reason = (
+                "medusa_durable_registration_conflict"
+                if isinstance(exc, DurableRunLedgerConflict)
+                else "medusa_durable_registration_unconfirmed"
+            )
+            # A lost INSERT acknowledgement is not ownership proof.
+            await self._retire_rejected_registration(
+                run, error_type=reason, persist_failure=False
+            )
+            raise ExecutionAdmissionRejected(reason) from None
 
         guarded = (
             self._settings.distributed_run_control_enabled
@@ -251,22 +260,14 @@ class MedusaRunManager:
             uncertain = registration_attempted and not isinstance(
                 exc, DistributedRunAdmissionCancelled
             )
-            cleanup = asyncio.create_task(
-                self._retire_rejected_registration(
-                    run,
-                    error_type=(
-                        "AdmissionCancelledRegistrationUnconfirmed"
-                        if uncertain
-                        else "AdmissionCancelledBeforeRegistration"
-                    ),
+            await self._finish_cancelled_admission(
+                run,
+                error_type=(
+                    "AdmissionCancelledRegistrationUnconfirmed"
+                    if uncertain
+                    else "AdmissionCancelledBeforeRegistration"
                 ),
             )
-            while not cleanup.done():
-                try:
-                    await asyncio.shield(cleanup)
-                except asyncio.CancelledError:
-                    continue
-            cleanup.result()
             raise
         except Exception as exc:
             if isinstance(exc, DistributedRunAdmissionRejected):
@@ -315,33 +316,36 @@ class MedusaRunManager:
                     tenant_id=tenant_id,
                     worker_id=self._settings.worker_id,
                     started_at=started_at,
-                )
-            except (DurableRunLedgerConflict, DurableRunLedgerUnavailable):
-                logger.exception(
-                    "Medusa durable running transition failed",
-                    extra={"run_id": run_id},
-                )
-                if run.shared_registered:
-                    try:
-                        await self._distributed_store.mark_terminal(
-                            run_id=run_id,
-                            tenant_id=run.tenant_id,
-                            worker_id=self._settings.worker_id,
-                            status="failed",
-                            completed_at=datetime.now(timezone.utc),
-                            error_type="DurableRunningTransitionFailed",
+                    shared_registration=(
+                        "acknowledged"
+                        if run.shared_registered
+                        else (
+                            "unavailable"
+                            if self._settings.distributed_run_control_enabled
+                            else "not_configured"
                         )
-                    except Exception:
-                        logger.exception(
-                            "Medusa shared compensation after durable failure failed",
-                            extra={"run_id": run_id},
-                        )
-                async with self._lock:
-                    if self._runs.get(run_id) is run:
-                        self._runs.pop(run_id, None)
-                if self._settings.durable_run_ledger_required:
-                    raise
-                run.durable_registered = False
+                    ),
+                )
+            except asyncio.CancelledError:
+                await self._finish_cancelled_admission(
+                    run,
+                    error_type="DurableRunningTransitionUnconfirmed",
+                    persist_failure=False,
+                )
+                raise
+            except Exception as exc:
+                reason = (
+                    "medusa_durable_running_conflict"
+                    if isinstance(exc, DurableRunLedgerConflict)
+                    else "medusa_durable_running_unconfirmed"
+                )
+                # Preserve both stores for authoritative repair. A failed
+                # acknowledgement or conflict is not permission to overwrite
+                # either record with a terminal receipt.
+                await self._retire_rejected_registration(
+                    run, error_type=reason, persist_failure=False
+                )
+                raise ExecutionAdmissionRejected(reason) from None
 
         if run.shared_registered:
             run.heartbeat_task = asyncio.create_task(
@@ -350,15 +354,49 @@ class MedusaRunManager:
             )
         return run
 
+    async def _finish_cancelled_admission(
+        self,
+        run: ExecutionRun,
+        *,
+        error_type: str,
+        persist_failure: bool = True,
+    ) -> None:
+        cleanup = asyncio.create_task(
+            self._retire_rejected_registration(
+                run, error_type=error_type, persist_failure=persist_failure
+            ),
+        )
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                continue
+        cleanup.result()
+
     async def _retire_rejected_registration(
         self,
         run: ExecutionRun,
         *,
         error_type: str,
+        persist_failure: bool = True,
     ) -> None:
         """Close an unstarted task without asserting shared registration rollback."""
         try:
-            if run.durable_registered:
+            if not persist_failure:
+                logger.warning(
+                    "medusa_durable_admission_denied",
+                    extra={
+                        "run_id": run.run_id,
+                        "correlation_id": run.correlation_id,
+                        "request_id": run.request_id,
+                        "tenant_id": run.tenant_id,
+                        "user_id": run.user_id,
+                        "reason_code": error_type,
+                        "durable_registered": run.durable_registered,
+                        "shared_registered": run.shared_registered,
+                    },
+                )
+            elif run.durable_registered:
                 await self._safe_mark_durable_terminal(
                     run=run,
                     status=ExecutionRunStatus.FAILED,
@@ -1600,10 +1638,35 @@ class MedusaRunManager:
             if run_id in local_run_ids:
                 continue
             try:
-                shared = await self._distributed_store.get(
-                    run_id=run_id,
-                    tenant_id=tenant_id,
-                )
+                observe = getattr(self._distributed_store, "observe_reconciliation", None)
+                if observe is None:
+                    # Older injected adapters can supply receipts, but cannot
+                    # prove lease expiry from a collapsed orphan snapshot.
+                    shared = await self._distributed_store.get(
+                        run_id=run_id, tenant_id=tenant_id
+                    )
+                    if shared.get("status") == "orphaned":
+                        continue
+                else:
+                    evidence = await observe(run_id=run_id, tenant_id=tenant_id)
+                    if evidence.snapshot is None:
+                        await self._record_unresolved_shared_evidence(
+                            row, tenant_id, evidence.kind
+                        )
+                        continue
+                    shared = evidence.snapshot
+                    if evidence.kind == "active" and shared.get("status") == "orphaned":
+                        # Clock advancement between observations is not a new proof.
+                        continue
+                    if evidence.kind == "lease_expired" and (
+                        evidence.expiry_fence is None
+                        or shared.get("status") != "orphaned"
+                        or any(shared.get(key) for key in (
+                            "completed_at", "outcome_status", "terminal_authority",
+                        ))
+                    ):
+                        # Expiry evidence must never impersonate a terminal receipt.
+                        continue
             except DistributedRunStoreUnavailable:
                 return
             except DistributedRunTenantMismatch:
@@ -1613,16 +1676,12 @@ class MedusaRunManager:
                 )
                 continue
             except DistributedRunNotFound:
-                shared = {
-                    "status": "orphaned",
-                    "completed_at": None,
-                    "error_type": "WorkerLeaseExpired",
-                }
+                await self._record_unresolved_shared_evidence(row, tenant_id, "absent")
+                continue
 
-            # A present shared receipt must match the durable identity.
-            # Absence is handled by the existing orphan reconciliation policy.
-            if "run_id" in shared and any(
-                shared.get(key) != row.get(key)
+            # Only a present identity-matched shared receipt can repair history.
+            if any(
+                not shared.get(key) or shared.get(key) != row.get(key)
                 for key in ("run_id", "correlation_id", "user_id", "owner_worker_id")
             ):
                 logger.warning(
@@ -1630,8 +1689,8 @@ class MedusaRunManager:
                     extra={"run_id": run_id, "tenant_id": tenant_id},
                 )
                 continue
-            if "run_id" in shared and _canonical_tenant_id(
-                str(shared.get("tenant_id") or "")
+            if not shared.get("tenant_id") or _canonical_tenant_id(
+                str(shared["tenant_id"])
             ) != _canonical_tenant_id(tenant_id):
                 continue
             shared_status = str(shared.get("status") or "")
@@ -1654,6 +1713,61 @@ class MedusaRunManager:
             ):
                 continue
             try:
+                expiry_fence: dict[str, Any] = {}
+                if shared_status == "orphaned" and not shared.get("completed_at"):
+                    # Only the classified adapter can distinguish expiry
+                    # from a missing claim or a missing hash.
+                    if observe is None or evidence.kind != "lease_expired":
+                        continue
+                    heartbeat = self._parse_time(row.get("heartbeat_at"))
+                    if (
+                        row.get("status") not in {"running", "cancellation_requested"}
+                        or heartbeat is None
+                        or (datetime.now(timezone.utc) - heartbeat).total_seconds()
+                        < self._settings.run_orphan_grace_seconds
+                    ):
+                        continue
+                    read = getattr(self._durable_ledger, "read_admission_provenance", None)
+                    if read is None:
+                        continue
+                    provenance = await read(
+                        run_id=run_id,
+                        tenant_id=tenant_id,
+                        user_id=str(row.get("user_id") or ""),
+                        correlation_id=str(row.get("correlation_id") or ""),
+                        worker_id=str(row.get("owner_worker_id") or ""),
+                    )
+                    if (
+                        provenance is None
+                        or provenance.phase != "running"
+                        or provenance.shared_registration != "acknowledged"
+                    ):
+                        continue
+
+                    async def confirm_expiry() -> bool:
+                        try:
+                            current = await asyncio.wait_for(
+                                observe(run_id=run_id, tenant_id=tenant_id),
+                                timeout=self._settings.run_heartbeat_interval_seconds,
+                            )
+                        except (
+                            DistributedRunStoreUnavailable,
+                            DistributedRunTenantMismatch,
+                            TimeoutError,
+                            ValueError,
+                        ):
+                            return False
+                        return (
+                            current.kind == "lease_expired"
+                            and current.expiry_fence == evidence.expiry_fence
+                            and current.snapshot == shared
+                        )
+
+                    expiry_fence = {
+                        "expected_status": row["status"],
+                        "expected_heartbeat_at": heartbeat,
+                        "confirm_expiry": confirm_expiry,
+                    }
                 changed = await reconcile(
                     run_id=run_id,
                     tenant_id=tenant_id,
@@ -1666,6 +1780,7 @@ class MedusaRunManager:
                     expected_correlation_id=shared.get("correlation_id"),
                     expected_user_id=shared.get("user_id"),
                     terminal_authority=shared.get("terminal_authority"),
+                    **expiry_fence,
                 )
             except ValueError:
                 logger.warning(
@@ -1693,6 +1808,35 @@ class MedusaRunManager:
                 "Medusa reconciled durable history from Redis",
                 extra={"tenant_id": tenant_id, "reconciled_run_count": reconciled},
             )
+
+    async def _record_unresolved_shared_evidence(
+        self, row: dict[str, Any], tenant_id: str, reason: str
+    ) -> None:
+        """Observe admission history without granting repair or execution."""
+        provenance_status = "unobserved"
+        read = getattr(self._durable_ledger, "read_admission_provenance", None)
+        if read is not None:
+            try:
+                evidence = await read(
+                    run_id=str(row["run_id"]),
+                    tenant_id=tenant_id,
+                    user_id=str(row.get("user_id") or ""),
+                    correlation_id=str(row.get("correlation_id") or ""),
+                    worker_id=str(row.get("owner_worker_id") or ""),
+                )
+                provenance_status = evidence.phase if evidence is not None else "absent"
+            except (DurableRunLedgerUnavailable, ValueError):
+                provenance_status = "unavailable"
+        logger.warning(
+            "medusa_shared_evidence_unresolved",
+            extra={
+                "run_id": row["run_id"],
+                "tenant_id": tenant_id,
+                "correlation_id": row.get("correlation_id"),
+                "reason_code": reason,
+                "admission_phase": provenance_status,
+            },
+        )
 
     async def _distributed_available(self) -> bool:
         if not self._settings.distributed_run_control_enabled:

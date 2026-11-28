@@ -8,8 +8,9 @@ cannot provide truthful cluster leases or remote cancellation.
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from redis.exceptions import OutOfMemoryError, RedisError
 
@@ -258,6 +259,20 @@ class DistributedRunNotCancellable(RuntimeError):
     """Raised when a shared run cannot accept a cancellation request."""
 
 
+@dataclass(frozen=True, slots=True)
+class SharedRunEvidence:
+    """One atomic observation, not an authorization to repair or execute."""
+
+    kind: Literal[
+        "absent", "claim_without_hash", "invalid_identity", "invalid_lease",
+        "claim_missing", "claim_mismatch", "lease_expired", "active", "terminal",
+    ]
+    snapshot: dict[str, Any] | None = None
+    # Internal raw status and lease timestamp from the same atomic observation.
+    # The public snapshot collapses expired running/cancelling into orphaned.
+    expiry_fence: tuple[str, str] | None = None
+
+
 class DistributedRunStore(Protocol):
     """Storage contract used by the Medusa run manager."""
 
@@ -300,6 +315,10 @@ class DistributedRunStore(Protocol):
     async def request_cancel(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]: ...
+
+    async def observe_reconciliation(
+        self, *, run_id: str, tenant_id: str
+    ) -> SharedRunEvidence: ...
 
     async def list_runs(
         self,
@@ -684,6 +703,56 @@ class RedisDistributedRunStore:
                 "shared_run_observation_unavailable"
             ) from exc
         return record, owner
+
+    async def observe_reconciliation(
+        self, *, run_id: str, tenant_id: str
+    ) -> SharedRunEvidence:
+        """Classify hash/claim evidence without changing either key."""
+        client = await self._client()
+        record, owner = await self._read_run_authority(client, run_id)
+        if not record:
+            return SharedRunEvidence("claim_without_hash" if owner is not None else "absent")
+        if record.get("tenant_id") != tenant_id:
+            raise DistributedRunTenantMismatch(run_id)
+        if record.get("run_id") != run_id or not all(
+            record.get(key) for key in ("owner_worker_id", "user_id", "correlation_id")
+        ):
+            return SharedRunEvidence("invalid_identity")
+        status = record.get("status")
+        if status in {"completed", "failed", "cancelled", "orphaned"}:
+            if owner is not None:
+                return SharedRunEvidence("claim_mismatch")
+            try:
+                return SharedRunEvidence(
+                    "terminal", self._snapshot(record, claim_alive=False)
+                )
+            except (ValueError, TypeError, OverflowError):
+                return SharedRunEvidence("invalid_lease")
+        if status not in self._ACTIVE:
+            return SharedRunEvidence("invalid_identity")
+        if any(record.get(key) for key in ("completed_at", "outcome_status", "terminal_authority")):
+            # An active hash cannot also be an authoritative terminal receipt.
+            return SharedRunEvidence("invalid_identity")
+        try:
+            expires = self._parse_time(record.get("lease_expires_at"))
+        except (ValueError, TypeError, OverflowError):
+            return SharedRunEvidence("invalid_lease")
+        if expires is None:
+            return SharedRunEvidence("invalid_lease")
+        if owner is not None and owner != record["owner_worker_id"]:
+            return SharedRunEvidence("claim_mismatch")
+        if expires <= self._now():
+            # An existing claim contradicts the expired metadata timestamp.
+            if owner is not None:
+                return SharedRunEvidence("invalid_lease")
+            return SharedRunEvidence(
+                "lease_expired",
+                self._snapshot(record, claim_alive=False),
+                expiry_fence=(str(status), record["lease_expires_at"]),
+            )
+        if owner is None:
+            return SharedRunEvidence("claim_missing")
+        return SharedRunEvidence("active", self._snapshot(record, claim_alive=True))
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any]:
         client = await self._client()

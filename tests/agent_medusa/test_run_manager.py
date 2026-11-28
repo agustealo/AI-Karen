@@ -10,6 +10,7 @@ from ai_karen_engine.agent_medusa.execution.run_manager import (
     RunTenantMismatchError,
 )
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
+from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
 
 
 def _local_settings() -> AgentMedusaRuntimeSettings:
@@ -120,7 +121,9 @@ async def test_unverified_retirement_never_claims_cancellation_or_success(
         assert [row["run_id"] for row in active] == ["unresolved"]
         with pytest.raises(RunNotCancellableError):
             await manager.cancel(**scope)
-        with pytest.raises(RuntimeError, match="already active or unresolved"):
+        with pytest.raises(
+            ExecutionAdmissionRejected, match="medusa_local_registration_conflict"
+        ):
             await manager.register(
                 **scope, correlation_id="corr", user_id="owner", task=task
             )

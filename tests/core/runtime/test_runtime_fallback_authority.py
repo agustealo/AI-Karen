@@ -103,7 +103,9 @@ async def test_authorized_recovery_uses_exact_original_plan_and_meter():
         "disallowed_degraded", "different_meter_budget",
         "gateway_exhausted", "permission_denied", "receipt_uncertain",
         "medusa_admission_denied", "medusa_registration_unconfirmed",
-        "medusa_registration_conflict",
+        "medusa_registration_conflict", "medusa_durable_registration_conflict",
+        "medusa_durable_registration_unconfirmed", "medusa_durable_running_conflict",
+        "medusa_durable_running_unconfirmed", "medusa_local_registration_conflict",
     ],
 )
 async def test_recovery_must_never_invent_execution_authority(case):
@@ -166,6 +168,10 @@ async def test_recovery_must_never_invent_execution_authority(case):
             "medusa_registration_conflict": "redis_registration_conflict",
         }[case]
         failure = DistributedRunAdmissionRejected(reason)
+    elif case.startswith(("medusa_durable_", "medusa_local_")):
+        from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
+
+        failure = ExecutionAdmissionRejected(case)
     elif case == "receipt_uncertain":
         from ai_karen_engine.core.runtime.outcome.store import OutcomeStoreError
 

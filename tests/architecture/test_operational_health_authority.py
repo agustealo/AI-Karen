@@ -27,17 +27,20 @@ def _load_medusa_config_for_contract(monkeypatch: pytest.MonkeyPatch) -> ModuleT
     dependencies. Isolate that package boundary, not the Medusa loader or
     its validation. Restore the canonical module after each test.
     """
-    name = "ai_karen_engine.config.agent_medusa"
-    path = (
-        Path(__file__).resolve().parents[2]
-        / "src/ai_karen_engine/config/agent_medusa.py"
-    )
-    spec = importlib.util.spec_from_file_location(name, path)
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, name, module)
-    spec.loader.exec_module(module)
-    return module
+    root = Path(__file__).resolve().parents[2] / "src/ai_karen_engine/config"
+
+    def load(name: str, filename: str) -> ModuleType:
+        spec = importlib.util.spec_from_file_location(name, root / filename)
+        assert spec is not None and spec.loader is not None
+        module = importlib.util.module_from_spec(spec)
+        monkeypatch.setitem(sys.modules, name, module)
+        spec.loader.exec_module(module)
+        return module
+
+    # Both configuration owners are stdlib-only. The lean workflow needs no
+    # ASGI/Pydantic/dotenv dependencies to execute their actual validation.
+    load("ai_karen_engine.config.runtime", "runtime.py")
+    return load("ai_karen_engine.config.agent_medusa", "agent_medusa.py")
 
 
 def _set_safe_production_environment(monkeypatch: pytest.MonkeyPatch) -> ModuleType:
@@ -56,9 +59,11 @@ def _set_safe_production_environment(monkeypatch: pytest.MonkeyPatch) -> ModuleT
     ):
         monkeypatch.setenv(name, "false")
 
+    monkeypatch.setenv("ENVIRONMENT", "production")
     monkeypatch.setenv("KARI_ENABLE_MEMORY_SERVICE", "true")
     monkeypatch.setenv("REDIS_URL", "redis://red-private:6379/0")
     monkeypatch.delenv("REDIS_PASSWORD", raising=False)
+    monkeypatch.setenv("KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES", "16777216")
     monkeypatch.setenv("KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", "true")
     monkeypatch.setenv("KAREN_MEDUSA_DURABLE_RUN_LEDGER_ENABLED", "true")
     monkeypatch.setenv("KAREN_MEDUSA_DURABLE_RUN_LEDGER_REQUIRED", "true")
@@ -335,6 +340,21 @@ async def test_production_distributed_readiness_requires_redis_even_without_memo
     redis_check.return_value = {"ready": True, "status": "not_required"}
     assert (await service.readiness(environment="production")).ready is True
     redis_check.assert_awaited_once_with(required=False)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("environment", ["production", "prod"])
+async def test_cached_local_zero_reserve_blocks_production_readiness(monkeypatch, environment):
+    agent_medusa = _set_safe_production_environment(monkeypatch)
+    monkeypatch.setattr(agent_medusa, "_SETTINGS", agent_medusa.AgentMedusaRuntimeSettings())
+    service = OperationalHealthService()
+    monkeypatch.setattr(service, "_database_check", AsyncMock(return_value={"ready": True}))
+    redis_check = AsyncMock(return_value={"ready": True, "status": "healthy"})
+    monkeypatch.setattr(service, "_redis_check", redis_check)
+    result = await service.readiness(environment=environment)
+    assert not result.ready
+    assert "medusa_runtime_settings=invalid_or_unavailable" in result.checks["configuration"]["violations"]
+    redis_check.assert_awaited_once_with(required=True, durability_required=True)
 
 
 @pytest.mark.asyncio

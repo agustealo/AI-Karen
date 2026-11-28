@@ -260,7 +260,10 @@ async def test_production_distributed_coordination_attaches_canonical_redis_with
     _required(monkeypatch, False)
     monkeypatch.setattr(
         agent_medusa, "get_agent_medusa_runtime_settings",
-        lambda: SimpleNamespace(distributed_run_control_enabled=True),
+        lambda: agent_medusa.AgentMedusaRuntimeSettings(
+            distributed_run_control_enabled=True,
+            run_redis_admission_reserve_bytes=16777216,
+        ),
     )
     manager = SimpleNamespace(
         is_healthy=AsyncMock(return_value=False),
@@ -275,3 +278,25 @@ async def test_production_distributed_coordination_attaches_canonical_redis_with
     manager.initialize.assert_awaited_once()
     await application_runtime.shutdown_application_redis(app)
     module.shutdown_redis_manager.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("environment", ["production", "prod"])
+async def test_production_lifespan_rejects_cached_zero_reserve_before_startup(
+    monkeypatch: pytest.MonkeyPatch, environment: str,
+) -> None:
+    from ai_karen_engine.config import agent_medusa
+
+    server_startup = ModuleType("ai_karen_engine.server.startup")
+    server_startup.on_startup = AsyncMock()
+    server_startup.on_shutdown = AsyncMock()
+    monkeypatch.setitem(sys.modules, server_startup.__name__, server_startup)
+    monkeypatch.setattr(agent_medusa, "_SETTINGS", agent_medusa.AgentMedusaRuntimeSettings())
+    settings = SimpleNamespace(environment=environment)
+    app = SimpleNamespace(state=SimpleNamespace(settings=settings))
+    lifecycle = application_runtime.create_application_lifespan(settings)
+    with pytest.raises(agent_medusa.AgentMedusaConfigError, match="must be positive"):
+        async with lifecycle(app):
+            pytest.fail("Unsafe production configuration must not yield readiness")
+    server_startup.on_startup.assert_not_awaited()
+    server_startup.on_shutdown.assert_not_awaited()

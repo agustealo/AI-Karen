@@ -36,6 +36,19 @@ class Environment(str, Enum):
     LOCAL = "local"
 
 
+# Both runtime and legacy server settings consume these environment aliases.
+# Production safety must not depend on which alias takes precedence.
+_PRODUCTION_ENVIRONMENT_ALIASES = ("KARI_ENVIRONMENT", "ENVIRONMENT", "KARI_ENV", "ENV")
+
+
+def production_environment_declared() -> bool:
+    """Return whether any supported environment alias explicitly declares production."""
+    return any(
+        os.getenv(name, "").strip().lower() in {Environment.PRODUCTION.value, "prod"}
+        for name in _PRODUCTION_ENVIRONMENT_ALIASES
+    )
+
+
 class RuntimeEngine(str, Enum):
     """Primary runtime engine selection."""
 
@@ -752,6 +765,7 @@ def validate_runtime_settings_startup(settings: Optional[RuntimeSettings] = None
 
 __all__ = [
     "Environment",
+    "production_environment_declared",
     "RuntimeEngine",
     "LLMSettings",
     "ProviderFlags",
