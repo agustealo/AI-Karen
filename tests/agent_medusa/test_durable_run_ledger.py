@@ -1276,6 +1276,7 @@ def test_retention_metric_ignores_unbounded_labels_and_collector_failure(monkeyp
     )
     metrics.record_retention_event("acknowledgement", "acknowledged")
 
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("phase", ["register", "mark_running"])
 @pytest.mark.parametrize(
@@ -1579,8 +1580,15 @@ async def test_admission_provenance_readback_is_bounded_and_fail_closed(case):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "kind", ["absent", "claim_without_hash", "claim_missing", "claim_mismatch",
-             "invalid_identity", "invalid_lease"]
+    "kind",
+    [
+        "absent",
+        "claim_without_hash",
+        "claim_missing",
+        "claim_mismatch",
+        "invalid_identity",
+        "invalid_lease",
+    ],
 )
 async def test_reconciliation_does_not_write_unresolved_evidence(kind):
     from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
@@ -1606,8 +1614,11 @@ async def test_reconciliation_does_not_write_unresolved_evidence(kind):
     )
     await manager._reconcile_tenant_from_redis(tenant_id)
     ledger.read_admission_provenance.assert_awaited_once_with(
-        run_id="uncertain", tenant_id=tenant_id, user_id="user-1",
-        correlation_id="corr-uncertain", worker_id="dead-worker",
+        run_id="uncertain",
+        tenant_id=tenant_id,
+        user_id="user-1",
+        correlation_id="corr-uncertain",
+        worker_id="dead-worker",
     )
     ledger.reconcile_from_shared.assert_not_awaited()
     assert ledger.records["uncertain"]["status"] == "created"
@@ -1616,8 +1627,15 @@ async def test_reconciliation_does_not_write_unresolved_evidence(kind):
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "case",
-    ["verified", "changed_status", "changed_heartbeat", "missing_fence", "revoked",
-     "zero_update", "incomplete_identity"],
+    [
+        "verified",
+        "changed_status",
+        "changed_heartbeat",
+        "missing_fence",
+        "revoked",
+        "zero_update",
+        "incomplete_identity",
+    ],
 )
 async def test_inferred_expiry_reconciliation_requires_stable_owned_row(case):
     stamp = datetime(2026, 11, 25, tzinfo=timezone.utc)
@@ -1692,7 +1710,9 @@ async def test_inferred_expiry_reconciliation_requires_stable_owned_row(case):
         ("expiry_with_terminal_timestamp", "running"),
     ],
 )
-async def test_manager_expiry_repair_requires_readback_and_reobservation(case, expected):
+async def test_manager_expiry_repair_requires_readback_and_reobservation(
+    case, expected
+):
     from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
         SharedRunEvidence,
     )
@@ -1720,7 +1740,8 @@ async def test_manager_expiry_repair_requires_readback_and_reobservation(case, e
     if case == "expiry_with_terminal_timestamp":
         snapshot["completed_at"] = lease_stamp
     observed = SharedRunEvidence(
-        "lease_expired", snapshot,
+        "lease_expired",
+        snapshot,
         expiry_fence=None if case == "missing_expiry_fence" else fence,
     )
     second = observed
@@ -1730,12 +1751,18 @@ async def test_manager_expiry_repair_requires_readback_and_reobservation(case, e
         second = DistributedRunStoreUnavailable("unavailable")
     elif case == "expiry_timestamp_changed":
         second = SharedRunEvidence(
-            "lease_expired", snapshot,
-            expiry_fence=("running", (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat()),
+            "lease_expired",
+            snapshot,
+            expiry_fence=(
+                "running",
+                (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(),
+            ),
         )
     elif case == "expiry_status_changed":
         second = SharedRunEvidence(
-            "lease_expired", snapshot, expiry_fence=("cancelling", lease_stamp),
+            "lease_expired",
+            snapshot,
+            expiry_fence=("cancelling", lease_stamp),
         )
     store.observe_reconciliation = AsyncMock(side_effect=[observed, second])
     manager = MedusaRunManager(
@@ -1746,10 +1773,15 @@ async def test_manager_expiry_repair_requires_readback_and_reobservation(case, e
     await manager._reconcile_tenant_from_redis(tenant)
     assert ledger.records["expired"]["status"] == expected
     assert store.observe_reconciliation.await_count == (
-        1 if case in {
-            "fresh_heartbeat", "unknown_provenance", "missing_expiry_fence",
+        1
+        if case
+        in {
+            "fresh_heartbeat",
+            "unknown_provenance",
+            "missing_expiry_fence",
             "expiry_with_terminal_timestamp",
-        } else 2
+        }
+        else 2
     )
 
 
@@ -1796,7 +1828,9 @@ async def test_reconciliation_keyset_rotates_without_exposing_cursor_or_writing(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("interruption", ["wrap", "eviction"])
-async def test_stale_reconciliation_read_cannot_republish_cursor(monkeypatch, interruption):
+async def test_stale_reconciliation_read_cannot_republish_cursor(
+    monkeypatch, interruption
+):
     from ai_karen_engine.agent_medusa.execution import durable_run_ledger
 
     stamp = datetime(2026, 11, 25, tzinfo=timezone.utc)

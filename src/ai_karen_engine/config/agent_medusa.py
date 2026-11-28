@@ -113,7 +113,6 @@ class AgentMedusaRuntimeSettings:
         if not self.worker_id.strip():
             raise AgentMedusaConfigError("worker_id must not be empty")
 
-
     def validate_production_redis_admission(self) -> None:
         """Reject unguarded shared admission at a production authority boundary."""
         if (

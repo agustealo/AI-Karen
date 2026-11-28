@@ -663,7 +663,10 @@ class PostgresDurableRunLedger:
                         or metadata["admission_phase"] != expected_phase
                         or metadata["shared_registration"]
                         not in get_args(SharedRegistrationObservation)
-                        or (index == 0 and metadata["shared_registration"] != "unobserved")
+                        or (
+                            index == 0
+                            and metadata["shared_registration"] != "unobserved"
+                        )
                     ):
                         raise DurableRunLedgerUnavailable(invalid)
                     observation = cast(
@@ -682,7 +685,6 @@ class PostgresDurableRunLedger:
             raise DurableRunLedgerUnavailable(
                 "medusa_durable_ledger_unavailable"
             ) from exc
-
 
     async def read_transitions(
         self,

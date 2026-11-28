@@ -1638,7 +1638,9 @@ class MedusaRunManager:
             if run_id in local_run_ids:
                 continue
             try:
-                observe = getattr(self._distributed_store, "observe_reconciliation", None)
+                observe = getattr(
+                    self._distributed_store, "observe_reconciliation", None
+                )
                 if observe is None:
                     # Older injected adapters can supply receipts, but cannot
                     # prove lease expiry from a collapsed orphan snapshot.
@@ -1661,9 +1663,14 @@ class MedusaRunManager:
                     if evidence.kind == "lease_expired" and (
                         evidence.expiry_fence is None
                         or shared.get("status") != "orphaned"
-                        or any(shared.get(key) for key in (
-                            "completed_at", "outcome_status", "terminal_authority",
-                        ))
+                        or any(
+                            shared.get(key)
+                            for key in (
+                                "completed_at",
+                                "outcome_status",
+                                "terminal_authority",
+                            )
+                        )
                     ):
                         # Expiry evidence must never impersonate a terminal receipt.
                         continue
@@ -1727,7 +1734,9 @@ class MedusaRunManager:
                         < self._settings.run_orphan_grace_seconds
                     ):
                         continue
-                    read = getattr(self._durable_ledger, "read_admission_provenance", None)
+                    read = getattr(
+                        self._durable_ledger, "read_admission_provenance", None
+                    )
                     if read is None:
                         continue
                     provenance = await read(
