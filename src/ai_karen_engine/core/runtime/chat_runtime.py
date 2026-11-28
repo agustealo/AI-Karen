@@ -696,6 +696,7 @@ class ChatRuntime:
         request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
         try:
+            self._require_supported_attachment_execution(request, decision, plan)
             await self._admit_attachments(request, plan, meter)
             self._require_supported_attachment_execution(request, decision, plan)
         except AttachmentAdmissionDenied:
@@ -1522,6 +1523,7 @@ class ChatRuntime:
         request.context.bind_runtime_model_authority(plan, meter)
         meter.start()
         try:
+            self._require_supported_attachment_execution(request, decision, plan)
             await self._admit_attachments(request, plan, meter)
             self._require_supported_attachment_execution(request, decision, plan)
         except AttachmentAdmissionDenied:
