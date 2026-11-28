@@ -6,20 +6,22 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import json
 import logging
-import uuid
 from typing import Any, Protocol
 
 from ai_karen_engine.core.runtime.contracts import AuthorizedExecutionPlan
+from ai_karen_engine.core.runtime.document_operation_contract import (
+    MAX_CONTENT_SOURCE_REFERENCES as MAX_CONTENT_SOURCE_REFERENCES,
+    is_canonical_source_uuid,
+    runtime_content_operation_digest as runtime_content_operation_digest,
+    validate_source_operation,
+)
 from ai_karen_engine.extensions.contracts import (
     ExtensionExecutionContext, ExtensionExecutionRequest,
 )
 
 logger = logging.getLogger(__name__)
 PLUGIN = "content-intelligence"
-# Fixed protocol ceiling, shared by ingress, execution and inventory metadata.
-MAX_CONTENT_SOURCE_REFERENCES = 12
 
 
 class TextStore(Protocol):
@@ -32,84 +34,6 @@ class Kernel(Protocol):
     def get_record(self, plugin_id: str) -> dict[str, Any] | None: ...
     async def execute(self, request: ExtensionExecutionRequest) -> Any: ...
     async def admit(self, request: ExtensionExecutionRequest) -> Any: ...
-
-
-def _uuid(value: Any) -> bool:
-    if not isinstance(value, str):
-        return False
-    try:
-        return str(uuid.UUID(value)) == value
-    except (TypeError, ValueError, AttributeError):
-        return False
-
-
-def _sha(value: Any) -> bool:
-    return (
-        isinstance(value, str) and len(value) == 64
-        and all(ch in "0123456789abcdef" for ch in value)
-    )
-
-
-def _validate_source_operation(
-    operation: str, references: list[dict[str, str]], *,
-    query: str | None, left_id: str | None, right_id: str | None,
-) -> list[tuple[str, str]]:
-    """Validate operation shape and pin selection before any await."""
-    if operation not in {"analyze", "search", "compare"}:
-        raise ValueError("content_source_operation_invalid")
-    if not isinstance(references, list) or not 1 <= len(references) <= MAX_CONTENT_SOURCE_REFERENCES:
-        raise ValueError("content_source_count_invalid")
-    ids: set[str] = set()
-    selection: list[tuple[str, str]] = []
-    for ref in references:
-        if (
-            not isinstance(ref, dict)
-            or set(ref) != {"source_id", "revision"}
-            or not _uuid(ref["source_id"])
-            or not _sha(ref["revision"])
-            or ref["source_id"] in ids
-        ):
-            raise PermissionError("content_source_reference_invalid")
-        ids.add(ref["source_id"])
-        selection.append((ref["source_id"], ref["revision"]))
-    if operation == "search":
-        if not isinstance(query, str) or not 1 <= len(query.strip()) <= 512:
-            raise ValueError("content_source_query_invalid")
-    elif query is not None:
-        raise ValueError("content_source_unused_query")
-    if operation == "compare":
-        if left_id not in ids or right_id not in ids or left_id == right_id:
-            raise ValueError("content_source_comparison_invalid")
-    elif left_id is not None or right_id is not None:
-        raise ValueError("content_source_unused_selection")
-    return selection
-
-
-def runtime_content_operation_digest(
-    references: list[dict[str, str]], operation: Any,
-) -> str:
-    """Bind a validated operation and its arguments without publishing private query text."""
-    if not isinstance(operation, dict):
-        raise ValueError("content_source_operation_invalid")
-    name = operation.get("operation")
-    if not isinstance(name, str):
-        raise ValueError("content_source_operation_invalid")
-    fields = {"operation"}
-    if name == "search":
-        fields.add("query")
-    elif name == "compare":
-        fields.update({"left_id", "right_id"})
-    if set(operation) != fields:
-        raise ValueError("content_source_operation_invalid")
-    _validate_source_operation(
-        name, references, query=operation.get("query"),
-        left_id=operation.get("left_id"), right_id=operation.get("right_id"),
-    )
-    encoded = json.dumps(
-        {"references": references, "operation": operation},
-        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
-    ).encode("utf-8")
-    return hashlib.sha256(encoded).hexdigest()
 
 
 def _snapshot_source_documents(
@@ -235,7 +159,7 @@ def _runtime_source_documents(
     """Project only already-admitted owner evidence; never read storage here."""
     runtime_context, _ = context.runtime_attachment_context(PLUGIN, plan)
     if (
-        not _uuid(context.tenant_id) or not _uuid(context.user_id)
+        not is_canonical_source_uuid(context.tenant_id) or not is_canonical_source_uuid(context.user_id)
         or not {PLUGIN, "data:read"}.issubset(plan.allowed_capabilities)
         or not {PLUGIN, "data:read"}.issubset(context.allowed_capabilities)
         or context.audit_context.get("user_roles") != runtime_context.roles
@@ -248,7 +172,7 @@ def _runtime_source_documents(
     ]
     if references != plan.resource_scope.get("attachment_references"):
         raise PermissionError("content_source_reference_invalid")
-    _validate_source_operation(
+    validate_source_operation(
         "analyze", references, query=None, left_id=None, right_id=None,
     )
     documents: list[dict[str, str]] = []
@@ -329,7 +253,7 @@ class ContentSourceHost:
         if (
             not isinstance(context, ExtensionExecutionContext)
             or not isinstance(plan, AuthorizedExecutionPlan)
-            or not _uuid(context.tenant_id) or not _uuid(context.user_id)
+            or not is_canonical_source_uuid(context.tenant_id) or not is_canonical_source_uuid(context.user_id)
             or not context.policy_decision_id
             or not plan.matches_execution_scope(
                 user_id=context.user_id, tenant_id=context.tenant_id,
@@ -382,7 +306,7 @@ class ContentSourceHost:
     ) -> dict[str, Any]:
         """Invoke only the original chat grant; no new policy or storage read."""
         references, documents = _runtime_source_documents(context, plan)
-        _validate_source_operation(
+        validate_source_operation(
             operation, references, query=query, left_id=left_id, right_id=right_id,
         )
         payload: dict[str, Any] = {"operation": operation, "documents": documents}
@@ -425,7 +349,7 @@ class ContentSourceHost:
         references: list[dict[str, str]], query: str | None = None,
         left_id: str | None = None, right_id: str | None = None,
     ) -> dict[str, Any]:
-        selection = _validate_source_operation(
+        selection = validate_source_operation(
             operation, references, query=query, left_id=left_id, right_id=right_id,
         )
 
