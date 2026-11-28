@@ -767,6 +767,9 @@ async def test_runtime_bound_extension_uses_original_deadline(
         ("forged_digest", "invalid_output", 1),
         ("output_alias", None, 1),
         ("mutated_query", "invalid_output", 1),
+        ("wrong_operation", "extension_runtime_authority_invalid", 0),
+        ("wrong_query", "extension_runtime_authority_invalid", 0),
+        ("missing_commitment", "extension_runtime_authority_invalid", 0),
         ("substituted_text", "extension_runtime_authority_invalid", 0),
         ("unbound", "extension_runtime_authority_invalid", 0),
         ("revoked", "extension_runtime_authority_invalid", 1),
@@ -792,7 +795,14 @@ async def test_direct_runtime_document_executor_enforces_lineage(
         user_id=owner, tenant_id=tenant, allowed_plugins=[plugin],
         allowed_capabilities=[plugin, "data:read"],
     )
-    plan.resource_scope = {"attachment_references": refs}
+    from ai_karen_engine.extensions.content_intelligence_sources import runtime_content_operation_digest
+
+    operation = ({"operation": "search", "query": "vendor"}
+                 if scenario in {"mutated_query", "wrong_query"} else {"operation": "analyze"})
+    scope = {"attachment_references": refs}
+    if scenario != "missing_commitment":
+        scope["document_operation_digest"] = runtime_content_operation_digest(refs, operation)
+    plan.resource_scope = scope
     meter = ExecutionBudgetMeter(plan.budget)
     meter.start()
     context = _context(user_id=owner, tenant_id=tenant)
@@ -817,7 +827,7 @@ async def test_direct_runtime_document_executor_enforces_lineage(
     ])
     context = replace(
         context, conversation_id=runtime.conversation_id,
-        resource_scope={"attachment_references": refs},
+        resource_scope=dict(scope),
         allowed_capabilities=[plugin, "data:read"], audit_context={"user_roles": ["user"]},
     )
     if scenario != "unbound":
@@ -872,8 +882,8 @@ async def test_direct_runtime_document_executor_enforces_lineage(
         "documents": [{"id": source, "name": "notes.txt",
                        "text": "substituted" if scenario == "substituted_text" else body}],
     }
-    if scenario == "mutated_query":
-        payload.update({"operation": "search", "query": "vendor"})
+    if scenario in {"mutated_query", "wrong_operation", "wrong_query"}:
+        payload.update({"operation": "search", "query": "changed" if scenario == "wrong_query" else "vendor"})
     request = ExtensionExecutionRequest(
         plugin_id=plugin, capability="execute", payload=payload,
         context=context, authorized_plan=plan,
