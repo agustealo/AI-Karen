@@ -319,12 +319,13 @@ async def test_committed_readback_is_scoped_pinned_and_read_only(case):
     sql, params = db.statements[0]
     assert sql.strip().startswith("SELECT")
     assert "upload.state = 'committed'" in sql
-    assert "upload.artifact_id = :session_id" in sql
+    assert "upload.artifact_id = :reserved_artifact_id" in sql
     assert "artifact.deleted_at IS NULL" in sql
     assert "artifact.sha256 = upload.expected_sha256" in sql
     assert "artifact.owner_user_id = :owner_user_id" in sql
     assert params == {"tenant_id": TENANT, "owner_user_id": OWNER,
-                      "session_id": SESSION, "storage_key": f"{TENANT}/{SESSION}/content"}
+                      "session_id": SESSION, "reserved_artifact_id": SESSION,
+                      "storage_key": f"{TENANT}/{SESSION}/content"}
     assert not db.committed and not db.rolled_back
     if case == "missing":
         store.read_owner_active_text_bounded.assert_not_awaited()

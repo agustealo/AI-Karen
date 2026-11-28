@@ -573,6 +573,7 @@ class UploadSessionRepository:
         session_uuid = str(UUID(session_id))
         params = {
             **identity, "session_id": session_uuid,
+            "reserved_artifact_id": session_uuid,
             "storage_key": f"{identity['tenant_id']}/{session_uuid}/content",
         }
         async with self._session_factory() as session:
@@ -589,7 +590,7 @@ class UploadSessionRepository:
                   AND upload.tenant_id = :tenant_id
                   AND upload.owner_user_id = :owner_user_id
                   AND upload.state = 'committed'
-                  AND upload.artifact_id = :session_id
+                  AND upload.artifact_id = :reserved_artifact_id
                   AND upload.lease_owner IS NULL AND upload.lease_expires_at IS NULL
                   AND upload.storage_key = :storage_key
                   AND upload.received_bytes = upload.expected_bytes
