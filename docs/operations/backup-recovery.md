@@ -162,7 +162,10 @@ an invalid empty value, through the production overlay that resets env_file.
 For hosted Render deployments set the process environment explicitly; no
 existing hosted service setting is changed by this repository contract.
 The application factory and lifespan reject startup before router wiring or
-service acquisition. The canonical PostgreSQL engine rejects initialization,
+service acquisition. The legacy package ASGI module also rejects held import
+and factory construction, and both existing server startup functions deny
+before service acquisition. Normal-mode legacy routes remain unchanged while
+their references and replacement contracts are audited. The canonical PostgreSQL engine rejects initialization,
 factory access and new pool checkouts. Invalid mode values also deny.
 The default normal preserves existing non-recovery deployments; the absence
 of a hold is not proof that a database has been safely recovered. This is not

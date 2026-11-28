@@ -96,3 +96,14 @@ def test_recovery_hold_is_forwarded_through_production_compose_environment() -> 
     api_override = overlay.split("\n  api:", 1)[1].split("\n  web:", 1)[0]
     assert "env_file: !reset []" in api_override
     assert "KAREN_DATABASE_RECOVERY_MODE:" not in api_override
+
+
+def test_legacy_application_and_startup_reuse_recovery_authority() -> None:
+    legacy = (REPO_ROOT / "src/ai_karen_engine/server/app.py").read_text(encoding="utf-8")
+    assert legacy.index("require_database_recovery_not_held()") < legacy.index("from fastapi import")
+    factory = legacy.split("def create_app()", 1)[1]
+    assert factory.index("require_database_recovery_not_held()") < factory.index("validate_environment_security()")
+    startup = STARTUP.read_text(encoding="utf-8")
+    for name in ("on_startup", "on_startup_with_extensions"):
+        body = startup.split(f"async def {name}(", 1)[1]
+        assert body.index("require_database_recovery_not_held()") < body.index("await init_database(app)")

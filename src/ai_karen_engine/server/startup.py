@@ -7,6 +7,8 @@ from typing import Any, Dict, Optional
 
 from fastapi import FastAPI
 
+from ai_karen_engine.config.database import require_database_recovery_not_held
+
 from ai_karen_engine.server.optimized_startup import (
     initialize_optimization_components,
     optimized_service_startup,
@@ -620,6 +622,9 @@ async def on_startup(settings: Any, app: Optional[FastAPI] = None) -> None:
     """Base server startup path."""
     global _startup_init_task
 
+    # This must remain outside ordinary degraded-startup handling.
+    require_database_recovery_not_held()
+
     logger.info("Starting Kari AI Server in %s mode", settings.environment)
 
     if app is not None:
@@ -900,6 +905,9 @@ async def warm_local_llm_stack(app: FastAPI) -> None:
 async def on_startup_with_extensions(settings: Any, app: FastAPI) -> None:
     """Enhanced startup with extension and monitoring initialization."""
     global _startup_init_task
+
+    # This must remain outside ordinary degraded-startup handling.
+    require_database_recovery_not_held()
 
     logger.info("Starting Kari AI Server in %s mode", settings.environment)
 

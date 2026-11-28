@@ -4,6 +4,13 @@ FastAPI application factory for Kari Server.
 Creates and configures the FastAPI app with all components.
 """
 
+from ai_karen_engine.config.database import require_database_recovery_not_held
+
+# This legacy module constructs an app at import time. Refuse before its
+# eager imports and side effects; the normal-mode compatibility surface is
+# retained until its route/reference audit is complete.
+require_database_recovery_not_held()
+
 import os
 import logging
 from datetime import datetime, timezone
@@ -90,6 +97,7 @@ PLUGIN_MAP = {}
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application"""
+    require_database_recovery_not_held()
 
     # Run security policy validation before continuing
     # This protects against missing secrets before the server starts.
