@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import runpy
 import subprocess
 from pathlib import Path
 
@@ -226,3 +227,79 @@ def test_recovery_replay_probe_cannot_consume_observation_query(tmp_path):
     assert result.returncode == 2
     assert "not a paused read-only physical standby" in result.stderr
     assert result.stdout == ""
+
+
+def test_signed_recovery_manifest_authentication_and_replay_denial(tmp_path, monkeypatch):
+    verifier = runpy.run_path(str(REPO_ROOT / "scripts/deploy/database-recovery-replay.py"))
+    signed_digest = verifier["signed_cutoff_digest"]
+    hold = verifier["RecoveryHold"]
+    private = tmp_path / "signing.pem"
+    public = tmp_path / "public.der"
+    manifest = tmp_path / "manifest.json"
+    signature = tmp_path / "manifest.sig"
+
+    def openssl(*args):
+        subprocess.run(
+            ["openssl", *args], check=True, capture_output=True, timeout=10,
+        )
+
+    openssl("genpkey", "-algorithm", "ED25519", "-out", str(private))
+    openssl("pkey", "-in", str(private), "-pubout", "-outform", "DER", "-out", str(public))
+    cutoff = "a" * 64
+    payload = {
+        "schema_version": 1,
+        "evidence_type": "karen_final_recovery_cutoff",
+        "deployment": "fixture",
+        "recovery_epoch": "incident-2",
+        "cutoff_sha256": cutoff,
+    }
+
+    def sign(value):
+        manifest.write_text(json.dumps(value), encoding="utf-8")
+        openssl("pkeyutl", "-sign", "-inkey", str(private), "-rawin",
+                "-in", str(manifest), "-out", str(signature))
+        return hashlib.sha256(manifest.read_bytes()).hexdigest()
+
+    for name in verifier["_SIGNED_FIELDS"]:
+        monkeypatch.delenv(name, raising=False)
+    assert signed_digest(cutoff) is None
+    monkeypatch.setenv("RECOVERY_MANIFEST_FILE", str(manifest))
+    with pytest.raises(hold, match="incomplete"):
+        signed_digest(cutoff)
+    digest = sign(payload)
+    for name, value in {
+        "RECOVERY_MANIFEST_SIGNATURE_FILE": str(signature),
+        "RECOVERY_TRUSTED_PUBLIC_KEY_FILE": str(public),
+        "RECOVERY_EXPECTED_EPOCH": "incident-2",
+        "RECOVERY_EXPECTED_DEPLOYMENT": "fixture",
+        "RECOVERY_EXPECTED_MANIFEST_SHA256": digest,
+    }.items():
+        monkeypatch.setenv(name, value)
+    assert signed_digest(cutoff) == digest
+    with pytest.raises(hold, match="cutoff digest mismatch"):
+        signed_digest("b" * 64)
+
+    old_digest = sign({**payload, "recovery_epoch": "incident-1"})
+    with pytest.raises(hold, match="final recovery manifest digest mismatch"):
+        signed_digest(cutoff)
+    monkeypatch.setenv("RECOVERY_EXPECTED_MANIFEST_SHA256", old_digest)
+    with pytest.raises(hold, match="deployment or epoch mismatch"):
+        signed_digest(cutoff)
+
+    wrong_deployment = sign({**payload, "deployment": "foreign"})
+    monkeypatch.setenv("RECOVERY_EXPECTED_MANIFEST_SHA256", wrong_deployment)
+    with pytest.raises(hold, match="deployment or epoch mismatch"):
+        signed_digest(cutoff)
+
+    digest = sign(payload)
+    monkeypatch.setenv("RECOVERY_EXPECTED_MANIFEST_SHA256", digest)
+    signature.write_bytes(bytes([signature.read_bytes()[0] ^ 1]) + signature.read_bytes()[1:])
+    with pytest.raises(hold, match="signature invalid"):
+        signed_digest(cutoff)
+
+    sign(payload)
+    other = tmp_path / "other.pem"
+    openssl("genpkey", "-algorithm", "ED25519", "-out", str(other))
+    openssl("pkey", "-in", str(other), "-pubout", "-outform", "DER", "-out", str(public))
+    with pytest.raises(hold, match="signature invalid"):
+        signed_digest(cutoff)

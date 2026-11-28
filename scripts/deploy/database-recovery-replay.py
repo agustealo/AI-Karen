@@ -13,6 +13,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 from datetime import datetime
 from pathlib import Path
 
@@ -99,6 +100,89 @@ def load_receipt(path, expected_digest):
     return receipt
 
 
+_SIGNED_FIELDS = (
+    "RECOVERY_MANIFEST_FILE", "RECOVERY_MANIFEST_SIGNATURE_FILE",
+    "RECOVERY_TRUSTED_PUBLIC_KEY_FILE", "RECOVERY_EXPECTED_EPOCH",
+    "RECOVERY_EXPECTED_DEPLOYMENT", "RECOVERY_EXPECTED_MANIFEST_SHA256",
+)
+_MANIFEST_FIELDS = {
+    "schema_version", "evidence_type", "deployment", "recovery_epoch",
+    "cutoff_sha256",
+}
+
+
+def bounded_bytes(path, limit):
+    with Path(path).open("rb") as source:
+        raw = source.read(limit + 1)
+    if not raw or len(raw) > limit:
+        raise RecoveryHold("invalid signed recovery evidence size")
+    return raw
+
+
+def signed_cutoff_digest(expected_cutoff):
+    # The caller supplies trusted deployment, epoch, public key and final
+    # manifest digest outside the restored cluster. None is discovered there.
+    configured = [name in os.environ for name in _SIGNED_FIELDS]
+    if not any(configured):
+        return None
+    if not all(os.environ.get(name) for name in _SIGNED_FIELDS):
+        raise RecoveryHold("incomplete signed recovery evidence configuration")
+    manifest = bounded_bytes(os.environ["RECOVERY_MANIFEST_FILE"], 4096)
+    signature = bounded_bytes(os.environ["RECOVERY_MANIFEST_SIGNATURE_FILE"], 64)
+    key = bounded_bytes(os.environ["RECOVERY_TRUSTED_PUBLIC_KEY_FILE"], 44)
+    # Exact Ed25519 SubjectPublicKeyInfo DER prefix and public key length.
+    # Reject other algorithms rather than letting OpenSSL negotiate them.
+    if len(signature) != 64 or len(key) != 44 or not key.startswith(
+        bytes.fromhex("302a300506032b6570032100")
+    ):
+        raise RecoveryHold("invalid Ed25519 recovery key or signature")
+    expected_manifest = os.environ["RECOVERY_EXPECTED_MANIFEST_SHA256"]
+    if not re.fullmatch(r"[0-9a-fA-F]{64}", expected_manifest) or not hmac.compare_digest(
+        hashlib.sha256(manifest).hexdigest(), expected_manifest.lower()
+    ):
+        raise RecoveryHold("final recovery manifest digest mismatch")
+    # Verify exactly the bytes parsed below; a path replacement after reading
+    # cannot change the key, signed message, or detached signature.
+    with tempfile.TemporaryDirectory(prefix="karen-recovery-") as directory:
+        root = Path(directory)
+        for filename, raw in (
+            ("manifest", manifest), ("signature", signature), ("key.der", key),
+        ):
+            (root / filename).write_bytes(raw)
+        result = subprocess.run(
+            ["openssl", "pkeyutl", "-verify", "-pubin", "-keyform", "DER",
+             "-inkey", str(root / "key.der"), "-rawin",
+             "-in", str(root / "manifest"), "-sigfile", str(root / "signature")],
+            stdin=subprocess.DEVNULL, capture_output=True, check=False, timeout=10,
+        )
+    if result.returncode:
+        raise RecoveryHold("recovery manifest signature invalid")
+    payload = json.loads(manifest, object_pairs_hook=unique_object)
+    if (
+        not isinstance(payload, dict) or set(payload) != _MANIFEST_FIELDS
+        or type(payload["schema_version"]) is not int or payload["schema_version"] != 1
+        or payload["evidence_type"] != "karen_final_recovery_cutoff"
+    ):
+        raise RecoveryHold("invalid signed recovery manifest")
+    for field, env in (
+        ("deployment", "RECOVERY_EXPECTED_DEPLOYMENT"),
+        ("recovery_epoch", "RECOVERY_EXPECTED_EPOCH"),
+    ):
+        value = payload[field]
+        if (
+            not isinstance(value, str) or not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}", value)
+            or value != os.environ[env]
+        ):
+            raise RecoveryHold("recovery manifest deployment or epoch mismatch")
+    digest = payload["cutoff_sha256"]
+    if (
+        not isinstance(digest, str) or not re.fullmatch(r"[0-9a-f]{64}", digest)
+        or not hmac.compare_digest(digest, expected_cutoff.lower())
+    ):
+        raise RecoveryHold("signed recovery cutoff digest mismatch")
+    return expected_manifest.lower()
+
+
 def observe():
     helper = Path(__file__).resolve().with_name("postgres-recovery-client.sh")
     result = subprocess.run(
@@ -146,7 +230,9 @@ def verify(receipt, observation):
 
 def main():
     try:
-        receipt = load_receipt(os.environ["RECOVERY_CUTOFF_FILE"], os.environ["RECOVERY_CUTOFF_SHA256"])
+        expected_cutoff = os.environ["RECOVERY_CUTOFF_SHA256"]
+        manifest_digest = signed_cutoff_digest(expected_cutoff)
+        receipt = load_receipt(os.environ["RECOVERY_CUTOFF_FILE"], expected_cutoff)
         if not os.environ.get("RECOVERY_DATABASE_URL"):
             raise RecoveryHold("recovery database URL required")
         observation = observe()
@@ -164,6 +250,8 @@ def main():
         "required_lsn": receipt["required_lsn"],
         "replay_lsn": observation["replay_lsn"],
         "timeline_hex": receipt["timeline_hex"],
+        "signed_manifest_verified": manifest_digest is not None,
+        "manifest_sha256": manifest_digest,
         "admission_verified": False,
     }))
     return 0
