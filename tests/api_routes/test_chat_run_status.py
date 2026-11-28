@@ -245,6 +245,95 @@ async def test_completed_status_requires_exact_transcript_binding(monkeypatch, r
             await ledger.read_status(**identity, transport_run_id="run-exact")
 
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mutation", [False, True])
+@pytest.mark.parametrize("outcome", ["success", "ineligible", "foreign", "missing", "invalid", "outage", "bad_receipt"])
+async def test_draft_retry_ingress_is_scoped_and_fail_closed(monkeypatch, mutation, outcome):
+    from unittest.mock import AsyncMock
+
+    expected = 8 if mutation else 7
+    result = {
+        "success": expected, "ineligible": None, "foreign": PermissionError("private"),
+        "missing": RuntimeError("conversation_not_found"), "invalid": ValueError("private"),
+        "outage": OSError("private"), "bad_receipt": True,
+    }[outcome]
+    operation = AsyncMock(side_effect=result if isinstance(result, Exception) else None,
+                          return_value=result)
+    unused = AsyncMock(side_effect=AssertionError("wrong operation"))
+    coordinator = SimpleNamespace(
+        read_failed_draft_revision=unused if mutation else operation,
+        advance_failed_draft_revision=operation if mutation else unused,
+    )
+    monkeypatch.setattr(ingress, "get_runtime_settings", lambda: SimpleNamespace(
+        features=SimpleNamespace(enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=True),
+    ))
+    monkeypatch.setattr(ingress, "get_chat_run_coordinator", lambda: coordinator)
+    user = {"user_id": OWNER, "tenant_id": TENANT}
+    payload = ingress.AGUIDraftRetryRequest(submitted_text="retained", attachment_references=[])
+    async def invoke():
+        if mutation:
+            return await ingress.post_ag_ui_draft_retry(THREAD, "draft-v1-7", payload, user=user)
+        return await ingress.get_ag_ui_draft_retry(THREAD, "draft-v1-7", user=user)
+    if outcome == "success" or (outcome == "ineligible" and not mutation):
+        import json
+        response = await invoke()
+        assert response.status_code == 200
+        assert response.headers["cache-control"] == "private, no-store"
+        assert json.loads(response.body) == {
+            "submission_id": "draft-v1-7",
+            **({"revision": 8} if mutation else {"eligible": outcome == "success"}),
+        }
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await invoke()
+        assert caught.value.status_code == {
+            "ineligible": 409, "foreign": 404, "missing": 404,
+            "invalid": 422, "outage": 503, "bad_receipt": 503,
+        }[outcome]
+        assert "private" not in caught.value.detail
+    operation.assert_awaited_once()
+    args, kwargs = operation.await_args
+    assert (args[0].tenant_id, args[0].user_id, args[0].conversation_id) == (TENANT, OWNER, THREAD)
+    assert kwargs == {"submission_id": "draft-v1-7", **(
+        {"submitted_text": "retained", "attachment_references": []} if mutation else {}
+    )}
+    unused.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_draft_retry_rejects_disabled_or_invalid_protocol_before_coordinator(monkeypatch):
+    from unittest.mock import Mock
+    settings = SimpleNamespace(features=SimpleNamespace(
+        enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=False,
+    ))
+    coordinator = Mock(side_effect=AssertionError("coordinator must not run"))
+    monkeypatch.setattr(ingress, "get_runtime_settings", lambda: settings)
+    monkeypatch.setattr(ingress, "get_chat_run_coordinator", coordinator)
+    user = {"user_id": OWNER, "tenant_id": TENANT}
+    with pytest.raises(HTTPException) as disabled:
+        await ingress.get_ag_ui_draft_retry(THREAD, "draft-v1-7", user=user)
+    assert disabled.value.status_code == 404
+    settings.features.enable_ag_ui_durable_runs = True
+    for thread, identity in [(THREAD, "opaque"), (THREAD, "draft-v1-9007199254740990"), ("invalid", "draft-v1-7")]:
+        with pytest.raises(HTTPException) as invalid:
+            await ingress.get_ag_ui_draft_retry(thread, identity, user=user)
+        assert invalid.value.status_code == 422
+    coordinator.assert_not_called()
+
+
+@pytest.mark.parametrize("body", [
+    {"submitted_text": "retained"},
+    {"submitted_text": "retained", "attachment_references": [], "tenant_id": TENANT},
+    {"submitted_text": 1, "attachment_references": []},
+    {"submitted_text": "retained", "attachment_references": [{"source_id": THREAD, "revision": 1}]},
+])
+def test_draft_retry_request_rejects_untrusted_shapes(body):
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        ingress.AGUIDraftRetryRequest.model_validate(body)
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "state,live,terminal,bound,expected,error",

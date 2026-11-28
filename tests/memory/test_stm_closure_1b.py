@@ -133,7 +133,8 @@ async def test_stm_recall_is_slot_typed_and_excludes_tool_state() -> None:
     )
 
     class CanonicalEventSource:
-        async def fetch_many(self, *, tenant_id, user_id, event_ids):
+        async def fetch_many(self, *, tenant_id, user_id, event_ids, for_current_recall=False):
+            assert for_current_recall is True
             assert (tenant_id, user_id) == ("tenant-a", "user-a")
             assert event_ids == ["event-1"]
             return {

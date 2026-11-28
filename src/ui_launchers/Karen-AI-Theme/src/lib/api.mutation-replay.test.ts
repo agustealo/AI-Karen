@@ -444,3 +444,38 @@ describe("bounded authenticated inbox waits", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
+
+
+describe("historical attachment private read transport", () => {
+  afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); localStorage.clear(); });
+  const thread = "11111111-1111-4111-8111-111111111111";
+  const message = "22222222-2222-4222-8222-222222222222";
+
+  it.each([401, 404, 502])("denies HTTP %i without refresh or fallback", async (status) => {
+    vi.mocked(authService.getCurrentUser).mockReturnValue(
+      { tenant_id: "tenant", user_id: "owner" } as ReturnType<typeof authService.getCurrentUser>,
+    );
+    vi.mocked(authService.getAuthenticationRevision).mockReturnValue(1);
+    const scope = captureApiPrincipalScope("tenant", "owner")!;
+    localStorage.setItem("refresh_token", "must-not-rotate");
+    const refresh = vi.spyOn(clientInternals, "refreshAccessToken");
+    const fetchMock = vi.fn().mockResolvedValue(new Response("private error", { status }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(apiClient.readHistoricalAttachmentText(thread, message, 1, scope, new AbortController().signal))
+      .rejects.toMatchObject({ status, message: "Private read unavailable" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(refresh).not.toHaveBeenCalled();
+    expect(fetchMock.mock.calls[0][1]).toMatchObject({ cache: "no-store", redirect: "error" });
+  });
+
+  it("rejects an oversized streamed response before parsing", async () => {
+    vi.mocked(authService.getCurrentUser).mockReturnValue(
+      { tenant_id: "tenant", user_id: "owner" } as ReturnType<typeof authService.getCurrentUser>,
+    );
+    vi.mocked(authService.getAuthenticationRevision).mockReturnValue(1);
+    const scope = captureApiPrincipalScope("tenant", "owner")!;
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("x".repeat(400 * 1024 + 1))));
+    await expect(apiClient.readHistoricalAttachmentText(thread, message, 1, scope, new AbortController().signal))
+      .rejects.toThrow("Private response exceeds its byte bound");
+  });
+});

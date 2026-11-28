@@ -14,6 +14,10 @@ on:
       - "src/ai_karen_engine/services/memory/**"
       - "supabase/migrations/**"
       - "scripts/ci/start-postgres-container.sh"
+      - "scripts/deploy/database-backup.sh"
+      - "scripts/deploy/postgres-recovery-client.sh"
+      - "scripts/deploy/database-recovery-cutoff.sh"
+      - "scripts/deploy/database-restore.sh"
       - "tests/core/memory/**"
       - "tests/platform/memory/**"
       - "tests/memory/**"
@@ -251,6 +255,31 @@ jobs:
           pytest tests/integration/test_live_memory_cross_process_revocation.py -q -rs
           pytest tests/core/runtime/test_chat_runtime_stream_contract.py -k live_postgres_revocation_between_stream_chunks_denies_publication -q -rs
           pytest tests/integration/test_live_automation_task_claims.py -q -rs
+      - name: Use recovery clients from the running PostgreSQL service
+        run: |
+          container="ai-karen-postgres-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          clients="$RUNNER_TEMP/karen-postgres-recovery-clients"
+          mkdir -m 700 "$clients"
+          for tool in psql pg_dump pg_restore; do
+            printf '#!/usr/bin/env bash\nset -euo pipefail\nexec docker exec -i %q %q "$@"\n' \
+              "$container" "$tool" > "$clients/$tool"
+            chmod 700 "$clients/$tool"
+            "$clients/$tool" --version
+          done
+      - name: Prove isolated backup restore and expose consent rollback boundary
+        env:
+          KAREN_POSTGRES_BIN_DIR: ${{ runner.temp }}/karen-postgres-recovery-clients
+          KAREN_TEST_DISPOSABLE_DATABASE: "1"
+        run: |
+          pytest tests/integration/test_live_memory_backup_recovery.py -q -rs --junitxml=memory-backup-recovery-junit.xml
+      - name: Preserve isolated recovery boundary proof
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-backup-recovery-proof
+          path: memory-backup-recovery-junit.xml
+          if-no-files-found: warn
+          retention-days: 14
       - name: Measure canonical memory authorization against migrated PostgreSQL
         env:
           KAREN_MEMORY_AUTH_LOAD: "1"
@@ -331,6 +360,9 @@ jobs:
           assert report["identity_isolation"] == "passed"
           assert report["session_isolation"] == "passed"
           assert report["revocation"] == "event_derived_redis_and_graph_denied"
+          assert report["delayed_stm_publication"] in (
+              "stale_cache_recall_denied", "publication_denied",
+          )
           assert report["checked_out_after_cleanup"] == 0
           print("Real Redis/graph/PostgreSQL composition evidence validated.")
           PY

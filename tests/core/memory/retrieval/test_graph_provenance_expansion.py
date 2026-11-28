@@ -45,6 +45,7 @@ class _Events:
         self.include = include
 
     async def fetch_many(self, **kwargs):
+        assert kwargs["for_current_recall"] is True
         if not self.include:
             return {}
         return {

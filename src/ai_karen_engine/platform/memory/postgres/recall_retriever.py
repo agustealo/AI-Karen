@@ -11,7 +11,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any, Callable
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import or_, select
 
 from ai_karen_engine.core.memory.types import (
     MemoryEntry,
@@ -22,8 +22,8 @@ from ai_karen_engine.core.memory.types import (
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
-from .consent_filter import recallable_memory_event
-from .ledger_models import MemoryAssertion, MemoryEvent, ProfileFact
+from .consent_filter import non_profile_memory_event, recallable_memory_event
+from .ledger_models import MemoryAssertion, MemoryEvent
 
 
 class PostgresRecallScopeError(ValueError):
@@ -69,21 +69,9 @@ class PostgresRecallRetriever:
                 MemoryAssertion.tenant_id == tenant_uuid,
                 MemoryAssertion.user_id == user_uuid,
                 MemoryAssertion.consent_state == "granted",
-                # Profile facts belong to the governed belief projection,
-                # not the immutable assertion recall lane. Formation stamps
-                # signal_type before projection, including quarantined or
-                # not-yet-projected events. Older projected events may lack
-                # that stamp: exclude them by their scoped event relationship
-                # regardless of the projection's present validity.
-                func.coalesce(
-                    MemoryEvent.payload["metadata"]["custom"]["signal_type"].astext,
-                    "",
-                ).notin_(("identity_fact", "profile_fact", "preference")),
-                ~select(ProfileFact.fact_id).where(
-                    ProfileFact.event_id == MemoryAssertion.event_id,
-                    ProfileFact.tenant_id == tenant_uuid,
-                    ProfileFact.user_id == user_uuid,
-                ).exists(),
+                non_profile_memory_event(
+                    tenant_id=tenant_uuid, user_id=user_uuid,
+                ),
                 or_(MemoryAssertion.valid_from.is_(None), MemoryAssertion.valid_from <= now),
                 or_(MemoryAssertion.valid_to.is_(None), MemoryAssertion.valid_to > now),
                 recallable_memory_event(

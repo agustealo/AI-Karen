@@ -587,3 +587,144 @@ def test_local_storage_rejects_remote_docker_context(monkeypatch):
             verifier.require_local_docker()
         monkeypatch.delenv(key)
     assert len(calls) == 2
+
+
+def test_owner_text_acceptance_reuses_local_isolation_and_live_storage_digest():
+    source = SPEC.read_text(encoding="utf-8")
+    workflow = WORKFLOW.read_text(encoding="utf-8")
+    assert "KAREN_FILE_EXPLORER_OWNER_TEXT_ACCEPTANCE" not in workflow
+    assert "ownerTextAcceptance && (!enabled ||" in source
+    assert 'process.env.KAREN_FILE_EXPLORER_ISOLATION_ACCEPTANCE !== "true"' in source
+    trial = source.split('test("KFILE-ISOLATION-LOCAL:', 1)[1].split("Opt-in real selection-to-analysis evidence", 1)[0]
+    assert 'process.env.GITHUB_ACTIONS === "true"' in trial
+    assert 'process.env.KAREN_FILE_EXPLORER_ISOLATED_STACK_CONFIRMED !== "true"' in trial
+    assert 'endpoint("/api/artifacts/" + sourceId + "/text")' in trial
+    assert 'createHash("sha256").update(text, "utf8").digest("hex") === actor.file.sha256' in trial
+    assert 'size <= 65536 && size === actor.file.size_bytes' in trial
+    assert 'includes("no-store")' in trial
+    assert 'await replay.clearCookies();\n    const response = await replay.request.get(textUrl(sourceId), actor.options)' in trial
+    assert 'Object.keys(body).length === 1 && typeof body.detail === "string"' in trial
+    assert trial.index("await verifyOwnText(owner)") < trial.index('name: "Sign out"') < trial.index("await denyOwnerText(aSource!, owner, [401, 403])")
+    assert trial.index("await verifyOwnText(other)") < trial.index("await denyOwnerText(aSource!, other, [404])")
+    assert trial.index("await verifyOwnText(restored)") < trial.rindex("await denyOwnerText(aSource!, owner, [401, 403])")
+
+
+def test_owner_text_report_rejects_generic_isolation_pass_and_invalid_markers():
+    from copy import deepcopy
+
+    import pytest
+
+    from scripts.ci.verify_local_browser_report import (
+        EXPLORER_PREFIXES, EXPLORER_SPEC, validate_report,
+    )
+
+    report = {
+        "errors": [],
+        "stats": {"expected": 4, "unexpected": 0, "skipped": 0, "flaky": 0},
+        "suites": [{"specs": [
+            {"title": prefix + " acceptance", "file": EXPLORER_SPEC,
+             "tests": [{"projectName": "chromium", "expectedStatus": "passed",
+                        "status": "expected", "results": [{"status": "passed", "retry": 0}]}]}
+            for prefix in EXPLORER_PREFIXES
+        ]}],
+    }
+    validate_report(report, EXPLORER_PREFIXES, EXPLORER_SPEC)
+    with pytest.raises(ValueError):
+        validate_report(report, EXPLORER_PREFIXES, EXPLORER_SPEC, owner_text=True)
+    specs = report["suites"][0]["specs"]
+    marker = {"name": "karen.owner_text.v1", "contentType": "text/plain", "body": "cGFzc2Vk"}
+    specs[-1]["tests"][0]["results"][0]["attachments"] = [marker]
+    validate_report(report, EXPLORER_PREFIXES, EXPLORER_SPEC, owner_text=True)
+    for invalid in ([marker, marker], [{**marker, "body": "invalid"}], [{**marker, "path": "file"}]):
+        bad = deepcopy(report)
+        bad["suites"][0]["specs"][-1]["tests"][0]["results"][0]["attachments"] = invalid
+        with pytest.raises(ValueError):
+            validate_report(bad, EXPLORER_PREFIXES, EXPLORER_SPEC, owner_text=True)
+    bad = deepcopy(report)
+    bad["suites"][0]["specs"][0]["tests"][0]["results"][0]["attachments"] = [marker]
+    with pytest.raises(ValueError):
+        validate_report(bad, EXPLORER_PREFIXES, EXPLORER_SPEC, owner_text=True)
+    discovery = deepcopy(report)
+    for spec in discovery["suites"][0]["specs"]:
+        spec["tests"][0]["results"] = []
+    validate_report(discovery, EXPLORER_PREFIXES, EXPLORER_SPEC, list_only=True, owner_text=True)
+    source = SPEC.read_text(encoding="utf-8")
+    assert source.rindex("await denyOwnerText(aSource!, owner, [401, 403])") < source.index('testInfo.attach("karen.owner_text.v1"')
+    runner = (ROOT / "scripts/ci/kui-local-acceptance.sh").read_text(encoding="utf-8")
+    assert "REPORT+=(--owner-text)" in runner
+    assert "PASS explorer_owner_text_acceptance" in runner
+    assert "NOT_RUN explorer_owner_text_acceptance" in runner
+
+
+def test_owner_text_mode_requires_real_local_storage_provenance(tmp_path, monkeypatch):
+    import json
+    import sys
+
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    sha = "a" * 40
+    project = "kcard-" + sha[:12]
+    database = "kcard_" + sha[:12]
+    env_file = tmp_path / "local.env"
+    env_file.write_text("")
+    env_file.chmod(0o600)
+    storage_origin = "http://host.docker.internal:54341"
+    calls = []
+
+    def inspect(project_arg, sha_arg, service, **kwargs):
+        assert project_arg == project and sha_arg == sha
+        assert kwargs["explorer_database"] == database
+        calls.append((service, kwargs.get("require_local_storage", False)))
+        result = {"service": service}
+        if service == "api" and kwargs.get("require_local_storage"):
+            result["storage_origin"] = storage_origin
+        return result
+
+    def storage(container, origin):
+        assert container == "db-id" and origin == storage_origin
+        calls.append(("storage", True))
+        return {"container_id": "gateway-id", "origin": origin}
+
+    monkeypatch.setattr(verifier, "require_local_docker", lambda: None)
+    monkeypatch.setattr(verifier, "inspect_container", inspect)
+    monkeypatch.setattr(verifier, "http_json", lambda url: (
+        {"status": "ok", "revision": sha} if url.endswith("/api/deployment-revision")
+        else {"status": "ok", "backend_ready": True}
+    ))
+    monkeypatch.setattr(verifier, "verify_local_supabase_database",
+                        lambda *_: {"container_id": "db-id"})
+    monkeypatch.setattr(verifier, "verify_local_storage_gateway", storage)
+
+    def invoke(mode, filename):
+        output = tmp_path / filename
+        monkeypatch.setattr(sys, "argv", [
+            "verify", mode, "--sha", sha, "--project", project,
+            "--env-file", str(env_file), "--evidence", str(output),
+        ])
+        return verifier.main(), output
+
+    for mode, scenario, required in (
+        ("--file-explorer", "file-explorer", False),
+        ("--content-intelligence", "content-intelligence", True),
+        ("--owner-text", "file-explorer-owner-text", True),
+    ):
+        calls.clear()
+        status, output = invoke(mode, scenario + ".json")
+        assert status == 0
+        evidence = json.loads(output.read_text())
+        assert evidence["scenario"] == scenario
+        assert ("supabase_storage" in evidence) is required
+        assert calls == [("api", required), ("web", False)] + (
+            [("storage", True)] if required else []
+        )
+
+    def unavailable(*_):
+        raise verifier.GuardError("Local Storage gateway unavailable")
+
+    monkeypatch.setattr(verifier, "verify_local_storage_gateway", unavailable)
+    status, output = invoke("--owner-text", "denied.json")
+    assert status == 1
+    assert not output.exists()
+    runner = (ROOT / "scripts/ci/kui-local-acceptance.sh").read_text()
+    assert "PROVENANCE[2]='--owner-text'" in runner
+    assert "REPORT+=(--owner-text)" in runner

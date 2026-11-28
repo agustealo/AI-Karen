@@ -616,6 +616,48 @@ def test_extension_runtime_authority_scope_and_copy_guard(monkeypatch):
         )
 
 
+@pytest.mark.parametrize("mismatch", ["missing", "extra", "substituted"])
+def test_runtime_extension_resource_scope_must_match_plan(monkeypatch, mismatch):
+    from dataclasses import replace
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+
+    plan = _plan()
+    plan.resource_scope = {"attachment_references": [{"source_id": "selected", "revision": "r1"}]}
+    meter = ExecutionBudgetMeter(plan.budget)
+    context = _context()
+    runtime_context = ChatExecutionContext(
+        user_id=context.user_id, tenant_id=context.tenant_id,
+        session_id=context.session_id, correlation_id=context.correlation_id,
+        request_id="chat-request",
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "is_runtime_model_plan_authorized",
+        lambda self, p, m: self is runtime_context and p is plan and m is meter,
+    )
+    # Extension invocation IDs are intentionally distinct from chat request IDs.
+    context = replace(
+        context, conversation_id=runtime_context.conversation_id,
+        resource_scope={"attachment_references": [{"source_id": "selected", "revision": "r1"}]},
+    )
+    invalid = {
+        "missing": {},
+        "extra": {**context.resource_scope, "extra": True},
+        "substituted": {"attachment_references": [{"source_id": "other", "revision": "r1"}]},
+    }[mismatch]
+    with pytest.raises(PermissionError, match="extension_runtime_authority_invalid"):
+        replace(context, resource_scope=invalid).bind_runtime_authority(
+            runtime_context, plan, meter, "echo",
+        )
+    context.bind_runtime_authority(runtime_context, plan, meter, "echo")
+    assert context.runtime_authority("echo") == (plan, meter)
+    context.resource_scope.clear()
+    context.resource_scope.update(invalid)
+    with pytest.raises(PermissionError, match="extension_runtime_authority_invalid"):
+        context.runtime_authority("echo")
+    assert meter.tool_calls == 0
+
+
 @pytest.mark.asyncio
 async def test_executor_rejects_runtime_authority_for_unrelated_plugin(monkeypatch):
     from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter

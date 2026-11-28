@@ -18,6 +18,7 @@ from ai_karen_engine.core.memory.types import (
     MemoryNamespace,
     MemoryQuery,
     MemoryType,
+    RecallCandidateBatch,
 )
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
 
@@ -77,7 +78,7 @@ class PostgresProfileRecallRetriever:
                     ProfileFact.confidence.desc(),
                     ProfileFact.updated_at.desc(),
                 )
-                .limit(top_k)
+                .limit(top_k + 1)
             )
             if intent.qualifiers or (
                 preferred_attribute is not None
@@ -96,13 +97,18 @@ class PostgresProfileRecallRetriever:
                     )
             rows = (await session.execute(stmt)).all()
 
-        return [
+        # Inspect one extra row before provenance filtering. Neither a full
+        # bounded page nor discarded source mismatches establish exhaustion.
+        candidates = [
             self._entry(row, query, source_type, source_ref)
-            for row, source_type, source_ref in rows
+            for row, source_type, source_ref in rows[:top_k]
             # A projection cannot override canonical event origin. Any
             # discrepancy is quarantined at the read boundary.
             if row.source_type == source_type and row.source_ref == source_ref
         ]
+        return RecallCandidateBatch(
+            candidates, complete=len(rows) <= top_k and len(candidates) == len(rows),
+        )
 
     @staticmethod
     def _preferred_attribute(text: str) -> str | None:
