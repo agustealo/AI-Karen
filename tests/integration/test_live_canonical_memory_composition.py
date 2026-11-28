@@ -20,6 +20,7 @@ from sqlalchemy import delete, select, text
 
 from ai_karen_engine.core.memory.graph.service import get_leangraph_service
 from ai_karen_engine.core.memory.memory_runtime_manager import MemoryRuntimeManager
+from ai_karen_engine.core.memory.projections.hot_state_worker import HotStateWorker
 from ai_karen_engine.core.memory.stm import STMScope, STMSlot
 from ai_karen_engine.persistence.postgres.engine import get_postgres_engine
 from ai_karen_engine.persistence.postgres.transactions import async_transaction_scope
@@ -240,6 +241,49 @@ async def test_live_canonical_redis_graph_postgres_memory_composition() -> None:
         )
         assert "stm" in stores(after)  # independent session-only goal survives
         report["revocation"] = "event_derived_redis_and_graph_denied"
+
+        # A delayed producer may replay the already committed event after the
+        # consent transaction has committed. Exercise the actual projection
+        # worker rather than only leaving an old Redis value in place.
+        assert await stm.delete_slot(scope=scope, slot=STMSlot.RECENT_CONTEXT)
+        assert await stm.get_slot(scope=scope, slot=STMSlot.RECENT_CONTEXT) is None
+        worker = HotStateWorker(stm)
+        published = await worker.project(
+            {
+                "event_id": str(event_id), "tenant_id": str(tenant),
+                "user_id": str(user), "session_id": session_id,
+                "source_type": "conversation", "source_ref": None,
+                "payload": {"content": content},
+            },
+            {
+                "assertion_id": str(assertion_id), "event_id": str(event_id),
+                "text": content,
+            },
+        )
+        # A future write-side fence may deny publication outright. If the
+        # cache accepts a stale projection, canonical recall still must deny it.
+        stale = await stm.get_slot(scope=scope, slot=STMSlot.RECENT_CONTEXT)
+        if published:
+            assert stale is not None
+            assert stale["latest"]["event_id"] == str(event_id)
+        else:
+            assert stale is None
+        replay = await recall(str(tenant), str(user), session_id)
+        assert replay["status"] == "success" and not replay["degraded"]
+        assert all(row["content"] != content for row in replay["results"])
+        assert not {str(event_id), str(assertion_id)}.intersection(
+            str(row["id"]) for row in replay["results"]
+        )
+        assert "postgres_graph" not in stores(replay)
+        assert "stm" in stores(replay)
+        report["delayed_stm_publication"] = (
+            "stale_cache_recall_denied" if published else "publication_denied"
+        )
+        # The existing cleanup expects both scoped slots to be present.
+        # Only delete an extant recent-context slot at cleanup if the
+        # future publisher has already denied the delayed write.
+        if stale is None:
+            slots = (STMSlot.ACTIVE_GOAL,)
 
         async with engine.async_session_factory() as session:
             assert (await session.execute(text("SELECT 1"))).scalar_one() == 1
