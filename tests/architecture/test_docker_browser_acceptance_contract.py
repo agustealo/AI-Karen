@@ -253,7 +253,14 @@ def test_signed_docker_kexp_reuses_exact_host_chain_and_scoped_approval() -> Non
     assert 'if [[ -v VERCEL_AUTOMATION_BYPASS_SECRET ]]; then exit 2; fi' in proof
     assert "KEXP-A7-ATTACHED-CONTENT:" in proof
     assert "CK-07F3 operator-approved real native stop" in proof
-    assert "--workers=1 --reporter=list --retries=0 --forbid-only" in proof
+    assert "--workers=1 --reporter=json --retries=0 --forbid-only" in proof
+    assert "from scripts.ci.verify_local_browser_report import validate_report" in proof
+    assert "validate_report(report, (sys.argv[2],), Path(sys.argv[3]).name)" in proof
+    assert "PLAYWRIGHT_NO_COPY_PROMPT=1" in proof
+    assert "umask 077" in proof
+    assert 'trap \'rm -rf -- "$evidence"\' EXIT' in proof
+    assert '>"$evidence/runner.log" 2>&1' in proof
+    assert "KEXP_BROWSER_EVIDENCE_REJECTED" in proof
     for name in (
         "KAREN_KEXP_CONTENT_ANSWER_SHA256", "KAREN_KEXP_RETRY_SOURCE_ID",
         "KAREN_KEXP_CONTENT_CONVERSATION_ID",

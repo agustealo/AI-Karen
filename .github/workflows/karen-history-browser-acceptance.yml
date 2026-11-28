@@ -796,8 +796,34 @@ jobs:
               ;;
             *) exit 2 ;;
           esac
-          npx playwright test "$spec" --config=e2e/playwright.config.ts \
-            --project=chromium --grep "$pattern" --workers=1 --reporter=list --retries=0 --forbid-only
+          # Exit status alone accepts skipped tests. Require one real passing
+          # result using the existing exact scenario report validator. Never
+          # expose report contents, credentials or browser failure snapshots.
+          umask 077
+          evidence="$(mktemp -d "${RUNNER_TEMP:?}/kexp-evidence.XXXXXXXX")"
+          trap 'rm -rf -- "$evidence"' EXIT
+          export PLAYWRIGHT_NO_COPY_PROMPT=1
+          unset PW_TEST_REPORTER PLAYWRIGHT_JSON_ONLY_FAILURES
+          export PLAYWRIGHT_JSON_OUTPUT_FILE="$evidence/result.json"
+          if ! npx playwright test "$spec" --config=e2e/playwright.config.ts \
+              --project=chromium --grep "$pattern" --workers=1 --reporter=json --retries=0 --forbid-only \
+              --output="$evidence/artifacts" >"$evidence/runner.log" 2>&1; then
+            echo 'KEXP_BROWSER_EXECUTION_FAILED' >&2
+            exit 1
+          fi
+          PYTHONPATH="$GITHUB_WORKSPACE" python - "$evidence/result.json" "$pattern" "$spec" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from scripts.ci.verify_local_browser_report import validate_report
+
+          try:
+              report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              validate_report(report, (sys.argv[2],), Path(sys.argv[3]).name)
+          except (OSError, ValueError, TypeError, KeyError):
+              raise SystemExit("KEXP_BROWSER_EVIDENCE_REJECTED") from None
+          print("KEXP browser scenario passed exactly once; zero skips, retries or failures")
+          PY
 
       - name: Recheck public Docker revision and main after browser replay
         working-directory: .

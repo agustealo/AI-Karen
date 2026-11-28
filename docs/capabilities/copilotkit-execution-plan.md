@@ -466,6 +466,12 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-27: KEXP-042A.7 protected signed Docker dispatch, PR #1383
+
+- **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** extend the existing main-only signed Docker host/browser/host chain with explicit approved recovery variants and attached-content scenario. Scoped secrets, sanitized account and exact reviewed SHA remain mandatory. Reuse the existing Playwright report validator to require exactly one passed Chromium execution, no skip, retry or unexpected result. Private temporary evidence is removed on exit; no credential-bearing report upload.
+- **Proof:** consumer head `aae15e79639b036712a545483246c06a5375ca29` passed 6/6 source workflows; backend #1413 remains 17/17. Dispatch changes require fresh source CI, independent review and separately authorized real signed deployment. Browser execution, upload and direct Storage/TLS proof NOT_RUN. No activation claim.
+
+
 ### 2026-11-27: KEXP-042A.6D7/A.7 browser evidence candidate, PR #1383
 
 - **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** extend existing native Stop and real File Explorer Playwright owners with explicitly approved signed Docker v1/v2 retained recovery, real one-forward lost-response fault injection, picker-selected attachment identity, content-only challenge, persisted generative receipt and reload. Reuse origin-locked authenticated browser read helper; draft attachment seeding restricted to approved disposable reference and revision CAS. Existing privacy configuration disables retries, recordings and retained failure context in KEXP modes. No new runtime owner, workflow, mock result or production execution.
