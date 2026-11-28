@@ -37,7 +37,9 @@ from ai_karen_engine.core.runtime.policy.runtime_policy import (
 from ai_karen_engine.persistence.repositories import chat_run_repository
 from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
 from ai_karen_engine.services.database.repositories.conversation_repository import (
+    COMPLETED_ATTACHMENT_RECEIPT_KEY,
     Message,
+    build_completed_attachment_receipt,
     canonical_message_digest,
     draft_attachment_selection_digest,
 )
@@ -357,7 +359,7 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
             return ctx
 
         def pair(run, content):
-            return [
+            messages = [
                 Message(
                     id=str(uuid4()), conversation_id=conversation, tenant_id=tenant,
                     role=role, content=value, metadata={
@@ -369,6 +371,10 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
                 )
                 for role, value in (("user", content), ("assistant", "Controlled response"))
             ]
+            messages[1].metadata[COMPLETED_ATTACHMENT_RECEIPT_KEY] = (
+                build_completed_attachment_receipt(messages[0], run.submission_id, [active_ref])
+            )
+            return messages
 
         async def readback(run, ctx, messages):
             return await repo.read_committed_turn(
@@ -403,6 +409,16 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         assert (await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
         )).data == attached.data
+
+        # The caller cannot substitute a different historical receipt even with
+        # an otherwise valid private execution and lease.
+        receipt = messages[1].metadata.pop(COMPLETED_ATTACHMENT_RECEIPT_KEY)
+        forged = await repo.add_completed_turn(
+            *messages, run_lease=completing, private_execution=ctx,
+        )
+        assert not forged.success and forged.error == "attachment_session_denied"
+        assert await observe(completing) == ("running", 0)
+        messages[1].metadata[COMPLETED_ATTACHMENT_RECEIPT_KEY] = receipt
 
         # A real database error during retirement must roll back BOTH messages
         # and the already-staged terminal UPDATE, not just the draft change.
@@ -461,6 +477,45 @@ async def test_attachment_draft_atomic_cas_and_owner_scope(monkeypatch):
         assert await observe(completing) == ("completed", 2)
         recovered = await readback(completing, ctx, messages)
         assert recovered.success and recovered.data is True
+        attachment_gateway = ConversationRuntimeGateway(repository=repo)
+
+        async def attached_history(*, text_only=False):
+            snapshot = await attachment_gateway.get_owned_snapshot(ctx, message_limit=501)
+            proofs = await runs.completed_replay_attestations(
+                tenant_id=tenant, user_id=owner, conversation_id=conversation,
+            )
+            return project_owned_history(snapshot, attestations=proofs,
+                                         text_continuation=text_only)
+
+        original_history = await attached_history()
+        assert [event for event in original_history["replayEvents"]
+                if event["name"] == "karen.verified_attachment_history.v1"] == [{
+            "type": "CUSTOM", "name": "karen.verified_attachment_history.v1",
+            "messageId": messages[1].id,
+            "value": {"user_message_id": messages[0].id, "attachment_count": 1},
+        }]
+        assert active_ref["source_id"] not in str(original_history)
+        assert active_ref["revision"] not in str(original_history)
+        assert (await attached_history(text_only=True))["replayEvents"] == []
+        async with engine.begin() as conn:
+            saved = (await conn.execute(text(
+                "SELECT message_metadata FROM public.messages WHERE message_id = CAST(:id AS uuid)"
+            ), {"id": messages[1].id})).scalar_one()
+            assert saved[COMPLETED_ATTACHMENT_RECEIPT_KEY] == receipt
+            await conn.execute(text(
+                "UPDATE public.messages SET message_metadata = message_metadata || "
+                "'{\"tampered\": true}'::jsonb WHERE message_id = CAST(:id AS uuid)"
+            ), {"id": messages[0].id})
+        assert not (await readback(completing, ctx, messages)).success
+        with pytest.raises(UnreplayableHistory):
+            await attached_history()
+        async with engine.begin() as conn:
+            await conn.execute(text(
+                "UPDATE public.messages SET message_metadata = message_metadata - 'tampered' "
+                "WHERE message_id = CAST(:id AS uuid)"
+            ), {"id": messages[0].id})
+        assert (await readback(completing, ctx, messages)).success
+        assert await attached_history() == original_history
         retired = await repo.get_composer_draft_with_attachments(
             conversation, tenant, user_id=owner,
         )

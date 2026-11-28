@@ -24,6 +24,7 @@ from ai_karen_engine.persistence.repositories.chat_run_repository import (
 from ai_karen_engine.services.database.repositories.conversation_repository import canonical_message_digest
 
 from ai_karen_engine.services.database.repositories.conversation_repository import (
+    COMPLETED_ATTACHMENT_RECEIPT_KEY,
     Conversation,
     ConversationQuery,
     ConversationRepository,
@@ -31,6 +32,7 @@ from ai_karen_engine.services.database.repositories.conversation_repository impo
     RepositoryResult,
     validate_draft_attachment_references,
     draft_attachment_selection_digest,
+    verify_completed_attachment_receipt,
 )
 from ai_karen_engine.services.database.repositories.observability import (
     instrument_repository,
@@ -960,6 +962,7 @@ class PostgresConversationRepository(ConversationRepository):
                         (assistant_message_id, "assistant", assistant_text, "assistant"),
                     )
                     assistant_digest: str | None = None
+                    canonical_user: Message | None = None
                     for message_id, role, content, actor in expected:
                         row = rows.get(message_id)
                         if row is None or row["role"] != role or row["content"] != content:
@@ -979,6 +982,29 @@ class PostgresConversationRepository(ConversationRepository):
                             and meta.get("persona_scope_id") == persona_scope_id
                         ):
                             return missing
+                        if role == "user":
+                            canonical_user = Message(
+                                id=message_id, conversation_id=conversation_id,
+                                tenant_id=tenant_id, role=role, content=content,
+                                metadata=meta,
+                            )
+                        elif COMPLETED_ATTACHMENT_RECEIPT_KEY in meta:
+                            if (
+                                canonical_user is None
+                                or run_lease is None
+                                or run_lease.submission_id is None
+                                or private_execution is None
+                            ):
+                                return missing
+                            references = [
+                                {"source_id": item["source_id"], "revision": item["revision"]}
+                                for item in private_execution.runtime_attachment_documents()
+                            ]
+                            if not verify_completed_attachment_receipt(
+                                meta[COMPLETED_ATTACHMENT_RECEIPT_KEY], canonical_user,
+                                run_lease.submission_id, references,
+                            ):
+                                return missing
                         if role == "assistant" and (
                             run_lease is not None or expected_assistant_digest is not None
                         ):
@@ -1064,6 +1090,16 @@ class PostgresConversationRepository(ConversationRepository):
                         except Exception:
                             raise ValueError("attachment_session_denied") from None
                     submitted_references: list[dict[str, str]] = []
+                    if COMPLETED_ATTACHMENT_RECEIPT_KEY in user_message.metadata:
+                        raise ValueError("attachment_session_denied")
+                    if (
+                        COMPLETED_ATTACHMENT_RECEIPT_KEY in assistant_message.metadata
+                        and (
+                            run_lease is None
+                            or draft_attachment_digest_from_submission_id(run_lease.submission_id) is None
+                        )
+                    ):
+                        raise ValueError("attachment_session_denied")
                     if run_lease is not None:
                         # A v2 receipt can only complete with the original verified
                         # attachment scope, not a caller's replacement references.
@@ -1078,7 +1114,14 @@ class PostgresConversationRepository(ConversationRepository):
                                     {"source_id": item["source_id"], "revision": item["revision"]}
                                     for item in private_execution.runtime_attachment_documents()
                                 ])
-                                if draft_attachment_selection_digest(submitted_references) != attachment_digest:
+                                if (
+                                    run_lease.submission_id is None
+                                    or draft_attachment_selection_digest(submitted_references) != attachment_digest
+                                    or not verify_completed_attachment_receipt(
+                                        assistant_message.metadata.get(COMPLETED_ATTACHMENT_RECEIPT_KEY),
+                                        user_message, run_lease.submission_id, submitted_references,
+                                    )
+                                ):
                                     raise PermissionError("attachment_session_denied")
                             except Exception:
                                 raise ValueError("attachment_session_denied") from None
