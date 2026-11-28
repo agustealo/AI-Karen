@@ -16,7 +16,18 @@ def _composition_harness(synthesis):
         body=[ast.ClassDef(name="Harness", bases=[], keywords=[], body=[method], decorator_list=[])],
         type_ignores=[],
     ))
+    # Keep the isolated method harness aligned with the production import,
+    # without importing ChatRuntime's heavy runtime composition.
+    imports = [
+        node for node in tree.body
+        if isinstance(node, ast.ImportFrom)
+        and any(alias.name == "ATTACHED_DOCUMENT_INTENT" for alias in node.names)
+    ]
+    assert len(imports) == 1
     namespace = {}
+    exec(compile(ast.fix_missing_locations(ast.Module(
+        body=imports, type_ignores=[],
+    )), str(path), "exec"), namespace)
     exec(compile(compiled, str(path), "exec"), namespace)
 
     class Harness(namespace["Harness"]):
