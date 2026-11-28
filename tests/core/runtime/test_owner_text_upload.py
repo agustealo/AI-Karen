@@ -56,11 +56,14 @@ def transfer():
     service = OwnerTextUploadService(sessions=sessions, artifacts=artifacts)
     return SimpleNamespace(service=service, context=context, sessions=sessions,
                            artifacts=artifacts, state=state, data=data, filename=filename,
-                           key=key, session=session, lease=lease, proof=proof)
+                           key=key, session=session, lease=lease, proof=proof, admission=AsyncMock())
 
 
 async def save(t):
-    return await t.service.save(t.context, filename=t.filename, data=t.data, idempotency_key=t.key)
+    return await t.service.save(
+        t.context, filename=t.filename, data=t.data, idempotency_key=t.key,
+        authorize_transfer=t.admission,
+    )
 
 
 @pytest.mark.asyncio
@@ -76,7 +79,8 @@ async def test_fresh_transfer_uses_one_claim_and_committed_readback(transfer):
     t.artifacts.upload_reserved_text.assert_awaited_once()
     args, kw = t.artifacts.upload_reserved_text.await_args
     assert args[0].data == t.data and args[0].tenant_id == t.context.tenant_id
-    assert kw == {"session_id": t.session, "lease_token": t.lease}
+    assert kw["session_id"] == t.session and kw["lease_token"] == t.lease
+    assert callable(kw["before_write"])
     t.sessions.read_committed_verified_text.assert_awaited_once()
 
 
@@ -136,3 +140,11 @@ async def test_invalid_payload_never_creates_session(transfer):
     with pytest.raises(ValueError):
         await save(t)
     t.sessions.create_or_get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_host_admission_denial_precedes_session_creation(transfer):
+    transfer.admission.side_effect = PermissionError("host denied")
+    with pytest.raises(PermissionError):
+        await save(transfer)
+    transfer.sessions.create_or_get.assert_not_awaited()

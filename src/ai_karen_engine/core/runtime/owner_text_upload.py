@@ -9,6 +9,7 @@ import asyncio
 import hashlib
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from uuid import UUID
@@ -47,7 +48,7 @@ class OwnerTextUploadService:
 
     async def save(
         self, context: ChatExecutionContext, *, filename: str, data: bytes,
-        idempotency_key: str,
+        idempotency_key: str, authorize_transfer: Callable[[], Awaitable[None]],
     ) -> OwnerTextUploadReceipt:
         config = ArtifactStorageConfig.from_environment()
         validate_reserved_text_payload(filename, data, max_bytes=config.governed_text_upload_max_bytes)
@@ -58,7 +59,7 @@ class OwnerTextUploadService:
             raise ValueError("Invalid upload idempotency key") from None
         try:
             return await asyncio.wait_for(
-                self._save(context, filename, data, idempotency_key, config),
+                self._save(context, filename, data, idempotency_key, config, authorize_transfer),
                 timeout=config.governed_text_upload_deadline_seconds,
             )
         except (PermissionError, UploadSessionConflict, UploadOutcomeUnavailable):
@@ -76,7 +77,9 @@ class OwnerTextUploadService:
     async def _save(
         self, context: ChatExecutionContext, filename: str, data: bytes,
         key: str, config: ArtifactStorageConfig,
+        authorize_transfer: Callable[[], Awaitable[None]],
     ) -> OwnerTextUploadReceipt:
+        await authorize_transfer()
         await context.revalidate_runtime_artifact_write_session()
         tenant, owner = context.tenant_id, context.user_id
         # Reject rather than normalize a principal to another identity.
@@ -91,6 +94,7 @@ class OwnerTextUploadService:
         }, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
 
         async def authorize() -> None:
+            await authorize_transfer()
             await context.revalidate_runtime_artifact_write_session()
             if (context.tenant_id, context.user_id) != (tenant, owner):
                 raise PermissionError("Upload principal changed")
@@ -147,6 +151,7 @@ class OwnerTextUploadService:
                     content_type="text/plain", data=data,
                 ),
                 session_id=claim.session_id, lease_token=claim.lease_owner,
+                before_write=authorize,
             )
         elif current.state in {"committing", "reconcile_required"}:
             await authorize()

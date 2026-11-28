@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 import base64
 import binascii
 import io
@@ -510,6 +511,7 @@ class SupabaseArtifactStore(ArtifactStore):
     @instrument_repository(operation="upload_reserved_text", repository="SupabaseArtifactStore")
     async def upload_reserved_text(
         self, request: ArtifactUploadRequest, *, session_id: str, lease_token: str,
+        before_write: Callable[[], Awaitable[None]] | None = None,
     ) -> RepositoryResult[Artifact]:
         """Consume the existing ledger claim, write once, and prove readback.
 
@@ -553,6 +555,10 @@ class SupabaseArtifactStore(ArtifactStore):
             )
             if claimed is None:
                 return RepositoryResult(success=False, error=unavailable)
+            # A claim may have waited on another transaction. Revalidate
+            # the host authorization before dispatching the remote write.
+            if before_write is not None:
+                await before_write()
             written = await self._upload_object_and_metadata(
                 request, artifact_id=session_id, reserved=True,
             )
@@ -567,7 +573,7 @@ class SupabaseArtifactStore(ArtifactStore):
             ):
                 return RepositoryResult(success=False, error="reserved_upload_reconcile_required")
             return written
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, PermissionError):
             raise
         except Exception as exc:
             logger.warning(

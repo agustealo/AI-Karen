@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from abc import abstractmethod
+from collections.abc import Awaitable, Callable
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -106,6 +107,7 @@ class ArtifactStore(Repository):
 
     async def upload_reserved_text(
         self, request: ArtifactUploadRequest, *, session_id: str, lease_token: str,
+        before_write: Callable[[], Awaitable[None]] | None = None,
     ) -> RepositoryResult[Artifact]:
         """Internal governed writer. Unsupported backends must fail closed.
 

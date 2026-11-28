@@ -234,3 +234,34 @@ async def test_reserved_writer_freezes_payload_before_claim(monkeypatch):
     assert bucket.objects == {f"{tenant}/{session_id}/content": b"first\nsecond"}
     assert result.data.metadata == {"generation": {"version": 1}}
     assert result.data.tenant_id == tenant
+
+
+@pytest.mark.asyncio
+async def test_reserved_writer_rechecks_host_after_spending_claim(monkeypatch):
+    from unittest.mock import AsyncMock
+    from uuid import uuid4
+    from ai_karen_engine.services.database.repositories import supabase_artifact_store as module
+
+    tenant, owner, session_id, token = (str(uuid4()) for _ in range(4))
+    store, bucket = make_store(Session())
+    ledger = SimpleNamespace(
+        consume_write_claim=AsyncMock(return_value=SimpleNamespace(state="reconcile_required")),
+        reconcile_verified_text=AsyncMock(),
+    )
+    monkeypatch.setattr(module, "UploadSessionRepository", lambda factory: ledger)
+
+    async def revoked():
+        ledger.consume_write_claim.assert_awaited_once()
+        assert not bucket.uploads
+        raise PermissionError("session revoked")
+
+    upload = ArtifactUploadRequest(
+        tenant_id=tenant, user_id=owner, filename="generated.txt",
+        content_type="text/plain", data=b"verified",
+    )
+    with pytest.raises(PermissionError):
+        await store.upload_reserved_text(
+            upload, session_id=session_id, lease_token=token, before_write=revoked,
+        )
+    assert not bucket.uploads
+    ledger.reconcile_verified_text.assert_not_awaited()
