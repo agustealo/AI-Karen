@@ -467,6 +467,62 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28 UTC: KFILE-UPLOAD-U2D2 authenticated host transfer binding
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** host-only RuntimePolicy transfer admission from fresh session/RBAC; generic requests for file_upload.transfer remain denied. PluginService shares discovery/transfer preparation, pins the existing kernel lifecycle scope and delegates to the owner-text runtime, revalidating identity/lifecycle during state changes. Reserved writer rechecks host admission after claim consumption, before remote dispatch. Denied post-claim write remains reconcile_required; never replay. No public route, UI, new writer or activation. Existing reserved writer callers without a host callback retain internal compatibility.
+- **Proof:** staged regressions for forged generic transfer, unknown destination, active host scope, pre-session denial and post-claim revocation. Tests not executed on staged head. Quota CI preserved; distributed lifecycle fencing, bounded HTTP ingress, exact-head review and live Storage/model proof outstanding.
+
+### 2026-11-28: KFILE-UPLOAD-U2D1 host-operation lifecycle fence
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** reuse one PluginKernel active-execution scope across execute, probe admission and a new trusted host-operation admission context. Host scope retains the existing lifecycle marker until exit, requires actual payload validation using the canonical executor, rejects denied admission and releases on exception. No new policy grant, plugin handler execution, public endpoint or distributed lease. Unit regressions cover probe compatibility, schema denial, no handler invocation, active marker and refresh/cleanup/duplicate request denial, and failure cleanup.
+- **Proof:** quota repair `4b83dec2682e44609243be46e60374d78d473751` CK-GEN PostgreSQL job 140864990739 passed 163 tests, 2 opt-in live Storage tests skipped. Preserve its active CI. Host fence staged, fresh CI not run; transfer policy, live lifecycle cross-worker fencing, bounded HTTP ingress and Storage/browser proof remain outstanding.
+
+### 2026-11-28: KFILE-UPLOAD-U1B admission-only extension discovery
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** default-disabled first-party File Upload catalog manifest; no UI/API/Storage permissions, hooks or generic execution. Existing PluginService obtains current owner-create session and canonical RBAC, evaluates RuntimePolicy, invokes PluginKernel.admit, revalidates current session and lifecycle, then projects the sole bounded store-only owner-library destination with transfer_available=false. No upload execution grant or activation. Tests cover manifest, missing entitlements, unregistered actions, disabled kernel, and lifecycle changes.
+- **Proof:** staged on current quota candidate; previous transfer head passed 16/16 workflows before quota promotion. Fresh quota CI preserved; discovery tests not yet run. Transfer ingress, destination execution policy, lifecycle lease, live Storage/browser acceptance and independent review outstanding.
+
+### 2026-11-28: KFILE-UPLOAD-U2C1 durable admission budget
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** serialize per-tenant/owner upload-session creation under a PostgreSQL transaction advisory lock and fresh READ COMMITTED snapshot. Count all admitted manifests over the preceding 24 hours (including failed/cancelled), with validated KAREN_UPLOAD_ADMISSION_DAILY_SESSIONS (128, range 1–100000) and KAREN_UPLOAD_ADMISSION_DAILY_BYTES (8388608, range 1–1099511627776) settings. Existing matching unexpired keys remain free; expired keys never restart. This is a ledger admission budget, not a total Storage capacity quota, tenant-wide budget, or plugin authorization. No new store, table, API or grant. File Upload extension is not installed; no substitute File Explorer grant.
+- **Proof:** unit SQL/config assertions and disposable PostgreSQL concurrent different-key admission, replay and cancellation regression added. Staged while prior exact-head Medusa CI runs; fresh tests and independent review required. Live Storage and consumer activation NOT_RUN.
+
+### 2026-11-28: KFILE-UPLOAD-U2B2 internal bounded text transfer
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** stage owner-library store-only runtime orchestration on the existing canonical ArtifactStore and UploadSessionRepository factory. Shared inert text profile, principal-derived manifest and idempotency, fresh durable permission checks, CAS staging, one-time writer and verified committed readback. No API, UI, plugin activation, new database or general binary upload. Config: KAREN_GOVERNED_TEXT_UPLOAD_MAX_BYTES (65536, 1–65536), KAREN_GOVERNED_TEXT_UPLOAD_TTL_SECONDS (3600, 1–86400), KAREN_GOVERNED_TEXT_UPLOAD_DEADLINE_SECONDS (60, 1–300 and strictly less than TTL); invalid values fail closed. Expired session keys remain unavailable via create_or_get; no automatic new write.
+- **Proof:** source staging only, no executed tests yet. Preserve PR #1383 exact head `5ea6ce74278df0d8da740a95564d278c3629476a` while First-Boot runs. Unit contract covers fresh/repeated/uncertain receipt, live lease denial, revocation and invalid manifest. Destination/plugin admission, quota accounting, actual transfer/Storage TLS, signed browser proof, and independent review outstanding. No production activation.
+
+### 2026-11-28: KFILE-UPLOAD-U2B1 committed receipt readback, PR #1383
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** reuse the existing owner-scoped upload ledger and canonical bounded Storage reader for read-only retrieval of an already committed reserved text receipt. Require the exact reserved artifact, active file row, owner, digest, size and Storage key; share the pinned byte-verification helper with uncertain reconciliation. No mutation, replay, client exposure, new store or schema. Unit regressions and disposable PostgreSQL cases cover repeated readback, owner denial, archival and substituted proof.
+- **Proof:** prior consumer head `f4deb16353f323ba4943a8c2da63ee9bc1a440a8` passed 10/10 source workflows. New source requires fresh exact-head CI and review; PostgreSQL test uses a controlled Storage reader, not live TLS. Runtime upload orchestration, UI upload and signed upload-to-model proof remain NOT_RUN. No activation.
+
+### 2026-11-27: KFILE-UPLOAD-U2A legacy owner-create admission, PR #1383
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** use existing witness-issuing authenticated ingress and canonical artifact owner-create plus DATA_READ RBAC (not broad DATA_WRITE). Audit ingress decisions and revalidate current account/session before body read and immediately before canonical Storage dispatch. Reject legacy conversation/message bindings because their persistence is unsupported; no invented association, new endpoint, upload ledger or privilege grant. Existing bounded-ingress tests extend denial, revocation, scope and positive owner checks.
+- **Proof:** previous consumer head `d68eeaddf167845bd66e3e1a1b5f2424307776e8` passed all nine source workflows, including first-boot. Fresh exact-head tests and independent review required. Legacy upload remains non-idempotent; durable governed upload admission, actual Storage transport, signed browser/model proof and production activation NOT_RUN. No direct deployment or mutation.
+
+### 2026-11-27: KEXP-042A.7 canonical Storage factory correction, PR #1383
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** the existing DatabaseServiceFactory supplied the raw SDK Storage client to RepositoryFactory, whereas SupabaseArtifactStore requires the initialized platform wrapper for bucket access, configured origin and private CA policy. Pass that same wrapper used by the canonical runtime repository factory; add a factory regression for policy/bucket identity and unavailable Storage denial. No new client, upload route, TLS implementation or release workflow. #1408 owns local HTTPS gateway/CA provenance; retain that separate acceptance gate.
+- **Proof:** prior #1383 head `460344ee8e87cc1ce81a29d29e0a5b4fc4d1fd50` passed 6/6 source workflows; new exact-head CI and independent review required. Actual governed upload, direct real Storage/TLS transport and signed browser execution remain NOT_RUN. Existing picker acceptance uses a pre-provisioned artifact; legacy multipart ingress is not proof of governed consumer upload. No production mutation or activation.
+
+### 2026-11-27: KEXP-042A.7 protected signed Docker dispatch, PR #1383
+
+- **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** extend the existing main-only signed Docker host/browser/host chain with explicit approved recovery variants and attached-content scenario. Scoped secrets, sanitized account and exact reviewed SHA remain mandatory. Reuse the existing Playwright report validator to require exactly one passed Chromium execution, no skip, retry or unexpected result. Private temporary evidence is removed on exit; no credential-bearing report upload.
+- **Proof:** consumer head `aae15e79639b036712a545483246c06a5375ca29` passed 6/6 source workflows; backend #1413 remains 17/17. Dispatch changes require fresh source CI, independent review and separately authorized real signed deployment. Browser execution, upload and direct Storage/TLS proof NOT_RUN. No activation claim.
+
+### 2026-11-27: KEXP-042A.6D7/A.7 browser evidence candidate, PR #1383
+
+- **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** extend existing native Stop and real File Explorer Playwright owners with explicitly approved signed Docker v1/v2 retained recovery, real one-forward lost-response fault injection, picker-selected attachment identity, content-only challenge, persisted generative receipt and reload. Reuse origin-locked authenticated browser read helper; draft attachment seeding restricted to approved disposable reference and revision CAS. Existing privacy configuration disables retries, recordings and retained failure context in KEXP modes. No new runtime owner, workflow, mock result or production execution.
+- **Proof:** #1384 merged at `1c051e84e14567697ed3c2180fb0b5392d49f3dd`; #1413 head `3b83c95454352b667d97f9e99e8d15139b932fb0` 17/17 distinct source workflows including 39 non-skipped composer tests and real PostgreSQL; previous consumer head `179209895b13382c5be72f1dd7086d40d8d9ca82` 4/4 source workflows. New test source requires fresh exact-head compilation and review. Signed runtime browser proof, upload and direct Storage/TLS evidence NOT_RUN; checklist stays open. No activation claim.
+
+### 2026-11-27: KEXP-042A.6C–6D6 governed attachment submission and recovery, PR #1383
+
+- **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** existing controller uses the canonical persisted-draft v2 snapshot and per-run reference hints under explicit verified capability. Ordinary governed failure and reload recovery use exact owner-scoped submission status, read-only draft identity, verified history and explicit retry preparation. Lost retry response requires causal backend receipt with current successor and fresh matching draft readback; no automatic replay or inference. Existing gateway validates the optional receipt fields together and never invents evidence for an older backend. Original draft/ledger/runtime owners retained.
+- **Proof:** prior head `d5b1b018cdfcdd344f95c9b5ecaac75a5f846bdc` passed Chat System Burn, DEV_FAST and KAREN Presentation Contract, and the Main Quality frontend/classifier/deployment jobs; backend stopped at the required convergence-ledger update. This entry corrects that gate. Added proxy/controlled-composer causal receipt regressions; fresh exact-head tests and independent review required. Depends on #1384 and the staged A.6D6 backend/migration. No signed-in browser, Storage/model or production activation claim; checklist tasks remain open.
+
+
 ### 2026-11-24: KIS-UX-02B governed general search, PR #1292
 
 - **KCON-213 / KCON-260 / KCON-750, SOURCE_CANDIDATE:** Reuses ChatRuntime and CORTEX admission for typed general-search retrieval options in HTTP/SSE; propagates the original authorized plan and cumulative execution meter through primary retrieval and eligible Intelligent Search fallback. Source-matched supporting citations in the three synchronized plugin UI distributions are not claim-level verification. Unsupported specialized/crawl options retain the existing plugin path; runtime denial does not trigger a UI retry. No new orchestrator or provider registry.

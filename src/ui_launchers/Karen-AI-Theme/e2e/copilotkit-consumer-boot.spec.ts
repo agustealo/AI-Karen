@@ -1,5 +1,5 @@
 import { expect, test } from "./fixtures/verified-search-deployment";
-import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import { readAuthorizedSameOriginJson, signInApprovedKaren } from "./fixtures/approved-karen-login";
 import { openAutomationWorkspace } from "./fixtures/automation-workspace-navigation";
 import type { Page } from "@playwright/test";
 import { createHash } from "node:crypto";
@@ -10,31 +10,6 @@ import { approvedSpecialistIdentity, emptyFreshSpecialistHistory, validApprovedS
  * an unstyled SDK and still pass preview-only acceptance. Assert the real
  * browser loaded the *nonempty same-origin* pinned vendor stylesheet.
  */
-/**
- * Read canonical JSON through the *actual signed-in browser*. Playwright's
- * request context shares cookies, but cannot see Karen's localStorage Bearer
- * access token. Keep that credential inside the browser: never echo it to the
- * runner, attach it to redirects or send it to a different origin.
- */
-async function readAuthorizedSameOriginJson(
-  page: Page, apiPath: string,
-): Promise<{ ok: boolean; status: number; body: unknown }> {
-  return page.evaluate(async (path) => {
-    const url = new URL(path, window.location.origin);
-    if (url.origin !== window.location.origin || !url.pathname.startsWith("/api/")) {
-      throw new Error("Refusing authenticated read outside the application's API origin");
-    }
-    const accessToken = window.localStorage.getItem("access_token");
-    const response = await window.fetch(url.pathname + url.search, {
-      credentials: "same-origin",
-      cache: "no-store",
-      redirect: "error",
-      headers: accessToken ? { Authorization: `Bearer ${accessToken}` } : {},
-    });
-    return { ok: response.ok, status: response.status, body: response.ok ? await response.json() : null };
-  }, apiPath);
-}
-
 /**
  * KCON-770 case 08: independently read the exact owned run's durable status
  * and observed events. A generic SDK alert or unrelated backend failure does

@@ -59,7 +59,7 @@ export async function readKarenScopedStopRunId(
 /** Shared bounded parser for trusted backend run receipts and read-only status.
  * Never buffer arbitrary upstream JSON, follow redirects or expose raw errors.
  */
-async function readBoundedRunJson(response: Response): Promise<unknown> {
+async function readBoundedRunJson(response: Response | Request, maxBytes = MAX_STOP_BYTES): Promise<unknown> {
   const reader = response.body?.getReader();
   if (!reader) throw new Error("missing receipt");
   const decoder = new TextDecoder("utf-8", { fatal: true });
@@ -69,9 +69,9 @@ async function readBoundedRunJson(response: Response): Promise<unknown> {
     const part = await reader.read();
     if (part.done) break;
     bytes += part.value.byteLength;
-    if (bytes > MAX_STOP_BYTES) {
+    if (bytes > maxBytes) {
       void reader.cancel().catch(() => undefined);
-      throw new Error("oversized receipt");
+      throw new RangeError("oversized receipt");
     }
     body += decoder.decode(part.value, { stream: true });
   }
@@ -215,4 +215,110 @@ export async function readKarenOwnedRunStatus(
     cancel_requested: record.cancel_requested,
     cancellation_confirmed: record.cancellation_confirmed,
   }, { status: 200, headers: { "Cache-Control": "private, no-store" } });
+}
+
+
+// Retry preparation is not a run, stop or SDK operation. The canonical
+// ledger owns eligibility and revision advancement; this is transport only.
+const DRAFT_RETRY_ROUTE = /^\/api\/copilotkit\/agent\/default\/draft-retry\/([0-9a-f-]{36})\/(draft-v1-([1-9][0-9]{0,15})|draft-v2-([1-9][0-9]{0,15})-[a-f0-9]{64})$/;
+const MAX_RETRY_BYTES = 65536;
+type DraftRetryTarget = { threadId: string; submissionId: string; revision: number };
+
+export function ownedDraftRetryTarget(request: NextRequest): DraftRetryTarget | null {
+  if (!["GET", "POST"].includes(request.method) || request.nextUrl.search) return null;
+  const match = DRAFT_RETRY_ROUTE.exec(request.nextUrl.pathname);
+  if (!match) return null;
+  const revision = Number(match[3] ?? match[4]);
+  if (!Number.isSafeInteger(revision) || revision >= Number.MAX_SAFE_INTEGER - 1) return null;
+  return { threadId: match[1], submissionId: match[2], revision };
+}
+
+export async function relayKarenOwnedDraftRetry(
+  request: NextRequest, backendBaseUrl: string, verifiedHeaders: Record<string, string>,
+  target: DraftRetryTarget,
+): Promise<Response> {
+  const mutation = request.method === "POST";
+  let body: string | undefined;
+  if (mutation) {
+    const length = request.headers.get("content-length");
+    if (length !== null && (!/^\d+$/.test(length) || Number(length) > MAX_RETRY_BYTES)) {
+      return NextResponse.json({ detail: "Draft retry request too large" }, { status: 413 });
+    }
+    try {
+      const input = await readBoundedRunJson(request, MAX_RETRY_BYTES);
+      if (!input || typeof input !== "object" || Array.isArray(input)) {
+        return NextResponse.json({ detail: "Invalid draft retry request" }, { status: 422 });
+      }
+      const values = input as Record<string, unknown>;
+      if (Object.keys(values).length !== 2 || typeof values.submitted_text !== "string" ||
+          !values.submitted_text.trim() || values.submitted_text.length > 10000 ||
+          !Array.isArray(values.attachment_references) || values.attachment_references.length > 12) {
+        return NextResponse.json({ detail: "Invalid draft retry request" }, { status: 422 });
+      }
+      // Exact reference shape/digest and all eligibility are validated again
+      // by the canonical backend. No client identity or authority forwarded.
+      body = JSON.stringify({
+        submitted_text: values.submitted_text,
+        attachment_references: values.attachment_references,
+      });
+    } catch (error) {
+      return NextResponse.json({ detail: "Invalid draft retry request" }, {
+        status: error instanceof RangeError ? 413 : 400,
+      });
+    }
+  }
+  let response: Response;
+  try {
+    response = await fetch(
+      backendBaseUrl + "/api/chat/ag-ui/draft-retry/" + target.threadId + "/" + target.submissionId,
+      {
+        method: mutation ? "POST" : "GET",
+        headers: { ...verifiedHeaders, ...(mutation ? { "content-type": "application/json" } : {}) },
+        ...(mutation ? { body } : {}),
+        redirect: "manual", cache: "no-store", signal: request.signal,
+      },
+    );
+  } catch {
+    return NextResponse.json({ detail: "Draft retry unavailable" }, { status: 503 });
+  }
+  if ([401, 403, 404].includes(response.status)) {
+    return NextResponse.json({ detail: "Draft retry unavailable" }, { status: 404 });
+  }
+  if (response.status === 409 && mutation) {
+    return NextResponse.json({ detail: "Draft retry is no longer eligible" }, { status: 409 });
+  }
+  if (response.status === 422) {
+    return NextResponse.json({ detail: "Invalid draft retry request" }, { status: 422 });
+  }
+  if (response.status !== 200 || !response.headers.get("content-type")?.includes("application/json")) {
+    return NextResponse.json({ detail: "Draft retry unavailable" }, { status: 503 });
+  }
+  try {
+    const receipt = await readBoundedRunJson(response);
+    if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)) throw new Error("receipt");
+    const values = receipt as Record<string, unknown>;
+    if (values.submission_id !== target.submissionId ||
+        (mutation ? values.revision !== target.revision + 1 : typeof values.eligible !== "boolean")) {
+      throw new Error("receipt");
+    }
+    // Old backends may omit both causal fields. Never synthesize them
+    // from eligibility or a current draft revision.
+    const causal = !mutation && ("prepared_revision" in values || "prepared_current" in values);
+    if (causal && (
+        typeof values.prepared_current !== "boolean" ||
+        (values.prepared_revision !== null && values.prepared_revision !== target.revision + 1) ||
+        (values.eligible === true && values.prepared_revision !== null) ||
+        (values.prepared_current === true && values.prepared_revision === null))) {
+      throw new Error("receipt");
+    }
+    return NextResponse.json({
+      submission_id: target.submissionId,
+      ...(mutation ? { revision: values.revision } : {
+        eligible: values.eligible,
+        ...(causal ? { prepared_revision: values.prepared_revision, prepared_current: values.prepared_current } : {}),
+      }),
+    }, { headers: { "Cache-Control": "private, no-store" } });
+  } catch {
+    return NextResponse.json({ detail: "Invalid draft retry receipt" }, { status: 503 });
+  }
 }

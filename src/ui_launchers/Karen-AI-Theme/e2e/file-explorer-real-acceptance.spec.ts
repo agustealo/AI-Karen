@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { type Page, type Request, type TestInfo } from "@playwright/test";
 import { expect, test } from "./fixtures/verified-search-deployment";
-import { signInApprovedKaren } from "./fixtures/approved-karen-login";
+import { readAuthorizedSameOriginJson, signInApprovedKaren } from "./fixtures/approved-karen-login";
 
 /**
  * Real authenticated File Explorer acceptance. No mocked routes, files,
@@ -1420,4 +1420,177 @@ test('KCONTENT-REVOKED-LIVE: retired owner source remains unavailable', async ({
   expect(responseText.length).toBeLessThan(2048);
   expect(responseText).not.toContain(retiredId);
   expect(responseText).not.toContain(retiredRevision);
+});
+
+/**
+ * Positive content proof, separate from the legacy disabled-capability case.
+ * Operator pre-provisions a root UTF-8 text artifact with a random 32-hex
+ * challenge found only in its bytes (not filename, metadata or prompt).
+ * This test neither uploads nor reads the artifact directly.
+ */
+test("KEXP-A7-ATTACHED-CONTENT: real picker, revision-bound submission and model content", async ({ page }) => {
+  test.skip(process.env.KAREN_KEXP_CONTENT_ACCEPTANCE_REQUIRED !== "true",
+    "Requires explicit approved attachment content acceptance");
+  test.setTimeout(360000);
+  const origin = trustedOrigin();
+  const expectedRevision = process.env.KAREN_CHAT_BOOT_REVISION;
+  const sourceId = process.env.KAREN_KEXP_CONTENT_SOURCE_ID;
+  const sourceRevision = process.env.KAREN_KEXP_CONTENT_SOURCE_REVISION;
+  const expectedAnswerHash = process.env.KAREN_KEXP_CONTENT_ANSWER_SHA256;
+  const thread = process.env.KAREN_KEXP_CONTENT_CONVERSATION_ID;
+  const title = process.env.KAREN_KEXP_CONTENT_CONVERSATION_TITLE;
+  if (!enabled || process.env.KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED !== "true" ||
+      process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
+      process.env.KAREN_SANITIZED_ACCOUNT !== "true" ||
+      process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined ||
+      origin.protocol !== "https:" || !expectedRevision || !/^[a-f0-9]{40}$/.test(expectedRevision) ||
+      !sourceId || !uuidPattern.test(sourceId) || !thread || !uuidPattern.test(thread) ||
+      !sourceRevision || !/^[a-f0-9]{64}$/.test(sourceRevision) ||
+      !expectedAnswerHash || !/^[a-f0-9]{64}$/.test(expectedAnswerHash) || !title || !email || !password) {
+    throw new Error("KEXP content proof requires signed Docker, approved disposable owner/thread/source and exact revision/challenge digest");
+  }
+  const deployment = await page.request.get(new URL("/api/deployment-revision", origin).toString(),
+    { maxRedirects: 0, maxRetries: 0 });
+  expect(deployment.status()).toBe(200);
+  expect(await deployment.json()).toEqual({ status: "ok", revision: expectedRevision });
+  await signInApprovedKaren(page, email, password);
+  // Keep the existing browser's credential inside its origin. No credential
+  // or source body is returned to the runner or attached to test reports.
+  async function read(path: string): Promise<unknown> {
+    if (new URL(page.url()).origin !== origin.origin) throw new Error("Unexpected browser origin");
+    const result = await readAuthorizedSameOriginJson(page, path);
+    expect(result.ok, "Canonical authenticated read must succeed").toBe(true);
+    return result.body;
+  }
+  const workspace = page.getByTestId("karen-copilot-consumer-chat");
+  const candidate = workspace.getByTestId("karen-copilot-controlled-chat");
+  const composer = candidate.getByTestId("karen-copilot-sdk-chat").locator("textarea");
+  const attachments = candidate.getByRole("region", { name: "Draft attachments" });
+  const browse = candidate.getByRole("button", { name: "Browse files", exact: true });
+  async function openThread() {
+    await expect(workspace).toBeVisible({ timeout: 30000 });
+    if (await workspace.getAttribute("data-conversation-id") !== thread) {
+      await workspace.getByRole("button", { name: "Find conversations" }).click();
+      await workspace.getByPlaceholder("Search conversation titles").fill(title!);
+      const match = workspace.getByRole("group", { name: "Matching conversations" })
+        .locator('button[data-conversation-id="' + thread + '"]');
+      await expect(match).toHaveCount(1);
+      await match.click();
+    }
+    await expect(workspace).toHaveAttribute("data-conversation-id", thread!);
+    await expect(composer).toHaveCount(1);
+    await expect(composer).toBeVisible();
+  }
+  const runs: Array<{ runId: string; submissionId: string; refs: unknown }> = [];
+  let forbiddenRuns = 0;
+  page.context().on("request", request => {
+    const url = new URL(request.url());
+    if (request.method() !== "POST") return;
+    if (["/api/chat/ag-ui", "/api/chat/stream", "/api/chat"].includes(url.pathname)) forbiddenRuns++;
+    if (url.pathname !== "/api/copilotkit/agent/default/run") return;
+    try {
+      const body = request.postDataJSON() as {
+        threadId?: string; runId?: string; messages?: Array<{ id: string; role: string }>;
+        forwardedProps?: { attachment_references?: unknown };
+      };
+      if (url.origin !== origin.origin || body.threadId !== thread || !body.runId) throw Error("scope");
+      runs.push({ runId: body.runId, submissionId: body.messages?.filter(m => m.role === "user").at(-1)?.id || "",
+        refs: body.forwardedProps?.attachment_references });
+    } catch { forbiddenRuns++; }
+  });
+  await openThread();
+  expect(await read("/api/chat/ag-ui/capabilities")).toMatchObject({
+    enabled: true, governed_history: true, attachment_draft_submission: true,
+  });
+  const historyPath = "/api/copilotkit/threads/" + thread + "/messages";
+  const draftPath = "/api/conversations/" + thread + "/draft?include_attachments=true";
+  type Draft = { text: string; revision: number; attachment_references: Array<{ source_id: string; revision: string }> };
+  const initial = await read(draftPath) as Draft;
+  expect(initial).toMatchObject({ text: "", attachment_references: [] });
+  expect(Number.isSafeInteger(initial.revision)).toBe(true);
+  expect(await read(historyPath)).toMatchObject({ threadId: thread, messages: [] });
+  await expect(composer).toHaveValue("");
+  const inventoryPending = nextRealPage(page, origin);
+  await browse.click();
+  const response = await inventoryPending;
+  expect(response.status()).toBe(200);
+  const inventory = inventoryResponse(await response.json());
+  const source = inventory.items.find(item => item.source_id === sourceId && item.revision === sourceRevision);
+  if (!source || inventory.items.filter(item => item.name === source.name).length !== 1 ||
+      !source.name.endsWith(".txt") || /[a-f0-9]{32}/i.test(source.name)) {
+    throw new Error("Approved uniquely named root text source absent or unsuitable");
+  }
+  const refs = [{ source_id: source.source_id, revision: source.revision }];
+  const browserRegion = candidate.getByRole("region", { name: "Conversation file browser" });
+  await browserRegion.getByRole("checkbox", { name: "Select " + source.name, exact: true }).check();
+  await browserRegion.getByRole("button", { name: "Attach selected files (1)", exact: true }).click();
+  const prompt = "Read the attached text file. Return only its 32-character lowercase hexadecimal challenge, without explanation or formatting.";
+  await composer.fill(prompt);
+  await expect.poll(async () => {
+    const draft = await read(draftPath) as Draft;
+    return draft.text === prompt && draft.attachment_references.length === 1 &&
+      draft.attachment_references[0].source_id === refs[0].source_id &&
+      draft.attachment_references[0].revision === refs[0].revision &&
+      draft.revision > initial.revision;
+  }, { timeout: 30000 }).toBe(true);
+  const saved = await read(draftPath) as Draft;
+  await expect(attachments).toContainText("References saved");
+  expect(runs).toHaveLength(0);
+  expect(forbiddenRuns).toBe(0);
+  await composer.press("Enter");
+  await expect.poll(() => runs.length, { timeout: 30000 }).toBe(1);
+  const run = runs[0];
+  const digest = createHash("sha256").update(JSON.stringify(refs.map(({ revision, source_id }) =>
+    ({ revision, source_id }))), "utf8").digest("hex");
+  expect(run.submissionId).toBe("draft-v2-" + saved.revision + "-" + digest);
+  expect(run.refs).toEqual(refs);
+  const statusPath = "/api/copilotkit/agent/default/submissions/" + thread + "/" + run.submissionId + "/status";
+  await expect.poll(async () => {
+    const observation = await readAuthorizedSameOriginJson(page, statusPath);
+    if (observation.status === 404) return false;
+    expect(observation.ok).toBe(true);
+    const result = observation.body as Record<string, unknown>;
+    return result.status === "completed" && result.runId === run.runId && result.submissionId === run.submissionId;
+  }, { timeout: 180000 }).toBe(true);
+  let assistantId = "";
+  await expect.poll(async () => {
+    const history = await read(historyPath) as {
+      messages?: Array<{ id: string; role: string; content: string }>;
+      replayEvents?: Array<{ type: string; name: string; messageId: string; value: Record<string, unknown> }>;
+    };
+    if (!Array.isArray(history.messages) || history.messages.length !== 2 ||
+        history.messages[0].role !== "user" || history.messages[0].content !== prompt ||
+        history.messages[1].role !== "assistant") return false;
+    const assistant = history.messages[1];
+    const answer = assistant.content.trim();
+    if (!/^[a-f0-9]{32}$/.test(answer) || createHash("sha256").update(answer).digest("hex") !== expectedAnswerHash) return false;
+    const receipt = history.replayEvents?.filter(event => event.type === "CUSTOM" &&
+      event.name === "karen.execution_receipt.v1" && event.messageId === assistant.id);
+    if (receipt?.length !== 1 || !receipt[0].value ||
+        !["provider_runtime", "openai_compatible_engine", "model"].includes(String(receipt[0].value.response_source)) ||
+        receipt[0].value.degraded_mode === true ||
+        typeof receipt[0].value.actual_provider !== "string" || !receipt[0].value.actual_provider.trim() ||
+        typeof receipt[0].value.actual_model !== "string" || !receipt[0].value.actual_model.trim()) return false;
+    assistantId = assistant.id;
+    return true;
+  }, { timeout: 30000 }).toBe(true);
+  await expect.poll(async () => {
+    const draft = await read(draftPath) as Draft;
+    return draft.text === "" && draft.attachment_references.length === 0 && draft.revision === saved.revision + 1;
+  }, { timeout: 30000 }).toBe(true);
+  const renderedChallenge = async () => candidate.getByTestId("karen-copilot-assistant-message").evaluateAll(
+    elements => elements.map(element => element.textContent || ""),
+  ).then(values => values.some(value => {
+    const answer = value.match(/\b[a-f0-9]{32}\b/g);
+    return answer?.some(token => createHash("sha256").update(token).digest("hex") === expectedAnswerHash) === true;
+  }));
+  await expect.poll(renderedChallenge).toBe(true);
+  await page.reload();
+  await openThread();
+  await expect.poll(renderedChallenge).toBe(true);
+  const replay = await read(historyPath) as { messages: Array<{ id: string; role: string }> };
+  expect(replay.messages.filter(message => message.role === "assistant").map(message => message.id)).toEqual([assistantId]);
+  expect(runs).toHaveLength(1);
+  expect(forbiddenRuns).toBe(0);
+  // Retain sanitized audit evidence. No source mutation or direct content read.
 });

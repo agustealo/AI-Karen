@@ -15,8 +15,10 @@ from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+
 if TYPE_CHECKING:
-    from .artifact_store import ArtifactStore
+    from .artifact_store import ArtifactStore, VerifiedArtifactText
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,7 +95,7 @@ class UploadSessionRepository:
         expected_sha256: str | None = None,
     ) -> UploadSession:
         identity = self._identity(tenant_id, owner_user_id)
-        if not destination_id or not recipe or expected_bytes < 0:
+        if not destination_id or not recipe or type(expected_bytes) is not int or expected_bytes < 0:
             raise ValueError("Invalid upload session manifest")
         for digest in (idempotency_key_hash, manifest_sha256):
             if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
@@ -106,8 +108,12 @@ class UploadSessionRepository:
             raise ValueError("Expected lowercase content SHA-256 digest")
         if expires_at <= datetime.utcnow():
             raise ValueError("Upload session must expire in the future")
+        config = ArtifactStorageConfig.from_environment()
         params = {
             **identity,
+            "admission_sessions": config.upload_admission_daily_sessions,
+            "admission_bytes": config.upload_admission_daily_bytes,
+            "quota_lock": f"artifact-upload-admission:{identity['tenant_id']}:{identity['owner_user_id']}",
             "destination_id": destination_id,
             "recipe": recipe,
             "idempotency_key_hash": idempotency_key_hash,
@@ -117,17 +123,32 @@ class UploadSessionRepository:
             "expires_at": expires_at,
         }
         async with self._session_factory() as session:
-            # Unique constraint serializes concurrent requests for the same
-            # authenticated principal and idempotency key.
+            # Serialize all new reservations for this owner, not just one key.
+            # READ COMMITTED gives the post-lock statement a fresh snapshot
+            # even if another worker committed while this worker waited.
+            await session.execute(text("SET TRANSACTION ISOLATION LEVEL READ COMMITTED"))
+            await session.execute(text("""
+                SELECT pg_advisory_xact_lock(hashtextextended(CAST(:quota_lock AS text), 0))
+            """), {"quota_lock": params["quota_lock"]})
+            # Count admitted manifests (including failed/cancelled sessions)
+            # over a rolling day. Retrying an existing key remains free:
+            # the following scoped lookup returns it even when the cap is full.
             await session.execute(text("""
                 INSERT INTO public.artifact_upload_sessions
                     (tenant_id, owner_user_id, destination_id, recipe,
                      idempotency_key_hash, manifest_sha256, expected_bytes,
                      expected_sha256, expires_at)
-                VALUES
-                    (:tenant_id, :owner_user_id, :destination_id, :recipe,
-                     :idempotency_key_hash, :manifest_sha256, :expected_bytes,
-                     :expected_sha256, :expires_at)
+                SELECT :tenant_id, :owner_user_id, :destination_id, :recipe,
+                       :idempotency_key_hash, :manifest_sha256, CAST(:expected_bytes AS BIGINT),
+                       :expected_sha256, :expires_at
+                WHERE (
+                    SELECT count(*) < :admission_sessions
+                       AND COALESCE(sum(expected_bytes), 0) + CAST(:expected_bytes AS BIGINT)
+                           <= CAST(:admission_bytes AS BIGINT)
+                    FROM public.artifact_upload_sessions
+                    WHERE tenant_id = :tenant_id AND owner_user_id = :owner_user_id
+                      AND created_at > clock_timestamp() - interval '24 hours'
+                )
                 ON CONFLICT (tenant_id, owner_user_id, idempotency_key_hash)
                 DO NOTHING
             """), params)
@@ -143,7 +164,9 @@ class UploadSessionRepository:
             """), params)
             row = result.first()
             if row is None:
-                raise RuntimeError("Upload session creation unavailable")
+                # No new admission (budget exhausted), or an existing key
+                # has expired. Neither case may start a replacement write.
+                raise RuntimeError("Upload session admission unavailable")
             record = self._record(row)
             if (
                 record.manifest_sha256 != manifest_sha256
@@ -442,8 +465,6 @@ class UploadSessionRepository:
         an object. Missing evidence leaves the session uncertain. Expired
         upload sessions may be reconciled, but never restarted by this method.
         """
-        from .artifact_store import VerifiedArtifactText
-
         identity = self._identity(tenant_id, owner_user_id)
         session_uuid = str(UUID(session_id))
         storage_key = f"{identity['tenant_id']}/{session_uuid}/content"
@@ -470,31 +491,10 @@ class UploadSessionRepository:
                 return None
             pending = self._record(row)
 
-        result = await artifact_store.read_owner_active_text_bounded(
-            session_uuid, identity["tenant_id"], identity["owner_user_id"],
-            max_bytes=pending.expected_bytes,
-        )
-        proof = result.data
-        if not result.success or not isinstance(proof, VerifiedArtifactText):
+        proof = await self._read_reserved_text(pending, artifact_store)
+        if proof is None:
             return None
-        if not isinstance(proof.text, str):
-            return None
-        try:
-            raw = proof.text.encode("utf-8")
-        except UnicodeError:
-            return None
-        if (
-            proof.artifact_id != session_uuid
-            or proof.tenant_id != identity["tenant_id"]
-            or proof.user_id != identity["owner_user_id"]
-            or proof.mime_type != "text/plain"
-            or not isinstance(proof.filename, str)
-            or not proof.filename.lower().endswith((".txt", ".md"))
-            or len(raw) != pending.expected_bytes
-            or proof.sha256 != pending.expected_sha256
-            or hashlib.sha256(raw).hexdigest() != pending.expected_sha256
-        ):
-            return None
+        raw = proof.text.encode("utf-8")
         params.update(
             reserved_artifact_id=session_uuid,
             observed_bytes=len(raw), observed_sha256=proof.sha256,
@@ -539,3 +539,99 @@ class UploadSessionRepository:
                 return None
             await session.commit()
             return self._record(row)
+
+    @staticmethod
+    async def _read_reserved_text(
+        pending: UploadSession, artifact_store: ArtifactStore,
+    ) -> VerifiedArtifactText | None:
+        """Verify the reserved identity and content with the canonical reader."""
+        from .artifact_store import VerifiedArtifactText
+
+        if (
+            not isinstance(pending.expected_sha256, str)
+            or len(pending.expected_sha256) != 64
+            or any(char not in "0123456789abcdef" for char in pending.expected_sha256)
+            or not 1 <= pending.expected_bytes <= 65536
+        ):
+            return None
+        result = await artifact_store.read_owner_active_text_bounded(
+            pending.session_id, pending.tenant_id, pending.owner_user_id,
+            max_bytes=pending.expected_bytes, expected_sha256=pending.expected_sha256,
+        )
+        proof = result.data
+        if not result.success or not isinstance(proof, VerifiedArtifactText):
+            return None
+        if not isinstance(proof.text, str):
+            return None
+        try:
+            raw = proof.text.encode("utf-8")
+        except UnicodeError:
+            return None
+        if (
+            proof.artifact_id != pending.session_id
+            or proof.tenant_id != pending.tenant_id
+            or proof.user_id != pending.owner_user_id
+            or proof.mime_type != "text/plain"
+            or not isinstance(proof.filename, str)
+            or not proof.filename.lower().endswith((".txt", ".md"))
+            or len(raw) != pending.expected_bytes
+            or proof.sha256 != pending.expected_sha256
+            or hashlib.sha256(raw).hexdigest() != pending.expected_sha256
+        ):
+            return None
+        return proof
+
+    async def read_committed_verified_text(
+        self, *, tenant_id: str, owner_user_id: str, session_id: str,
+        artifact_store: ArtifactStore,
+    ) -> VerifiedArtifactText | None:
+        """Recover an existing committed receipt without replaying any write.
+
+        This is an internal readback, not an authorization grant or client DTO.
+        The runtime must revalidate the principal before invoking it and before
+        disclosing a receipt. Expiration prevents new writes, not readback of
+        a committed result. Archived, missing or changed artifacts fail closed.
+        """
+        identity = self._identity(tenant_id, owner_user_id)
+        session_uuid = str(UUID(session_id))
+        params = {
+            **identity, "session_id": session_uuid,
+            "reserved_artifact_id": session_uuid,
+            "storage_key": f"{identity['tenant_id']}/{session_uuid}/content",
+        }
+        async with self._session_factory() as session:
+            result = await session.execute(text("""
+                SELECT upload.session_id, upload.tenant_id, upload.owner_user_id,
+                       upload.destination_id, upload.recipe, upload.state,
+                       upload.manifest_sha256, upload.expected_bytes,
+                       upload.received_bytes, upload.artifact_id,
+                       upload.expected_sha256, upload.lease_owner,
+                       upload.lease_expires_at, upload.storage_key
+                FROM public.artifact_upload_sessions AS upload
+                JOIN public.files AS artifact ON artifact.file_id = upload.artifact_id
+                WHERE upload.session_id = :session_id
+                  AND upload.tenant_id = :tenant_id
+                  AND upload.owner_user_id = :owner_user_id
+                  AND upload.state = 'committed'
+                  AND upload.artifact_id = :reserved_artifact_id
+                  AND upload.lease_owner IS NULL AND upload.lease_expires_at IS NULL
+                  AND upload.storage_key = :storage_key
+                  AND upload.received_bytes = upload.expected_bytes
+                  AND upload.expected_bytes BETWEEN 1 AND 65536
+                  AND upload.expected_sha256 IS NOT NULL
+                  AND artifact.tenant_id = :tenant_id
+                  AND artifact.owner_user_id = :owner_user_id
+                  AND artifact.deleted_at IS NULL
+                  AND artifact.bytes = upload.expected_bytes
+                  AND artifact.sha256 = upload.expected_sha256
+                  AND artifact.mime_type = 'text/plain'
+                  AND artifact.storage_uri = 'supabase://artifacts/' || :storage_key
+            """), params)
+            row = result.first()
+            if row is None:
+                return None
+            committed = self._record(row)
+        # The canonical reader rechecks the current active file row and streams
+        # exactly its pinned bytes. No ledger mutation, new claim or write.
+        return await self._read_reserved_text(committed, artifact_store)
+

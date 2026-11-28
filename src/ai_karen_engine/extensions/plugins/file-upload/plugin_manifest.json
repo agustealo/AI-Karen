@@ -1,0 +1,63 @@
+{
+  "id": "file-upload",
+  "name": "file-upload",
+  "display_name": "File Upload",
+  "version": "0.1.0",
+  "description": "Default-disabled host-admitted owner-library upload extension. No direct Storage access or public transfer ingress.",
+  "purpose": "Discover the bounded owner-library store-only destination through governed host admission.",
+  "author": "KAREN Engineering",
+  "license": "MIT",
+  "category": "integration",
+  "entrypoint": "handler:MainExtension",
+  "tags": [
+    "files",
+    "upload",
+    "local-first"
+  ],
+  "capabilities": {
+    "provides_ui": false,
+    "provides_api": false,
+    "prompt_first": true
+  },
+  "prompt_files": {
+    "mode": "none",
+    "prompt_first": true
+  },
+  "rbac": {
+    "allowed_roles": [
+      "user",
+      "admin",
+      "developer"
+    ],
+    "default_enabled": false
+  },
+  "permissions": {
+    "memory_read": false,
+    "memory_write": false,
+    "user_data_read": false,
+    "user_data_write": false,
+    "network_access": []
+  },
+  "resources": {
+    "max_memory_mb": 128,
+    "max_cpu_percent": 20,
+    "max_disk_mb": 50,
+    "enforcement_action": "default"
+  },
+  "execution_input_schema": {
+    "type": "object",
+    "properties": {
+      "operation": {
+        "type": "string",
+        "enum": [
+          "discover",
+          "transfer"
+        ]
+      }
+    },
+    "required": [
+      "operation"
+    ],
+    "additional_properties": false
+  }
+}

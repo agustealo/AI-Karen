@@ -1064,8 +1064,35 @@ class RuntimePolicyEnforcer:
         if not authorized() or not await meter.check_duration():
             raise PermissionError("generated_artifact_authority_denied")
 
+    async def authorize_owner_text_transfer(
+        self, *, context: "ChatExecutionContext", destination: str, recipe: str,
+    ) -> PolicyDecision:
+        """Host-only transfer admission; ordinary policy requests cannot issue it."""
+        from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
+
+        if (destination, recipe) != ("explorer", "store_only"):
+            raise PermissionError("file_upload_destination_denied")
+        if self.config.default_level is not RuntimeLevel.FULL:
+            raise PermissionError("file_upload_runtime_level_denied")
+        await context.revalidate_runtime_artifact_write_session()
+        principal = context.require_authenticated_user()
+        permissions = sorted(p.value for p in get_rbac_manager().get_user_permissions(principal))
+        return await self._evaluate_policy_request(
+            PolicyEvaluationRequest(
+                user_id=context.user_id, tenant_id=context.tenant_id,
+                session_id=context.session_id, correlation_id=context.correlation_id,
+                roles=list(principal.roles), permissions=permissions,
+                action="plugin_execution", plugin_id="file-upload",
+                requested_capabilities=["file-upload", "file_upload.transfer",
+                    Permission.DATA_READ.value, Permission.ARTIFACT_CREATE_OWN.value],
+                runtime_level=self.config.default_level,
+            ),
+            owner_upload_context=context,
+        )
+
     async def _evaluate_policy_request(
-        self, request: PolicyEvaluationRequest,
+        self, request: PolicyEvaluationRequest, *,
+        owner_upload_context: "ChatExecutionContext | None" = None,
     ) -> PolicyDecision:
         """Evaluate capabilities and reasoning modes as distinct policy domains."""
         decision_id = f"policy-{request.tenant_id}-{request.user_id}-{time.time_ns()}"
@@ -1312,6 +1339,39 @@ class RuntimePolicyEnforcer:
                 )
         else:
             authorized_attachments = []
+
+        # Generic policy requests cannot authorize File Upload writes.
+        # Only the authenticated host transfer admission requests this action.
+        upload_actions = {
+            capability for capability in request.requested_capabilities
+            if isinstance(capability, str) and capability.startswith("file_upload.")
+        }
+        if request.plugin_id == "file-upload" or request.extension_id == "file-upload" or upload_actions:
+            from ai_karen_engine.auth.rbac_middleware import Permission
+
+            required = {Permission.DATA_READ.value, Permission.ARTIFACT_CREATE_OWN.value}
+            action = "file_upload.discover"
+            if owner_upload_context is not None:
+                action = "file_upload.transfer"
+                if (
+                    request.user_id != owner_upload_context.user_id
+                    or request.tenant_id != owner_upload_context.tenant_id
+                    or request.session_id != owner_upload_context.session_id
+                    or self.config.default_level is not RuntimeLevel.FULL
+                ):
+                    raise PermissionError("file_upload_identity_changed")
+            if (
+                request.plugin_id != "file-upload" or request.action != "plugin_execution"
+                or set(request.requested_capabilities) != {"file-upload", action, *required}
+                or not required.issubset(request.permissions)
+                or request.tool_id or request.extension_id
+            ):
+                return PolicyDecision(
+                    decision_id=decision_id, policy_version=policy_version, allowed=False,
+                    reason_codes=[PolicyReasonCode.INSUFFICIENT_PERMISSION],
+                    denied_capabilities=list(request.requested_capabilities),
+                    evaluated_at=evaluated_at,
+                )
 
         # Explorer mutations are owner-only and must not inherit broad data
         # write/delete authority. Unknown future actions default to denial.

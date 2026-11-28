@@ -391,3 +391,116 @@ describe("CopilotKit exact submission status is an authenticated read only", () 
     expect(spy).not.toHaveBeenCalled();
   });
 });
+
+
+describe("CopilotKit governed draft retry gateway", () => {
+  const identity = "draft-v1-7";
+  const path = "http://localhost:3000/api/copilotkit/agent/default/draft-retry/" + THREAD + "/";
+  const upstream = "http://api:8000/api/chat/ag-ui/draft-retry/" + THREAD + "/";
+  const payload = { submitted_text: "retained", attachment_references: [] };
+  function request(method: "GET" | "POST", id = identity, data: unknown = payload) {
+    return new NextRequest(path + id, {
+      method, headers: { cookie: "kari_session=owner", "content-type": "application/json",
+        "x-user-id": "forged", "x-tenant-id": "forged" },
+      ...(method === "POST" ? { body: JSON.stringify(data) } : {}),
+    });
+  }
+  function mockRetry(result: () => Response, method = "GET", flags: Record<string, unknown> = {
+    enabled: true, governed_history: true, attachment_draft_submission: true,
+  }, id = identity) {
+    const seen: string[] = [];
+    globalThis.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      seen.push(url);
+      expect(init?.redirect).toBe("manual");
+      expect(init?.cache).toBe("no-store");
+      expect(new Headers(init?.headers).get("cookie")).toBe("kari_session=owner");
+      expect(new Headers(init?.headers).has("x-user-id")).toBe(false);
+      expect(new Headers(init?.headers).has("x-tenant-id")).toBe(false);
+      if (url === AUTH) return Response.json({ user_id: "user-owner", tenant_id: "tenant-A", is_active: true });
+      if (url === FLAGS) return Response.json(flags);
+      if (url === upstream + id) {
+        expect(init?.method).toBe(method);
+        if (method === "POST") expect(JSON.parse(String(init?.body))).toEqual(payload);
+        else expect(init?.body).toBeUndefined();
+        return result();
+      }
+      throw new Error("Unexpected request");
+    }) as typeof fetch;
+    return seen;
+  }
+  it.each([true, false])("projects only canonical read eligibility %s", async (eligible) => {
+    const seen = mockRetry(() => Response.json({ submission_id: identity, eligible, private: "never forward" }));
+    const response = await GET(request("GET"));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toContain("no-store");
+    expect(await response.json()).toEqual({ submission_id: identity, eligible });
+    expect(seen).toEqual([AUTH, FLAGS, upstream + identity]);
+  });
+  it.each([true, false])("projects durable receipt separately from current eligibility (%s)", async (current) => {
+    mockRetry(() => Response.json({
+      submission_id: identity, eligible: false, prepared_revision: 8, prepared_current: current,
+      private: "never forward",
+    }));
+    const response = await GET(request("GET"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      submission_id: identity, eligible: false, prepared_revision: 8, prepared_current: current,
+    });
+  });
+  it.each([
+    { eligible: true, prepared_revision: 8, prepared_current: true },
+    { eligible: false, prepared_revision: 9, prepared_current: true },
+    { eligible: false, prepared_revision: null, prepared_current: true },
+    { eligible: false, prepared_revision: 8 },
+    { eligible: false, prepared_current: false },
+  ])("rejects inconsistent causal receipt %j", async (fields) => {
+    mockRetry(() => Response.json({ submission_id: identity, ...fields }));
+    expect((await GET(request("GET"))).status).toBe(503);
+  });
+  it("prepares exact next revision without invoking SDK", async () => {
+    const seen = mockRetry(() => Response.json({ submission_id: identity, revision: 8 }), "POST");
+    const response = await POST(request("POST"));
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ submission_id: identity, revision: 8 });
+    expect(seen).toEqual([AUTH, FLAGS, upstream + identity]);
+  });
+  it.each([403, 404, 409, 422, 503])("sanitizes upstream failure %s", async (status) => {
+    mockRetry(() => Response.json({ detail: "private evidence" }, { status }), "POST");
+    const response = await POST(request("POST"));
+    expect(response.status).toBe(status === 403 ? 404 : status);
+    expect(JSON.stringify(await response.json())).not.toContain("private");
+  });
+  it("rejects malformed or substituted receipts and redirects", async () => {
+    for (const receipt of [
+      Response.json({ submission_id: identity, revision: 9 }),
+      Response.json({ submission_id: "draft-v1-6", revision: 8 }),
+      Response.json({ submission_id: identity, revision: "8" }),
+      new Response(null, { status: 307, headers: { location: "https://forged.test" } }),
+    ]) {
+      mockRetry(() => receipt, "POST");
+      expect((await POST(request("POST"))).status).toBe(503);
+    }
+  });
+  it("rejects forged request keys and unsupported capability before retry", async () => {
+    let seen = mockRetry(() => Response.json({}));
+    expect((await POST(request("POST", identity, { ...payload, tenant_id: "foreign" }))).status).toBe(422);
+    expect(seen).toEqual([AUTH, FLAGS]);
+    seen = mockRetry(() => Response.json({}), "GET", { enabled: true, governed_history: false });
+    expect((await GET(request("GET"))).status).toBe(404);
+    expect(seen).toEqual([AUTH, FLAGS]);
+    const v2 = "draft-v2-7-" + "a".repeat(64);
+    seen = mockRetry(() => Response.json({}), "GET", { enabled: true, governed_history: true }, v2);
+    expect((await GET(request("GET", v2))).status).toBe(404);
+    expect(seen).toEqual([AUTH, FLAGS]);
+  });
+  it("rejects invalid identity and oversized request", async () => {
+    const spy = vi.fn();
+    globalThis.fetch = spy as typeof fetch;
+    expect((await GET(request("GET", "opaque"))).status).toBe(404);
+    expect(spy).not.toHaveBeenCalled();
+    const seen = mockRetry(() => Response.json({}));
+    expect((await POST(request("POST", identity, { submitted_text: "x".repeat(65537), attachment_references: [] }))).status).toBe(413);
+    expect(seen).toEqual([AUTH, FLAGS]);
+  });
+});

@@ -161,13 +161,17 @@ class ExtensionExecutionService:
             result.result_trust = getattr(capability, "result_trust", ResultTrust.UNTRUSTED_EXTERNAL)
             result.data_classification = getattr(capability, "data_classification", DataClassification.PUBLIC)
 
-    async def admit(self, request: ExtensionExecutionRequest) -> ExtensionExecutionResult:
+    async def admit(
+        self, request: ExtensionExecutionRequest, *, validate_payload: bool = False,
+    ) -> ExtensionExecutionResult:
         """Run canonical authorization without executing the plugin handler."""
-        return await self.execute(request, admission_only=True)
+        return await self.execute(
+            request, admission_only=True, validate_admission_payload=validate_payload,
+        )
 
     async def execute(
         self, request: ExtensionExecutionRequest, *,
-        admission_only: bool = False,
+        admission_only: bool = False, validate_admission_payload: bool = False,
     ) -> ExtensionExecutionResult:
         """Execute or admit an extension through the same governance gates."""
         start = time.perf_counter()
@@ -372,10 +376,10 @@ class ExtensionExecutionService:
                 data_classification,
             )
 
-        # An admission request has no source bytes yet: validate the complete
-        # actual payload during the later, separately governed execution.
+        # Probe-only admission can omit future invocation inputs. A trusted
+        # host-operation scope instead supplies and validates its actual input.
         input_errors = (
-            [] if admission_only else
+            [] if admission_only and not validate_admission_payload else
             self._schema_validator.validate_input(manifest, request.payload, capability_obj)
         )
         if input_errors:

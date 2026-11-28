@@ -14,6 +14,8 @@ on:
           - docker-search
           - docker-specialist-participation
           - docker-specialist-ordinary-chat
+          - docker-kexp-retry
+          - docker-kexp-content
           - copilotkit-protocol
           - copilotkit-native
           - copilotkit-native-stop
@@ -579,7 +581,7 @@ jobs:
   # Operator-controlled Docker host proof. NEVER npm install or type browser
   # credentials on this production-capable runner.
   docker-provenance-before:
-    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat' || inputs.scenario == 'docker-kexp-retry' || inputs.scenario == 'docker-kexp-content') && github.ref == 'refs/heads/main'
     runs-on: [self-hosted, Linux, X64, karen-consumer-release]
     timeout-minutes: 20
     environment: karen-sanitized-browser-acceptance
@@ -622,7 +624,7 @@ jobs:
   # Credentials and untrusted npm/Playwright setup are isolated on a GitHub-
   # hosted runner with no operator-host Docker socket or production env file.
   authenticated-docker-search-replay:
-    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat' || inputs.scenario == 'docker-kexp-retry' || inputs.scenario == 'docker-kexp-content') && github.ref == 'refs/heads/main'
     needs: docker-provenance-before
     runs-on: ubuntu-24.04
     timeout-minutes: 25
@@ -666,7 +668,7 @@ jobs:
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
           python scripts/ci/verify_deployment_revision.py
-          if [[ "${{ inputs.scenario }}" == "docker-specialist-participation" || "${{ inputs.scenario }}" == "docker-specialist-ordinary-chat" ]]; then
+          if [[ "${{ inputs.scenario }}" == "docker-specialist-participation" || "${{ inputs.scenario }}" == "docker-specialist-ordinary-chat" || "${{ inputs.scenario }}" == "docker-kexp-retry" || "${{ inputs.scenario }}" == "docker-kexp-content" ]]; then
             python -m scripts.ci.verify_backend_target --base-url "$KAREN_BASE_URL"
           fi
 
@@ -738,6 +740,91 @@ jobs:
           KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
         run: bash "$GITHUB_WORKSPACE/scripts/ci/run_specialist_browser_acceptance.sh" docker ordinary-chat
 
+      - name: Prove signed Docker KEXP recovery or attached content
+        if: inputs.scenario == 'docker-kexp-retry' || inputs.scenario == 'docker-kexp-content'
+        shell: bash
+        env:
+          KEXP_SCENARIO: ${{ inputs.scenario }}
+          KAREN_KEXP_BROWSER_APPROVED: ${{ vars.KAREN_KEXP_BROWSER_APPROVED }}
+          KAREN_SANITIZED_ACCOUNT: ${{ vars.KAREN_SANITIZED_ACCOUNT }}
+          KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED: "true"
+          KAREN_CHAT_BOOT_REVISION: ${{ inputs.target_sha }}
+          KAREN_UX_EMAIL: ${{ secrets.KAREN_UX_EMAIL }}
+          KAREN_UX_PASSWORD: ${{ secrets.KAREN_UX_PASSWORD }}
+          KAREN_HISTORY_CONVERSATION_ID: ${{ secrets.KAREN_HISTORY_CONVERSATION_ID }}
+          KAREN_COPILOTKIT_LIVE_STOP_CONVERSATION_ID: ${{ secrets.KAREN_KEXP_RETRY_CONVERSATION_ID }}
+          KAREN_KEXP_RETRY_VARIANT: ${{ vars.KAREN_KEXP_RETRY_VARIANT }}
+          KAREN_KEXP_RETRY_SOURCE_ID: ${{ secrets.KAREN_KEXP_RETRY_SOURCE_ID }}
+          KAREN_KEXP_RETRY_SOURCE_REVISION: ${{ secrets.KAREN_KEXP_RETRY_SOURCE_REVISION }}
+          KAREN_KEXP_CONTENT_SOURCE_ID: ${{ secrets.KAREN_KEXP_CONTENT_SOURCE_ID }}
+          KAREN_KEXP_CONTENT_SOURCE_REVISION: ${{ secrets.KAREN_KEXP_CONTENT_SOURCE_REVISION }}
+          KAREN_KEXP_CONTENT_ANSWER_SHA256: ${{ secrets.KAREN_KEXP_CONTENT_ANSWER_SHA256 }}
+          KAREN_KEXP_CONTENT_CONVERSATION_ID: ${{ secrets.KAREN_KEXP_CONTENT_CONVERSATION_ID }}
+          KAREN_KEXP_CONTENT_CONVERSATION_TITLE: ${{ secrets.KAREN_KEXP_CONTENT_CONVERSATION_TITLE }}
+        run: |
+          set -euo pipefail
+          test "$KAREN_KEXP_BROWSER_APPROVED" = true
+          test "$KAREN_SANITIZED_ACCOUNT" = true
+          test -n "$KAREN_UX_EMAIL"
+          test -n "$KAREN_UX_PASSWORD"
+          if [[ -v VERCEL_AUTOMATION_BYPASS_SECRET ]]; then exit 2; fi
+          # Select exactly one scenario with no retries. A fresh disposable
+          # conversation is required for every independently approved run.
+          case "$KEXP_SCENARIO" in
+            docker-kexp-retry)
+              export KAREN_COPILOTKIT_LIVE_STOP_REQUIRED=true
+              export KAREN_KEXP_RETRY_ACCEPTANCE_REQUIRED=true
+              export KAREN_KEXP_RETRY_ATTACHMENT_REQUIRED=false
+              export KAREN_KEXP_RETRY_LOST_RESPONSE_REQUIRED=false
+              case "$KAREN_KEXP_RETRY_VARIANT" in
+                v1-normal) ;;
+                v1-lost) export KAREN_KEXP_RETRY_LOST_RESPONSE_REQUIRED=true ;;
+                v2-normal) export KAREN_KEXP_RETRY_ATTACHMENT_REQUIRED=true ;;
+                v2-lost)
+                  export KAREN_KEXP_RETRY_ATTACHMENT_REQUIRED=true
+                  export KAREN_KEXP_RETRY_LOST_RESPONSE_REQUIRED=true ;;
+                *) echo 'Unapproved KEXP retry variant' >&2; exit 2 ;;
+              esac
+              spec=e2e/karen-copilotkit-native-acceptance.spec.ts
+              pattern='CK-07F3 operator-approved real native stop confirms the durable worker outcome'
+              ;;
+            docker-kexp-content)
+              export KAREN_FILE_EXPLORER_ACCEPTANCE=true
+              export KAREN_KEXP_CONTENT_ACCEPTANCE_REQUIRED=true
+              spec=e2e/file-explorer-real-acceptance.spec.ts
+              pattern='KEXP-A7-ATTACHED-CONTENT:'
+              ;;
+            *) exit 2 ;;
+          esac
+          # Exit status alone accepts skipped tests. Require one real passing
+          # result using the existing exact scenario report validator. Never
+          # expose report contents, credentials or browser failure snapshots.
+          umask 077
+          evidence="$(mktemp -d "${RUNNER_TEMP:?}/kexp-evidence.XXXXXXXX")"
+          trap 'rm -rf -- "$evidence"' EXIT
+          export PLAYWRIGHT_NO_COPY_PROMPT=1
+          unset PW_TEST_REPORTER PLAYWRIGHT_JSON_ONLY_FAILURES
+          export PLAYWRIGHT_JSON_OUTPUT_FILE="$evidence/result.json"
+          if ! npx playwright test "$spec" --config=e2e/playwright.config.ts \
+              --project=chromium --grep "$pattern" --workers=1 --reporter=json --retries=0 --forbid-only \
+              --output="$evidence/artifacts" >"$evidence/runner.log" 2>&1; then
+            echo 'KEXP_BROWSER_EXECUTION_FAILED' >&2
+            exit 1
+          fi
+          PYTHONPATH="$GITHUB_WORKSPACE" python - "$evidence/result.json" "$pattern" "$spec" <<'PY'
+          import json
+          import sys
+          from pathlib import Path
+          from scripts.ci.verify_local_browser_report import validate_report
+
+          try:
+              report = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))
+              validate_report(report, (sys.argv[2],), Path(sys.argv[3]).name)
+          except (OSError, ValueError, TypeError, KeyError):
+              raise SystemExit("KEXP_BROWSER_EVIDENCE_REJECTED") from None
+          print("KEXP browser scenario passed exactly once; zero skips, retries or failures")
+          PY
+
       - name: Recheck public Docker revision and main after browser replay
         working-directory: .
         shell: bash
@@ -746,7 +833,7 @@ jobs:
         run: |
           set -euo pipefail
           python scripts/ci/verify_deployment_revision.py
-          if [[ "${{ inputs.scenario }}" == "docker-specialist-participation" || "${{ inputs.scenario }}" == "docker-specialist-ordinary-chat" ]]; then
+          if [[ "${{ inputs.scenario }}" == "docker-specialist-participation" || "${{ inputs.scenario }}" == "docker-specialist-ordinary-chat" || "${{ inputs.scenario }}" == "docker-kexp-retry" || "${{ inputs.scenario }}" == "docker-kexp-content" ]]; then
             python -m scripts.ci.verify_backend_target --base-url "$KAREN_BASE_URL"
           fi
           test "$(git rev-parse HEAD)" = "$TARGET_SHA"
@@ -758,7 +845,7 @@ jobs:
   # Recheck the exact Docker signatures and running images only after the
   # credentialed browser has demonstrated durable citations and replay.
   docker-provenance-after:
-    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat') && github.ref == 'refs/heads/main'
+    if: (inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat' || inputs.scenario == 'docker-kexp-retry' || inputs.scenario == 'docker-kexp-content') && github.ref == 'refs/heads/main'
     needs: authenticated-docker-search-replay
     runs-on: [self-hosted, Linux, X64, karen-consumer-release]
     timeout-minutes: 20

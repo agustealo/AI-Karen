@@ -1,6 +1,7 @@
 import { expect, test } from "./fixtures/verified-search-deployment";
-import { signInApprovedKaren } from "./fixtures/approved-karen-login";
-import type { APIRequestContext } from "@playwright/test";
+import { readAuthorizedSameOriginJson, seedApprovedAcceptanceDraft, signInApprovedKaren } from "./fixtures/approved-karen-login";
+import type { APIRequestContext, Route } from "@playwright/test";
+import { createHash } from "node:crypto";
 
 // This visits a REAL isolated candidate on a sanitized reviewed deployment.
 // Default scenarios never execute a model. One separately operator-approved
@@ -9,6 +10,22 @@ import type { APIRequestContext } from "@playwright/test";
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
 const required = process.env.KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED === "true";
+const retryRequired = process.env.KAREN_KEXP_RETRY_ACCEPTANCE_REQUIRED === "true";
+const retryLostResponse = process.env.KAREN_KEXP_RETRY_LOST_RESPONSE_REQUIRED === "true";
+const retryAttachment = process.env.KAREN_KEXP_RETRY_ATTACHMENT_REQUIRED === "true";
+if (retryAttachment && !retryRequired) {
+  throw new Error("Attachment-bound retry proof requires explicit KEXP retry acceptance");
+}
+if (retryLostResponse && !retryRequired) {
+  throw new Error("Lost retry response proof requires explicit KEXP retry acceptance");
+}
+if (retryRequired && (!required ||
+    process.env.KAREN_COPILOTKIT_LIVE_STOP_REQUIRED !== "true" ||
+    process.env.KAREN_SANITIZED_ACCOUNT !== "true" ||
+    process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
+    !/^[0-9a-f]{40}$/.test(process.env.KAREN_CHAT_BOOT_REVISION || ""))) {
+  throw new Error("KEXP retry proof requires approved signed Docker native acceptance, exact revision, sanitized account and explicit live Stop opt-in");
+}
 const email = process.env.KAREN_UX_EMAIL;
 const password = process.env.KAREN_UX_PASSWORD;
 const conversationId = process.env.KAREN_HISTORY_CONVERSATION_ID;
@@ -519,30 +536,73 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     throw new Error("Live Stop requires a distinct valid, disposable owned conversation UUID");
   }
   if (!email || !password) throw new Error("Approved sanitized sign-in required");
-  test.setTimeout(240000);
+  test.setTimeout(retryRequired ? 360000 : 240000);
+  if (retryRequired) {
+    const deployment = await page.request.get("/api/deployment-revision", { maxRedirects: 0, maxRetries: 0 });
+    expect(deployment.status()).toBe(200);
+    expect(await deployment.json()).toEqual({ status: "ok", revision: process.env.KAREN_CHAT_BOOT_REVISION });
+  }
   await signInApprovedKaren(page, email, password);
+  const read = (path: string) => readAuthorizedSameOriginJson(page, path);
 
-  const capabilities = await page.request.get("/api/chat/ag-ui/capabilities");
-  expect(capabilities.status()).toBe(200);
-  const flags = await capabilities.json() as {
-    enabled: boolean; governed_history: boolean;
+  const inferenceRequests: string[] = [];
+  const retryMutations: string[] = [];
+  if (retryRequired) page.context().on("request", request => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() !== "POST") return;
+    if (isInferenceRequest(request.url())) inferenceRequests.push(pathname);
+    if (pathname.startsWith("/api/copilotkit/agent/default/draft-retry/")) retryMutations.push(pathname);
+  });
+
+  const capabilities = await read("/api/chat/ag-ui/capabilities");
+  expect(capabilities.status).toBe(200);
+  const flags = capabilities.body as {
+    enabled: boolean; governed_history: boolean; attachment_draft_submission?: boolean;
   };
   expect(flags.enabled, "Real execution must use enabled canonical AG-UI").toBe(true);
   expect(flags.governed_history, "Positive stop needs durable run admission").toBe(true);
+  const refs: Array<{ source_id: string; revision: string }> = [];
+  if (retryAttachment) {
+    expect(flags.attachment_draft_submission, "Attachment proof must not silently fall back to text").toBe(true);
+    const source = process.env.KAREN_KEXP_RETRY_SOURCE_ID;
+    const revision = process.env.KAREN_KEXP_RETRY_SOURCE_REVISION;
+    if (!source || !UUID.test(source) || source !== source.toLowerCase() ||
+        !revision || !/^[a-f0-9]{64}$/.test(revision)) {
+      throw new Error("Attachment proof requires a reviewed existing sanitized owned source and exact revision");
+    }
+    refs.push({ source_id: source, revision });
+  }
 
   const prefix = "/api/copilotkit/threads/" + encodeURIComponent(dedicatedThread);
-  const before = await page.request.get(prefix + "/messages");
-  expect(before.status()).toBe(200);
-  const original = await before.json() as {
+  const before = await read(prefix + "/messages");
+  expect(before.status).toBe(200);
+  const original = before.body as {
     threadId: string; messages: Array<{ id: string; role: string; content: string }>;
   };
   expect(original.threadId).toBe(dedicatedThread);
   expect(original.messages, "Live Stop uses an empty disposable conversation").toEqual([]);
   const draftUrl = "/api/conversations/" + encodeURIComponent(dedicatedThread) + "/draft";
-  const draft = await page.request.get(draftUrl);
-  expect(draft.status()).toBe(200);
-  expect((await draft.json() as { text: string }).text,
-    "Disposable conversation must not contain another person's unsent draft").toBe("");
+  const draftReadUrl = retryRequired ? draftUrl + "?include_attachments=true" : draftUrl;
+  const draft = await read(draftReadUrl);
+  expect(draft.status).toBe(200);
+  const initialDraft = draft.body as {
+    text: string; revision: number; attachment_references: Array<{ source_id: string; revision: string }>;
+  };
+  expect(initialDraft.text, "Disposable conversation must have no unsent text").toBe("");
+  if (retryRequired) expect(initialDraft.attachment_references).toEqual([]);
+  if (retryAttachment) {
+    // The standalone native preview has no file picker. Seed only a reviewed
+    // reference through the genuine owner-scoped CAS; do not create or mock
+    // an artifact. This is attachment recovery, not file-picker proof.
+    expect(Number.isSafeInteger(initialDraft.revision)).toBe(true);
+    const seeded = await seedApprovedAcceptanceDraft(page, draftUrl, {
+      text: "", expected_revision: initialDraft.revision, attachment_references: refs,
+    });
+    expect(seeded.status).toBe(200);
+    expect(seeded.body).toMatchObject({
+      text: "", revision: initialDraft.revision + 1, attachment_references: refs,
+    });
+  }
 
   await page.goto("/acceptance/copilotkit/" + encodeURIComponent(dedicatedThread));
   const native = page.getByTestId("karen-copilot-controlled-chat");
@@ -554,11 +614,17 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   const composer = sdkChat.locator("textarea");
   await expect(composer, "Native SDK must expose exactly one composer").toHaveCount(1);
   const prompt = "CK-07F3 approved disposable model cancellation: explain a detailed multi-stage thought experiment about sorting 100000 numbered tiles.";
+  const attachmentRegion = native.getByRole("region", { name: "Draft attachments" });
+  if (retryAttachment) {
+    await expect(attachmentRegion).toBeVisible();
+    await expect(attachmentRegion).toContainText("References saved");
+    await expect(attachmentRegion.getByRole("button", { name: "Remove file reference " + refs[0].source_id })).toBeVisible();
+  }
   await composer.fill(prompt);
   await expect.poll(async () => {
-    const value = await page.request.get(draftUrl);
-    expect(value.status()).toBe(200);
-    return (await value.json() as { text: string }).text;
+    const value = await read(draftReadUrl);
+    expect(value.status).toBe(200);
+    return (value.body as { text: string }).text;
   }, { timeout: 20000 }).toBe(prompt);
 
   // Observe the real SDK transport POST. Never log prompt, cookies or streamed
@@ -570,8 +636,12 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   );
   await composer.press("Enter");
   const runRequest = await submitted;
-  const payload = runRequest.postDataJSON() as { threadId: string; runId: string };
+  const payload = runRequest.postDataJSON() as {
+    threadId: string; runId: string; messages?: Array<{ id: string; role: string }>;
+    forwardedProps?: { attachment_references?: unknown };
+  };
   expect(payload.threadId).toBe(dedicatedThread);
+  if (retryAttachment) expect(payload.forwardedProps?.attachment_references).toEqual(refs);
   expect(RUN_ID.test(payload.runId), "Observe a real SDK-issued run identity").toBe(true);
 
   // A client transport packet alone does not establish that Karen admitted
@@ -580,10 +650,10 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   const runStatusUrl = "/api/copilotkit/agent/default/runs/" +
     dedicatedThread + "/" + payload.runId + "/status";
   await expect.poll(async () => {
-    const status = await page.request.get(runStatusUrl);
-    if (status.status() === 404) return "not-admitted";
-    expect(status.status(), "Canonical run status must be readable").toBe(200);
-    const body = await status.json() as {
+    const status = await read(runStatusUrl);
+    if (status.status === 404) return "not-admitted";
+    expect(status.status, "Canonical run status must be readable").toBe(200);
+    const body = status.body as {
       status: string; cancel_requested: boolean; cancellation_confirmed: boolean;
     };
     expect(body.cancel_requested).toBe(false);
@@ -645,20 +715,161 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   // UI, not only in a server JSON payload.
   await expect(native.getByTestId("karen-copilot-stop-status"))
     .toContainText("Karen confirmed this run was cancelled.");
-  const terminal = await page.request.get(runStatusUrl);
-  expect(terminal.status(), "Read-only canonical run status must be available").toBe(200);
-  expect(await terminal.json()).toEqual({
+  const terminal = await read(runStatusUrl);
+  expect(terminal.status, "Read-only canonical run status must be available").toBe(200);
+  expect(terminal.body).toEqual({
     status: "cancelled", cancel_requested: true, cancellation_confirmed: true,
   });
-  const stored = await page.request.get(prefix + "/messages");
-  expect(stored.status()).toBe(200);
-  const persisted = await stored.json() as {
+  const stored = await read(prefix + "/messages");
+  expect(stored.status).toBe(200);
+  const persisted = stored.body as {
     threadId: string; messages: Array<{ id: string; role: string; content: string }>;
   };
   expect(persisted.threadId).toBe(dedicatedThread);
   expect(persisted.messages.filter(m => m.role === "assistant"),
     "Cancelled run must not create a falsely completed assistant transcript")
     .toEqual([]);
+  if (retryRequired) {
+    // This is a real ledger-bound submission, not a generated test identity.
+    const submissionId = payload.messages?.filter(message => message.role === "user").at(-1)?.id;
+    const identity = submissionId?.match(retryAttachment
+      ? /^draft-v2-([1-9][0-9]{0,15})-([a-f0-9]{64})$/
+      : /^draft-v1-([1-9][0-9]{0,15})$/);
+    if (!submissionId || !identity) throw new Error("Missing exact governed original submission identity");
+    if (retryAttachment) {
+      const expectedDigest = createHash("sha256").update(JSON.stringify(refs.map(
+        ({ revision, source_id }) => ({ revision, source_id }),
+      )), "utf8").digest("hex");
+      expect(identity[2]).toBe(expectedDigest);
+    }
+    const revision = Number(identity[1]);
+    expect(Number.isSafeInteger(revision) && revision < Number.MAX_SAFE_INTEGER - 1).toBe(true);
+    const readDraft = async () => {
+      const result = await read(draftReadUrl);
+      expect(result.status).toBe(200);
+      return result.body as {
+        text: string; revision: number;
+        attachment_references: Array<{ source_id: string; revision: string }>;
+      };
+    };
+    const retained = { text: prompt, revision, attachment_references: refs };
+    await expect.poll(readDraft, { timeout: 20000 }).toMatchObject(retained);
+    const statusPath = "/api/copilotkit/agent/default/submissions/" +
+      dedicatedThread + "/" + submissionId + "/status";
+    const statusReceipt = await read(statusPath);
+    expect(statusReceipt.status).toBe(200);
+    expect(statusReceipt.body).toMatchObject({
+      runId: payload.runId, submissionId, status: "cancelled",
+      cancel_requested: true, cancellation_confirmed: true,
+    });
+    const retryPath = "/api/copilotkit/agent/default/draft-retry/" +
+      dedicatedThread + "/" + submissionId;
+    const eligible = await read(retryPath);
+    expect(eligible.status).toBe(200);
+    expect(eligible.body).toEqual({
+      submission_id: submissionId, eligible: true,
+      prepared_revision: null, prepared_current: false,
+    });
+
+    // Reload removes transient component holds. Recover through the actual
+    // saved draft and owner-scoped ledger; no second run may be started.
+    await page.reload();
+    await expect(native).toBeVisible({ timeout: 30000 });
+    await expect(composer).toHaveValue(prompt);
+    const discover = native.getByRole("button", { name: "Check saved draft recovery", exact: true });
+    await expect(discover).toBeEnabled();
+    await discover.click();
+    const check = native.getByRole("button", { name: "Check run status and saved history", exact: true });
+    await expect(check).toBeEnabled();
+    await check.click();
+    const prepare = native.getByRole("button", { name: "Prepare failed draft for retry", exact: true });
+    await expect(prepare).toBeEnabled({ timeout: 30000 });
+    expect(retryMutations).toEqual([]);
+    expect(inferenceRequests).toEqual(["/api/copilotkit/agent/default/run"]);
+    expect(await readDraft()).toMatchObject(retained);
+    if (retryLostResponse) {
+      // Fault injection at one exact same-origin browser response boundary.
+      // Forward the authentic POST once; never fulfill a synthetic receipt,
+      // replay the mutation, follow redirects or intercept other endpoints.
+      const origin = new URL(page.url()).origin;
+      const target = origin + retryPath;
+      const receipts: Array<{ status: number; body: unknown }> = [];
+      let forwarded = 0;
+      const handler = async (route: Route) => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        forwarded += 1;
+        try {
+          if (forwarded !== 1 || route.request().url() !== target) {
+            throw new Error("Unexpected retry mutation replay or destination");
+          }
+          const upstream = await route.fetch({ maxRedirects: 0, maxRetries: 0, timeout: 30000 });
+          try {
+            receipts.push({ status: upstream.status(), body: await upstream.json() });
+          } finally {
+            await upstream.dispose();
+          }
+        } finally {
+          // Drop only the delivery of the real mutation's response.
+          await route.abort("failed");
+        }
+      };
+      await page.route(target, handler);
+      try {
+        await prepare.click();
+        await expect.poll(() => receipts.length, { timeout: 30000 }).toBe(1);
+        expect(receipts[0]).toEqual({
+          status: 200, body: { submission_id: submissionId, revision: revision + 1 },
+        });
+        await expect(native).toContainText("Retry preparation could not be verified. Sending remains blocked.");
+        expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
+        // The UI must remain blocked until the user explicitly checks the
+        // original durable receipt and successor readback.
+        await expect(prepare).toHaveCount(0);
+        expect(inferenceRequests).toEqual(["/api/copilotkit/agent/default/run"]);
+        await expect(check).toBeEnabled();
+        await check.click();
+        await expect(native).toContainText(
+          "Retry preparation was recovered and verified. Review the draft and select Send when ready.",
+        );
+        expect(forwarded).toBe(1);
+      } finally {
+        await page.unroute(target, handler);
+      }
+    } else {
+      const preparedResponse = page.waitForResponse(response =>
+        response.request().method() === "POST" && new URL(response.url()).pathname === retryPath,
+        { timeout: 30000 });
+      await prepare.click();
+      const prepared = await preparedResponse;
+      expect(prepared.status()).toBe(200);
+      expect(await prepared.json()).toEqual({ submission_id: submissionId, revision: revision + 1 });
+      await expect(native).toContainText("Draft prepared and verified. Review it and select Send when ready.");
+    }
+    await expect(composer).toHaveValue(prompt);
+    expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
+    const causal = await read(retryPath);
+    expect(causal.status).toBe(200);
+    expect(causal.body).toEqual({
+      submission_id: submissionId, eligible: false,
+      prepared_revision: revision + 1, prepared_current: true,
+    });
+    await page.reload();
+    await expect(composer).toHaveValue(prompt, { timeout: 30000 });
+    if (retryAttachment) {
+      await expect(attachmentRegion).toContainText("References saved");
+      await expect(attachmentRegion.getByRole("button", { name: "Remove file reference " + refs[0].source_id })).toBeVisible();
+    }
+    expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
+    expect(inferenceRequests).toEqual(["/api/copilotkit/agent/default/run"]);
+    expect(retryMutations).toEqual([retryPath]);
+    const after = await read(prefix + "/messages");
+    expect(after.status).toBe(200);
+    expect(after.body).toMatchObject({ threadId: dedicatedThread, messages: persisted.messages });
+    // No successor execution or cleanup; preserve actual evidence.
+  }
   // The disposable conversation is intentionally retained as audit evidence.
   // No user-facing fixture or production message is ever deleted as cleanup.
 });

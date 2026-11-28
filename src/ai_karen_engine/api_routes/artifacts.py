@@ -95,14 +95,24 @@ async def _require_owned_artifact(store, artifact_id: str, tenant_id: str, user_
 
 @router.post("/upload", response_model=ArtifactUploadResponse)
 async def upload_artifact(
+    request: Request,
     file: UploadFile = File(...),
     conversation_id: Optional[str] = None,
     message_id: Optional[str] = None,
     kind: str = "attachment",
-    current_user = Depends(get_current_user),
+    current_user = Depends(get_chat_execution_context),
 ):
-    """Upload an artifact."""
-    tenant_id, user_id = _artifact_principal(current_user)
+    """Legacy bounded upload: owner library only, not conversation attachment."""
+    context = _artifact_access_context(request, current_user, write=True)
+    # The legacy writer cannot durably bind an artifact to a message or
+    # conversation. Reject even an owned binding instead of reporting a save
+    # that the canonical metadata does not represent.
+    if conversation_id is not None or message_id is not None:
+        raise HTTPException(status_code=422, detail="Legacy upload does not support conversation binding")
+    try:
+        await context.revalidate_runtime_artifact_write_session()
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Artifact access denied") from None
     try:
         limit = ArtifactStorageConfig.from_environment().max_legacy_upload_bytes
     except ValueError:
@@ -114,19 +124,23 @@ async def upload_artifact(
     data = await file.read(limit + 1)
     if len(data) > limit:
         raise HTTPException(status_code=413, detail="Artifact exceeds upload limit")
+    # Body reads can suspend; require fresh account and owner-create permission
+    # again before invoking the only canonical Storage writer.
+    try:
+        await context.revalidate_runtime_artifact_write_session()
+    except PermissionError:
+        raise HTTPException(status_code=403, detail="Artifact access denied") from None
     store = _get_artifact_store()
     from ai_karen_engine.services.database.repositories.artifact_store import ArtifactUploadRequest
-    request = ArtifactUploadRequest(
-        tenant_id=str(tenant_id),
-        user_id=str(user_id),
-        conversation_id=conversation_id,
-        message_id=message_id,
+    upload = ArtifactUploadRequest(
+        tenant_id=context.tenant_id,
+        user_id=context.user_id,
         kind=kind,
         filename=file.filename or "uploaded",
         content_type=file.content_type or "application/octet-stream",
         data=data,
     )
-    result = await store.upload(request)
+    result = await store.upload(upload)
     if not result.success or not result.data:
         logger.error("Artifact upload repository rejected request")
         raise HTTPException(status_code=503, detail="Artifact upload failed")
@@ -251,17 +265,20 @@ async def list_owned_artifact_page(
     )
 
 
-def _artifact_text_context(request: Request, current_user, *, conversation_id=None):
+def _artifact_access_context(request: Request, current_user, *, conversation_id=None, write=False):
     tenant_id, user_id = _artifact_principal(current_user)
     rbac = get_rbac_manager()
-    allowed = rbac.has_permission(current_user, Permission.DATA_READ)
-    rbac.audit_access_attempt(
-        current_user, Permission.DATA_READ, resource=request.url.path,
-        granted=allowed, request=request,
-        additional_context={"operation": "artifact_owner_text_read"},
-    )
-    if not allowed:
-        raise HTTPException(status_code=403, detail="Artifact access denied")
+    permissions = (Permission.DATA_READ, Permission.ARTIFACT_CREATE_OWN) if write else (Permission.DATA_READ,)
+    operation = "artifact_owner_upload" if write else "artifact_owner_text_read"
+    for permission in permissions:
+        allowed = rbac.has_permission(current_user, permission)
+        rbac.audit_access_attempt(
+            current_user, permission, resource=request.url.path,
+            granted=allowed, request=request,
+            additional_context={"operation": operation},
+        )
+        if not allowed:
+            raise HTTPException(status_code=403, detail="Artifact access denied")
     return ChatExecutionContext(
         user_id=user_id, tenant_id=tenant_id, authenticated_user=current_user,
         conversation_id=conversation_id,
@@ -327,7 +344,7 @@ async def read_artifact_text(
     revision: str | None = None,
 ):
     """Return currently authorized owner text, optionally pinned to a revision."""
-    context = _artifact_text_context(request, current_user)
+    context = _artifact_access_context(request, current_user)
     return await _read_verified_artifact_text(context, artifact_id, revision, response)
 
 
@@ -354,7 +371,7 @@ async def read_historical_attachment_text(
             raise ValueError("invalid attachment ordinal")
     except (ValueError, TypeError):
         raise HTTPException(status_code=404, detail="Artifact text unavailable") from None
-    context = _artifact_text_context(request, current_user, conversation_id=thread_id)
+    context = _artifact_access_context(request, current_user, conversation_id=thread_id)
     await _revalidate_artifact_text_context(context)
     try:
         reference = await read_owned_historical_attachment_reference(

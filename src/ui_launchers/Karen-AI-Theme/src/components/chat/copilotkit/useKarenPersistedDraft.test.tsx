@@ -295,3 +295,47 @@ describe("staged attachment-bound draft preparation", () => {
     expect(putDraft).not.toHaveBeenCalled();
   });
 });
+
+describe("read-only retained retry draft", () => {
+  const text = "Saved private draft";
+  const references = [
+    { source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) },
+    { source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", revision: "b".repeat(64) },
+  ];
+  const identity = "draft-v2-7-e1e0621b3a710eb63db47864a9d9b89ec137ad424320a2f939681831e3e1c23b";
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.stubGlobal("crypto", webcrypto);
+    getDraft.mockResolvedValue({ text, revision: 7, attachment_references: references } as never);
+  });
+  afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
+
+  it("requires a fresh exact revision and digest without writing", async () => {
+    const { result } = renderHook(() => useKarenPersistedDraft(conversationId));
+    await flush();
+    await act(async () => {
+      expect(await result.current.readRetainedRetryDraft(identity)).toEqual({
+        submissionId: identity, text, attachmentReferences: references,
+      });
+      expect(await result.current.readRetainedRetryDraft()).toEqual({
+        submissionId: identity, text, attachmentReferences: references,
+      });
+      expect(await result.current.readRetainedRetryDraft("draft-v1-7")).toBeNull();
+      expect(await result.current.readRetainedRetryDraft(identity.replace("-7-", "-8-"))).toBeNull();
+      getDraft.mockRejectedValueOnce(new Error("Read unavailable"));
+      expect(await result.current.readRetainedRetryDraft(identity)).toBeNull();
+    });
+    expect(putDraft).not.toHaveBeenCalled();
+  });
+
+  it("never flushes a newer unsaved edit to manufacture retry eligibility", async () => {
+    const { result } = renderHook(() => useKarenPersistedDraft(conversationId));
+    await flush();
+    act(() => result.current.setText("New unsaved edit"));
+    await act(async () => {
+      expect(await result.current.readRetainedRetryDraft(identity)).toBeNull();
+    });
+    expect(result.current.draft).toBe("New unsaved edit");
+    expect(putDraft).not.toHaveBeenCalled();
+  });
+});

@@ -24,7 +24,9 @@ const cardStudioAcceptance = process.env.KAREN_CARD_STUDIO_VISUAL_ACCEPTANCE ===
 const participationAcceptance = process.env.KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE === 'true';
 const inboxAcceptance = process.env.KAREN_COMMS_INBOX_ACCEPTANCE === 'true';
 const generatedDocumentAcceptance = process.env.KAREN_GENERATED_DOCUMENT_ACCEPTANCE === 'true';
-const privateLifecycleAcceptance = participationAcceptance || inboxAcceptance || generatedDocumentAcceptance;
+const kexpAcceptance = process.env.KAREN_KEXP_RETRY_ACCEPTANCE_REQUIRED === 'true' ||
+  process.env.KAREN_KEXP_CONTENT_ACCEPTANCE_REQUIRED === 'true';
+const privateLifecycleAcceptance = participationAcceptance || inboxAcceptance || generatedDocumentAcceptance || kexpAcceptance;
 // Playwright 1.59.1 also captures failure accessibility snapshots independently
 // of trace/screenshot settings. Suppress those before workers start; remove
 // per-test output (including error-context.md) during normal runner teardown.

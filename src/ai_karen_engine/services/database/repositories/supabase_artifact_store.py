@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from collections.abc import Awaitable, Callable
 import base64
 import binascii
 import io
@@ -33,6 +34,7 @@ from ai_karen_engine.services.database.repositories.artifact_store import (
     ArtifactFolder,
     ArtifactUploadRequest,
     VerifiedArtifactText,
+    validate_reserved_text_payload,
     RepositoryResult,
 )
 from ai_karen_engine.services.database.repositories.observability import instrument_repository
@@ -509,6 +511,7 @@ class SupabaseArtifactStore(ArtifactStore):
     @instrument_repository(operation="upload_reserved_text", repository="SupabaseArtifactStore")
     async def upload_reserved_text(
         self, request: ArtifactUploadRequest, *, session_id: str, lease_token: str,
+        before_write: Callable[[], Awaitable[None]] | None = None,
     ) -> RepositoryResult[Artifact]:
         """Consume the existing ledger claim, write once, and prove readback.
 
@@ -523,23 +526,15 @@ class SupabaseArtifactStore(ArtifactStore):
                 isinstance(value, str) and self._canonical_uuid_value(value)
                 for value in (session_id, lease_token, request.tenant_id, request.user_id)
             )
-            or not isinstance(data, bytes)
-            or not 1 <= len(data) <= 65536
             or request.content_type != "text/plain"
-            or not isinstance(request.filename, str)
-            or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,159}", request.filename) is None
-            or not request.filename.lower().endswith((".txt", ".md"))
         ):
             return RepositoryResult(success=False, error=unavailable)
         try:
             try:
-                body = data.decode("utf-8", errors="strict")
-            except UnicodeError:
+                validate_reserved_text_payload(request.filename, data)
+            except ValueError:
                 return RepositoryResult(success=False, error=unavailable)
-            if not body.strip() or any(
-                ord(char) < 32 and char not in "\n\r\t" for char in body
-            ):
-                return RepositoryResult(success=False, error=unavailable)
+            assert isinstance(data, bytes)
             # Freeze validated data and metadata before yielding to the ledger.
             # Another coroutine must not mutate the payload after digest admission.
             try:
@@ -560,6 +555,10 @@ class SupabaseArtifactStore(ArtifactStore):
             )
             if claimed is None:
                 return RepositoryResult(success=False, error=unavailable)
+            # A claim may have waited on another transaction. Revalidate
+            # the host authorization before dispatching the remote write.
+            if before_write is not None:
+                await before_write()
             written = await self._upload_object_and_metadata(
                 request, artifact_id=session_id, reserved=True,
             )
@@ -574,7 +573,7 @@ class SupabaseArtifactStore(ArtifactStore):
             ):
                 return RepositoryResult(success=False, error="reserved_upload_reconcile_required")
             return written
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, PermissionError):
             raise
         except Exception as exc:
             logger.warning(

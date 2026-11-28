@@ -21,8 +21,11 @@ const sdk = vi.hoisted(() => ({
   stopAgent: vi.fn(),
   clearDraft: vi.fn(),
   prepareRevision: vi.fn(),
+  prepareAttachment: vi.fn(),
   refreshDraft: vi.fn(),
+  readRetryDraft: vi.fn(),
   revisionBoundSubmission: false,
+  attachmentDraftSubmission: false,
   post: vi.fn(),
   get: vi.fn(),
   refreshHistory: vi.fn(),
@@ -82,7 +85,9 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", async (importOrig
       failureStatus: sdk.draftFailureStatus,
       prepareSubmission: (...args: unknown[]) => sdk.clearDraft(...args),
       prepareRevisionSubmission: (...args: unknown[]) => sdk.prepareRevision(...args),
+      prepareAttachmentSubmission: (...args: unknown[]) => sdk.prepareAttachment(...args),
       refreshSubmittedDraft: sdk.refreshDraft,
+      readRetainedRetryDraft: sdk.readRetryDraft,
       retry: vi.fn(),
       discardAndReload: vi.fn(),
     };
@@ -99,6 +104,7 @@ vi.mock("@/components/chat/copilotkit/KarenCopilotHistoryGate", () => {
     useKarenScopedAgent: () => ({
       agent: sdk.agent, isReady: sdk.isReady, refreshVerifiedHistory: sdk.refreshHistory,
       recoveryRun: sdk.recoveryRun, revisionBoundSubmission: sdk.revisionBoundSubmission,
+      attachmentDraftSubmission: sdk.attachmentDraftSubmission,
     }),
   };
 });
@@ -127,8 +133,11 @@ beforeEach(() => {
   sdk.stopAgent.mockReset().mockResolvedValue(undefined);
   sdk.clearDraft.mockReset().mockResolvedValue(true);
   sdk.prepareRevision.mockReset().mockResolvedValue("draft-v1-7");
+  sdk.prepareAttachment.mockReset().mockResolvedValue(null);
   sdk.refreshDraft.mockReset().mockResolvedValue(undefined);
+  sdk.readRetryDraft.mockReset().mockResolvedValue(null);
   sdk.revisionBoundSubmission = false;
+  sdk.attachmentDraftSubmission = false;
   sdk.refreshHistory.mockReset().mockResolvedValue(true);
   sdk.recoveryRun = null;
   sdk.get.mockReset().mockResolvedValue({
@@ -1415,5 +1424,309 @@ describe("ARM-04 canonical mission draft admission", () => {
     } finally {
       window.removeEventListener("karen:chat-draft-prepared", navigation);
     }
+  });
+});
+
+
+
+describe("KEXP-042A.6C explicit attachment-bound composer handoff", () => {
+  const first = { source_id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", revision: "a".repeat(64) };
+  const second = { source_id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", revision: "b".repeat(64) };
+  const submissionId = "draft-v2-7-" + "e1e0621b3a710eb63db47864a9d9b89ec137ad424320a2f939681831e3e1c23b";
+  const snapshot = Object.freeze({
+    submissionId,
+    attachmentReferences: Object.freeze([Object.freeze({ ...first }), Object.freeze({ ...second })]),
+  });
+  function enable() {
+    sdk.revisionBoundSubmission = true;
+    sdk.attachmentDraftSubmission = true;
+    sdk.initialAttachments = [{ ...first }, { ...second }];
+    sdk.prepareAttachment.mockResolvedValue(snapshot);
+  }
+  function submitAttached() {
+    act(() => {
+      input().onChange("Read these documents");
+      input().onSubmitMessage("Read these documents");
+      input().onChange("");
+    });
+  }
+
+  it("uses the exact prepared v2 identity and ordered per-run hints, not an optimistic clear", async () => {
+    enable();
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(1));
+    expect(sdk.prepareAttachment).toHaveBeenCalledWith("Read these documents", [first, second]);
+    expect(sdk.prepareRevision).not.toHaveBeenCalled();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).toHaveBeenCalledWith({
+      id: submissionId, role: "user", content: "Read these documents",
+    });
+    expect(sdk.runAgent).toHaveBeenCalledWith({
+      agent: sdk.agent, forwardedProps: { attachment_references: snapshot.attachmentReferences },
+    });
+    expect(input().value).toBe("Read these documents");
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+  });
+
+  it.each(["legacy", "older-governed"] as const)("denies %s backend without both capabilities", (kind) => {
+    enable();
+    if (kind === "legacy") sdk.revisionBoundSubmission = false;
+    else sdk.attachmentDraftSubmission = false;
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    expect(sdk.prepareAttachment).not.toHaveBeenCalled();
+    expect(sdk.prepareRevision).not.toHaveBeenCalled();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(input().value).toBe("Read these documents");
+  });
+
+  it("fails closed if snapshot preparation cannot verify the saved draft", async () => {
+    enable();
+    sdk.prepareAttachment.mockResolvedValueOnce(null);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    await waitFor(() => expect(screen.getByRole("alert").textContent).toContain("attached draft"));
+    expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(sdk.prepareRevision).not.toHaveBeenCalled();
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(input().value).toBe("Read these documents");
+    expect(screen.getByText("2 / 12 file references")).toBeTruthy();
+  });
+
+  it.each(["capability", "recovery", "thread", "unmount"] as const)(
+    "rejects prepared snapshot after %s changes during preparation", async (change) => {
+      enable();
+      let finish!: (value: typeof snapshot) => void;
+      sdk.prepareAttachment.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+      const view = render(<KarenCopilotControlledChat conversationId={THREAD} />);
+      submitAttached();
+      expect(sdk.prepareAttachment).toHaveBeenCalledTimes(1);
+      if (change === "capability") {
+        sdk.attachmentDraftSubmission = false;
+        view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+      } else if (change === "recovery") {
+        sdk.recoveryRun = { runId: "old-run", submissionId: "old-turn", status: "interrupted" };
+        view.rerender(<KarenCopilotControlledChat conversationId={THREAD} />);
+      } else if (change === "thread") {
+        sdk.agent.threadId = "bd1d23c2-bbd7-4d31-987a-cf81025ebafd";
+      } else {
+        view.unmount();
+      }
+      await act(async () => { finish(snapshot); });
+      expect(sdk.agent.addMessage).not.toHaveBeenCalled();
+      expect(sdk.runAgent).not.toHaveBeenCalled();
+      expect(sdk.clearDraft).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not automatically retry or discard references when SDK execution fails", async () => {
+    enable();
+    sdk.runAgent.mockRejectedValueOnce(new Error("connection lost"));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+    expect(input().value).toBe("Read these documents");
+    expect(screen.getByText("2 / 12 file references")).toBeTruthy();
+  });
+
+  it("does not forward attachment hints on a subsequent explicitly text-only submission", async () => {
+    enable();
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    submitAttached();
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect((screen.getByRole("button", { name: "Remove file reference " + first.source_id }) as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: "Remove file reference " + first.source_id }));
+    fireEvent.click(screen.getByRole("button", { name: "Remove file reference " + second.source_id }));
+    act(() => {
+      input().onChange("Text only");
+      input().onSubmitMessage("Text only");
+    });
+    await waitFor(() => expect(sdk.runAgent).toHaveBeenCalledTimes(2));
+    expect(sdk.prepareAttachment).toHaveBeenCalledTimes(1);
+    expect(sdk.prepareRevision).toHaveBeenCalledWith("Text only");
+    expect(sdk.runAgent).toHaveBeenNthCalledWith(2, { agent: sdk.agent });
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+  });
+});
+
+describe("KEXP-042A.6D4 exact failed-submission retry preparation", () => {
+  const text = "Original governed question";
+  const id = "draft-v1-7";
+  const snapshot = { submissionId: id, text, attachmentReferences: [] };
+  const retryPath = "/api/copilotkit/agent/default/draft-retry/" + THREAD + "/" + id;
+  async function offer() {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(new Error('HTTP 409: {"detail":"Chat execution has already been admitted"}'));
+    sdk.readRetryDraft.mockResolvedValue(snapshot);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => { input().onChange(text); input().onSubmitMessage(text); });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    sdk.get.mockResolvedValueOnce({
+      runId: "original-run", submissionId: id, status: "failed",
+      cancel_requested: false, cancellation_confirmed: false,
+    }).mockResolvedValueOnce({ submission_id: id, eligible: true });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Prepare failed draft for retry" })).toBeTruthy());
+  }
+
+  it("requires a separate click and exact revision readback; never automatically sends", async () => {
+    await offer();
+    expect(sdk.get).toHaveBeenLastCalledWith(retryPath);
+    expect(sdk.post).not.toHaveBeenCalled();
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    sdk.post.mockResolvedValueOnce({ submission_id: id, revision: 8 });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare failed draft for retry" }));
+    await waitFor(() => expect(screen.getByText(/Draft prepared and verified/)).toBeTruthy());
+    expect(sdk.post).toHaveBeenCalledExactlyOnceWith(retryPath, { submitted_text: text, attachment_references: [] });
+    expect(sdk.readRetryDraft).toHaveBeenLastCalledWith("draft-v1-8");
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(["receipt", "readback", "lost"] as const)("keeps the send hold on uncertain %s", async (fault) => {
+    await offer();
+    if (fault === "receipt") sdk.post.mockResolvedValueOnce({ submission_id: id, revision: 9 });
+    else if (fault === "readback") {
+      sdk.post.mockResolvedValueOnce({ submission_id: id, revision: 8 });
+      sdk.readRetryDraft.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(null);
+    } else sdk.post.mockRejectedValueOnce(new Error("Lost response"));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare failed draft for retry" }));
+    await waitFor(() => expect(screen.getByText(/Retry preparation could not be verified/)).toBeTruthy());
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.post).toHaveBeenCalledTimes(1);
+    expect(input().value).toBe(text);
+  });
+});
+
+describe("KEXP-042A.6D5 retained run recovery", () => {
+  const text = "Original governed question";
+  const id = "draft-v1-7";
+  const next = "draft-v1-8";
+  const snapshot = { submissionId: id, text, attachmentReferences: [] };
+  const receipt = {
+    runId: "owned-run", submissionId: id, status: "failed",
+    cancel_requested: false, cancellation_confirmed: false,
+  };
+  const statusPath = "/api/copilotkit/agent/default/submissions/" + THREAD + "/" + id + "/status";
+
+  it("correlates an ordinary governed transport failure to the original submission", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(new Error("Connection lost"));
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => { input().onChange(text); input().onSubmitMessage(text); });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check run status and saved history" })).toBeTruthy());
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({ submission_id: id, eligible: true });
+    sdk.readRetryDraft.mockResolvedValue(snapshot);
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Prepare failed draft for retry" })).toBeTruthy());
+    expect(sdk.get).toHaveBeenNthCalledWith(1, statusPath);
+    expect(sdk.post).not.toHaveBeenCalled();
+  });
+
+  it("discovers an existing exact saved submission without starting a run", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.readRetryDraft.mockResolvedValue(snapshot);
+    sdk.get.mockResolvedValueOnce(receipt);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => input().onChange(text));
+    fireEvent.click(screen.getByRole("button", { name: "Check saved draft recovery" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Check run status and saved history" })).toBeTruthy());
+    expect(sdk.get).toHaveBeenCalledExactlyOnceWith(statusPath);
+    expect(sdk.readRetryDraft).toHaveBeenLastCalledWith(id);
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).not.toHaveBeenCalled();
+    expect(sdk.post).not.toHaveBeenCalled();
+  });
+
+  it.each(["unavailable", "wrong identity", "changed draft"] as const)(
+    "does not invent a recovery identity when %s", async fault => {
+      sdk.revisionBoundSubmission = true;
+      sdk.readRetryDraft.mockResolvedValue(snapshot);
+      if (fault === "unavailable") sdk.get.mockRejectedValueOnce(new Error("Unavailable"));
+      else if (fault === "wrong identity") sdk.get.mockResolvedValueOnce({ ...receipt, submissionId: next });
+      else {
+        sdk.get.mockResolvedValueOnce(receipt);
+        sdk.readRetryDraft.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(null);
+      }
+      render(<KarenCopilotControlledChat conversationId={THREAD} />);
+      act(() => input().onChange(text));
+      fireEvent.click(screen.getByRole("button", { name: "Check saved draft recovery" }));
+      await waitFor(() => expect(screen.getByText(/No existing submission could be verified|saved draft changed during recovery/)).toBeTruthy());
+      expect(screen.queryByRole("region", { name: "Unverified run recovery" })).toBeNull();
+      expect(sdk.runAgent).not.toHaveBeenCalled();
+      expect(sdk.post).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["current", "historical", "wrong revision", "changed readback"] as const)(
+    "reconciles lost preparation only with current causal receipt and exact readback (%s)", async fault => {
+      sdk.revisionBoundSubmission = true;
+      sdk.runAgent.mockRejectedValueOnce(new Error("Connection lost"));
+      sdk.readRetryDraft.mockResolvedValue(snapshot);
+      render(<KarenCopilotControlledChat conversationId={THREAD} />);
+      act(() => { input().onChange(text); input().onSubmitMessage(text); });
+      await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+      sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({ submission_id: id, eligible: true });
+      fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+      await waitFor(() => expect(screen.getByRole("button", { name: "Prepare failed draft for retry" })).toBeTruthy());
+      sdk.post.mockRejectedValueOnce(new Error("Lost response"));
+      fireEvent.click(screen.getByRole("button", { name: "Prepare failed draft for retry" }));
+      await waitFor(() => expect(screen.getByText(/Retry preparation could not be verified/)).toBeTruthy());
+      const successor = { ...snapshot, submissionId: next };
+      sdk.readRetryDraft.mockResolvedValueOnce(null).mockResolvedValueOnce(successor)
+        .mockResolvedValueOnce(fault === "changed readback" ? null : successor);
+      sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({
+        submission_id: id, eligible: false, prepared_revision: fault === "wrong revision" ? 9 : 8,
+        prepared_current: fault !== "historical",
+      }).mockRejectedValueOnce(new Error("No attested successor run"));
+      fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+      if (fault === "current") {
+        await waitFor(() => expect(screen.getByText(/Retry preparation was recovered and verified/)).toBeTruthy());
+        expect(screen.queryByRole("region", { name: "Unverified run recovery" })).toBeNull();
+      } else {
+        await waitFor(() => expect(screen.getByText(/retry receipt is unavailable/)).toBeTruthy());
+        act(() => input().onSubmitMessage(text));
+        expect(screen.getByRole("region", { name: "Unverified run recovery" })).toBeTruthy();
+      }
+      expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+      expect(sdk.post).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it("does not replay a lost retry mutation and discovers a positively attested successor run", async () => {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(new Error("Connection lost"));
+    sdk.readRetryDraft.mockResolvedValue(snapshot);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => { input().onChange(text); input().onSubmitMessage(text); });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    sdk.get.mockResolvedValueOnce(receipt).mockResolvedValueOnce({ submission_id: id, eligible: true });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Prepare failed draft for retry" })).toBeTruthy());
+    sdk.post.mockRejectedValueOnce(new Error("Lost response"));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare failed draft for retry" }));
+    await waitFor(() => expect(screen.getByText(/Retry preparation could not be verified/)).toBeTruthy());
+    sdk.readRetryDraft.mockResolvedValueOnce(null).mockResolvedValueOnce({ ...snapshot, submissionId: next });
+    sdk.get.mockResolvedValueOnce(receipt)
+      .mockResolvedValueOnce({ submission_id: id, eligible: false })
+      .mockResolvedValueOnce({ ...receipt, runId: "next-run", submissionId: next });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByText(/newer saved submission was verified/)).toBeTruthy());
+    expect(sdk.get).toHaveBeenLastCalledWith("/api/copilotkit/agent/default/submissions/" + THREAD + "/" + next + "/status");
+    expect(sdk.post).toHaveBeenCalledTimes(1);
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
   });
 });

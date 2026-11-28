@@ -31,7 +31,7 @@ pytestmark = [
 ]
 
 
-async def test_upload_session_migration_rls_and_repository_contract() -> None:
+async def test_upload_session_migration_rls_and_repository_contract(monkeypatch) -> None:
     url = make_url(os.environ["KAREN_TEST_CODE_ARTIFACT_DATABASE_URL"])
     assert url.drivername in ("postgresql", "postgresql+asyncpg")
     assert url.host in ("127.0.0.1", "localhost")
@@ -385,5 +385,69 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
         assert recovered is not None and recovered.state == "committed"
         assert recovered.artifact_id == pending.session_id
         assert await repo.reconcile_verified_text(**recovery_scope, artifact_store=reader()) is None
+        # An already committed upload is retrieved by readback, never replayed.
+        committed_reader = reader()
+        for _ in range(2):
+            receipt = await repo.read_committed_verified_text(
+                **recovery_scope, artifact_store=committed_reader,
+            )
+            assert receipt is not None and receipt.artifact_id == pending.session_id
+            assert receipt.sha256 == content_digest
+        assert committed_reader.read_owner_active_text_bounded.await_count == 2
+        committed_reader.read_owner_active_text_bounded.assert_awaited_with(
+            pending.session_id, tenant, owner, max_bytes=len(body.encode()),
+            expected_sha256=content_digest,
+        )
+        denied = reader()
+        assert await repo.read_committed_verified_text(
+            **{**recovery_scope, "owner_user_id": foreign_owner}, artifact_store=denied,
+        ) is None
+        denied.read_owner_active_text_bounded.assert_not_awaited()
+        async with factory() as db:
+            await db.execute(text(
+                "UPDATE public.files SET deleted_at=now() WHERE file_id=:id"
+            ), {"id": pending.session_id})
+            await db.commit()
+        archived = reader()
+        assert await repo.read_committed_verified_text(
+            **recovery_scope, artifact_store=archived,
+        ) is None
+        archived.read_owner_active_text_bounded.assert_not_awaited()
+
+        # Real concurrent admission: exactly one remaining slot, different
+        # keys, one owner. The winning key remains readable at capacity.
+        async with factory() as db:
+            used = (await db.execute(text("""
+                SELECT count(*), COALESCE(sum(expected_bytes), 0)
+                FROM public.artifact_upload_sessions
+                WHERE tenant_id = CAST(:tenant AS uuid)
+                  AND owner_user_id = CAST(:owner AS uuid)
+                  AND created_at > clock_timestamp() - interval '24 hours'
+            """), {"tenant": tenant, "owner": owner})).one()
+        monkeypatch.setenv("KAREN_UPLOAD_ADMISSION_DAILY_SESSIONS", str(used[0] + 1))
+        monkeypatch.setenv("KAREN_UPLOAD_ADMISSION_DAILY_BYTES", str(used[1] + 42))
+        keys = [uuid4().hex + uuid4().hex for _ in range(2)]
+
+        async def admit(key_hash):
+            return await repo.create_or_get(
+                tenant_id=tenant, owner_user_id=owner,
+                destination_id="explorer", recipe="store_only",
+                idempotency_key_hash=key_hash, manifest_sha256=digest,
+                expected_bytes=42, expires_at=datetime.utcnow() + timedelta(hours=1),
+            )
+
+        outcomes = await asyncio.gather(*(admit(key_hash) for key_hash in keys), return_exceptions=True)
+        winners = [index for index, outcome in enumerate(outcomes) if not isinstance(outcome, Exception)]
+        assert len(winners) == 1
+        winner = winners[0]
+        assert isinstance(outcomes[1 - winner], RuntimeError)
+        assert (await admit(keys[winner])).session_id == outcomes[winner].session_id
+        # Cancellation does not refund admission budget and cannot bypass it.
+        await repo.transition(
+            tenant_id=tenant, owner_user_id=owner, session_id=outcomes[winner].session_id,
+            expected_state="created", next_state="cancelled",
+        )
+        with pytest.raises(RuntimeError, match="admission unavailable"):
+            await admit(uuid4().hex + uuid4().hex)
     finally:
         await engine.dispose()

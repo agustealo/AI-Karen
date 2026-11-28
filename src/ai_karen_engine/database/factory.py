@@ -193,11 +193,11 @@ class DatabaseServiceFactory:
                 return None
 
             supabase_platform = get_supabase_platform()
-            storage_client = supabase_platform.storage
-
+            # ArtifactStore needs the initialized platform, not its raw SDK
+            # Storage object: the platform owns the bucket, origin and TLS policy.
             factory = RepositoryFactory(
                 session_factory=session_factory,
-                storage_client=storage_client,
+                storage_client=supabase_platform,
                 hierarchy_transaction=async_transaction_scope,
             )
 
@@ -208,6 +208,12 @@ class DatabaseServiceFactory:
             self._services["conversation_repository"] = factory.create_conversation_repository()
 
             self._services["artifact_store"] = factory.create_artifact_store()
+            self._services["upload_session_repository"] = factory.create_upload_session_repository()
+            from ai_karen_engine.core.runtime.owner_text_upload import OwnerTextUploadService
+            self._services["owner_text_upload"] = OwnerTextUploadService(
+                sessions=self._services["upload_session_repository"],
+                artifacts=self._services["artifact_store"],
+            )
 
             # Reuse the SAME canonical artifact owner for KariSignature
             # delegate-use verification. A bare style repository without

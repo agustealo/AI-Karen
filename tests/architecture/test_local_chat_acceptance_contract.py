@@ -336,7 +336,9 @@ def test_arm05c5b_private_participation_acceptance_suppresses_failure_context() 
     assert "const participationAcceptance = process.env.KAREN_SPECIALIST_PARTICIPATION_ACCEPTANCE === 'true';" in config
     assert "const inboxAcceptance = process.env.KAREN_COMMS_INBOX_ACCEPTANCE === 'true';" in config
     assert "const generatedDocumentAcceptance = process.env.KAREN_GENERATED_DOCUMENT_ACCEPTANCE === 'true';" in config
-    assert "const privateLifecycleAcceptance = participationAcceptance || inboxAcceptance || generatedDocumentAcceptance;" in config
+    assert "const privateLifecycleAcceptance = participationAcceptance || inboxAcceptance || generatedDocumentAcceptance || kexpAcceptance;" in config
+    assert "process.env.KAREN_KEXP_RETRY_ACCEPTANCE_REQUIRED === 'true'" in config
+    assert "process.env.KAREN_KEXP_CONTENT_ACCEPTANCE_REQUIRED === 'true'" in config
     assert "if (privateLifecycleAcceptance) process.env.PLAYWRIGHT_NO_COPY_PROMPT = '1';" in config
     assert "preserveOutput: privateLifecycleAcceptance ? 'never' : 'always'," in config
     reporter = config.split("reporter:", 1)[1].split("use:", 1)[0]
