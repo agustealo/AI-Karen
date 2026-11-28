@@ -2916,11 +2916,15 @@ class ChatRuntime:
             )
             verified = []
             conversational = False
+            incomplete = False
             for key, _label in fields:
                 saved = evaluate_personal_evidence(
                     decision.cognitive_context,
                     tenant_id=tenant_id, user_id=user_id, attribute=key,
                 )
+                if saved.reason == "incomplete_memory_retrieval":
+                    incomplete = True
+                    continue
                 recent = evaluate_conversation_personal_evidence(
                     decision.cognitive_context,
                     tenant_id=tenant_id, user_id=user_id, attribute=key,
@@ -2940,8 +2944,11 @@ class ChatRuntime:
                     verified.append((key, recent))
                     conversational = True
             meta = {
-                "evidence_sufficiency": "supported" if verified else "missing",
-                "evidence_reason": "verified_identity_summary" if verified else "no_verified_identity_facts",
+                "evidence_sufficiency": "ambiguous" if incomplete else ("supported" if verified else "missing"),
+                "evidence_reason": (
+                    "incomplete_memory_retrieval" if incomplete
+                    else "verified_identity_summary" if verified else "no_verified_identity_facts"
+                ),
                 "evidence_count": sum(len(result.evidence_ids) for _, result in verified),
                 "response_source": (
                     "authorized_conversation_evidence"
@@ -2951,13 +2958,18 @@ class ChatRuntime:
                 "actual_model": None,
             }
             if not verified:
+                if incomplete:
+                    return "I couldn't complete saved-memory retrieval, so I can't verify your identity details right now.", meta
                 return "I don't have enough verified information saved to describe who you are.", meta
             from ai_karen_engine.core.runtime.grounded_response_composer import (
                 compose_identity_summary,
             )
 
             facts = {key: result.value for key, result in verified}
-            return compose_identity_summary(facts), meta
+            summary = compose_identity_summary(facts)
+            if incomplete:
+                summary += " I couldn't complete saved-memory retrieval, so this summary may be incomplete."
+            return summary, meta
         result = evaluate_personal_evidence(
             decision.cognitive_context,
             tenant_id=tenant_id,
@@ -3090,6 +3102,18 @@ class ChatRuntime:
                     "evidence_value_count": len(result.values),
                 },
             )
+        if result.reason == "incomplete_memory_retrieval":
+            if recent.status is EvidenceSufficiencyStatus.SUPPORTED:
+                return (
+                    f"You told me in this conversation that your {fact_label} is {recent.value}. "
+                    "I couldn't complete saved-memory retrieval to verify it.",
+                    {
+                        **metadata,
+                        "response_source": "authorized_conversation_evidence",
+                        "evidence_count": len(recent.evidence_ids),
+                    },
+                )
+            return "I couldn't complete saved-memory retrieval, so I can't verify that detail right now.", metadata
         if result.status is EvidenceSufficiencyStatus.AMBIGUOUS:
             return "Which detail about you would you like me to recall?", metadata
         if result.status is EvidenceSufficiencyStatus.CONTRADICTORY:
