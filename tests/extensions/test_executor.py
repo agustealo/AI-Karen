@@ -199,6 +199,58 @@ async def test_execute_success_with_matching_authorized_plan():
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("failure", "code", "detail"),
+    [
+        ("input", "invalid_input", "Extension input failed schema validation"),
+        ("output", "invalid_output", "Extension output failed schema validation"),
+        ("handler", "execution_error", "Extension handler failed"),
+        ("typed", "extension_error", "Extension handler failed"),
+    ],
+)
+async def test_payload_diagnostics_do_not_escape_executor(failure, code, detail, caplog):
+    from ai_karen_engine.extensions.errors import ExtensionError
+
+    private_marker = "private-document-diagnostic-marker"
+    audit = []
+
+    class DiagnosticHandler(FakeHandler):
+        async def execute(self, payload, context):
+            self.calls += 1
+            if failure == "handler":
+                raise RuntimeError(private_marker)
+            if failure == "typed":
+                raise ExtensionError(private_marker)
+            return {"echo": "hello", private_marker: "private"}
+
+    handler = DiagnosticHandler()
+    manifest = _manifest()
+    manifest.input_schema["additionalProperties"] = False
+    manifest.output_schema["additionalProperties"] = False
+    service = ExtensionExecutionService(
+        registry=FakeRegistry(handler=handler, manifest=manifest),
+        lifecycle=FakeLifecycle(),
+        audit_sink=audit.append,
+    )
+    request = _request(plan=_plan())
+    if failure == "input":
+        request.payload[private_marker] = "private"
+    with caplog.at_level("INFO"):
+        result = await service.execute(request)
+
+    assert result.status == "failed"
+    assert result.error_code == code
+    assert result.error_detail == detail
+    assert result.payload is None
+    assert handler.calls == (0 if failure == "input" else 1)
+    assert audit[-1]["error_code"] == code
+    assert audit[-1]["detail"] == detail
+    assert private_marker not in repr(audit)
+    assert private_marker not in caplog.text
+    assert private_marker not in repr(result)
+
+
+@pytest.mark.asyncio
 async def test_missing_authorized_plan_denied_before_handler():
     handler = FakeHandler()
     service = ExtensionExecutionService(
