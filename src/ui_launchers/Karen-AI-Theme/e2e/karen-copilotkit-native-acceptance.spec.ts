@@ -10,6 +10,10 @@ test.use({ trace: "off", screenshot: "off", video: "off" });
 
 const required = process.env.KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED === "true";
 const retryRequired = process.env.KAREN_KEXP_RETRY_ACCEPTANCE_REQUIRED === "true";
+const retryLostResponse = process.env.KAREN_KEXP_RETRY_LOST_RESPONSE_REQUIRED === "true";
+if (retryLostResponse && !retryRequired) {
+  throw new Error("Lost retry response proof requires explicit KEXP retry acceptance");
+}
 if (retryRequired && (!required ||
     process.env.KAREN_COPILOTKIT_LIVE_STOP_REQUIRED !== "true" ||
     process.env.KAREN_SANITIZED_ACCOUNT !== "true" ||
@@ -728,14 +732,67 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     expect(retryMutations).toEqual([]);
     expect(inferenceRequests).toEqual(["/api/copilotkit/agent/default/run"]);
     expect(await readDraft()).toMatchObject(retained);
-    const preparedResponse = page.waitForResponse(response =>
-      response.request().method() === "POST" && new URL(response.url()).pathname === retryPath,
-      { timeout: 30000 });
-    await prepare.click();
-    const prepared = await preparedResponse;
-    expect(prepared.status()).toBe(200);
-    expect(await prepared.json()).toEqual({ submission_id: submissionId, revision: revision + 1 });
-    await expect(native).toContainText("Draft prepared and verified. Review it and select Send when ready.");
+    if (retryLostResponse) {
+      // Fault injection at one exact same-origin browser response boundary.
+      // Forward the authentic POST once; never fulfill a synthetic receipt,
+      // replay the mutation, follow redirects or intercept other endpoints.
+      const origin = new URL(page.url()).origin;
+      const target = origin + retryPath;
+      const receipts: Array<{ status: number; body: unknown }> = [];
+      let forwarded = 0;
+      const handler: Parameters<typeof page.route>[1] = async route => {
+        if (route.request().method() !== "POST") {
+          await route.fallback();
+          return;
+        }
+        forwarded += 1;
+        try {
+          if (forwarded !== 1 || route.request().url() !== target) {
+            throw new Error("Unexpected retry mutation replay or destination");
+          }
+          const upstream = await route.fetch({ maxRedirects: 0, maxRetries: 0, timeout: 30000 });
+          try {
+            receipts.push({ status: upstream.status(), body: await upstream.json() });
+          } finally {
+            await upstream.dispose();
+          }
+        } finally {
+          // Drop only the delivery of the real mutation's response.
+          await route.abort("failed");
+        }
+      };
+      await page.route(target, handler);
+      try {
+        await prepare.click();
+        await expect.poll(() => receipts.length, { timeout: 30000 }).toBe(1);
+        expect(receipts[0]).toEqual({
+          status: 200, body: { submission_id: submissionId, revision: revision + 1 },
+        });
+        await expect(native).toContainText("Retry preparation could not be verified. Sending remains blocked.");
+        expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
+        // The UI must remain blocked until the user explicitly checks the
+        // original durable receipt and successor readback.
+        await expect(prepare).toHaveCount(0);
+        expect(inferenceRequests).toEqual(["/api/copilotkit/agent/default/run"]);
+        await expect(check).toBeEnabled();
+        await check.click();
+        await expect(native).toContainText(
+          "Retry preparation was recovered and verified. Review the draft and select Send when ready.",
+        );
+        expect(forwarded).toBe(1);
+      } finally {
+        await page.unroute(target, handler);
+      }
+    } else {
+      const preparedResponse = page.waitForResponse(response =>
+        response.request().method() === "POST" && new URL(response.url()).pathname === retryPath,
+        { timeout: 30000 });
+      await prepare.click();
+      const prepared = await preparedResponse;
+      expect(prepared.status()).toBe(200);
+      expect(await prepared.json()).toEqual({ submission_id: submissionId, revision: revision + 1 });
+      await expect(native).toContainText("Draft prepared and verified. Review it and select Send when ready.");
+    }
     await expect(composer).toHaveValue(prompt);
     expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
     const causal = await page.request.get(retryPath);
