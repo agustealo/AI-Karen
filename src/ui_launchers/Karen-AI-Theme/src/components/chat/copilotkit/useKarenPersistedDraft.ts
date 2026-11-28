@@ -15,6 +15,20 @@ export type AttachmentSubmissionSnapshot = Readonly<{
   attachmentReferences: ReadonlyArray<Readonly<DraftAttachment>>;
 }>;
 type DraftRecord = { text: string; revision: number; attachment_references: DraftAttachment[] };
+export type RetainedRetryDraft = Readonly<{
+  text: string;
+  attachmentReferences: ReadonlyArray<Readonly<DraftAttachment>>;
+}>;
+
+async function attachmentDigest(selection: DraftAttachment[]): Promise<string> {
+  // Python canonical compact sorted-key JSON. Preserve array order.
+  const bytes = new TextEncoder().encode(JSON.stringify(selection.map(
+    ({ revision, source_id }) => ({ revision, source_id }),
+  )));
+  const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
+  if (digest.byteLength !== 32) throw new Error("Invalid digest");
+  return Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+}
 
 function validAttachments(value: unknown): value is DraftAttachment[] {
   if (!Array.isArray(value) || value.length > MAX_DRAFT_ATTACHMENTS) return false;
@@ -158,6 +172,7 @@ export function useKarenPersistedDraft(conversationId: string) {
       setSynced(true);
       setStatus("ready");
       setFailureStatus(null);
+      return true;
     } catch (error) {
       if (!activeRef.current || generationRef.current !== generation ||
           readSequenceRef.current !== readSequence) return;
@@ -506,15 +521,8 @@ export function useKarenPersistedDraft(conversationId: string) {
     if (revision === null || revision < 1 || revision > Number.MAX_SAFE_INTEGER - 1 ||
         !stillCurrent()) return null;
     try {
-      // Python canonical digest uses sorted object keys, ASCII JSON and
-      // compact separators. UUID and lowercase hex validators ensure ASCII.
-      // The reference array's original order is part of the identity.
-      const bytes = new TextEncoder().encode(JSON.stringify(selection.map(
-        ({ revision: sourceRevision, source_id }) => ({ revision: sourceRevision, source_id }),
-      )));
-      const digest = await globalThis.crypto.subtle.digest("SHA-256", bytes);
-      if (digest.byteLength !== 32 || !stillCurrent()) return null;
-      const hex = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, "0")).join("");
+      const hex = await attachmentDigest(selection);
+      if (!stillCurrent()) return null;
       return Object.freeze({
         submissionId: "draft-v2-" + revision + "-" + hex,
         attachmentReferences: Object.freeze(selection.map(item => Object.freeze(item))),
@@ -524,6 +532,38 @@ export function useKarenPersistedDraft(conversationId: string) {
       return null;
     }
   }, [flushSubmission]);
+
+  // Retry preparation is deliberately read-only here. Never flush an edit
+  // or use an optimistic local revision to reconstruct a failed identity.
+  const readRetainedRetryDraft = useCallback(async (
+    submissionId: string,
+  ): Promise<RetainedRetryDraft | null> => {
+    const match = /^(?:draft-v1-([1-9][0-9]{0,15})|draft-v2-([1-9][0-9]{0,15})-([a-f0-9]{64}))$/.exec(submissionId);
+    if (!match) return null;
+    const revision = Number(match[1] ?? match[2]);
+    if (!Number.isSafeInteger(revision) || revision >= Number.MAX_SAFE_INTEGER) return null;
+    const generation = generationRef.current;
+    if (!await refresh(false) || generationRef.current !== generation) return null;
+    const sequence = readSequenceRef.current;
+    const text = textRef.current;
+    const selection = attachmentsRef.current.map(ref => ({ ...ref }));
+    const current = () => activeRef.current && generationRef.current === generation &&
+      readSequenceRef.current === sequence && statusRef.current === "ready" &&
+      !busyRef.current && !dirtyRef.current && revisionRef.current === revision &&
+      textRef.current === text && sameAttachments(attachmentsRef.current, selection);
+    if (!current() || !text.trim() || text.trim().length > 10000 ||
+        !validAttachments(selection) || (match[3] ? selection.length === 0 : selection.length !== 0)) return null;
+    try {
+      if (match[3] && await attachmentDigest(selection) !== match[3]) return null;
+      if (!current()) return null;
+      return Object.freeze({
+        text,
+        attachmentReferences: Object.freeze(selection.map(ref => Object.freeze(ref))),
+      });
+    } catch {
+      return null;
+    }
+  }, [refresh]);
 
   const refreshSubmittedDraft = useCallback(async () => {
     // Preserve a newer unsent edit; the regular CAS path owns its recovery.
@@ -616,6 +656,6 @@ export function useKarenPersistedDraft(conversationId: string) {
   return {
     draft, setText, readText, attachments, updateAttachments, status, synced, failureStatus,
     clearBeforeSubmit, prepareSubmission, prepareRevisionSubmission, prepareAttachmentSubmission, refreshSubmittedDraft,
-    retry, discardAndReload,
+    readRetainedRetryDraft, retry, discardAndReload,
   };
 }

@@ -23,6 +23,7 @@ const sdk = vi.hoisted(() => ({
   prepareRevision: vi.fn(),
   prepareAttachment: vi.fn(),
   refreshDraft: vi.fn(),
+  readRetryDraft: vi.fn(),
   revisionBoundSubmission: false,
   attachmentDraftSubmission: false,
   post: vi.fn(),
@@ -86,6 +87,7 @@ vi.mock("@/components/chat/copilotkit/useKarenPersistedDraft", async (importOrig
       prepareRevisionSubmission: (...args: unknown[]) => sdk.prepareRevision(...args),
       prepareAttachmentSubmission: (...args: unknown[]) => sdk.prepareAttachment(...args),
       refreshSubmittedDraft: sdk.refreshDraft,
+      readRetainedRetryDraft: sdk.readRetryDraft,
       retry: vi.fn(),
       discardAndReload: vi.fn(),
     };
@@ -133,6 +135,7 @@ beforeEach(() => {
   sdk.prepareRevision.mockReset().mockResolvedValue("draft-v1-7");
   sdk.prepareAttachment.mockReset().mockResolvedValue(null);
   sdk.refreshDraft.mockReset().mockResolvedValue(undefined);
+  sdk.readRetryDraft.mockReset().mockResolvedValue(null);
   sdk.revisionBoundSubmission = false;
   sdk.attachmentDraftSubmission = false;
   sdk.refreshHistory.mockReset().mockResolvedValue(true);
@@ -1549,5 +1552,57 @@ describe("KEXP-042A.6C explicit attachment-bound composer handoff", () => {
     expect(sdk.prepareRevision).toHaveBeenCalledWith("Text only");
     expect(sdk.runAgent).toHaveBeenNthCalledWith(2, { agent: sdk.agent });
     expect(sdk.clearDraft).not.toHaveBeenCalled();
+  });
+});
+
+describe("KEXP-042A.6D4 exact failed-submission retry preparation", () => {
+  const text = "Original governed question";
+  const id = "draft-v1-7";
+  const snapshot = { text, attachmentReferences: [] };
+  const retryPath = "/api/copilotkit/agent/default/draft-retry/" + THREAD + "/" + id;
+  async function offer() {
+    sdk.revisionBoundSubmission = true;
+    sdk.runAgent.mockRejectedValueOnce(new Error('HTTP 409: {"detail":"Chat execution has already been admitted"}'));
+    sdk.readRetryDraft.mockResolvedValue(snapshot);
+    render(<KarenCopilotControlledChat conversationId={THREAD} />);
+    act(() => { input().onChange(text); input().onSubmitMessage(text); });
+    await waitFor(() => expect(sdk.refreshDraft).toHaveBeenCalledTimes(1));
+    sdk.get.mockResolvedValueOnce({
+      runId: "original-run", submissionId: id, status: "failed",
+      cancel_requested: false, cancellation_confirmed: false,
+    }).mockResolvedValueOnce({ submission_id: id, eligible: true });
+    fireEvent.click(screen.getByRole("button", { name: "Check run status and saved history" }));
+    await waitFor(() => expect(screen.getByRole("button", { name: "Prepare failed draft for retry" })).toBeTruthy());
+  }
+
+  it("requires a separate click and exact revision readback; never automatically sends", async () => {
+    await offer();
+    expect(sdk.get).toHaveBeenLastCalledWith(retryPath);
+    expect(sdk.post).not.toHaveBeenCalled();
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    sdk.post.mockResolvedValueOnce({ submission_id: id, revision: 8 });
+    fireEvent.click(screen.getByRole("button", { name: "Prepare failed draft for retry" }));
+    await waitFor(() => expect(screen.getByText(/Draft prepared and verified/)).toBeTruthy());
+    expect(sdk.post).toHaveBeenCalledExactlyOnceWith(retryPath, { submitted_text: text, attachment_references: [] });
+    expect(sdk.readRetryDraft).toHaveBeenLastCalledWith("draft-v1-8");
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.agent.addMessage).toHaveBeenCalledTimes(1);
+    expect(sdk.clearDraft).not.toHaveBeenCalled();
+  });
+
+  it.each(["receipt", "readback", "lost"] as const)("keeps the send hold on uncertain %s", async (fault) => {
+    await offer();
+    if (fault === "receipt") sdk.post.mockResolvedValueOnce({ submission_id: id, revision: 9 });
+    else if (fault === "readback") {
+      sdk.post.mockResolvedValueOnce({ submission_id: id, revision: 8 });
+      sdk.readRetryDraft.mockResolvedValueOnce(snapshot).mockResolvedValueOnce(null);
+    } else sdk.post.mockRejectedValueOnce(new Error("Lost response"));
+    fireEvent.click(screen.getByRole("button", { name: "Prepare failed draft for retry" }));
+    await waitFor(() => expect(screen.getByText(/Retry preparation could not be verified/)).toBeTruthy());
+    act(() => input().onSubmitMessage(text));
+    expect(sdk.runAgent).toHaveBeenCalledTimes(1);
+    expect(sdk.post).toHaveBeenCalledTimes(1);
+    expect(input().value).toBe(text);
   });
 });

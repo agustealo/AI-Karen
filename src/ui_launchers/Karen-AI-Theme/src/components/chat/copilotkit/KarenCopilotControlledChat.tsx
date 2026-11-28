@@ -29,6 +29,13 @@ import { FileText, X } from "lucide-react";
 
 const MAX_INPUT_CHARS = 65536;
 const RUN_ID = /^[A-Za-z0-9_-]{1,100}$/;
+function retryIdentity(submissionId: string): { revision: number; next: string } | null {
+  const match = /^(?:draft-v1-([1-9][0-9]{0,15})|draft-v2-([1-9][0-9]{0,15})-([a-f0-9]{64}))$/.exec(submissionId);
+  if (!match) return null;
+  const revision = Number(match[1] ?? match[2]);
+  if (!Number.isSafeInteger(revision) || revision >= Number.MAX_SAFE_INTEGER - 1) return null;
+  return { revision, next: match[3] ? "draft-v2-" + (revision + 1) + "-" + match[3] : "draft-v1-" + (revision + 1) };
+}
 type StopReceipt = {
   status: "cancelling" | "cancelled";
   cancel_requested: true;
@@ -93,6 +100,8 @@ export function KarenCopilotControlledChat({
   const [finalityFeedback, setFinalityFeedback] = useState<string | null>(null);
   const [checkingFinality, setCheckingFinality] = useState(false);
   const checkingFinalityRef = useRef(false);
+  const [retryOffer, setRetryOffer] = useState<FinalityHold | null>(null);
+  const retryScope = useRef<object | null>(null);
   const observedRunId = useRef<string | null>(null);
   // Correlation only, scoped to this explicit governed SDK invocation.
   const submittedIdentity = useRef<{ conversationId: string; submissionId: string } | null>(null);
@@ -130,8 +139,12 @@ export function KarenCopilotControlledChat({
     attachments, updateAttachments,
     status: draftStatus, synced: draftSynced, failureStatus: draftFailureStatus, prepareSubmission,
     prepareRevisionSubmission, prepareAttachmentSubmission, refreshSubmittedDraft,
-    retry, discardAndReload,
+    readRetainedRetryDraft, retry, discardAndReload,
   } = useKarenPersistedDraft(conversationId);
+  useLayoutEffect(() => {
+    retryScope.current = isReady && revisionBoundSubmission && !recoveryRun && draftStatus === "ready" ? {} : null;
+    return () => { retryScope.current = null; };
+  }, [agent, conversationId, isReady, revisionBoundSubmission, attachmentDraftSubmission, recoveryRun, draftStatus]);
   const rejectedAttachmentClear = useRef<object | null>(null);
   // CAS and WebCrypto can await while verified history withdraws protocol
   // support or discovers an unresolved run. Fence that eligibility epoch.
@@ -448,6 +461,7 @@ export function KarenCopilotControlledChat({
     checkingFinalityRef.current = true;
     setCheckingFinality(true);
     setFinalityFeedback(null);
+    setRetryOffer(null);
     void (async () => {
       try {
         const result: unknown = await apiClient.get<RunStatus>(
@@ -484,6 +498,36 @@ export function KarenCopilotControlledChat({
           if (!mounted.current || finalityHoldRef.current !== hold ||
               agent.threadId !== conversationId) return;
         }
+        if (hold.submissionId && result.status !== "completed") {
+          const id = hold.submissionId;
+          const scope = retryScope.current;
+          if (!scope || !retryIdentity(id) ||
+              (id.startsWith("draft-v2-") && !attachmentDraftSubmission)) {
+            setFinalityFeedback("Retry preparation is unavailable. Sending remains blocked.");
+            return;
+          }
+          const snapshot = await readRetainedRetryDraft(id);
+          if (!mounted.current || finalityHoldRef.current !== hold || retryScope.current !== scope ||
+              agent.threadId !== conversationId) return;
+          if (!snapshot) {
+            setFinalityFeedback("The original saved draft could not be verified. Sending remains blocked.");
+            return;
+          }
+          const receipt: unknown = await apiClient.get(
+            "/api/copilotkit/agent/default/draft-retry/" + conversationId + "/" + id,
+          );
+          if (!mounted.current || finalityHoldRef.current !== hold || retryScope.current !== scope ||
+              agent.threadId !== conversationId) return;
+          if (!receipt || typeof receipt !== "object" ||
+              (receipt as Record<string, unknown>).submission_id !== id ||
+              (receipt as Record<string, unknown>).eligible !== true) {
+            setFinalityFeedback("The backend did not confirm retry eligibility. Sending remains blocked.");
+            return;
+          }
+          setRetryOffer(hold);
+          setFinalityFeedback("The failed draft can be prepared for a new submission. Preparing it will not send a message.");
+          return;
+        }
         finalityHoldRef.current = null;
         setFinalityHold(null);
         setError(null);
@@ -497,7 +541,61 @@ export function KarenCopilotControlledChat({
         if (mounted.current) setCheckingFinality(false);
       }
     })();
-  }, [agent, conversationId, refreshVerifiedHistory, refreshSubmittedDraft]);
+  }, [agent, conversationId, refreshVerifiedHistory, refreshSubmittedDraft,
+    readRetainedRetryDraft, attachmentDraftSubmission]);
+
+  const prepareFailedRetry = useCallback(() => {
+    const hold = finalityHoldRef.current;
+    const id = hold?.submissionId;
+    const identity = id ? retryIdentity(id) : null;
+    const scope = retryScope.current;
+    if (!hold || hold !== retryOffer || hold.conversationId !== conversationId ||
+        !id || !identity || !scope || (id.startsWith("draft-v2-") && !attachmentDraftSubmission) ||
+        checkingFinalityRef.current || submitPending.current || agent.isRunning ||
+        agent.threadId !== conversationId) return;
+    checkingFinalityRef.current = true;
+    setCheckingFinality(true);
+    setRetryOffer(null);
+    setFinalityFeedback(null);
+    const current = () => mounted.current && finalityHoldRef.current === hold &&
+      retryScope.current === scope && agent.threadId === conversationId && !agent.isRunning;
+    void (async () => {
+      try {
+        const snapshot = await readRetainedRetryDraft(id);
+        if (!current()) return;
+        if (!snapshot) throw new Error("Original saved draft unavailable");
+        const receipt: unknown = await apiClient.post(
+          "/api/copilotkit/agent/default/draft-retry/" + conversationId + "/" + id,
+          { submitted_text: snapshot.text.trim(), attachment_references: snapshot.attachmentReferences },
+        );
+        if (!current()) return;
+        if (!receipt || typeof receipt !== "object" ||
+            (receipt as Record<string, unknown>).submission_id !== id ||
+            (receipt as Record<string, unknown>).revision !== identity.revision + 1) {
+          throw new Error("Invalid retry receipt");
+        }
+        const retained = await readRetainedRetryDraft(identity.next);
+        if (!current()) return;
+        if (!retained || retained.text !== snapshot.text ||
+            JSON.stringify(retained.attachmentReferences) !== JSON.stringify(snapshot.attachmentReferences)) {
+          throw new Error("Retry draft readback mismatch");
+        }
+        // Only explicit preparation was authorized. The normal composer
+        // submission remains a separate user gesture and backend admission.
+        finalityHoldRef.current = null;
+        setFinalityHold(null);
+        setError(null);
+        setFinalityFeedback("Draft prepared and verified. Review it and select Send when ready.");
+      } catch {
+        if (mounted.current && finalityHoldRef.current === hold) {
+          setFinalityFeedback("Retry preparation could not be verified. Sending remains blocked. Check saved history again.");
+        }
+      } finally {
+        checkingFinalityRef.current = false;
+        if (mounted.current) setCheckingFinality(false);
+      }
+    })();
+  }, [agent, conversationId, retryOffer, readRetainedRetryDraft, attachmentDraftSubmission]);
 
   const onStop = useCallback(() => {
     if (!isReady || !agent.isRunning) return;
@@ -671,6 +769,13 @@ export function KarenCopilotControlledChat({
           ) : <p className="text-xs text-muted-foreground">
             No verified run identity was received. Reopen the conversation to check saved history and recovery status. Contact support if the outcome remains unclear.
           </p>}
+          {retryOffer === finalityHold && revisionBoundSubmission &&
+            (!finalityHold.submissionId?.startsWith("draft-v2-") || attachmentDraftSubmission) &&
+            <button type="button" disabled={checkingFinality || submitting || agent.isRunning ||
+              draftStatus !== "ready" || !draftSynced || Boolean(recoveryRun)}
+              onClick={prepareFailedRetry} className="rounded-md border border-input px-3 py-2 text-sm">
+              Prepare failed draft for retry
+            </button>}
         </section>
       )}
       {finalityFeedback && <p role="status" className="px-3 py-2 text-sm">{finalityFeedback}</p>}
