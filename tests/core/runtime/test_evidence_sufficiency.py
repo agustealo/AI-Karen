@@ -359,3 +359,167 @@ def test_semantic_value_uses_same_temporal_and_conflict_authority():
     assert value(future) is None
     assert value(future, evidence("residence_location", "Current City")) == "Current City"
     assert value(evidence("residence_location", "City A"), evidence("residence_location", "City B")) is None
+
+
+@pytest.mark.parametrize("status", ["failed", "timeout"])
+@pytest.mark.parametrize("with_candidate", [True, False])
+def test_incomplete_profile_recall_is_not_a_verified_value_or_absence(status, with_candidate):
+    from ai_karen_engine.core.context.contracts import EvidenceFactSemantics
+    from ai_karen_engine.core.memory.semantic_contract import FactCardinality
+
+    item = evidence("birthplace", "Jamaica")
+    item.fact_semantics = EvidenceFactSemantics(
+        attribute="birthplace", cardinality=FactCardinality.SINGLETON,
+    )
+    ctx = context(*([item] if with_candidate else []))
+    ctx.metadata = {
+        "memory_recall_status": "degraded", "memory_degraded": True,
+        "memory_retrieval_health": {"source_health": [
+            {"retriever": "PostgresProfileRecallRetriever", "status": status},
+            {"retriever": "PostgresRecallRetriever", "status": "success"},
+        ]},
+    }
+    result = check(ctx, "birthplace")
+    assert result.status is Status.AMBIGUOUS
+    assert result.reason == "incomplete_memory_retrieval"
+    assert not result.may_assert and result.value is None
+
+
+@pytest.mark.parametrize("health", [
+    {},
+    {"source_health": [{"retriever": "unknown", "status": "success"}]},
+    {"source_health": [
+        {"retriever": "PostgresProfileRecallRetriever", "status": "success"},
+        {"retriever": "PostgresProfileRecallRetriever", "status": "failed"},
+        {"retriever": "PostgresRecallRetriever", "status": "success"},
+    ]},
+])
+def test_unknown_or_duplicate_source_health_cannot_certify_profile(health):
+    item = evidence("birthplace", "Jamaica")
+    ctx = context(item)
+    ctx.metadata = {
+        "memory_recall_status": "degraded", "memory_degraded": True,
+        "memory_retrieval_health": health,
+    }
+    assert check(ctx, "birthplace").reason == "incomplete_memory_retrieval"
+
+
+def test_unrelated_source_failure_preserves_independently_typed_profile_only():
+    from ai_karen_engine.core.context.contracts import EvidenceFactSemantics
+    from ai_karen_engine.core.memory.semantic_contract import FactCardinality
+
+    item = evidence("birthplace", "Jamaica")
+    ctx = context(item)
+    ctx.metadata = {
+        "memory_recall_status": "degraded", "memory_degraded": True,
+        "memory_retrieval_health": {"source_health": [
+            {"retriever": "PostgresProfileRecallRetriever", "status": "success", "candidate_count": 1, "candidate_batch_complete": True},
+            {"retriever": "PostgresRecallRetriever", "status": "success"},
+            {"retriever": "PostgresProceduralRecallRetriever", "status": "failed"},
+            {"retriever": "PostgresUserStateRecallRetriever", "status": "success"},
+            {"retriever": "HybridRetrievalRouter", "status": "success"},
+        ]},
+    }
+    assert not check(ctx, "birthplace").may_assert
+    item.fact_semantics = EvidenceFactSemantics(
+        attribute="birthplace", cardinality=FactCardinality.SINGLETON,
+    )
+    assert check(ctx, "birthplace").value == "Jamaica"
+    assert check(ctx, "origin_location").reason == "incomplete_memory_retrieval"
+
+    # Successful source retrieval can still lose profile rows during fusion.
+    rows = ctx.metadata["memory_retrieval_health"]["source_health"]
+    rows[0]["candidate_count"] = 2
+    assert check(ctx, "birthplace").reason == "incomplete_memory_retrieval"
+    rows[0].pop("candidate_count")
+    assert not check(ctx, "birthplace").may_assert
+    rows[0]["candidate_count"] = 1
+
+    # The hybrid source can carry event-backed personal observations. It
+    # cannot be treated as an unrelated failure by this independent lane.
+    rows[-1]["status"] = "timeout"
+    assert not check(ctx, "birthplace").may_assert
+
+
+@pytest.mark.parametrize("summary", [True, False])
+def test_grounded_response_reports_unavailable_recall_not_missing_saved_memory(summary):
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints=(
+            {"personal_evidence_identity_summary_requested": True} if summary
+            else {"personal_evidence_attribute": "birthplace"}
+        ),
+    )
+    ctx = context(evidence("birthplace", "Jamaica"))
+    ctx.metadata = {"memory_recall_status": "failed", "memory_degraded": True}
+    ctx.unresolved_sources = ["memory"]
+    decision.cognitive_context = ctx
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "couldn't complete saved-memory retrieval" in answer
+    assert "Jamaica" not in answer
+    assert meta["evidence_sufficiency"] == "ambiguous"
+    assert meta["evidence_reason"] == "incomplete_memory_retrieval"
+
+
+def test_incomplete_saved_recall_attributes_recent_statement_without_certifying_it():
+    from ai_karen_engine.core.runtime.chat_runtime import ChatRuntime
+    from ai_karen_engine.core.runtime.execution_decision import ExecutionDecision
+
+    ctx = context()
+    ctx.authorized_sources.append("conversation")
+    ctx.requirements = SimpleNamespace(conversation_id="conversation")
+    ctx.metadata = {"memory_recall_status": "failed", "memory_degraded": True}
+    ctx.unresolved_sources = ["memory"]
+    ctx.evidence.append(ContextEvidence(
+        evidence_id="recent-name", source=EvidenceSource.CONVERSATION,
+        content="My name is Alice.",
+        scope=EvidenceScope(tenant_id="tenant", user_id="user", conversation_id="conversation"),
+        metadata={"role": "user"},
+    ))
+    decision = ExecutionDecision(
+        intent="memory.recall",
+        policy_constraints={"personal_evidence_attribute": "preferred_name"},
+    )
+    decision.cognitive_context = ctx
+    answer, meta = ChatRuntime._grounded_personal_response(
+        decision, tenant_id="tenant", user_id="user",
+    )
+    assert "couldn't complete saved-memory retrieval" in answer
+    assert meta["evidence_sufficiency"] == "ambiguous"
+    assert "Alice" in answer
+    assert "You told me in this conversation" in answer
+    assert meta["response_source"] == "authorized_conversation_evidence"
+
+
+@pytest.mark.parametrize("complete,count,expected", [
+    (True, 1, Status.SUPPORTED),
+    (False, 1, Status.AMBIGUOUS),
+    (True, 2, Status.AMBIGUOUS),
+    (None, 1, Status.AMBIGUOUS),
+])
+def test_healthy_source_does_not_certify_truncated_profile_batch(complete, count, expected):
+    from ai_karen_engine.core.context.contracts import EvidenceFactSemantics
+    from ai_karen_engine.core.memory.semantic_contract import FactCardinality
+
+    item = evidence("birthplace", "Jamaica")
+    item.fact_semantics = EvidenceFactSemantics(
+        attribute="birthplace", cardinality=FactCardinality.SINGLETON,
+    )
+    ctx = context(item)
+    ctx.metadata = {
+        "memory_recall_status": "success",
+        "memory_retrieval_health": {"source_health": [{
+            "retriever": "PostgresProfileRecallRetriever", "status": "success",
+            "candidate_count": count, "candidate_batch_complete": complete,
+        }]},
+    }
+    result = check(ctx, "birthplace")
+    assert result.status is expected
+    if expected is Status.AMBIGUOUS:
+        assert result.reason == "incomplete_memory_retrieval"
+        assert not result.may_assert

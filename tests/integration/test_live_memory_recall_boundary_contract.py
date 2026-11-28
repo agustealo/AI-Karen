@@ -20,10 +20,11 @@ from ai_karen_engine.platform.memory.postgres.ledger_models import (
     ConsentScope,
     MemoryAssertion,
     MemoryEvent,
+    ProfileFact,
 )
 
 pytestmark = [
-    pytest.mark.asyncio,
+    pytest.mark.asyncio(loop_scope="module"),
     pytest.mark.skipif(
         os.getenv("KAREN_TEST_POSTGRES_MEMORY") != "1",
         reason="requires disposable canonical PostgreSQL memory ledger",
@@ -196,3 +197,52 @@ async def test_source_and_assertion_use_one_exclusive_utc_end_and_current_consen
             await session.execute(
                 delete(ConsentScope).where(ConsentScope.scope_id == scope_id)
             )
+
+
+async def test_profile_coverage_receipt_observes_real_sql_limit_and_consent() -> None:
+    from ai_karen_engine.core.memory.types import RecallCandidateBatch
+    from ai_karen_engine.platform.memory.postgres.profile_retriever import PostgresProfileRecallRetriever
+
+    tenant, user = uuid.uuid4(), uuid.uuid4()
+    event_ids = [uuid.uuid4(), uuid.uuid4()]
+    try:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            for event_id, attribute, value in zip(
+                event_ids, ("preferred_name", "birthplace"), ("Alice", "Detroit"), strict=True,
+            ):
+                session.add(MemoryEvent(
+                    event_id=event_id, tenant_id=tenant, user_id=user,
+                    source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                    event_type="memory_persisted", consent_state="granted",
+                    payload={"content": value, "vault": {"consent_scope": "memory.write"}},
+                ))
+                await session.flush()
+                session.add(ProfileFact(
+                    fact_id=uuid.uuid4(), event_id=event_id, tenant_id=tenant,
+                    user_id=user, category="identity", attribute=attribute,
+                    value={"value": value}, source_type="chat_user",
+                ))
+
+        async def read(top_k: int) -> RecallCandidateBatch:
+            result = await PostgresProfileRecallRetriever().recall(MemoryQuery(
+                tenant_id=str(tenant), user_id=str(user), text="who am i", top_k=top_k,
+            ))
+            assert isinstance(result, RecallCandidateBatch)
+            return result
+
+        limited = await read(1)
+        assert len(limited) == 1 and limited.complete is False
+        exhaustive = await read(2)
+        assert len(exhaustive) == 2 and exhaustive.complete is True
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            event = (await session.execute(select(MemoryEvent).where(
+                MemoryEvent.event_id == event_ids[1],
+            ))).scalar_one()
+            event.consent_state = "revoked"
+        visible = await read(1)
+        assert len(visible) == 1 and visible.complete is True
+        assert visible[0].content == "preferred_name: Alice"
+    finally:
+        async with async_transaction_scope(tenant_id=str(tenant)) as session:
+            await session.execute(delete(ProfileFact).where(ProfileFact.event_id.in_(event_ids)))
+            await session.execute(delete(MemoryEvent).where(MemoryEvent.event_id.in_(event_ids)))
