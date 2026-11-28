@@ -84,9 +84,16 @@ class NativeExecutionObservation:
     finished: bool = False
     soft_attempt: bool = False
     sealed_at: float | None = None
+    registration: object | None = field(default=None, init=False, repr=False)
 
     @contextmanager
     def bind(self) -> Iterator[None]:
+        # Bind occurs at the owned worker's handoff, before any model lock/I/O.
+        if self.endpoint is not None and self.started is None:
+            try:
+                self.registration = get_health_monitor().capture_endpoint_registration(self.endpoint)
+            except Exception:
+                self.registration = None
         token = _native_observation.set(self)
         try:
             yield
@@ -111,6 +118,7 @@ class NativeExecutionObservation:
             return get_health_monitor().record_native_execution(
                 self.endpoint, operation=self.operation,
                 outcome=outcome, response_time=elapsed,
+                registration=self.registration,
             )
         except Exception:
             return False
@@ -344,9 +352,15 @@ class ProviderHealthMonitor:
             "Updated health for %s: %s", provider_id, health_info.health_status.value
         )
 
+    def capture_endpoint_registration(self, endpoint: ProviderEndpoint) -> object | None:
+        """Read the canonical registry's opaque observation fence at handoff."""
+        if self._registry is None:
+            return None
+        return self._registry.capture_endpoint_health_registration(endpoint)
+
     def record_shared_http_execution(
         self, endpoint: ProviderEndpoint, *, transport: str,
-        outcome: str, response_time: float,
+        outcome: str, response_time: float, registration: object | None,
     ) -> bool:
         """Accept only bounded observations for the still-registered shared endpoint.
 
@@ -364,14 +378,15 @@ class ProviderHealthMonitor:
             or not math.isfinite(response_time)
             or response_time < 0
             or self._registry is None
-            or self._registry.get_provider_endpoint(endpoint.provider_id) != endpoint
+            or registration is None
         ):
             return False
-        self.update_provider_health(
-            endpoint.provider_id, is_healthy=outcome == "success",
+        if not self._registry.publish_endpoint_health(
+            endpoint, registration, is_healthy=outcome == "success",
             response_time=response_time,
             error_code=None if outcome == "success" else outcome,
-        )
+        ):
+            return False
         try:
             from ai_karen_engine.platform.observability.metrics import get_metrics_collector
 
@@ -394,7 +409,7 @@ class ProviderHealthMonitor:
 
     def record_native_execution(
         self, endpoint: ProviderEndpoint | None, *, operation: str,
-        outcome: str, response_time: float,
+        outcome: str, response_time: float, registration: object | None,
     ) -> bool:
         """Observe native execution without conflating reasoning, encoder and chat health."""
         if (
@@ -429,15 +444,13 @@ class ProviderHealthMonitor:
         if (
             operation == "generation" and outcome == "success"
             and endpoint is not None and endpoint.tenant_scoped is False
-            and self._registry is not None
-            and self._registry.get_provider_endpoint(endpoint.provider_id) == endpoint
+            and self._registry is not None and registration is not None
         ):
             from ai_karen_engine.core.model_runtime.runtime_engine import EndpointProtocol
             if endpoint.protocol is EndpointProtocol.NATIVE:
-                self.update_provider_health(
-                    endpoint.provider_id, is_healthy=True, response_time=response_time,
+                return self._registry.publish_endpoint_health(
+                    endpoint, registration, is_healthy=True, response_time=response_time,
                 )
-                return True
         return False
 
     def _emit_transition_if_changed(

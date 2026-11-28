@@ -2448,9 +2448,11 @@ async def test_direct_governed_http_does_not_duplicate_transport_health(monkeypa
     from ai_karen_engine.core.model_runtime import provider_health_monitor
 
     manager, attempts, endpoint = _local_manager(monkeypatch, shared_health=True)
-    monitor = provider_health_monitor.ProviderHealthMonitor(
-        registry=SimpleNamespace(get_provider_endpoint=lambda _: endpoint),
-    )
+    from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
+
+    registry = ProviderRegistryService()
+    registry.register_provider_endpoint(endpoint)
+    monitor = registry.health_monitor
     observations = Mock(wraps=monitor.update_provider_health)
     monkeypatch.setattr(monitor, "update_provider_health", observations)
     monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
@@ -2491,9 +2493,11 @@ async def test_direct_native_observation_uses_actual_library_call_and_owned_term
         endpoint_type=ProviderEndpointType.BUILTIN_TRANSFORMERS,
         protocol=EndpointProtocol.NATIVE, runtime_engine=RuntimeEngine.TRANSFORMERS,
     )
-    monitor = provider_health_monitor.ProviderHealthMonitor(
-        registry=SimpleNamespace(get_provider_endpoint=lambda _: endpoint),
-    )
+    from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
+
+    registry = ProviderRegistryService()
+    registry.register_provider_endpoint(endpoint)
+    monitor = registry.health_monitor
     health = Mock(wraps=monitor.update_provider_health)
     monkeypatch.setattr(monitor, "update_provider_health", health)
     monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)

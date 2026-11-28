@@ -85,6 +85,7 @@ class _HttpExecutionObservation:
         self.transport = transport
         self.shared = shared and endpoint.tenant_scoped is False
         self.started: float | None = None
+        self.registration: object | None = None
         self.response_status: int | None = None
         self.connection_failed = False
         self.finished = False
@@ -93,6 +94,15 @@ class _HttpExecutionObservation:
         return self
 
     def handoff(self) -> None:
+        if self.shared:
+            try:
+                from ai_karen_engine.core.model_runtime.provider_health_monitor import (
+                    get_health_monitor,
+                )
+                self.registration = get_health_monitor().capture_endpoint_registration(self.endpoint)
+            except Exception:
+                # Evidence failure cannot change execution admission.
+                self.registration = None
         self.started = time.perf_counter()
 
     def note_http_error(self, exc: BaseException) -> None:
@@ -117,6 +127,7 @@ class _HttpExecutionObservation:
             return get_health_monitor().record_shared_http_execution(
                 self.endpoint, transport=self.transport, outcome=outcome,
                 response_time=time.perf_counter() - self.started,
+                registration=self.registration,
             )
         except Exception:
             # Observation is never a model-execution dependency.

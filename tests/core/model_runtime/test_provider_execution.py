@@ -368,8 +368,8 @@ async def test_canonical_json_transport_owns_shared_health_once(
     monkeypatch, structured, case, expected,
 ):
     from dataclasses import replace
-    from types import SimpleNamespace
     from ai_karen_engine.core.model_runtime import provider_execution, provider_health_monitor
+    from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
 
     endpoint = replace(_endpoint("ollama-local"), capabilities=("chat_completion", "tools"))
     if case == "credential_missing":
@@ -378,9 +378,9 @@ async def test_canonical_json_transport_owns_shared_health_once(
     if case == "tenant_scoped":
         endpoint = replace(endpoint, tenant_scoped=True)
     registered = replace(endpoint, base_url="http://localhost:9999/v1") if case == "registry_drift" else endpoint
-    monitor = provider_health_monitor.ProviderHealthMonitor(
-        registry=SimpleNamespace(get_provider_endpoint=lambda _: registered),
-    )
+    registry = ProviderRegistryService()
+    registry.register_provider_endpoint(registered)
+    monitor = registry.health_monitor
     observations = []
     original = monitor.update_provider_health
 

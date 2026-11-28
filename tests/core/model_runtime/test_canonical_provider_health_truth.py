@@ -9,6 +9,8 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import pytest
+
 from ai_karen_engine.core.model_runtime import provider_registry_service
 from ai_karen_engine.core.model_runtime.provider_health_monitor import (
     HealthStatus,
@@ -315,8 +317,11 @@ def test_endpoint_replacement_discards_old_health_and_keeps_registration_eligibl
     endpoint = registry.get_provider_endpoint("ollama-local")
     assert endpoint is not None
     monitor = registry.health_monitor
+    registration = monitor.capture_endpoint_registration(endpoint)
+    assert registration is not None
     assert monitor.record_shared_http_execution(
         endpoint, transport="text", outcome="success", response_time=0.1,
+        registration=registration,
     )
     monitor.record_provider_interaction("lmstudio-desktop", success=True)
     replacement = replace(endpoint, base_url="http://127.0.0.1:11435/v1")
@@ -332,10 +337,12 @@ def test_endpoint_replacement_discards_old_health_and_keeps_registration_eligibl
     # Completion against the superseded endpoint cannot restore its evidence.
     assert not monitor.record_shared_http_execution(
         endpoint, transport="text", outcome="success", response_time=0.1,
+        registration=registration,
     )
     assert monitor.get_provider_health("ollama-local").health_status is HealthStatus.UNKNOWN
     assert monitor.record_shared_http_execution(
         replacement, transport="text", outcome="success", response_time=0.2,
+        registration=monitor.capture_endpoint_registration(replacement),
     )
     assert registry.get_provider_health_snapshot("ollama-local")["status"] == "healthy"
 
@@ -399,3 +406,102 @@ def test_withdrawn_configured_endpoint_discards_observed_health(monkeypatch):
     assert registry.health_monitor.get_provider_health(configured.provider_id).health_status is HealthStatus.UNKNOWN
     monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: configured)
     assert registry.get_provider_status(configured.provider_id).health_status is HealthStatus.UNKNOWN
+
+
+@pytest.mark.parametrize("transport", ["http", "native"])
+@pytest.mark.parametrize("mutation", ["replace", "aba", "identical", "withdraw"])
+def test_transport_health_publication_is_registration_fenced(monkeypatch, transport, mutation):
+    from concurrent.futures import ThreadPoolExecutor
+    from dataclasses import replace
+    from threading import Event
+
+    from ai_karen_engine.core.model_runtime import provider_health_monitor as health
+    from ai_karen_engine.core.model_runtime.provider_execution import _HttpExecutionObservation
+
+    registry = provider_registry_service.ProviderRegistryService()
+    provider = "ollama-local" if transport == "http" else "builtin_transformers"
+    endpoint = registry.get_provider_endpoint(provider)
+    assert endpoint is not None
+    if mutation == "withdraw":
+        endpoint = replace(endpoint, metadata={
+            **endpoint.metadata, "configuration_owner": "llm_provider_config",
+        })
+        monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: endpoint)
+        registry.register_provider_endpoint(endpoint)
+    monitor = registry.health_monitor
+    monkeypatch.setattr(health, "get_health_monitor", lambda: monitor)
+
+    if transport == "http":
+        observation = _HttpExecutionObservation(endpoint, transport="text", shared=True)
+        observation.handoff()
+        observation.response_status = 200
+        finish = observation.complete
+    else:
+        native = health.NativeExecutionObservation("generation", endpoint=endpoint)
+        with native.bind(), health.observe_native_compute("generation"):
+            pass
+        def finish_native():
+            return native.finish("success")
+
+        finish = finish_native
+
+    # A real admitted handoff precedes the concurrent registration change.
+    token = monitor.capture_endpoint_registration(endpoint)
+    assert token is not None
+    entered = Event()
+    release = Event()
+    original = registry.publish_endpoint_health
+    transitions = []
+    monkeypatch.setattr(monitor, "_emit_transition_if_changed", lambda *args: transitions.append(args))
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(5), "publication barrier was not released"
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(registry, "publish_endpoint_health", blocked)
+    replacement = replace(endpoint, default_model="replacement-model")
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(finish)
+        try:
+            assert entered.wait(5), "transport did not attempt publication"
+            if mutation == "withdraw":
+                monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: None)
+                assert registry.get_provider_endpoint(provider) is None
+                monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: endpoint)
+                registry.get_provider_endpoint(provider)
+            elif mutation == "identical":
+                registry.register_provider_endpoint(replace(endpoint))
+            else:
+                registry.register_provider_endpoint(replacement)
+                if mutation == "aba":
+                    registry.register_provider_endpoint(endpoint)
+        finally:
+            release.set()
+        future.result(timeout=5)
+
+    if mutation == "identical":
+        assert len(transitions) == 1
+        assert monitor.get_provider_health(provider).health_status is HealthStatus.HEALTHY
+        assert monitor.capture_endpoint_registration(endpoint) is token
+    else:
+        assert transitions == []
+        assert monitor.get_provider_health(provider).health_status is HealthStatus.UNKNOWN
+        current = registry.get_provider_endpoint(provider)
+        assert current is not None
+        fresh = monitor.capture_endpoint_registration(current)
+        assert fresh is not None and fresh is not token
+        assert original(current, fresh, is_healthy=True, response_time=0.1)
+        assert monitor.get_provider_health(provider).health_status is HealthStatus.HEALTHY
+
+
+def test_unfenced_endpoint_observation_cannot_publish_health():
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    monitor = registry.health_monitor
+    assert not monitor.record_shared_http_execution(
+        endpoint, transport="text", outcome="success", response_time=0.1,
+        registration=None,
+    )
+    assert monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.UNKNOWN

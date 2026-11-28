@@ -135,6 +135,12 @@ class ProviderRegistryService:
             endpoint.provider_id: endpoint for endpoint in BUILTIN_PROVIDER_ENDPOINTS
         }
 
+        # Opaque per-registration evidence identity. Replacements (including
+        # A -> B -> A) receive a fresh token; identical registrations preserve it.
+        self._health_registrations: Dict[str, object] = {
+            provider_id: object() for provider_id in self._provider_endpoints
+        }
+
         # Canonical health state owner — no dependency on integrations routing
         from ai_karen_engine.core.model_runtime.provider_health_monitor import (
             ProviderHealthMonitor,
@@ -389,12 +395,40 @@ class ProviderRegistryService:
                 # Observations describe the previous registration, not a
                 # different server/model configuration sharing its ID.
                 self.health_monitor.invalidate_provider(endpoint.provider_id)
+                self._health_registrations[endpoint.provider_id] = object()
             self._provider_endpoints[endpoint.provider_id] = endpoint
             self._update_provider_status(
                 endpoint.provider_id,
                 self._endpoint_to_capabilities(endpoint),
                 bool(endpoint.api_key_env),
             )
+
+    def capture_endpoint_health_registration(self, endpoint: ProviderEndpoint) -> Optional[object]:
+        """Capture registration evidence at transport admission, never a grant."""
+        with self._lock:
+            if (
+                endpoint.tenant_scoped is not False
+                or not endpoint.enabled
+                or self.get_provider_endpoint(endpoint.provider_id) != endpoint
+            ):
+                return None
+            return self._health_registrations.get(endpoint.provider_id)
+
+    def publish_endpoint_health(
+        self, endpoint: ProviderEndpoint, registration: Optional[object], *,
+        is_healthy: bool, response_time: float, error_code: Optional[str] = None,
+    ) -> bool:
+        """Compare and publish against the same registration critical section."""
+        if registration is None:
+            return False
+        with self._lock:
+            if self.capture_endpoint_health_registration(endpoint) is not registration:
+                return False
+            self.health_monitor.update_provider_health(
+                endpoint.provider_id, is_healthy=is_healthy,
+                response_time=response_time, error_code=error_code,
+            )
+            return True
 
     @classmethod
     def canonicalize_provider_id(cls, provider_name: Optional[Any]) -> Optional[str]:
@@ -594,6 +628,7 @@ class ProviderRegistryService:
             if configured is None:
                 if existing is not None:
                     self._provider_endpoints.pop(provider_id, None)
+                    self._health_registrations.pop(provider_id, None)
                     self._provider_status_cache.pop(provider_id, None)
                     self.health_monitor.invalidate_provider(provider_id)
                 return None

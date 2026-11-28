@@ -477,9 +477,11 @@ async def test_sse_transport_owns_terminal_health_not_delta_delivery(monkeypatch
     from ai_karen_engine.core.model_runtime import provider_health_monitor
 
     endpoint = _endpoint()
-    monitor = provider_health_monitor.ProviderHealthMonitor(
-        registry=SimpleNamespace(get_provider_endpoint=lambda _: endpoint),
-    )
+    from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
+
+    registry = ProviderRegistryService()
+    registry.register_provider_endpoint(endpoint)
+    monitor = registry.health_monitor
     observations = []
     original = monitor.update_provider_health
 
