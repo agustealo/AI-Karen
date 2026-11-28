@@ -524,3 +524,67 @@ async def test_invalid_operation_shape_denied_before_admission(operation, option
         )
     assert not store.calls
     assert not kernel.calls
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scenario", ["valid", "unbound", "revoked", "forged_result"])
+async def test_runtime_source_host_uses_only_pinned_evidence(monkeypatch, scenario):
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
+
+    auth = plan(resource_scope={"attachment_references": REFS})
+    meter = ExecutionBudgetMeter(auth.budget)
+    meter.start()
+    runtime = ChatExecutionContext(
+        user_id=OWNER, tenant_id=TENANT, session_id="session",
+        correlation_id="corr", request_id="chat-request", roles=["user"],
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "is_runtime_model_plan_authorized",
+        lambda self, p, m: self is runtime and p is auth and m is meter,
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "original_runtime_model_plan",
+        lambda self, m: auth if self is runtime and m is meter else None,
+    )
+    monkeypatch.setattr(ChatExecutionContext, "require_runtime_attachment_read_permission", lambda self: None)
+    runtime.bind_runtime_attachment_scope(auth, meter, REFS)
+    runtime.bind_runtime_attachment_documents(auth, meter, [
+        VerifiedArtifactText(FILE_ID, TENANT, OWNER, "notes.txt", "text/plain", DIGEST, TEXT)
+    ])
+    ctx = context(
+        conversation_id=runtime.conversation_id,
+        resource_scope={"attachment_references": REFS},
+        audit_context={"user_roles": ["user"]},
+    )
+    if scenario != "unbound":
+        ctx.bind_runtime_authority(runtime, auth, meter, "content-intelligence")
+    checks = 0
+
+    async def revalidate(self, **kwargs):
+        nonlocal checks
+        checks += 1
+        if scenario == "revoked" and checks > 1:
+            raise PermissionError("session_revoked")
+
+    monkeypatch.setattr(ChatExecutionContext, "revalidate_runtime_attachment_session", revalidate)
+    kernel = Kernel()
+    if scenario == "forged_result":
+        kernel = TamperingKernel(lambda payload: payload["documents"][0].update({"sha256": "0" * 64}))
+    if scenario == "valid":
+        result = await ContentSourceHost.execute_runtime_text(
+            kernel=kernel, context=ctx, plan=auth, operation="analyze",
+        )
+        assert result["documents"][0]["sha256"] == DIGEST
+        assert len(kernel.calls) == 1
+        assert kernel.calls[0][1].payload["documents"] == [
+            {"id": FILE_ID, "name": "notes.txt", "text": TEXT}
+        ]
+        assert kernel.calls[0][1].authorized_plan is auth
+        assert checks == 2
+    else:
+        with pytest.raises((PermissionError, RuntimeError)):
+            await ContentSourceHost.execute_runtime_text(
+                kernel=kernel, context=ctx, plan=auth, operation="analyze",
+            )
+        assert len(kernel.calls) == (0 if scenario == "unbound" else 1)

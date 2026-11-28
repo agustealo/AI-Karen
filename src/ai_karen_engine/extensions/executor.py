@@ -29,6 +29,8 @@ import asyncio
 import logging
 import time
 import uuid
+from copy import deepcopy
+from dataclasses import replace
 from typing import Any, Callable, Dict, List, Optional
 
 from ai_karen_engine.core.runtime.contracts import (
@@ -217,11 +219,26 @@ class ExtensionExecutionService:
 
         try:
             runtime_authority = context.runtime_authority(plugin_id)
-            if runtime_authority is not None and (
+            runtime_content = plugin_id == "content-intelligence" and (
+                runtime_authority is not None or bool(plan.resource_scope)
+                or bool(context.resource_scope)
+            )
+            if runtime_content:
+                from ai_karen_engine.extensions.content_intelligence_sources import (
+                    validate_runtime_content_payload,
+                )
+                if (
+                    admission_only or capability != "execute"
+                    or runtime_authority is None or runtime_authority[0] is not plan
+                ):
+                    raise PermissionError("extension_runtime_authority_invalid")
+                request = replace(request, payload=deepcopy(request.payload))
+                validate_runtime_content_payload(context, plan, request.payload)
+            elif runtime_authority is not None and (
                 plugin_id != "intelligent-search" or runtime_authority[0] is not plan
             ):
                 raise PermissionError("extension_runtime_authority_invalid")
-        except PermissionError:
+        except (PermissionError, ValueError, TypeError):
             return self._fail_with_provenance(
                 request, start, execution_id,
                 "extension_runtime_authority_invalid",
@@ -473,6 +490,28 @@ class ExtensionExecutionService:
                 data_classification=data_classification,
             )
 
+        if runtime_content:
+            try:
+                from ai_karen_engine.extensions.content_intelligence_sources import (
+                    revalidate_runtime_content_session,
+                    validate_runtime_content_payload,
+                )
+                await revalidate_runtime_content_session(context, plan)
+                validate_runtime_content_payload(context, plan, request.payload)
+            except (PermissionError, ValueError, TypeError, TimeoutError):
+                return self._fail_with_provenance(
+                    request, start, execution_id,
+                    "extension_runtime_authority_invalid",
+                    "Content execution authority or evidence changed",
+                    trust_tier, result_trust, data_classification,
+                )
+            if runtime_authority is None or not await runtime_authority[1].reserve_tool_call():
+                return self._fail_with_provenance(
+                    request, start, execution_id,
+                    "budget_exhausted", "Execution budget exhausted",
+                    trust_tier, result_trust, data_classification,
+                )
+
         timeout_ms = self._get_timeout(request, manifest, capability_obj)
         if runtime_authority is not None:
             try:
@@ -545,6 +584,22 @@ class ExtensionExecutionService:
                 result_trust,
                 data_classification,
             )
+
+        if runtime_content:
+            try:
+                from ai_karen_engine.extensions.content_intelligence_sources import (
+                    revalidate_runtime_content_session,
+                    validate_runtime_content_payload,
+                )
+                await revalidate_runtime_content_session(context, plan)
+                validate_runtime_content_payload(context, plan, request.payload)
+            except (PermissionError, ValueError, TypeError, TimeoutError):
+                return self._fail_with_provenance(
+                    request, start, execution_id,
+                    "extension_runtime_authority_invalid",
+                    "Content execution authority or evidence changed",
+                    trust_tier, result_trust, data_classification,
+                )
 
         # A cancellation-resistant handler can return after wait_for's deadline.
         # Recheck the original grant and clock before publishing any success.

@@ -4,6 +4,7 @@ Host-only composition. RuntimePolicy and the extension kernel remain authoritati
 """
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import logging
 import uuid
@@ -200,6 +201,88 @@ def _validate_source_output(
     return output
 
 
+def _runtime_source_documents(
+    context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+) -> tuple[list[dict[str, str]], list[dict[str, str]]]:
+    """Project only already-admitted owner evidence; never read storage here."""
+    runtime_context, _ = context.runtime_attachment_context(PLUGIN, plan)
+    if (
+        not _uuid(context.tenant_id) or not _uuid(context.user_id)
+        or not {PLUGIN, "data:read"}.issubset(plan.allowed_capabilities)
+        or not {PLUGIN, "data:read"}.issubset(context.allowed_capabilities)
+        or context.audit_context.get("user_roles") != runtime_context.roles
+    ):
+        raise PermissionError("content_source_authorization_required")
+    records = runtime_context.runtime_attachment_evidence()
+    references = [
+        {"source_id": record.artifact_id, "revision": record.sha256}
+        for record in records
+    ]
+    if references != plan.resource_scope.get("attachment_references"):
+        raise PermissionError("content_source_reference_invalid")
+    _validate_source_operation(
+        "analyze", references, query=None, left_id=None, right_id=None,
+    )
+    documents: list[dict[str, str]] = []
+    total = 0
+    for record in records:
+        if (
+            record.tenant_id != context.tenant_id or record.user_id != context.user_id
+            or record.mime_type != "text/plain"
+            or not 1 <= len(record.filename) <= 256
+            or not 1 <= len(record.text) <= 100_000
+            or hashlib.sha256(record.text.encode("utf-8")).hexdigest() != record.sha256
+        ):
+            raise PermissionError("content_source_evidence_invalid")
+        total += len(record.text)
+        if total > 300_000:
+            raise ValueError("content_source_budget_exceeded")
+        documents.append({"id": record.artifact_id, "name": record.filename, "text": record.text})
+    return references, documents
+
+
+def validate_runtime_content_payload(
+    context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+    payload: dict[str, Any],
+) -> None:
+    """The kernel verifies every submitted byte against pinned chat evidence."""
+    references, documents = _runtime_source_documents(context, plan)
+    if not isinstance(payload, dict) or payload.get("documents") != documents:
+        raise PermissionError("content_source_evidence_invalid")
+    operation = payload.get("operation")
+    if not isinstance(operation, str):
+        raise ValueError("content_source_operation_invalid")
+    _validate_source_operation(
+        operation, references, query=payload.get("query"),
+        left_id=payload.get("left_id"), right_id=payload.get("right_id"),
+    )
+    fields = {"operation", "documents"}
+    if operation == "search":
+        fields.add("query")
+    elif operation == "compare":
+        fields.update({"left_id", "right_id"})
+    if set(payload) != fields:
+        raise ValueError("content_source_operation_invalid")
+
+
+async def revalidate_runtime_content_session(
+    context: ExtensionExecutionContext, plan: AuthorizedExecutionPlan,
+) -> None:
+    """Use the same original clock and durable session witness, without renewal."""
+    runtime_context, meter = context.runtime_attachment_context(PLUGIN, plan)
+    remaining = await meter.remaining_admitted_duration_ms()
+    if remaining <= 0:
+        raise PermissionError("content_source_execution_deadline")
+    async with asyncio.timeout(remaining / 1000):
+        await runtime_context.revalidate_runtime_attachment_session()
+    current_context, current_meter = context.runtime_attachment_context(PLUGIN, plan)
+    if (
+        current_context is not runtime_context or current_meter is not meter
+        or await meter.remaining_admitted_duration_ms() <= 0
+    ):
+        raise PermissionError("content_source_authorization_required")
+
+
 class ContentSourceHost:
     """Bridge a trusted authorized plan to the existing owner-text repository."""
 
@@ -259,6 +342,50 @@ class ContentSourceHost:
         if getattr(admission, "status", None) != "admitted":
             raise PermissionError("content_source_kernel_admission_denied")
         ContentSourceHost._require_standalone_owner_access(context, plan)
+
+    @staticmethod
+    async def execute_runtime_text(
+        *, kernel: Kernel, context: ExtensionExecutionContext,
+        plan: AuthorizedExecutionPlan, operation: str, query: str | None = None,
+        left_id: str | None = None, right_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Invoke only the original chat grant; no new policy or storage read."""
+        references, documents = _runtime_source_documents(context, plan)
+        _validate_source_operation(
+            operation, references, query=query, left_id=left_id, right_id=right_id,
+        )
+        payload: dict[str, Any] = {"operation": operation, "documents": documents}
+        if operation == "search":
+            payload["query"] = query
+        elif operation == "compare":
+            payload.update({"left_id": left_id, "right_id": right_id})
+        authorized = _snapshot_source_documents(documents)
+        await revalidate_runtime_content_session(context, plan)
+        validate_runtime_content_payload(context, plan, payload)
+        record = kernel.get_record(PLUGIN)
+        if (
+            not isinstance(record, dict) or record.get("status") != "enabled"
+            or record.get("dependencies_resolved") is not True
+        ):
+            raise PermissionError("content_source_plugin_disabled")
+        _, meter = context.runtime_attachment_context(PLUGIN, plan)
+        remaining = await meter.remaining_admitted_duration_ms()
+        if remaining <= 0:
+            raise PermissionError("content_source_execution_deadline")
+        async with asyncio.timeout(remaining / 1000):
+            # The executor owns the single reservation and repeats the byte check.
+            result = await kernel.execute(ExtensionExecutionRequest(
+                plugin_id=PLUGIN, capability="execute", payload=payload,
+                context=context, authorized_plan=plan,
+            ))
+            if getattr(result, "status", None) != "success":
+                raise PermissionError("content_source_execution_denied")
+            output = _validate_source_output(
+                getattr(result, "payload", None), operation=operation,
+                authorized=authorized, query=query, left_id=left_id, right_id=right_id,
+            )
+            await revalidate_runtime_content_session(context, plan)
+            return output
 
     async def execute_owner_text(
         self, *, context: ExtensionExecutionContext,

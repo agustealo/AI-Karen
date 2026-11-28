@@ -335,6 +335,20 @@ class ExtensionExecutionContext:
             raise PermissionError("extension_runtime_authority_invalid")
         return plan, meter
 
+    def runtime_attachment_context(self, plugin_id: str, plan: Any) -> tuple[Any, Any]:
+        """Expose the pinned chat owner only for its exact original attachment grant."""
+        authority = self.runtime_authority(plugin_id)
+        if authority is None or authority[0] is not plan:
+            raise PermissionError("extension_runtime_authority_invalid")
+        runtime_context = self.__dict__["_runtime_authority"][1]
+        meter = authority[1]
+        if (
+            runtime_context.original_runtime_model_plan(meter) is not plan
+            or not runtime_context.has_runtime_attachment_scope()
+        ):
+            raise PermissionError("extension_runtime_authority_invalid")
+        return runtime_context, meter
+
     @property
     def is_budget_exhausted(self) -> bool:
         """Check if execution budget is exhausted."""
