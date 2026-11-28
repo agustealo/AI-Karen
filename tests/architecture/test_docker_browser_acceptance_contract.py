@@ -103,7 +103,7 @@ def test_browser_is_hosted_and_credentials_are_only_available_to_proof_step() ->
     assert "GH_TOKEN: " in browser
     assert "gh api" in browser and "branches/main" in browser
     assert "VERCEL_TOKEN" not in browser
-    assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in browser
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET:" not in browser
 
     job_scope = browser.split("\n    steps:", 1)[0]
     proof = browser.split(
@@ -189,7 +189,7 @@ def test_signed_docker_specialist_reuses_host_chain_and_private_gate() -> None:
         assert browser.count(binding) == expected_bindings
         assert browser.count(name) == 2 * expected_bindings
         assert name not in before and name not in after
-    assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in browser
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET:" not in browser
     assert "upload-artifact" not in browser
     shell = (ROOT / "scripts/ci/run_specialist_browser_acceptance.sh").read_text()
     assert '[[ -v VERCEL_AUTOMATION_BYPASS_SECRET ]]' in shell
@@ -227,7 +227,8 @@ def test_signed_docker_ordinary_specialist_is_explicit_and_step_scoped() -> None
     assert "PARTICIPATION_RUN_ID" not in proof
     assert browser.count("python -m scripts.ci.verify_backend_target") == 2
     assert "upload-artifact" not in browser
-    assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in browser
+    assert "VERCEL_AUTOMATION_BYPASS_SECRET:" not in browser
+
 
 def test_signed_docker_kexp_reuses_exact_host_chain_and_scoped_approval() -> None:
     workflow = WORKFLOW.read_text()
@@ -249,6 +250,7 @@ def test_signed_docker_kexp_reuses_exact_host_chain_and_scoped_approval() -> Non
         assert variant in proof
     assert 'test "$KAREN_KEXP_BROWSER_APPROVED" = true' in proof
     assert 'test "$KAREN_SANITIZED_ACCOUNT" = true' in proof
+    assert 'if [[ -v VERCEL_AUTOMATION_BYPASS_SECRET ]]; then exit 2; fi' in proof
     assert "KEXP-A7-ATTACHED-CONTENT:" in proof
     assert "CK-07F3 operator-approved real native stop" in proof
     assert "--workers=1 --reporter=list --retries=0 --forbid-only" in proof
