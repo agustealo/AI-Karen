@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -142,8 +143,21 @@ def test_derived_recall_requires_valid_canonical_source_event() -> None:
         "event_source.py",
     ):
         adapter = _text(base + module)
-        assert "from .consent_filter import recallable_memory_event" in adapter
-        assert "recallable_memory_event(" in adapter
+        tree = ast.parse(adapter)
+        assert any(
+            isinstance(node, ast.ImportFrom)
+            and node.level == 1
+            and node.module == "consent_filter"
+            and any(alias.name == "recallable_memory_event" and alias.asname is None
+                    for alias in node.names)
+            for node in ast.walk(tree)
+        ), module
+        assert any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "recallable_memory_event"
+            for node in ast.walk(tree)
+        ), module
 
 
 def test_legacy_ram_goal_and_prospective_authorities_are_retired() -> None:
