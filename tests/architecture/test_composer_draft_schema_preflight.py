@@ -41,3 +41,17 @@ def test_preflight_is_read_only_and_never_echoes_credentials() -> None:
     ):
         assert forbidden not in statements
     assert "echo ${DATABASE_URL}" not in script
+
+def test_preflight_requires_causal_retry_ledger_contract() -> None:
+    script = PREFLIGHT.read_text(encoding="utf-8")
+    assert "to_regclass('public.runtime_chat_runs')" in script
+    assert "runtime_chat_run_scoped_execution" in script
+    assert "chat_retry_ledger_security_missing" in script
+    assert "retry_prepared_revision" in script and "retry_prepared_at" in script
+    assert "ck_runtime_chat_retry_receipt" in script and "convalidated" in script
+    assert "chat_retry_receipt_contract_missing" in script
+    for privilege in ("SELECT", "UPDATE"):
+        assert f"has_table_privilege(current_user, runs, '{privilege}')" in script
+    smoke = (ROOT / "scripts/ci/production-first-boot-smoke.sh").read_text(encoding="utf-8")
+    assert "bash -s < scripts/deploy/verify-composer-draft-schema.sh" in smoke
+    assert smoke.index("bash -s < scripts/deploy/verify-composer-draft-schema.sh") < smoke.index('echo "[smoke] booting production API image"')
