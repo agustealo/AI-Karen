@@ -765,6 +765,7 @@ async def test_runtime_bound_extension_uses_original_deadline(
     [
         ("valid", None, 1),
         ("forged_digest", "invalid_output", 1),
+        ("output_alias", None, 1),
         ("mutated_query", "invalid_output", 1),
         ("substituted_text", "extension_runtime_authority_invalid", 0),
         ("unbound", "extension_runtime_authority_invalid", 0),
@@ -822,10 +823,13 @@ async def test_direct_runtime_document_executor_enforces_lineage(
     if scenario != "unbound":
         context.bind_runtime_authority(runtime, plan, meter, plugin)
     checks = 0
+    returned = {}
 
     async def revalidate(self, **kwargs):
         nonlocal checks
         checks += 1
+        if scenario == "output_alias" and checks > 1:
+            returned["documents"][0]["sha256"] = "0" * 64
         if scenario == "revoked" and checks > 1:
             raise PermissionError("session_revoked")
 
@@ -838,14 +842,15 @@ async def test_direct_runtime_document_executor_enforces_lineage(
                 payload["query"] = "different"
                 return {"operation": "search", "persisted": False,
                         "query": "different", "matches": []}
-            return {
+            returned.update({
                 "operation": "analyze", "persisted": False,
                 "documents": [{
                     "id": source, "name": "notes.txt", "characters": len(body),
                     "sha256": "0" * 64 if scenario == "forged_digest" else digest,
                     "top_terms": [],
                 }],
-            }
+            })
+            return returned
 
     class DocumentRegistry(FakeRegistry):
         def get(self, plugin_id):
