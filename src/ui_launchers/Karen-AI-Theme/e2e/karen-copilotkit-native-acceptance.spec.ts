@@ -9,6 +9,14 @@ import type { APIRequestContext } from "@playwright/test";
 test.use({ trace: "off", screenshot: "off", video: "off" });
 
 const required = process.env.KAREN_COPILOTKIT_NATIVE_ACCEPTANCE_REQUIRED === "true";
+const retryRequired = process.env.KAREN_KEXP_RETRY_ACCEPTANCE_REQUIRED === "true";
+if (retryRequired && (!required ||
+    process.env.KAREN_COPILOTKIT_LIVE_STOP_REQUIRED !== "true" ||
+    process.env.KAREN_SANITIZED_ACCOUNT !== "true" ||
+    process.env.KAREN_SEARCH_ACCEPTANCE_PLATFORM !== "docker" ||
+    !/^[0-9a-f]{40}$/.test(process.env.KAREN_CHAT_BOOT_REVISION || ""))) {
+  throw new Error("KEXP retry proof requires approved signed Docker native acceptance, exact revision, sanitized account and explicit live Stop opt-in");
+}
 const email = process.env.KAREN_UX_EMAIL;
 const password = process.env.KAREN_UX_PASSWORD;
 const conversationId = process.env.KAREN_HISTORY_CONVERSATION_ID;
@@ -519,8 +527,17 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
     throw new Error("Live Stop requires a distinct valid, disposable owned conversation UUID");
   }
   if (!email || !password) throw new Error("Approved sanitized sign-in required");
-  test.setTimeout(240000);
+  test.setTimeout(retryRequired ? 360000 : 240000);
   await signInApprovedKaren(page, email, password);
+
+  const inferenceRequests: string[] = [];
+  const retryMutations: string[] = [];
+  if (retryRequired) page.context().on("request", request => {
+    const pathname = new URL(request.url()).pathname;
+    if (request.method() !== "POST") return;
+    if (isInferenceRequest(request.url())) inferenceRequests.push(pathname);
+    if (pathname.startsWith("/api/copilotkit/agent/default/draft-retry/")) retryMutations.push(pathname);
+  });
 
   const capabilities = await page.request.get("/api/chat/ag-ui/capabilities");
   expect(capabilities.status()).toBe(200);
@@ -570,7 +587,9 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   );
   await composer.press("Enter");
   const runRequest = await submitted;
-  const payload = runRequest.postDataJSON() as { threadId: string; runId: string };
+  const payload = runRequest.postDataJSON() as {
+    threadId: string; runId: string; messages?: Array<{ id: string; role: string }>;
+  };
   expect(payload.threadId).toBe(dedicatedThread);
   expect(RUN_ID.test(payload.runId), "Observe a real SDK-issued run identity").toBe(true);
 
@@ -659,6 +678,82 @@ test("CK-07F3 operator-approved real native stop confirms the durable worker out
   expect(persisted.messages.filter(m => m.role === "assistant"),
     "Cancelled run must not create a falsely completed assistant transcript")
     .toEqual([]);
+  if (retryRequired) {
+    // This is a real ledger-bound submission, not a generated test identity.
+    const submissionId = payload.messages?.filter(message => message.role === "user").at(-1)?.id;
+    expect(submissionId).toMatch(/^draft-v1-[1-9][0-9]{0,15}$/);
+    if (!submissionId) throw new Error("Missing governed original submission identity");
+    const revision = Number(submissionId.slice("draft-v1-".length));
+    expect(Number.isSafeInteger(revision) && revision < Number.MAX_SAFE_INTEGER - 1).toBe(true);
+    const readDraft = async () => {
+      const result = await page.request.get(draftUrl);
+      expect(result.status()).toBe(200);
+      return await result.json() as {
+        text: string; revision: number;
+        attachment_references: Array<{ source_id: string; revision: string }>;
+      };
+    };
+    const retained = { text: prompt, revision, attachment_references: [] };
+    await expect.poll(readDraft, { timeout: 20000 }).toMatchObject(retained);
+    const statusPath = "/api/copilotkit/agent/default/submissions/" +
+      dedicatedThread + "/" + submissionId + "/status";
+    const statusReceipt = await page.request.get(statusPath);
+    expect(statusReceipt.status()).toBe(200);
+    expect(await statusReceipt.json()).toMatchObject({
+      runId: payload.runId, submissionId, status: "cancelled",
+      cancel_requested: true, cancellation_confirmed: true,
+    });
+    const retryPath = "/api/copilotkit/agent/default/draft-retry/" +
+      dedicatedThread + "/" + submissionId;
+    const eligible = await page.request.get(retryPath);
+    expect(eligible.status()).toBe(200);
+    expect(await eligible.json()).toEqual({
+      submission_id: submissionId, eligible: true,
+      prepared_revision: null, prepared_current: false,
+    });
+
+    // Reload removes transient component holds. Recover through the actual
+    // saved draft and owner-scoped ledger; no second run may be started.
+    await page.reload();
+    await expect(native).toBeVisible({ timeout: 30000 });
+    await expect(composer).toHaveValue(prompt);
+    const discover = native.getByRole("button", { name: "Check saved draft recovery", exact: true });
+    await expect(discover).toBeEnabled();
+    await discover.click();
+    const check = native.getByRole("button", { name: "Check run status and saved history", exact: true });
+    await expect(check).toBeEnabled();
+    await check.click();
+    const prepare = native.getByRole("button", { name: "Prepare failed draft for retry", exact: true });
+    await expect(prepare).toBeEnabled({ timeout: 30000 });
+    expect(retryMutations).toEqual([]);
+    expect(inferenceRequests).toEqual(["/api/copilotkit/agent/default/run"]);
+    expect(await readDraft()).toMatchObject(retained);
+    const preparedResponse = page.waitForResponse(response =>
+      response.request().method() === "POST" && new URL(response.url()).pathname === retryPath,
+      { timeout: 30000 });
+    await prepare.click();
+    const prepared = await preparedResponse;
+    expect(prepared.status()).toBe(200);
+    expect(await prepared.json()).toEqual({ submission_id: submissionId, revision: revision + 1 });
+    await expect(native).toContainText("Draft prepared and verified. Review it and select Send when ready.");
+    await expect(composer).toHaveValue(prompt);
+    expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
+    const causal = await page.request.get(retryPath);
+    expect(causal.status()).toBe(200);
+    expect(await causal.json()).toEqual({
+      submission_id: submissionId, eligible: false,
+      prepared_revision: revision + 1, prepared_current: true,
+    });
+    await page.reload();
+    await expect(composer).toHaveValue(prompt, { timeout: 30000 });
+    expect(await readDraft()).toMatchObject({ ...retained, revision: revision + 1 });
+    expect(inferenceRequests).toEqual(["/api/copilotkit/agent/default/run"]);
+    expect(retryMutations).toEqual([retryPath]);
+    const after = await page.request.get(prefix + "/messages");
+    expect(after.status()).toBe(200);
+    expect(await after.json()).toMatchObject({ threadId: dedicatedThread, messages: persisted.messages });
+    // No successor execution or cleanup; preserve actual evidence.
+  }
   // The disposable conversation is intentionally retained as audit evidence.
   // No user-facing fixture or production message is ever deleted as cleanup.
 });
