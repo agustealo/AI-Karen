@@ -16,6 +16,7 @@ on:
       - "scripts/ci/start-postgres-container.sh"
       - "scripts/deploy/database-backup.sh"
       - "scripts/deploy/postgres-recovery-client.sh"
+      - "scripts/deploy/database-recovery-cutoff.sh"
       - "scripts/deploy/database-restore.sh"
       - "tests/core/memory/**"
       - "tests/platform/memory/**"

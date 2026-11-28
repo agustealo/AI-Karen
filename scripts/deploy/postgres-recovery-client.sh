@@ -8,7 +8,7 @@ select_postgres_recovery_client() {
   local probe="psql" server_num server_major version version_major
   local client_dir="${KAREN_POSTGRES_BIN_DIR:-}"
 
-  if [[ "$tool" != "pg_dump" && "$tool" != "pg_restore" ]]; then
+  if [[ "$tool" != "pg_dump" && "$tool" != "pg_restore" && "$tool" != "psql" ]]; then
     echo "error: unsupported PostgreSQL recovery client" >&2
     return 1
   fi
