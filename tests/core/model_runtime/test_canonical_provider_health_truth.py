@@ -312,6 +312,7 @@ def test_aggregate_health_preserves_all_five_states_and_observation_time(monkeyp
 
 def test_endpoint_replacement_discards_old_health_and_keeps_registration_eligible():
     from dataclasses import replace
+    from ai_karen_engine.core.model_runtime.provider_execution import _resolve_base_url
 
     registry = provider_registry_service.ProviderRegistryService()
     endpoint = registry.get_provider_endpoint("ollama-local")
@@ -321,7 +322,7 @@ def test_endpoint_replacement_discards_old_health_and_keeps_registration_eligibl
     assert registration is not None
     assert monitor.record_shared_http_execution(
         endpoint, transport="text", outcome="success", response_time=0.1,
-        registration=registration,
+        registration=registration, wire_base_url=_resolve_base_url(endpoint),
     )
     monitor.record_provider_interaction("lmstudio-desktop", success=True)
     replacement = replace(endpoint, base_url="http://127.0.0.1:11435/v1")
@@ -337,12 +338,13 @@ def test_endpoint_replacement_discards_old_health_and_keeps_registration_eligibl
     # Completion against the superseded endpoint cannot restore its evidence.
     assert not monitor.record_shared_http_execution(
         endpoint, transport="text", outcome="success", response_time=0.1,
-        registration=registration,
+        registration=registration, wire_base_url=_resolve_base_url(endpoint),
     )
     assert monitor.get_provider_health("ollama-local").health_status is HealthStatus.UNKNOWN
     assert monitor.record_shared_http_execution(
         replacement, transport="text", outcome="success", response_time=0.2,
         registration=monitor.capture_endpoint_registration(replacement),
+        wire_base_url=_resolve_base_url(replacement),
     )
     assert registry.get_provider_health_snapshot("ollama-local")["status"] == "healthy"
 
@@ -416,7 +418,7 @@ def test_transport_health_publication_is_registration_fenced(monkeypatch, transp
     from threading import Event
 
     from ai_karen_engine.core.model_runtime import provider_health_monitor as health
-    from ai_karen_engine.core.model_runtime.provider_execution import _HttpExecutionObservation
+    from ai_karen_engine.core.model_runtime.provider_execution import _HttpExecutionObservation, _resolve_base_url
 
     registry = provider_registry_service.ProviderRegistryService()
     provider = "ollama-local" if transport == "http" else "builtin_transformers"
@@ -433,7 +435,7 @@ def test_transport_health_publication_is_registration_fenced(monkeypatch, transp
 
     if transport == "http":
         observation = _HttpExecutionObservation(endpoint, transport="text", shared=True)
-        observation.handoff()
+        observation.handoff(_resolve_base_url(endpoint))
         observation.response_status = 200
         finish = observation.complete
     else:
@@ -502,6 +504,55 @@ def test_unfenced_endpoint_observation_cannot_publish_health():
     monitor = registry.health_monitor
     assert not monitor.record_shared_http_execution(
         endpoint, transport="text", outcome="success", response_time=0.1,
-        registration=None,
+        registration=None, wire_base_url=endpoint.base_url,
     )
     assert monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.UNKNOWN
+
+
+
+def test_wire_destination_rechecked_inside_registry_publication(monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    from ai_karen_engine.core.model_runtime import provider_health_monitor as health
+    from ai_karen_engine.core.model_runtime.provider_execution import _HttpExecutionObservation
+
+    old_url = "http://localhost:11434/v1"
+    new_url = "http://localhost:11435/v1"
+    monkeypatch.setenv("OLLAMA_BASE_URL", old_url)
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    monitor = registry.health_monitor
+    monkeypatch.setattr(health, "get_health_monitor", lambda: monitor)
+    observation = _HttpExecutionObservation(endpoint, transport="text", shared=True)
+    observation.handoff(old_url)
+    assert observation.registration is not None
+    observation.response_status = 200
+    entered, release = Event(), Event()
+    original = registry.publish_endpoint_health
+
+    def blocked(*args, **kwargs):
+        entered.set()
+        assert release.wait(5)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(registry, "publish_endpoint_health", blocked)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(observation.complete)
+        try:
+            assert entered.wait(5)
+            monkeypatch.setenv("OLLAMA_BASE_URL", new_url)
+        finally:
+            release.set()
+        future.result(timeout=5)
+    assert monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.UNKNOWN
+    assert monitor.capture_endpoint_registration(endpoint, wire_base_url=old_url) is None
+    fresh = monitor.capture_endpoint_registration(endpoint, wire_base_url=new_url)
+    assert fresh is not None
+    assert not monitor.record_shared_http_execution(
+        endpoint, transport="text", outcome="success", response_time=0.1,
+        registration=fresh, wire_base_url=None,
+    )
+    assert original(endpoint, fresh, is_healthy=True, response_time=0.1, wire_base_url=new_url)
+    assert monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.HEALTHY

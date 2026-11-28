@@ -472,11 +472,15 @@ async def test_native_sse_never_accepts_redirect_response_as_completion(monkeypa
     ("success", "success"), ("incomplete", "invalid_provider_response"),
     ("server_error", "http_server_error"), ("rate_limit", None),
     ("consumer_close", None),
+    ("wire_before_handoff", None), ("wire_after_handoff", None),
+    ("wire_server_error", None),
 ])
 async def test_sse_transport_owns_terminal_health_not_delta_delivery(monkeypatch, case, expected):
-    from ai_karen_engine.core.model_runtime import provider_health_monitor
+    from ai_karen_engine.core.model_runtime import provider_execution, provider_health_monitor
 
     endpoint = _endpoint()
+    if case.startswith("wire_"):
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
 
     registry = ProviderRegistryService()
@@ -495,9 +499,25 @@ async def test_sse_transport_owns_terminal_health_not_delta_delivery(monkeypatch
     body = _chunk("Verified text") + _chunk(None, finish="stop")
     if case != "incomplete":
         body += "data: [DONE]\n\n"
-    _transport_client(monkeypatch, lambda _: httpx.Response(
-        code, headers={"content-type": "text/event-stream"}, content=body.encode(),
-    ))
+    def respond(request):
+        if case.startswith("wire_"):
+            assert str(request.url) == "http://localhost:11434/v1/chat/completions"
+        if case in {"wire_after_handoff", "wire_server_error"}:
+            monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11435/v1")
+        return httpx.Response(
+            503 if case == "wire_server_error" else code,
+            headers={"content-type": "text/event-stream"}, content=body.encode(),
+        )
+
+    _transport_client(monkeypatch, respond)
+    if case == "wire_before_handoff":
+        original_client = provider_execution._provider_http_client
+
+        def changed_client(timeout):
+            monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11435/v1")
+            return original_client(timeout)
+
+        monkeypatch.setattr(provider_execution, "_provider_http_client", changed_client)
     if case == "consumer_close":
         stream = stream_provider_endpoint(
             endpoint, messages=[], model="smollm2:135m",
@@ -506,7 +526,7 @@ async def test_sse_transport_owns_terminal_health_not_delta_delivery(monkeypatch
         assert (await anext(stream)).kind == "delta"
         assert not observations
         await stream.aclose()
-    elif case == "success":
+    elif case in {"success", "wire_before_handoff", "wire_after_handoff"}:
         events = await _events()
         assert events[-1].kind == "complete"
     else:

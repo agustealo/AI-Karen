@@ -1466,10 +1466,11 @@ async def build_model_settings_payload() -> Dict[str, Any]:
                         canonical_registry.canonicalize_provider_id(provider.name)
                     )
                     if endpoint is not None:
-                        registration = canonical_registry.capture_endpoint_health_registration(
-                            endpoint
-                        )
                         wire_url = _resolve_base_url(endpoint)
+                        if wire_url:
+                            registration = canonical_registry.capture_endpoint_health_registration(
+                                endpoint, wire_base_url=wire_url,
+                            )
                 except Exception:
                     logger.warning("ollama_probe_registration_unavailable")
             runtime_options = await _get_ollama_runtime_options()
@@ -1496,7 +1497,7 @@ async def build_model_settings_payload() -> Dict[str, Any]:
                 ):
                     ollama_probe_published = canonical_registry.publish_endpoint_health(
                         endpoint, registration, is_healthy=bool(selected_option.available),
-                        response_time=None,
+                        response_time=None, wire_base_url=wire_url,
                     )
             except Exception:
                 logger.warning("ollama_probe_health_publication_unavailable")

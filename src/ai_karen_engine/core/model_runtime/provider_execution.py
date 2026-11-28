@@ -86,6 +86,7 @@ class _HttpExecutionObservation:
         self.shared = shared and endpoint.tenant_scoped is False
         self.started: float | None = None
         self.registration: object | None = None
+        self.wire_base_url: str | None = None
         self.response_status: int | None = None
         self.connection_failed = False
         self.finished = False
@@ -93,13 +94,16 @@ class _HttpExecutionObservation:
     def __enter__(self) -> _HttpExecutionObservation:
         return self
 
-    def handoff(self) -> None:
+    def handoff(self, base_url: str) -> None:
+        self.wire_base_url = base_url
         if self.shared:
             try:
                 from ai_karen_engine.core.model_runtime.provider_health_monitor import (
                     get_health_monitor,
                 )
-                self.registration = get_health_monitor().capture_endpoint_registration(self.endpoint)
+                self.registration = get_health_monitor().capture_endpoint_registration(
+                    self.endpoint, wire_base_url=base_url,
+                )
             except Exception:
                 # Evidence failure cannot change execution admission.
                 self.registration = None
@@ -128,6 +132,7 @@ class _HttpExecutionObservation:
                 self.endpoint, transport=self.transport, outcome=outcome,
                 response_time=time.perf_counter() - self.started,
                 registration=self.registration,
+                wire_base_url=self.wire_base_url,
             )
         except Exception:
             # Observation is never a model-execution dependency.
@@ -602,7 +607,7 @@ async def _post_chat_completions(
         async with asyncio.timeout(total_seconds):
             async with _provider_http_client(total_seconds) as client:
                 if observation is not None:
-                    observation.handoff()
+                    observation.handoff(base_url)
                 async with client.stream(
                     "POST", f"{base_url}/chat/completions", json=payload, headers=headers,
                 ) as response:
@@ -1062,7 +1067,7 @@ async def stream_provider_endpoint(
         try:
             async with asyncio.timeout(total_seconds):
                 async with _provider_http_client(total_seconds) as client:
-                    observation.handoff()
+                    observation.handoff(base_url)
                     async with client.stream(
                         "POST", f"{base_url}/chat/completions",
                         json=payload, headers=headers,

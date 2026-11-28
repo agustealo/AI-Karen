@@ -352,15 +352,20 @@ class ProviderHealthMonitor:
             "Updated health for %s: %s", provider_id, health_info.health_status.value
         )
 
-    def capture_endpoint_registration(self, endpoint: ProviderEndpoint) -> object | None:
+    def capture_endpoint_registration(
+        self, endpoint: ProviderEndpoint, *, wire_base_url: str | None = None,
+    ) -> object | None:
         """Read the canonical registry's opaque observation fence at handoff."""
         if self._registry is None:
             return None
-        return self._registry.capture_endpoint_health_registration(endpoint)
+        return self._registry.capture_endpoint_health_registration(
+            endpoint, wire_base_url=wire_base_url,
+        )
 
     def record_shared_http_execution(
         self, endpoint: ProviderEndpoint, *, transport: str,
         outcome: str, response_time: float, registration: object | None,
+        wire_base_url: str | None,
     ) -> bool:
         """Accept only bounded observations for the still-registered shared endpoint.
 
@@ -379,12 +384,14 @@ class ProviderHealthMonitor:
             or response_time < 0
             or self._registry is None
             or registration is None
+            or not wire_base_url
         ):
             return False
         if not self._registry.publish_endpoint_health(
             endpoint, registration, is_healthy=outcome == "success",
             response_time=response_time,
             error_code=None if outcome == "success" else outcome,
+            wire_base_url=wire_base_url,
         ):
             return False
         try:

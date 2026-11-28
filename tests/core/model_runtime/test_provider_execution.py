@@ -363,6 +363,8 @@ async def test_async_json_transport_has_total_wire_deadline(monkeypatch):
     ("unauthorized", None), ("rate_limit", None), ("redirect", None),
     ("pool_timeout", None), ("credential_missing", None), ("tenant_scoped", None),
     ("registry_drift", None),
+    ("wire_before_handoff", None), ("wire_after_handoff", None),
+    ("wire_server_error", None),
 ])
 async def test_canonical_json_transport_owns_shared_health_once(
     monkeypatch, structured, case, expected,
@@ -372,6 +374,8 @@ async def test_canonical_json_transport_owns_shared_health_once(
     from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
 
     endpoint = replace(_endpoint("ollama-local"), capabilities=("chat_completion", "tools"))
+    if case.startswith("wire_"):
+        monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11434/v1")
     if case == "credential_missing":
         endpoint = replace(endpoint, api_key_env="KAREN_TEST_MISSING_HTTP_KEY")
         monkeypatch.delenv("KAREN_TEST_MISSING_HTTP_KEY", raising=False)
@@ -398,6 +402,12 @@ async def test_canonical_json_transport_owns_shared_health_once(
     wire = []
     def respond(request):
         wire.append(request)
+        if case.startswith("wire_"):
+            assert str(request.url) == "http://localhost:11434/v1/chat/completions"
+        if case in {"wire_after_handoff", "wire_server_error"}:
+            monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11435/v1")
+        if case == "wire_server_error":
+            return httpx.Response(503)
         if case == "connect_error":
             raise httpx.ConnectError("secret upstream detail", request=request)
         if case == "pool_timeout":
@@ -411,12 +421,20 @@ async def test_canonical_json_transport_owns_shared_health_once(
         })
 
     _mock_client(monkeypatch, respond)
+    if case == "wire_before_handoff":
+        original_client = provider_execution._provider_http_client
+
+        def changed_client(timeout):
+            monkeypatch.setenv("OLLAMA_BASE_URL", "http://localhost:11435/v1")
+            return original_client(timeout)
+
+        monkeypatch.setattr(provider_execution, "_provider_http_client", changed_client)
     kwargs = dict(messages=[], model="test-model", max_tokens=16, temperature=0.0)
     call = (
         provider_execution.execute_structured_provider_endpoint(endpoint, tools=[], **kwargs)
         if structured else provider_execution.execute_provider_endpoint(endpoint, **kwargs)
     )
-    if case in {"success", "tenant_scoped", "registry_drift"}:
+    if case in {"success", "tenant_scoped", "registry_drift", "wire_before_handoff", "wire_after_handoff"}:
         await call
     else:
         with pytest.raises(provider_execution.ProviderExecutionError):

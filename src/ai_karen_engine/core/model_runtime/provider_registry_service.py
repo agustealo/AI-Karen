@@ -413,21 +413,35 @@ class ProviderRegistryService:
                 return None
             return self._health_registrations.get(endpoint.provider_id)
 
-    def capture_endpoint_health_registration(self, endpoint: ProviderEndpoint) -> Optional[object]:
-        """Capture registration evidence for shared health only."""
+    def capture_endpoint_health_registration(
+        self, endpoint: ProviderEndpoint, *, wire_base_url: Optional[str] = None,
+    ) -> Optional[object]:
+        """Capture shared registration and, for HTTP, the admitted wire destination."""
         if endpoint.tenant_scoped is not False:
             return None
-        return self.capture_endpoint_registration(endpoint)
+        with self._lock:
+            registration = self.capture_endpoint_registration(endpoint)
+            if registration is None:
+                return None
+            if wire_base_url is not None:
+                from ai_karen_engine.core.model_runtime.provider_execution import _resolve_base_url
+
+                if _resolve_base_url(endpoint) != wire_base_url:
+                    return None
+            return registration
 
     def publish_endpoint_health(
         self, endpoint: ProviderEndpoint, registration: Optional[object], *,
         is_healthy: bool, response_time: Optional[float], error_code: Optional[str] = None,
+        wire_base_url: Optional[str] = None,
     ) -> bool:
         """Compare and publish against the same registration critical section."""
         if registration is None:
             return False
         with self._lock:
-            if self.capture_endpoint_health_registration(endpoint) is not registration:
+            if self.capture_endpoint_health_registration(
+                endpoint, wire_base_url=wire_base_url,
+            ) is not registration:
                 return False
             self.health_monitor.update_provider_health(
                 endpoint.provider_id, is_healthy=is_healthy,
