@@ -33,6 +33,7 @@ from ai_karen_engine.core.memory.types import (
     MemoryType,
 )
 
+from .consent_filter import recallable_memory_event
 from .ledger_models import (
     ConsentScope,
     MemoryAssertion,
@@ -792,7 +793,7 @@ class PostgresNeuroVault(VaultPort):
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
         assertion_uuid = self._uuid(memory_id, field_name="memory_id")
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
@@ -804,7 +805,7 @@ class PostgresNeuroVault(VaultPort):
             )
             if assertion is None:
                 return VaultWriteReceipt(memory_id=memory_id, persisted=False, tombstoned=False)
-            assertion.valid_to = now
+            assertion.valid_to = min(assertion.valid_to, now) if assertion.valid_to is not None else now
             source_event = await self._scoped_event(
                 session,
                 assertion.event_id,
@@ -812,7 +813,7 @@ class PostgresNeuroVault(VaultPort):
                 user_uuid=user_uuid,
             )
             if source_event is not None:
-                source_event.valid_to = now
+                source_event.valid_to = min(source_event.valid_to, now) if source_event.valid_to is not None else now
                 source_event.updated_at = now
             event = self._mutation_event(
                 tenant_uuid=tenant_uuid,
@@ -861,8 +862,9 @@ class PostgresNeuroVault(VaultPort):
                 user_uuid=user_uuid,
             )
             if source_event is not None:
-                source_event.valid_to = datetime.utcnow()
-                source_event.updated_at = datetime.utcnow()
+                now = datetime.now(timezone.utc).replace(tzinfo=None)
+                source_event.valid_to = min(source_event.valid_to, now) if source_event.valid_to is not None else now
+                source_event.updated_at = now
 
             event = self._mutation_event(
                 tenant_uuid=tenant_uuid,
@@ -893,6 +895,7 @@ class PostgresNeuroVault(VaultPort):
         *,
         context: VaultContext,
     ) -> list[MemoryEntry]:
+        """Export currently usable content; physical integrity is a separate operation."""
         self._require_capability(context, self.READ_CAPABILITY)
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
@@ -902,10 +905,21 @@ class PostgresNeuroVault(VaultPort):
 
         session_factory = self._resolve_session_factory()
         async with session_factory() as session:
-            stmt = select(MemoryAssertion).where(
-                MemoryAssertion.assertion_id.in_(ids),
-                MemoryAssertion.tenant_id == tenant_uuid,
-                MemoryAssertion.user_id == user_uuid,
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            stmt = (
+                select(MemoryAssertion)
+                .join(MemoryEvent, MemoryEvent.event_id == MemoryAssertion.event_id)
+                .where(
+                    MemoryAssertion.assertion_id.in_(ids),
+                    MemoryAssertion.tenant_id == tenant_uuid,
+                    MemoryAssertion.user_id == user_uuid,
+                    MemoryAssertion.consent_state == "granted",
+                    or_(MemoryAssertion.valid_from.is_(None), MemoryAssertion.valid_from <= now),
+                    or_(MemoryAssertion.valid_to.is_(None), MemoryAssertion.valid_to > now),
+                    recallable_memory_event(
+                        tenant_id=tenant_uuid, user_id=user_uuid, now=now,
+                    ),
+                )
             )
             result = await session.execute(stmt)
             rows = result.scalars().all()
@@ -917,6 +931,7 @@ class PostgresNeuroVault(VaultPort):
         *,
         context: VaultContext,
     ) -> Mapping[str, bool]:
+        """Check physical scoped row presence, not current content eligibility."""
         self._require_capability(context, self.READ_CAPABILITY)
         tenant_uuid = self._uuid(context.tenant_id, field_name="tenant_id")
         user_uuid = self._uuid(context.user_id, field_name="user_id")
@@ -969,7 +984,7 @@ class PostgresNeuroVault(VaultPort):
             MemoryEvent.event_id == event_id,
             MemoryEvent.tenant_id == tenant_uuid,
             MemoryEvent.user_id == user_uuid,
-        )
+        ).with_for_update()
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
@@ -985,7 +1000,7 @@ class PostgresNeuroVault(VaultPort):
             MemoryAssertion.assertion_id == assertion_id,
             MemoryAssertion.tenant_id == tenant_uuid,
             MemoryAssertion.user_id == user_uuid,
-        )
+        ).with_for_update()
         result = await session.execute(stmt)
         return result.scalar_one_or_none()
 
