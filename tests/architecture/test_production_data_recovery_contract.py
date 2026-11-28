@@ -204,7 +204,7 @@ def test_recovery_replay_probe_cannot_consume_observation_query(tmp_path):
         'cat >/dev/null\n'
         'if [[ "$1" == "--version" ]]; then echo "psql (PostgreSQL) 16.9"; exit; fi\n'
         'for arg in "$@"; do\n'
-        '  if [[ "$arg" == "SHOW server_version_num" ]]; then echo 160009; exit; fi\n'
+        '  if [[ "$arg" == "--command=SHOW server_version_num" ]]; then echo 160009; exit; fi\n'
         '  if [[ "$arg" == --command=*pg_is_in_recovery* ]]; then\n'
         '    echo \'{"in_recovery": false, "read_only": false}\'; exit; fi\n'
         'done\n'
