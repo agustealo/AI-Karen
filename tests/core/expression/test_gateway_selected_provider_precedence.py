@@ -355,18 +355,12 @@ async def test_kcon768_invalid_output_attempt_is_distinct_from_verified_model():
 @pytest.mark.asyncio
 async def test_real_gateway_http_observes_provider_health_once(monkeypatch):
     import httpx
-    from types import SimpleNamespace
-    from ai_karen_engine.core.model_runtime import provider_health_monitor, provider_registry_service
-    from ai_karen_engine.core.model_runtime.provider_endpoint import BUILTIN_PROVIDER_ENDPOINTS
+    from ai_karen_engine.core.model_runtime import provider_registry_service
 
-    endpoint = next(item for item in BUILTIN_PROVIDER_ENDPOINTS if item.provider_id == "ollama-local")
-    registry = SimpleNamespace(
-        get_provider_endpoint=lambda value: endpoint if value == endpoint.provider_id else None,
-        get_provider_status=lambda _: SimpleNamespace(is_available=True),
-        resolve_capable_targets=lambda **_: [endpoint],
-        canonicalize_provider_id=lambda value: value,
-    )
-    registry.health_monitor = provider_health_monitor.ProviderHealthMonitor(registry=registry)
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    assert registry.capture_endpoint_health_registration(endpoint) is not None
     monkeypatch.setattr(provider_registry_service, "get_provider_registry_service", lambda: registry)
     observations = []
     original = registry.health_monitor.update_provider_health
@@ -403,6 +397,7 @@ async def test_real_gateway_http_observes_provider_health_once(monkeypatch):
     assert result.provider == endpoint.provider_id
     assert len(wire) == len(observations) == 1
     assert observations[0][1]["is_healthy"] is True
+    assert registry.get_provider_health_snapshot(endpoint.provider_id)["status"] == "healthy"
 
 
 @pytest.mark.parametrize(
