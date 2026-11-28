@@ -757,3 +757,130 @@ async def test_runtime_bound_extension_uses_original_deadline(
     assert handler.calls == expected_calls
     assert timeouts == ([] if expected_timeout is None else [expected_timeout])
     assert meter.tool_calls == (0 if scenario == "unstarted" else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "scenario,expected_code,expected_calls",
+    [
+        ("valid", None, 1),
+        ("forged_digest", "invalid_output", 1),
+        ("mutated_query", "invalid_output", 1),
+        ("substituted_text", "extension_runtime_authority_invalid", 0),
+        ("unbound", "extension_runtime_authority_invalid", 0),
+        ("revoked", "extension_runtime_authority_invalid", 1),
+    ],
+)
+async def test_direct_runtime_document_executor_enforces_lineage(
+    monkeypatch, scenario, expected_code, expected_calls,
+):
+    import hashlib
+    from dataclasses import replace
+    from ai_karen_engine.core.runtime.chat_runtime_contract import ChatExecutionContext
+    from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
+    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
+
+    plugin = "content-intelligence"
+    owner = "22222222-2222-4222-8222-222222222222"
+    tenant = "11111111-1111-4111-8111-111111111111"
+    source = "44444444-4444-4444-8444-000000000001"
+    body = "Vendor delivery pending."
+    digest = hashlib.sha256(body.encode()).hexdigest()
+    refs = [{"source_id": source, "revision": digest}]
+    plan = _plan(
+        user_id=owner, tenant_id=tenant, allowed_plugins=[plugin],
+        allowed_capabilities=[plugin, "data:read"],
+    )
+    plan.resource_scope = {"attachment_references": refs}
+    meter = ExecutionBudgetMeter(plan.budget)
+    meter.start()
+    context = _context(user_id=owner, tenant_id=tenant)
+    runtime = ChatExecutionContext(
+        user_id=owner, tenant_id=tenant, session_id=context.session_id,
+        correlation_id=context.correlation_id, roles=["user"],
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "is_runtime_model_plan_authorized",
+        lambda self, p, m: self is runtime and p is plan and m is meter,
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "original_runtime_model_plan",
+        lambda self, m: plan if self is runtime and m is meter else None,
+    )
+    monkeypatch.setattr(
+        ChatExecutionContext, "require_runtime_attachment_read_permission", lambda self: None,
+    )
+    runtime.bind_runtime_attachment_scope(plan, meter, refs)
+    runtime.bind_runtime_attachment_documents(plan, meter, [
+        VerifiedArtifactText(source, tenant, owner, "notes.txt", "text/plain", digest, body),
+    ])
+    context = replace(
+        context, conversation_id=runtime.conversation_id,
+        resource_scope={"attachment_references": refs},
+        allowed_capabilities=[plugin, "data:read"], audit_context={"user_roles": ["user"]},
+    )
+    if scenario != "unbound":
+        context.bind_runtime_authority(runtime, plan, meter, plugin)
+    checks = 0
+
+    async def revalidate(self, **kwargs):
+        nonlocal checks
+        checks += 1
+        if scenario == "revoked" and checks > 1:
+            raise PermissionError("session_revoked")
+
+    monkeypatch.setattr(ChatExecutionContext, "revalidate_runtime_attachment_session", revalidate)
+
+    class DocumentHandler(FakeHandler):
+        async def execute(self, payload, context):
+            self.calls += 1
+            if scenario == "mutated_query":
+                payload["query"] = "different"
+                return {"operation": "search", "persisted": False,
+                        "query": "different", "matches": []}
+            return {
+                "operation": "analyze", "persisted": False,
+                "documents": [{
+                    "id": source, "name": "notes.txt", "characters": len(body),
+                    "sha256": "0" * 64 if scenario == "forged_digest" else digest,
+                    "top_terms": [],
+                }],
+            }
+
+    class DocumentRegistry(FakeRegistry):
+        def get(self, plugin_id):
+            return super().get("echo") if plugin_id == plugin else None
+
+    handler = DocumentHandler()
+    manifest = _manifest().model_copy(update={
+        "id": plugin,
+        "capabilities": [ExtensionCapability(id="execute", version="1.0.0")],
+        "input_schema": {"type": "object"},
+        "output_schema": {"type": "object"},
+    })
+    service = ExtensionExecutionService(
+        registry=DocumentRegistry(handler=handler, manifest=manifest),
+        lifecycle=FakeLifecycle(),
+    )
+    payload = {
+        "operation": "analyze",
+        "documents": [{"id": source, "name": "notes.txt",
+                       "text": "substituted" if scenario == "substituted_text" else body}],
+    }
+    if scenario == "mutated_query":
+        payload.update({"operation": "search", "query": "vendor"})
+    request = ExtensionExecutionRequest(
+        plugin_id=plugin, capability="execute", payload=payload,
+        context=context, authorized_plan=plan,
+    )
+    result = await service.execute(request)
+    assert result.error_code == expected_code
+    assert result.status == ("success" if expected_code is None else "failed")
+    assert handler.calls == expected_calls
+    assert meter.tool_calls == expected_calls
+    if expected_code is not None:
+        assert result.payload is None
+    else:
+        assert result.payload["documents"][0]["sha256"] == digest
+    if scenario == "mutated_query":
+        assert payload["query"] == "vendor"
