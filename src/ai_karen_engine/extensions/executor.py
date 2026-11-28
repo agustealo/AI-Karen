@@ -217,6 +217,7 @@ class ExtensionExecutionService:
                 data_classification,
             )
 
+        admitted_content_payload: dict[str, Any] | None = None
         try:
             runtime_authority = context.runtime_authority(plugin_id)
             runtime_content = plugin_id == "content-intelligence" and (
@@ -234,6 +235,7 @@ class ExtensionExecutionService:
                     raise PermissionError("extension_runtime_authority_invalid")
                 request = replace(request, payload=deepcopy(request.payload))
                 validate_runtime_content_payload(context, plan, request.payload)
+                admitted_content_payload = deepcopy(request.payload)
             elif runtime_authority is not None and (
                 plugin_id != "intelligent-search" or runtime_authority[0] is not plan
             ):
@@ -598,6 +600,23 @@ class ExtensionExecutionService:
                     request, start, execution_id,
                     "extension_runtime_authority_invalid",
                     "Content execution authority or evidence changed",
+                    trust_tier, result_trust, data_classification,
+                )
+
+        if admitted_content_payload is not None:
+            try:
+                from ai_karen_engine.extensions.content_intelligence_sources import (
+                    validate_runtime_content_output,
+                )
+                if request.payload != admitted_content_payload:
+                    raise RuntimeError("content_source_input_changed")
+                raw_result = validate_runtime_content_output(
+                    deepcopy(raw_result), admitted_payload=admitted_content_payload,
+                )
+            except (RuntimeError, ValueError, TypeError):
+                return self._fail_with_provenance(
+                    request, start, execution_id,
+                    "invalid_output", "Content execution output failed lineage validation",
                     trust_tier, result_trust, data_classification,
                 )
 
