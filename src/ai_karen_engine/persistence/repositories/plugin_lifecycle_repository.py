@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
 import uuid
 from typing import Any
@@ -26,6 +26,7 @@ from ai_karen_engine.persistence.postgres.transactions import (
 
 _PLUGIN_ID = re.compile(r"[a-z][a-z0-9_-]{0,49}\Z")
 _CHECKSUM = re.compile(r"[0-9a-f]{64}\Z")
+_LIFECYCLE_LOCK_NAMESPACE = "karen-plugin-global-lifecycle-v1"
 
 
 class PluginLifecycleLedgerError(RuntimeError):
@@ -105,6 +106,75 @@ class PluginLifecycleLedger:
     must obtain an authenticated, freshly authorized, action-bound plan before
     reserving. The SQL revalidates the exact approved scope independently.
     """
+
+    @staticmethod
+    async def _try_installation_lock(session: Any, installation_id: str, *, shared: bool) -> None:
+        """One lock namespace for physical mutation, reservation and host use."""
+        function = (
+            "pg_try_advisory_xact_lock_shared" if shared
+            else "pg_try_advisory_xact_lock"
+        )
+        locked = await session.execute(
+            text(f"SELECT {function}(hashtext(:lock_namespace), hashtext(:installation_id))"),
+            {"lock_namespace": _LIFECYCLE_LOCK_NAMESPACE, "installation_id": installation_id},
+        )
+        if locked.scalar_one() is not True:
+            raise PluginLifecycleRevisionConflict(
+                "Global plugin lifecycle physical execution is already locked"
+            )
+
+    @asynccontextmanager
+    async def hold_enabled_execution(
+        self, *, observation: PluginLifecycleKernelObservation,
+    ) -> AsyncIterator[Callable[[], Awaitable[None]]]:
+        """Shared durable readiness fence, not an authentication or policy grant.
+
+        A missing revision is denied, never bootstrapped from a stale worker.
+        The host supplies current kernel evidence and retains its local active
+        execution marker. The connection remains pinned for the operation.
+        Recheck on this same transaction before every external side effect;
+        a lost database connection or changed evidence must fail closed.
+        """
+        if not isinstance(observation, PluginLifecycleKernelObservation):
+            raise TypeError("Trusted kernel observation required")
+        if observation.observed_state != "enabled":
+            raise PluginLifecycleRevisionConflict("Plugin execution requires enabled evidence")
+        values = {"installation_id": observation.installation_id,
+                  "manifest_checksum": observation.manifest_checksum}
+        async with async_transaction_scope() as session:
+            await self._try_installation_lock(session, observation.installation_id, shared=True)
+
+            async def read_ready() -> int:
+                result = await session.execute(
+                    text(
+                        "SELECT revision FROM public.extension_lifecycle_revisions "
+                        "WHERE installation_id = :installation_id "
+                        "AND manifest_checksum = :manifest_checksum "
+                        "AND observed_state = 'enabled' AND disposition = 'ready' "
+                        "AND active_operation_id IS NULL FOR SHARE"
+                    ),
+                    values,
+                )
+                revision = result.scalar_one_or_none()
+                if type(revision) is not int or revision < 1:
+                    raise PluginLifecycleRevisionConflict(
+                        "Enabled plugin revision is unavailable or unresolved"
+                    )
+                return revision
+
+            revision = await read_ready()
+            active = True
+
+            async def revalidate() -> None:
+                if not active or not session.in_transaction():
+                    raise PluginLifecycleRevisionConflict("Plugin execution fence has ended")
+                if await read_ready() != revision:
+                    raise PluginLifecycleRevisionConflict("Plugin execution revision changed")
+
+            try:
+                yield revalidate
+            finally:
+                active = False
 
     async def initialize_observation(
         self, *, installation_id: str, manifest_checksum: str, observed_state: str
@@ -187,6 +257,7 @@ class PluginLifecycleLedger:
             "observed_state": observation.observed_state,
         }
         async with async_transaction_scope() as session:
+            await self._try_installation_lock(session, observation.installation_id, shared=False)
             result = await session.execute(
                 text(
                     "UPDATE public.extension_lifecycle_revisions "
@@ -258,9 +329,10 @@ class PluginLifecycleLedger:
             "request_id": request,
             "correlation_id": correlation,
         }
-        # Lock the approval first, so duplicate attempts cannot both pass even
-        # when they use the same expected revision or race across workers.
+        # Contend with active host execution before consuming any approval.
+        # Lock order is global installation, then approval, then revision.
         async with async_transaction_scope(scope.tenant_id) as session:
+            await self._try_installation_lock(session, scope.installation_id, shared=False)
             result = await session.execute(
                 text(
                     "SELECT approval_id FROM public.runtime_approval_requests "
@@ -366,22 +438,11 @@ class PluginLifecycleLedger:
             "action": scope.action,
             "tenant_id": scope.tenant_id,
             "actor_user_id": scope.user_id,
-            "lock_namespace": "karen-plugin-global-lifecycle-v1",
         }
         # This transaction owns a real PostgreSQL connection throughout the
         # physical transition. The per-process kernel lock is not sufficient.
         async with async_transaction_scope(scope.tenant_id) as fence_session:
-            lock = await fence_session.execute(
-                text(
-                    "SELECT pg_try_advisory_xact_lock("
-                    "hashtext(:lock_namespace), hashtext(:installation_id))"
-                ),
-                values,
-            )
-            if lock.scalar_one() is not True:
-                raise PluginLifecycleRevisionConflict(
-                    "Global plugin lifecycle physical execution is already locked"
-                )
+            await self._try_installation_lock(fence_session, scope.installation_id, shared=False)
             # A separate short transaction durably writes admission before
             # side effects. Crashes after this point retain in_flight.
             async with async_transaction_scope(scope.tenant_id) as admit_session:

@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28 UTC: KFILE-UPLOAD-U2D3 shared durable lifecycle fence
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** canonical PluginLifecycleLedger now offers shared enabled-execution admission on the existing global installation advisory-lock namespace. Ready enabled revision, exact manifest checksum and no unresolved operation required; missing row fails closed. Transaction holds a shared lock and row share through caller scope; revalidation uses same session and rejects after scope exit. Reservation, manifest reconciliation and physical mutation contend on exclusive lock before state changes. No approval consumed on contention, no new ledger/table, no activation.
+- **Proof:** disposable real PostgreSQL regression added for missing/stale/unresolved evidence, concurrent shared readers, exclusive reservation/reconciliation denial, approval remains approved, exit/failure releases lock. Staged only; not run on this head. Kernel verified active-operation evidence and transfer binding, bounded ingress, pool/deadline and connection-loss acceptance still required. No claim of distributed protection for an already-dispatched remote SDK operation.
+
 ### 2026-11-28 UTC: KFILE-UPLOAD-U2D2 authenticated host transfer binding
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** host-only RuntimePolicy transfer admission from fresh session/RBAC; generic requests for file_upload.transfer remain denied. PluginService shares discovery/transfer preparation, pins the existing kernel lifecycle scope and delegates to the owner-text runtime, revalidating identity/lifecycle during state changes. Reserved writer rechecks host admission after claim consumption, before remote dispatch. Denied post-claim write remains reconcile_required; never replay. No public route, UI, new writer or activation. Existing reserved writer callers without a host callback retain internal compatibility.

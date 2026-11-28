@@ -200,6 +200,61 @@ async def test_global_lifecycle_claim_cas_approval_rls_and_uncertain_outcome(
                 observed_state="enabled",
             )
 
+        # A host execution on one worker must block lifecycle mutations
+        # in other DB sessions before they consume an approval or change revision.
+        fenced = _scope(installation_id="host-execution-fence", tenant=tenant_a, actor=actor_a)
+        observation = PluginLifecycleKernelObservation(
+            operation_id=str(uuid.uuid4()), installation_id=fenced.installation_id,
+            manifest_checksum=fenced.manifest_checksum, observed_state="enabled",
+        )
+        with pytest.raises(PluginLifecycleRevisionConflict):
+            async with ledger.hold_enabled_execution(observation=observation):
+                pytest.fail("Missing durable state cannot bootstrap admission")
+        await ledger.initialize_observation(
+            installation_id=fenced.installation_id,
+            manifest_checksum=fenced.manifest_checksum, observed_state="enabled",
+        )
+        approval = await approve(fenced)
+        async with ledger.hold_enabled_execution(observation=observation) as check:
+            await check()
+            async with PluginLifecycleLedger().hold_enabled_execution(observation=observation) as peer:
+                await peer()
+                with pytest.raises(PluginLifecycleRevisionConflict, match="already locked"):
+                    await PluginLifecycleLedger().reserve_approved(
+                        approval_id=approval, scope=fenced,
+                        request_id="fenced-disable", correlation_id="fenced-trace",
+                    )
+                with pytest.raises(PluginLifecycleRevisionConflict, match="already locked"):
+                    await PluginLifecycleLedger().reconcile_manifest_observation(
+                        observation=replace(observation, manifest_checksum="b" * 64),
+                        previous_checksum=fenced.manifest_checksum, expected_revision=1,
+                    )
+            await check()
+            assert (await ledger.read_observation(fenced.installation_id))["disposition"] == "ready"
+            assert await raw.fetchval(
+                "SELECT status FROM public.runtime_approval_requests WHERE approval_id=$1",
+                uuid.UUID(approval),
+            ) == "approved"
+        with pytest.raises(PluginLifecycleRevisionConflict, match="fence has ended"):
+            await check()
+        # An exception also releases the shared lock.
+        with pytest.raises(RuntimeError, match="host failed"):
+            async with ledger.hold_enabled_execution(observation=observation):
+                raise RuntimeError("host failed")
+        with pytest.raises(PluginLifecycleRevisionConflict):
+            async with ledger.hold_enabled_execution(
+                observation=replace(observation, manifest_checksum="b" * 64),
+            ):
+                pytest.fail("Stale manifest may not execute")
+        claimed = await ledger.reserve_approved(
+            approval_id=approval, scope=fenced,
+            request_id="fenced-disable", correlation_id="fenced-trace",
+        )
+        assert claimed["status"] == "prepared"
+        with pytest.raises(PluginLifecycleRevisionConflict):
+            async with ledger.hold_enabled_execution(observation=observation):
+                pytest.fail("Unresolved lifecycle must deny new host execution")
+
         # An explicitly authorized deployment host may advance a ready
         # manifest observation without changing activation. These synthetic
         # observations exercise only the database CAS, not package trust.
