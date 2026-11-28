@@ -4107,6 +4107,8 @@ class ChatRuntime:
                     dict(item) for item in
                     (policy_constraints.get("attachment_references") or [])
                 ],
+                **({"document_operation_digest": policy_constraints["document_operation_digest"]}
+                   if policy_constraints.get("document_operation_digest") is not None else {}),
             } if policy_constraints.get("attachment_references") else {},
             budget=budget,
             memory_scope=decision.memory_scope,
