@@ -466,6 +466,12 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-27: KEXP-042A.6D7/A.7 browser evidence candidate, PR #1383
+
+- **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** extend existing native Stop and real File Explorer Playwright owners with explicitly approved signed Docker v1/v2 retained recovery, real one-forward lost-response fault injection, picker-selected attachment identity, content-only challenge, persisted generative receipt and reload. Reuse origin-locked authenticated browser read helper; draft attachment seeding restricted to approved disposable reference and revision CAS. Existing privacy configuration disables retries, recordings and retained failure context in KEXP modes. No new runtime owner, workflow, mock result or production execution.
+- **Proof:** #1384 merged at `1c051e84e14567697ed3c2180fb0b5392d49f3dd`; #1413 head `3b83c95454352b667d97f9e99e8d15139b932fb0` 17/17 distinct source workflows including 39 non-skipped composer tests and real PostgreSQL; previous consumer head `179209895b13382c5be72f1dd7086d40d8d9ca82` 4/4 source workflows. New test source requires fresh exact-head compilation and review. Signed runtime browser proof, upload and direct Storage/TLS evidence NOT_RUN; checklist stays open. No activation claim.
+
+
 ### 2026-11-27: KEXP-042A.6C–6D6 governed attachment submission and recovery, PR #1383
 
 - **KCON-140 / KCON-530 / KCON-770, SOURCE_CANDIDATE:** existing controller uses the canonical persisted-draft v2 snapshot and per-run reference hints under explicit verified capability. Ordinary governed failure and reload recovery use exact owner-scoped submission status, read-only draft identity, verified history and explicit retry preparation. Lost retry response requires causal backend receipt with current successor and fresh matching draft readback; no automatic replay or inference. Existing gateway validates the optional receipt fields together and never invents evidence for an older backend. Original draft/ledger/runtime owners retained.
