@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28 UTC: KFILE-UPLOAD-U2D4 bind host transfer to durable lifecycle evidence
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** existing kernel observation checks reused under the exact active host request; mutation finalization still denies any active execution. Transfer retains local admission and shared PostgreSQL enabled revision fence, rechecks session/principal, canonical manifest and durable revision before state transitions/write/receipt; outer config deadline covers admission and pool checkout. No implicit lifecycle bootstrap, public route, activation or new authority.
+- **Proof:** source regressions for active observation, strict finalization, changed request and durable fence denial before runtime. Staged; fresh CI not run. Already-dispatched remote writes cannot be undone by connection loss, and pool/deployment behavior still needs real acceptance. Consumer discovery continues reporting transfer unavailable.
+
 ### 2026-11-28 UTC: KFILE-UPLOAD-U2D3 shared durable lifecycle fence
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** canonical PluginLifecycleLedger now offers shared enabled-execution admission on the existing global installation advisory-lock namespace. Ready enabled revision, exact manifest checksum and no unresolved operation required; missing row fails closed. Transaction holds a shared lock and row share through caller scope; revalidation uses same session and rejects after scope exit. Reservation, manifest reconciliation and physical mutation contend on exclusive lock before state changes. No approval consumed on contention, no new ledger/table, no activation.

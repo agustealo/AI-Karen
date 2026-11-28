@@ -143,6 +143,20 @@ async def test_transfer_delegates_under_active_host_scope(discovery, monkeypatch
             active.clear()
 
     kernel.admitted_host_operation = admitted
+    from ai_karen_engine.persistence.repositories import plugin_lifecycle_repository as ledger_module
+    observation = object()
+    kernel.observe_active_host_lifecycle = AsyncMock(return_value=observation)
+    durable = AsyncMock()
+
+    @asynccontextmanager
+    async def hold_enabled_execution(*, observation):
+        assert observation is kernel.observe_active_host_lifecycle.return_value
+        assert active == {context.request_id: "file-upload"}
+        yield durable
+
+    monkeypatch.setattr(ledger_module, "PluginLifecycleLedger", lambda: SimpleNamespace(
+        hold_enabled_execution=hold_enabled_execution,
+    ))
     runtime = OwnerTextUploadService(sessions=Mock(), artifacts=Mock())
     expected = object()
 
@@ -161,4 +175,17 @@ async def test_transfer_delegates_under_active_host_scope(discovery, monkeypatch
         context, destination="explorer", recipe="store_only",
         filename="notes.txt", data=b"hello", idempotency_key=str(uuid4()),
     ) is expected
+    assert not active
+    assert durable.await_count == 3
+    assert kernel.observe_active_host_lifecycle.await_count == 4
+
+    # A lost durable fence cannot reach the runtime.
+    runtime.save.reset_mock()
+    durable.side_effect = RuntimeError("fence unavailable")
+    with pytest.raises(RuntimeError, match="fence unavailable"):
+        await service.transfer_owner_text(
+            context, destination="explorer", recipe="store_only",
+            filename="notes.txt", data=b"hello", idempotency_key=str(uuid4()),
+        )
+    runtime.save.assert_not_awaited()
     assert not active

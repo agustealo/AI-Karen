@@ -582,3 +582,33 @@ async def test_bundled_gui_upgrade_preserves_activation_and_rejects_old_approval
         )
     assert (package / kernel.MANUAL_ENABLED_MARKER).is_file() is enabled
     assert (package / ".karen-manual-disabled").is_file() is (not enabled)
+
+
+@pytest.mark.asyncio
+async def test_active_host_observation_preserves_finalization_fence(tmp_path):
+    from types import SimpleNamespace
+
+    _create_plugin(tmp_path)
+    service = PluginService(tmp_path, tmp_path)
+    await service.initialize()
+    kernel = service.kernel
+    assert kernel is not None
+    assert await service.enable_plugin("kernel-terminal")
+    operation_id = str(uuid.uuid4())
+    request = SimpleNamespace(
+        plugin_id="kernel-terminal", context=SimpleNamespace(request_id="host-request"),
+    )
+    with pytest.raises(PermissionError, match="not_active"):
+        await kernel.observe_active_host_lifecycle(request, operation_id=operation_id)
+    async with kernel._execution_scope(request):
+        observed = await kernel.observe_active_host_lifecycle(request, operation_id=operation_id)
+        assert observed.observed_state == "enabled"
+        assert observed.installation_id == request.plugin_id
+        with pytest.raises(RuntimeError, match="active executions"):
+            await kernel.observe_lifecycle_for_finalization(
+                request.plugin_id, operation_id=operation_id,
+            )
+        request.context.request_id = "different-request"
+        with pytest.raises(PermissionError, match="not_active"):
+            await kernel.observe_active_host_lifecycle(request, operation_id=operation_id)
+    assert not kernel.active_executions()

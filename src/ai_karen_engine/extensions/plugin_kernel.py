@@ -757,8 +757,23 @@ class PluginKernel:
                 plugin_id, operation_id=operation_id
             )
 
+    async def observe_active_host_lifecycle(
+        self, request: ExtensionExecutionRequest, *, operation_id: str,
+    ) -> PluginLifecycleKernelObservation:
+        """Inspect the same canonical state while an exact host request is pinned."""
+        async with self._state_lock:
+            if self._active.get(request.context.request_id) != request.plugin_id:
+                raise PermissionError("plugin_host_execution_not_active")
+            observation = self._observe_lifecycle_unlocked(
+                request.plugin_id, operation_id=operation_id,
+                active_request_id=request.context.request_id,
+            )
+            if observation.observed_state != "enabled":
+                raise PermissionError("plugin_host_execution_not_enabled")
+            return observation
+
     def _observe_lifecycle_unlocked(
-        self, plugin_id: str, *, operation_id: str
+        self, plugin_id: str, *, operation_id: str, active_request_id: str | None = None,
     ) -> PluginLifecycleKernelObservation:
         """Return locally verified state while the kernel lifecycle lock is held.
 
@@ -768,8 +783,11 @@ class PluginKernel:
             raise RuntimeError("Plugin kernel is not initialized")
         if plugin_id in self._retirement_pending:
             raise RuntimeError("Plugin retirement is not verified")
-        if plugin_id in self._active.values():
-            raise RuntimeError("Plugin has active executions")
+        if active_request_id is None:
+            if plugin_id in self._active.values():
+                raise RuntimeError("Plugin has active executions")
+        elif self._active.get(active_request_id) != plugin_id:
+            raise PermissionError("plugin_host_execution_not_active")
         record = self.get_record(plugin_id)
         registration = self.runtime_registry.get(plugin_id)
         manifest = self._catalog_manifests.get(plugin_id)

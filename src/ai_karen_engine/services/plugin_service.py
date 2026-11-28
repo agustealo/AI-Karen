@@ -268,7 +268,12 @@ class PluginService:
     ):
         """Internal host transfer; no caller-supplied policy or identity grant."""
         from ai_karen_engine.database.factory import get_database_service_factory
-        from ai_karen_engine.core.runtime.owner_text_upload import OwnerTextUploadService
+        from ai_karen_engine.core.runtime.owner_text_upload import (
+            OwnerTextUploadService, UploadOutcomeUnavailable,
+        )
+        from ai_karen_engine.persistence.repositories.plugin_lifecycle_repository import (
+            PluginLifecycleLedger,
+        )
         from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
         from ai_karen_engine.services.database.repositories.artifact_store import validate_reserved_text_payload
 
@@ -276,38 +281,52 @@ class PluginService:
             raise PermissionError("file_upload_destination_denied")
         config = ArtifactStorageConfig.from_environment()
         validate_reserved_text_payload(filename, data, max_bytes=config.governed_text_upload_max_bytes)
-        prepared = await self._prepare_owner_upload(context, operation="transfer")
-        if prepared is None:
-            raise PermissionError("file_upload_disabled")
-        kernel, request, principal = prepared
-        scope = (request.context.tenant_id, request.context.user_id, request.context.session_id)
+        try:
+            # One outer deadline covers admission, pool checkout, ledger
+            # fencing, transfer and receipt publication. The runtime retains
+            # its own shorter remaining bound when used by other hosts.
+            async with asyncio.timeout(config.governed_text_upload_deadline_seconds):
+                prepared = await self._prepare_owner_upload(context, operation="transfer")
+                if prepared is None:
+                    raise PermissionError("file_upload_disabled")
+                kernel, request, principal = prepared
+                scope = (request.context.tenant_id, request.context.user_id, request.context.session_id)
 
-        async def authorize() -> None:
-            await context.revalidate_runtime_artifact_write_session()
-            if (
-                context.require_authenticated_user() is not principal
-                or (context.tenant_id, context.user_id, context.session_id) != scope
-                or kernel.active_executions().get(request.context.request_id) != "file-upload"
-            ):
-                raise PermissionError("file_upload_host_scope_invalid")
-            record = kernel.get_record("file-upload")
-            if (
-                not isinstance(record, dict) or record.get("status") != "enabled"
-                or record.get("dependencies_resolved") is not True
-            ):
-                raise PermissionError("file_upload_disabled")
+                async with kernel.admitted_host_operation(request):
+                    observation_id = str(uuid.uuid4())
+                    observation = await kernel.observe_active_host_lifecycle(
+                        request, operation_id=observation_id,
+                    )
+                    async with PluginLifecycleLedger().hold_enabled_execution(
+                        observation=observation,
+                    ) as check_durable:
 
-        async with kernel.admitted_host_operation(request):
-            await authorize()
-            runtime = get_database_service_factory().get_service("owner_text_upload")
-            if not isinstance(runtime, OwnerTextUploadService):
-                raise RuntimeError("file_upload_runtime_unavailable")
-            receipt = await runtime.save(
-                context, filename=filename, data=data, idempotency_key=idempotency_key,
-                authorize_transfer=authorize,
-            )
-            await authorize()
-            return receipt
+                        async def authorize() -> None:
+                            await context.revalidate_runtime_artifact_write_session()
+                            if (
+                                context.require_authenticated_user() is not principal
+                                or (context.tenant_id, context.user_id, context.session_id) != scope
+                            ):
+                                raise PermissionError("file_upload_host_scope_invalid")
+                            current = await kernel.observe_active_host_lifecycle(
+                                request, operation_id=observation_id,
+                            )
+                            if current != observation:
+                                raise PermissionError("file_upload_lifecycle_changed")
+                            await check_durable()
+
+                        await authorize()
+                        runtime = get_database_service_factory().get_service("owner_text_upload")
+                        if not isinstance(runtime, OwnerTextUploadService):
+                            raise RuntimeError("file_upload_runtime_unavailable")
+                        receipt = await runtime.save(
+                            context, filename=filename, data=data, idempotency_key=idempotency_key,
+                            authorize_transfer=authorize,
+                        )
+                        await authorize()
+                        return receipt
+        except TimeoutError:
+            raise UploadOutcomeUnavailable("Upload outcome unavailable; reuse the same key") from None
 
     async def _prepare_file_explorer(
         self, *, user_id: str, tenant_id: str, roles: List[str],
