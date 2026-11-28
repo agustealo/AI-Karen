@@ -532,7 +532,11 @@ async def test_runtime_source_host_uses_only_pinned_evidence(monkeypatch, scenar
     from ai_karen_engine.core.runtime.contracts import ExecutionBudgetMeter
     from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
 
-    auth = plan(resource_scope={"attachment_references": REFS})
+    from ai_karen_engine.extensions.content_intelligence_sources import runtime_content_operation_digest
+
+    scope = {"attachment_references": REFS, "document_operation_digest":
+             runtime_content_operation_digest(REFS, {"operation": "analyze"})}
+    auth = plan(resource_scope=scope)
     meter = ExecutionBudgetMeter(auth.budget)
     meter.start()
     runtime = ChatExecutionContext(
@@ -554,7 +558,7 @@ async def test_runtime_source_host_uses_only_pinned_evidence(monkeypatch, scenar
     ])
     ctx = context(
         conversation_id=runtime.conversation_id,
-        resource_scope={"attachment_references": REFS},
+        resource_scope=dict(scope),
         audit_context={"user_roles": ["user"]},
     )
     if scenario != "unbound":
