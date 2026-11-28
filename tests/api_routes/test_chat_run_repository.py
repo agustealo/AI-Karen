@@ -471,7 +471,7 @@ async def test_retry_advances_only_verified_retained_revision(
     )
 
     calls = []
-    transaction = Transaction([str(uuid.uuid4()) if eligible else None, advanced])
+    transaction = Transaction([str(uuid.uuid4()) if eligible else None, advanced, advanced])
     scoped_transaction(monkeypatch, transaction)
 
     async def match(session, **kwargs):
@@ -487,7 +487,11 @@ async def test_retry_advances_only_verified_retained_revision(
     )
     assert result == expected
     assert len(calls) == int(eligible)
-    assert len(transaction.sql) == (2 if eligible and matched else 1)
+    assert len(transaction.sql) == (3 if expected is not None else 2 if eligible and matched else 1)
+    if expected is not None:
+        assert "SET retry_prepared_revision = :prepared_revision" in transaction.sql[2]
+        assert "retry_prepared_revision IS NULL" in transaction.sql[2]
+        assert transaction.parameters[2]["prepared_revision"] == expected
     assert "FOR UPDATE" in transaction.sql[0]
     assert "status IN ('failed', 'cancelled')" in transaction.sql[0]
     assert "terminal_at IS NOT NULL" in transaction.sql[0]
@@ -525,3 +529,21 @@ async def test_invalid_retry_identity_never_opens_transaction(monkeypatch, ident
             tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
             submission_id=identity, submitted_text="retained", attachment_references=refs,
         )
+
+@pytest.mark.asyncio
+async def test_retry_marker_failure_cannot_commit_draft_advance(monkeypatch):
+    from ai_karen_engine.services.database.repositories.postgres_conversation_repository import (
+        PostgresConversationRepository,
+    )
+    from unittest.mock import AsyncMock
+
+    transaction = Transaction([str(uuid.uuid4()), 8, None])
+    scoped_transaction(monkeypatch, transaction)
+    monkeypatch.setattr(PostgresConversationRepository, "lock_matching_submission_draft",
+                        AsyncMock(return_value=True))
+    with pytest.raises(RuntimeError, match="retry_receipt_not_recorded"):
+        await repository.SqlChatRunRepository().advance_failed_draft_revision(
+            tenant_id=TENANT, user_id=OWNER, conversation_id=THREAD,
+            submission_id="draft-v1-7", submitted_text="retained", attachment_references=[],
+        )
+    assert len(transaction.sql) == 3

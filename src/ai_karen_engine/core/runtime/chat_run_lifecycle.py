@@ -121,8 +121,8 @@ class ChatRunCoordinator:
 
     async def read_failed_draft_revision(
         self, context: ChatExecutionContext, *, submission_id: str,
-    ) -> Optional[int]:
-        """Read eligibility, never execute or authorize a future retry."""
+    ) -> dict[str, Any]:
+        """Observe eligibility and durable preparation; never grant execution."""
         context.require_authenticated_user()
         await get_conversation_runtime_gateway().require_owned_conversation(context)
         return await self._repository.read_failed_draft_revision(

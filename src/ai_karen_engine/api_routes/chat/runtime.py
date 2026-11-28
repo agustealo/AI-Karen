@@ -1836,16 +1836,29 @@ async def _ag_ui_draft_retry(
             "correlation_id": request_id, "error_type": type(exc).__name__,
         })
         raise HTTPException(status_code=503, detail="Draft retry unavailable") from exc
-    expected = revision if payload is None else revision + 1
-    if result is not None and (type(result) is not int or result != expected):
-        raise HTTPException(status_code=503, detail="Invalid draft retry receipt")
-    if payload is not None and result is None:
-        raise HTTPException(status_code=409, detail="Draft retry is no longer eligible")
+    if payload is None:
+        if (
+            not isinstance(result, dict)
+            or set(result) != {"eligible", "prepared_revision", "prepared_current"}
+            or type(result["eligible"]) is not bool
+            or type(result["prepared_current"]) is not bool
+            or (result["prepared_revision"] is not None and (
+                type(result["prepared_revision"]) is not int
+                or result["prepared_revision"] != revision + 1
+            ))
+            or (result["eligible"] and result["prepared_revision"] is not None)
+            or (result["prepared_current"] and result["prepared_revision"] is None)
+        ):
+            raise HTTPException(status_code=503, detail="Invalid draft retry receipt")
+        public = result
+    else:
+        if result is None:
+            raise HTTPException(status_code=409, detail="Draft retry is no longer eligible")
+        if type(result) is not int or result != revision + 1:
+            raise HTTPException(status_code=503, detail="Invalid draft retry receipt")
+        public = {"revision": result}
     return JSONResponse(
-        content={
-            "submission_id": submission_id,
-            **({"eligible": result is not None} if payload is None else {"revision": result}),
-        },
+        content={"submission_id": submission_id, **public},
         headers={"Cache-Control": "private, no-store"},
     )
 

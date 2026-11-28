@@ -252,9 +252,10 @@ async def test_completed_status_requires_exact_transcript_binding(monkeypatch, r
 async def test_draft_retry_ingress_is_scoped_and_fail_closed(monkeypatch, mutation, outcome):
     from unittest.mock import AsyncMock
 
-    expected = 8 if mutation else 7
+    expected = 8 if mutation else {"eligible": True, "prepared_revision": None, "prepared_current": False}
+    ineligible = None if mutation else {"eligible": False, "prepared_revision": None, "prepared_current": False}
     result = {
-        "success": expected, "ineligible": None, "foreign": PermissionError("private"),
+        "success": expected, "ineligible": ineligible, "foreign": PermissionError("private"),
         "missing": RuntimeError("conversation_not_found"), "invalid": ValueError("private"),
         "outage": OSError("private"), "bad_receipt": True,
     }[outcome]
@@ -282,7 +283,7 @@ async def test_draft_retry_ingress_is_scoped_and_fail_closed(monkeypatch, mutati
         assert response.headers["cache-control"] == "private, no-store"
         assert json.loads(response.body) == {
             "submission_id": "draft-v1-7",
-            **({"revision": 8} if mutation else {"eligible": outcome == "success"}),
+            **({"revision": 8} if mutation else result),
         }
     else:
         with pytest.raises(HTTPException) as caught:
@@ -551,3 +552,31 @@ async def test_submission_status_endpoint_is_scoped_and_minimal(monkeypatch, cas
         assert error.value.status_code == expected
         assert "private" not in error.value.detail
     assert calls == ([] if case in {"invalid_identity", "disabled"} else ["original-turn"])
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("observation,accepted", [
+    ({"eligible": False, "prepared_revision": 8, "prepared_current": True}, True),
+    ({"eligible": False, "prepared_revision": 8, "prepared_current": False}, True),
+    ({"eligible": True, "prepared_revision": 8, "prepared_current": True}, False),
+    ({"eligible": False, "prepared_revision": 9, "prepared_current": True}, False),
+    ({"eligible": False, "prepared_revision": None, "prepared_current": True}, False),
+    ({"eligible": False, "prepared_revision": True, "prepared_current": False}, False),
+])
+async def test_draft_retry_observation_validates_causal_receipt(monkeypatch, observation, accepted):
+    from unittest.mock import AsyncMock
+    import json
+
+    monkeypatch.setattr(ingress, "get_runtime_settings", lambda: SimpleNamespace(
+        features=SimpleNamespace(enable_ag_ui_bridge=True, enable_ag_ui_durable_runs=True),
+    ))
+    monkeypatch.setattr(ingress, "get_chat_run_coordinator", lambda: SimpleNamespace(
+        read_failed_draft_revision=AsyncMock(return_value=observation),
+    ))
+    user = {"user_id": OWNER, "tenant_id": TENANT}
+    if accepted:
+        response = await ingress.get_ag_ui_draft_retry(THREAD, "draft-v1-7", user=user)
+        assert json.loads(response.body) == {"submission_id": "draft-v1-7", **observation}
+    else:
+        with pytest.raises(HTTPException) as caught:
+            await ingress.get_ag_ui_draft_retry(THREAD, "draft-v1-7", user=user)
+        assert caught.value.status_code == 503
