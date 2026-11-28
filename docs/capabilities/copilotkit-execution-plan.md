@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-27: KFILE-UPLOAD-U2A legacy owner-create admission, PR #1383
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** use existing witness-issuing authenticated ingress and canonical artifact owner-create plus DATA_READ RBAC (not broad DATA_WRITE). Audit ingress decisions and revalidate current account/session before body read and immediately before canonical Storage dispatch. Reject legacy conversation/message bindings because their persistence is unsupported; no invented association, new endpoint, upload ledger or privilege grant. Existing bounded-ingress tests extend denial, revocation, scope and positive owner checks.
+- **Proof:** previous consumer head `d68eeaddf167845bd66e3e1a1b5f2424307776e8` passed all nine source workflows, including first-boot. Fresh exact-head tests and independent review required. Legacy upload remains non-idempotent; durable governed upload admission, actual Storage transport, signed browser/model proof and production activation NOT_RUN. No direct deployment or mutation.
+
 ### 2026-11-27: KEXP-042A.7 canonical Storage factory correction, PR #1383
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** the existing DatabaseServiceFactory supplied the raw SDK Storage client to RepositoryFactory, whereas SupabaseArtifactStore requires the initialized platform wrapper for bucket access, configured origin and private CA policy. Pass that same wrapper used by the canonical runtime repository factory; add a factory regression for policy/bucket identity and unavailable Storage denial. No new client, upload route, TLS implementation or release workflow. #1408 owns local HTTPS gateway/CA provenance; retain that separate acceptance gate.
