@@ -44,7 +44,7 @@ export function displayClockObservation(formatted: string): { time: string; date
  * Guard link schemes and local-network destinations independently of the
  * backend's canonical evidence validator.
  */
-function isPublicSourceUrl(value: unknown): value is string {
+export function isPublicSourceUrl(value: unknown): value is string {
   if (typeof value !== "string" || !value || value.length > 1200 ||
       /[\s\u0000-\u001f\\]/.test(value)) return false;
   try {

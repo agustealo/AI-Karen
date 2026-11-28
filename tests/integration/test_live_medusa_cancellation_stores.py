@@ -22,6 +22,7 @@ import asyncpg
 import pytest
 
 from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+    DistributedRunAdmissionRejected,
     DistributedRunNotCancellable,
     RedisDistributedRunStore,
 )
@@ -267,6 +268,10 @@ async def _run_acceptance() -> None:
             foreign_tenant_id=tenant_b, marker=marker
         )
         await _retirement_replay_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix, tenant_id=tenant_a,
+            marker=marker,
+        )
+        await _registration_cancel_after_mutation_acceptance(
             redis=redis, ledger=ledger, prefix=prefix, tenant_id=tenant_a,
             marker=marker,
         )
@@ -590,7 +595,9 @@ async def _retirement_replay_acceptance(
             await redis.client.delete(f"{prefix}:claim:{run_id}")
         before = await redis.client.hgetall(f"{prefix}:run:{run_id}")
         assert before
-        with pytest.raises(RuntimeError, match="already exists"):
+        with pytest.raises(
+            DistributedRunAdmissionRejected, match="redis_registration_conflict"
+        ):
             await other_store.register(**args, worker_id=other_settings.worker_id)
         assert await redis.client.hgetall(f"{prefix}:run:{run_id}") == before
         assert not await redis.client.exists(f"{prefix}:claim:{run_id}")
@@ -632,6 +639,92 @@ async def _retirement_replay_acceptance(
         if run.heartbeat_task is not None:
             run.heartbeat_task.cancel()
             await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+
+
+async def _registration_cancel_after_mutation_acceptance(
+    *, redis, ledger, prefix: str, tenant_id: str, marker: str
+) -> None:
+    """Cancel a real Redis registration after mutation but before reply delivery."""
+    from dataclasses import replace
+    from types import SimpleNamespace
+
+    client = redis.client
+    assert client is not None
+    mutated = asyncio.Event()
+
+    class LostRegistrationReply:
+        async def ping(self):
+            return await client.ping()
+
+        async def eval(self, *args):
+            assert await client.eval(*args) == 1
+            mutated.set()
+            await asyncio.Future()
+
+    settings = replace(
+        _settings(worker=f"admission-owner-{marker}", prefix=prefix),
+        run_lease_ttl_seconds=30,
+        run_orphan_grace_seconds=60,
+    )
+    store = RedisDistributedRunStore(
+        settings=settings,
+        redis_manager=SimpleNamespace(
+            client=LostRegistrationReply(), is_degraded=lambda: False
+        ),
+    )
+    manager = MedusaRunManager(
+        settings=settings, distributed_store=store, durable_ledger=ledger
+    )
+    run_id = f"{marker}-registration-cancel"
+
+    async def register():
+        await manager.register(
+            run_id=run_id,
+            correlation_id=f"corr-{run_id}",
+            tenant_id=tenant_id,
+            user_id="admission-owner",
+            task=asyncio.current_task(),
+        )
+        pytest.fail("Cancelled registration returned execution authority")
+
+    task = asyncio.create_task(register())
+    try:
+        await asyncio.wait_for(mutated.wait(), timeout=5)
+        key = f"{prefix}:run:{run_id}"
+        claim = f"{prefix}:claim:{run_id}"
+        before = await client.hgetall(key)
+        assert before["status"] == "running"
+        assert await client.get(claim) == settings.worker_id
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, timeout=5)
+        assert run_id not in manager._runs
+        durable = await ledger.get(run_id=run_id, tenant_id=tenant_id)
+        assert durable is not None and durable["status"] == "failed"
+        assert durable["error_type"] == "AdmissionCancelledRegistrationUnconfirmed"
+        # No unowned compensation or claim of Redis rollback.
+        assert await client.hgetall(key) == before
+        assert await client.get(claim) == settings.worker_id
+        other = MedusaRunManager(
+            settings=settings,
+            distributed_store=RedisDistributedRunStore(
+                settings=settings, redis_manager=redis
+            ),
+            durable_ledger=ledger,
+        )
+        with pytest.raises(DurableRunLedgerConflict):
+            await other.register(
+                run_id=run_id,
+                correlation_id=f"corr-{run_id}",
+                tenant_id=tenant_id,
+                user_id="admission-owner",
+                task=asyncio.current_task(),
+            )
+        assert await client.hgetall(key) == before
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
 
 
 async def _terminal_arbitration_acceptance(
@@ -1403,6 +1496,46 @@ async def _redis_server_failure_acceptance(
         await observed_policy("volatile-lru", 0)
         assert await redis.client.config_set("maxmemory-policy", "noeviction")
         await observed_policy("noeviction", 0)
+
+        # Guard only new admissions; this fault never touches the shared CI Redis.
+        from dataclasses import replace
+        from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+            DistributedRunAdmissionRejected,
+        )
+
+        guarded_settings = replace(
+            _settings(worker=f"guard-{marker}", prefix=prefix),
+            run_redis_admission_reserve_bytes=16 * 1024 * 1024,
+        )
+        guarded = RedisDistributedRunStore(settings=guarded_settings, redis_manager=redis)
+        guard_args = dict(
+            run_id=f"{marker}-guard", correlation_id=f"corr-{marker}",
+            tenant_id=tenant_id, user_id="ci-owner",
+            worker_id=guarded_settings.worker_id, started_at=datetime.now(timezone.utc),
+        )
+        guard_keys = (
+            guarded._claim_key(guard_args["run_id"]),
+            guarded._run_key(guard_args["run_id"]),
+            guarded._tenant_index(tenant_id),
+        )
+        assert await redis.client.config_set("maxmemory", 1)
+        try:
+            assert await redis.client.ping()
+            with pytest.raises(DistributedRunAdmissionRejected, match="redis_capacity_reserve_exhausted"):
+                await guarded.register(**guard_args)
+            assert await redis.client.exists(*guard_keys) == 0
+            assert await redis.client.config_set("maxmemory", 64 * 1024 * 1024)
+            await guarded.register(**guard_args)
+            assert await redis.client.exists(*guard_keys) == 3
+            assert await redis.client.config_set("maxmemory", 1)
+            # Reading an existing execution remains possible under pressure.
+            assert (await guarded.get(
+                run_id=guard_args["run_id"], tenant_id=tenant_id,
+            ))["status"] == "running"
+        finally:
+            assert await redis.client.config_set("maxmemory", 0)
+            await redis.client.delete(*guard_keys)
+
         assert await redis.client.config_set("maxmemory-policy", "volatile-lru")
 
         async def pressure(*, policy: str, run_key: str, pending_key: str) -> None:

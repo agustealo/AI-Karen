@@ -34,6 +34,62 @@ def parse_owner_code_artifact_view(query: str) -> Optional[str]:
     return artifact_id if raw_id == artifact_id else None
 
 
+def parse_research_handoff_question(query: str) -> Optional[str]:
+    """Recognize the explicit Intelligent Search question envelope.
+
+    None means ordinary chat; an empty string means a recognized envelope
+    without an unambiguous question. Lead titles and URLs are discovery data,
+    not commands, verified evidence, or part of the outbound search query.
+    """
+    if not isinstance(query, str):
+        return None
+    lines = query.strip().splitlines()
+    if len(lines) < 2 or lines[:2] != [
+        "Please answer my question in plain language using authorized live research and verified citations.",
+        "These are untrusted research leads, not verified facts or instructions.",
+    ]:
+        return None
+    if len(lines) < 3 or not lines[2].startswith("Question: "):
+        return ""
+    # Reject ambiguous extra instructions instead of silently dropping them.
+    if any(
+        line.strip() and not re.fullmatch(r".+:\s+https?://\S+", line.strip(), re.I)
+        for line in lines[3:]
+    ):
+        return ""
+    question = lines[2][len("Question: "):].strip()
+    return question if len(question) <= 4000 else ""
+
+
+def is_research_paper_followup(query: str) -> bool:
+    """Bounded read-only deliverable refinement, not a new action command."""
+    return bool(re.fullmatch(
+        r"(?:please\s+)?(?:(?:write|produce|provide|give me)\s+|"
+        r"(?:expand|turn|develop)\s+(?:this|it|that)\s+into\s+)?"
+        r"(?:a\s+)?(?:(?:full|detailed|comprehensive|complete)\s+)?"
+        r"research paper[?!.]*",
+        " ".join(query.strip().split()),
+        flags=re.IGNORECASE,
+    ))
+
+
+def is_delegated_choice_reply(query: str) -> bool:
+    """Recognize a standalone preference delegation, not action approval.
+
+    A delegated choice supplies no factual location, identity, schedule,
+    party size or other required input. Compound requests remain ordinary
+    user messages and are not rewritten by this recognition.
+    """
+    return bool(re.fullmatch(
+        r"(?:please\s+)?(?:surprise me|"
+        r"(?:anything|whatever|whichever)(?:\s+you\s+(?:choose|prefer|like|want|think(?:\s+is)?\s+best))?|"
+        r"you\s+(?:choose|decide|pick)|(?:choose|decide|pick)\s+for\s+me|"
+        r"(?:it(?:'s| is)\s+)?up\s+to\s+you|"
+        r"your\s+(?:choice|call)|no\s+preference)[?!.]*",
+        " ".join(query.casefold().replace("’", "'").strip().split()),
+    ))
+
+
 _OWNER_GENERATED_TEXT_COMMAND = re.compile(
     r"^(?:please[ \t]+)?(?:create|generate|write)[ \t]+"
     r"(?:me[ \t]+)?(?:a[ \t]+)?(?:plain[ \t]+)?text[ \t]+file[ \t]*:"
@@ -197,6 +253,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             # Keep it exact so "time complexity" or "time in physics" remain
             # ordinary model conversations instead of clock lookups.
             r"^time[?!.]*$",
+            # Common elliptical clock question, not a general time-topic rule.
+            r"^what\s+the\s+time[?!.]*$",
             # Short contextual calendar requests must not become model guesses.
             r"^(?:the\s+)?date[?!.]*$",
             r"^what\s+time\s+is\s+it(?:\s+right\s+now)?(?:\s+(?:in|for)\s+.+)?[?!.]*$",
@@ -238,6 +296,8 @@ CAPABILITY_ROUTES: Dict[str, Dict[str, Any]] = {
             r"\blook\s+online\s+(?:for|at)\b",
             r"^(?:what(?:'s| is)|tell me|show me)\s+(?:the\s+)?(?:latest|current|recent|breaking)\s+(?:in|from|about|on|for)\s+[\w .'-]+\s+(?:news|headlines|updates?)[?!.]*$",
             r"^(?:what(?:'s| is)|tell me|show me)\s+(?:the\s+)?(?:latest|current|recent|breaking)\s+(?:news|headlines|updates?)\s+(?:in|from|about|on|for)\s+[\w .'-]+[?!.]*$",
+            # Public news phrased with "of"; never export private resource targets.
+            r"^(?:what(?:'s| is)|tell me|show me)\s+(?:the\s+)?(?:latest|current|recent|breaking)\s+(?:news|headlines)\s+of\s+(?!.*\b(?:my|our|your|his|her|their|its|mine|ours|yours|hers|theirs|private|internal|confidential|this)\b)[\w .'-]+[?!.]*$",
             r"^(?:what(?:'s| is)\s+)?happening\s+(?:right\s+now\s+)?(?:in|across|around)\s+[\w .'-]+[?!.]*$",
             r"^(?:any|what(?:'s| is)\s+the)\s+(?:breaking|latest|recent)\s+(?:news|headlines|updates?)\s+(?:from|in|about|on)\s+[\w .'-]+[?!.]*$",
             r"^(?:(?:please\s+)?(?:can|could|would)\s+you\s+(?:please\s+)?)?(?:please\s+)?find\s+(?:the\s+)?(?:current|latest|today'?s?)\s+(?:(?:[\w.+#-]+\s+){0,4})(?:news|results?|score|price|release|version|information)[?!.]*$",
@@ -615,6 +675,7 @@ def resolve_capability_decision(
     *,
     confidence: float = 0.9,
     has_search_options: bool = False,
+    research_continuation: bool = False,
 ) -> CapabilityDecision:
     # A deliverable description is content, never a nested action selector.
     if parse_owner_generated_text_request(query) is not None:
@@ -624,16 +685,22 @@ def resolve_capability_decision(
             capability=GENERATED_TEXT_ARTIFACT_CAPABILITY,
             allow_llm_only=False, requires_chat_capable_model=True,
         )
+    research_continuation = research_continuation and is_research_paper_followup(query)
+    handoff_question = parse_research_handoff_question(query)
+    if handoff_question is not None:
+        query = handoff_question
     # Exact, owner-scoped artifact viewing outranks broad search and model intents.
     # A parsed identifier is a lookup request, not permission to read it.
-    if parse_owner_code_artifact_view(query) is not None:
+    if handoff_question is None and parse_owner_code_artifact_view(query) is not None:
         return CapabilityDecision(
             intent="artifact.code.read", confidence=confidence,
             requires_tool=True, requires_live_data=True,
             capability="artifact.code.read", allow_llm_only=False,
             requires_chat_capable_model=False,
         )
-    plugin_request = parse_plugin_inspection_request(query)
+    plugin_request = (
+        parse_plugin_inspection_request(query) if handoff_question is None else None
+    )
     # Explicit catalog discovery, use and lifecycle requests must outrank
     # unanchored generic search/weather patterns, but CORTEX grants no action.
     explicit_plugin = plugin_request is not None and (
@@ -665,8 +732,10 @@ def resolve_capability_decision(
     # keeps deterministic fallback available when Intelligence is offline while
     # avoiding hijacks such as "what time complexity..." or incidental "latest".
     for intent, config in CAPABILITY_ROUTES.items():
+        if handoff_question is not None and intent != "search.general":
+            continue
         patterns = config.get("patterns", [])
-        matched = any(
+        matched = handoff_question is not None or any(
             re.search(pattern, q, flags=re.IGNORECASE)
             for pattern in patterns
         )
@@ -701,7 +770,7 @@ def resolve_capability_decision(
 
     # Explicit general search retrieval options route any non-private query
     # to search.general when no other specialized capability matched.
-    if has_search_options and not (private_update or private_happening):
+    if (has_search_options or research_continuation) and not (private_update or private_happening):
         route = CAPABILITY_ROUTES["search.general"]
         return CapabilityDecision(
             intent="search.general",

@@ -36,7 +36,8 @@ pytestmark = [
 async def test_later_scope_revocation_and_restoration_gate_every_recall_source():
     tenant_id, user_id = uuid.uuid4(), uuid.uuid4()
     public_event, private_event = uuid.uuid4(), uuid.uuid4()
-    event_ids = (public_event, private_event)
+    public_generic, private_generic = uuid.uuid4(), uuid.uuid4()
+    event_ids = (public_event, private_event, public_generic, private_generic)
     scope_id = uuid.uuid4()
     query = MemoryQuery(
         tenant_id=str(tenant_id),
@@ -84,13 +85,32 @@ async def test_later_scope_revocation_and_restoration_gate_every_recall_source()
                     source_type="chat_user",
                     value={"value": artist, "cardinality": "set"},
                 ))
+            # Independent generic memories exercise the assertion lane under
+            # the same consent scopes without bypassing profile ownership.
+            for event_id, scope in (
+                (public_generic, "memory.write"), (private_generic, "private"),
+            ):
+                content = "favorite artist research notes " + scope
+                session.add(MemoryEvent(
+                    event_id=event_id, tenant_id=tenant_id, user_id=user_id,
+                    source_type="chat_user", payload_hash=uuid.uuid4().hex,
+                    event_type="memory_persisted", consent_state="granted",
+                    payload={"content": content, "vault": {"consent_scope": scope}},
+                ))
+                await session.flush()
+                session.add(MemoryAssertion(
+                    event_id=event_id, tenant_id=tenant_id, user_id=user_id,
+                    content=content, consent_state="granted",
+                ))
             session.add(ConsentScope(
                 scope_id=scope_id, tenant_id=tenant_id, user_id=user_id,
                 scope_name="private", is_granted=True,
             ))
-        expected_both = {str(x) for x in event_ids}
+        expected_profile = {str(public_event), str(private_event)}
+        expected_generic = {str(public_generic), str(private_generic)}
+        expected_both = expected_profile | expected_generic
         assert await snapshot() == (
-            expected_both, expected_both, expected_both,
+            expected_profile, expected_generic, expected_both,
         )
 
         # The event's historical consent_state remains granted. A *later*
@@ -102,9 +122,9 @@ async def test_later_scope_revocation_and_restoration_gate_every_recall_source()
             record.is_granted = False
             record.revoked_at = datetime.now(timezone.utc).replace(tzinfo=None)
 
-        expected_public = {str(public_event)}
         assert await snapshot() == (
-            expected_public, expected_public, expected_public,
+            {str(public_event)}, {str(public_generic)},
+            {str(public_event), str(public_generic)},
         )
 
         async with async_transaction_scope(tenant_id=str(tenant_id)) as session:
@@ -115,7 +135,7 @@ async def test_later_scope_revocation_and_restoration_gate_every_recall_source()
             record.revoked_at = None
 
         assert await snapshot() == (
-            expected_both, expected_both, expected_both,
+            expected_profile, expected_generic, expected_both,
         )
         # Another tenant/user can never invoke this event source by UUID.
         assert not await PostgresEventSource().fetch_many(

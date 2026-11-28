@@ -276,6 +276,31 @@ const RUN_FAILURE_UNKNOWN =
 
 const RUN_FAILURE_CODE = /^[A-Z][A-Z0-9_]{2,127}$/;
 
+// SDK failures may retain only the HTTP error string, not the response
+// object. Recognize the fixed rejection only to prevent another send;
+// neither its text nor its status is authority for a run identity.
+const ADMISSION_CONFLICT_CODE = 'CHAT_RUN_ADMISSION_CONFLICT';
+const ADMISSION_CONFLICT_DETAIL = 'Chat execution has already been admitted';
+
+function matchesAdmissionConflict(item: unknown): boolean {
+  if (typeof item === 'string') {
+    if (item.length > 512) return false;
+    const match = /^HTTP 409:\s*(\{.*\})$/.exec(item.trim());
+    if (!match) return false;
+    try {
+      const payload: unknown = JSON.parse(match[1]);
+      return isRecord(payload) && payload.detail === ADMISSION_CONFLICT_DETAIL;
+    } catch {
+      return false;
+    }
+  }
+  return isRecord(item) && item.status === 409 && (
+    item.detail === ADMISSION_CONFLICT_DETAIL ||
+    (isRecord(item.data) && item.data.detail === ADMISSION_CONFLICT_DETAIL) ||
+    (isRecord(item.details) && item.details.detail === ADMISSION_CONFLICT_DETAIL)
+  );
+}
+
 function runFailureDetail(value: unknown): {
   code: string | null;
   status: number | null;
@@ -285,6 +310,9 @@ function runFailureDetail(value: unknown): {
   let status: number | null = null;
   for (let index = 0; index < candidates.length && index < 10; index += 1) {
     const item = candidates[index];
+    if (matchesAdmissionConflict(item)) {
+      return { code: ADMISSION_CONFLICT_CODE, status: 409 };
+    }
     if (!isRecord(item) || visited.has(item)) continue;
     visited.add(item);
 
@@ -299,11 +327,19 @@ function runFailureDetail(value: unknown): {
       status = item.status;
     }
 
-    for (const key of ['event', 'error', 'cause', 'detail', 'details', 'response', 'data']) {
-      if (isRecord(item[key])) candidates.push(item[key]);
+    // Preserve the previous bounded structured traversal. Only the exact
+    // admission envelope is recognized from a string; no raw text is emitted.
+    for (const key of ['event', 'error', 'cause', 'detail', 'details', 'response', 'data', 'message']) {
+      if (isRecord(item[key]) || (typeof item[key] === 'string' && matchesAdmissionConflict(item[key]))) {
+        candidates.push(item[key]);
+      }
     }
   }
   return { code: null, status };
+}
+
+export function isCopilotRunAdmissionConflict(failure: unknown): boolean {
+  return runFailureDetail(failure).code === ADMISSION_CONFLICT_CODE;
 }
 
 export function isCopilotRunFinalityUnverified(failure: unknown): boolean {
@@ -312,6 +348,9 @@ export function isCopilotRunFinalityUnverified(failure: unknown): boolean {
 
 export function getCopilotRunFailureMessage(failure: unknown): string {
   const { code, status } = runFailureDetail(failure);
+  if (code === ADMISSION_CONFLICT_CODE) {
+    return 'Karen rejected another execution because a submission or conversation run already exists. Check the original submission status and saved history before sending again. If no recovery identity is available, reopen the conversation. (HTTP 409)';
+  }
   if (code !== null) {
     return `${RUN_FAILURE_GUIDANCE[code]} (Code: ${code})`;
   }

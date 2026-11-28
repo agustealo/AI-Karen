@@ -350,6 +350,17 @@ const approvedUrl = process.env.KAREN_BASE_URL;
 const approvedEmail = process.env.KAREN_UX_EMAIL;
 const approvedPassword = process.env.KAREN_UX_PASSWORD;
 const generatedDocumentAcceptance = process.env.KAREN_GENERATED_DOCUMENT_ACCEPTANCE === "true";
+const taskContinuityAcceptance = process.env.KAREN_TASK_CONTINUITY_ACCEPTANCE === "1";
+if (taskContinuityAcceptance && (
+    !localMode || releaseMode || authState || personalContextAcceptance ||
+    kcon770FaultAcceptance || generatedDocumentAcceptance ||
+    process.env.KAREN_SPECIALIST_ORDINARY_CHAT_ACCEPTANCE === "true" ||
+    process.env.KAREN_SANITIZED_ACCOUNT !== "true" ||
+    process.env.VERCEL_AUTOMATION_BYPASS_SECRET !== undefined ||
+    approvedUrl !== "http://127.0.0.1:8010" ||
+    !expectedRevision || !/^[0-9a-f]{40}$/.test(expectedRevision) ||
+    !approvedEmail?.trim() || !approvedPassword
+)) throw new Error("Task continuity proof requires approved sanitized loopback, explicit credentials and exact revision");
 const documentAccounts = [
   { email: approvedEmail, password: approvedPassword, tenant: process.env.KAREN_GENERATED_DOCUMENT_TENANT_ID, user: process.env.KAREN_GENERATED_DOCUMENT_USER_ID },
   { email: process.env.KAREN_UX_ACCOUNT_B_EMAIL, password: process.env.KAREN_UX_ACCOUNT_B_PASSWORD, tenant: process.env.KAREN_GENERATED_DOCUMENT_TENANT_ID, user: process.env.KAREN_GENERATED_DOCUMENT_B_USER_ID },
@@ -447,7 +458,7 @@ if (enabled) {
 async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
   // Generic local dev builds may omit the revision endpoint. Signed release
   // and explicit local specialist acceptance both require the reviewed SHA.
-  if (!releaseMode && !localSpecialistMode && !generatedDocumentAcceptance) return;
+  if (!releaseMode && !localSpecialistMode && !generatedDocumentAcceptance && !taskContinuityAcceptance) return;
   const response = await page.context().request.get(
     new URL("/api/deployment-revision", target).toString(),
     { failOnStatusCode: false, maxRedirects: 0, timeout: 20_000 },
@@ -455,7 +466,7 @@ async function requireReviewedRevision(page: Page, target: URL): Promise<void> {
   expect(response.status()).toBe(200);
   const body: unknown = await response.json();
   expect(body).toBeTruthy();
-  if (localSpecialistMode || generatedDocumentAcceptance) {
+  if (localSpecialistMode || generatedDocumentAcceptance || taskContinuityAcceptance) {
     expect(response.headers()["content-type"] ?? "").toMatch(/^application\/json(?:;|$)/i);
     expect(response.headers()["cache-control"] ?? "").toContain("no-store");
     expect(body).toEqual({ status: "ok", revision: expectedRevision });
@@ -479,7 +490,7 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     ? "ARM-08 local ordinary-chat specialist execution survives reload"
     : "ARM-08 fresh ordinary-chat specialist execution survives reload";
   test(approvedSpecialist ? specialistTitle : "persists a real user message and a real assistant reply", async ({ page }, testInfo) => {
-    test.setTimeout(approvedSpecialist ? 12 * 60_000 : personalContextAcceptance ? 18 * 60_000 : 180_000);
+    test.setTimeout(approvedSpecialist ? 12 * 60_000 : personalContextAcceptance ? 18 * 60_000 : taskContinuityAcceptance ? 12 * 60_000 : 180_000);
     const target = new URL(approvedUrl!);
     const browserErrors: string[] = [];
     page.on("pageerror", error => {
@@ -751,8 +762,13 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     // KCON-490: real multi-turn regression in the SAME authenticated browser,
     // immediately AFTER first model reply, BEFORE any reload can reset SDK
     // state or hide a second-send draft CAS race. Explicit opt-in only.
-    if (personalContextAcceptance) {
-      await test.step("KCON-490 real multi-turn personal context", async () => {
+    let taskContinuationProof: {
+      answer: string;
+      receipt: Awaited<ReturnType<typeof expectVerifiedExecutionReceipt>>;
+    } | undefined;
+    if (personalContextAcceptance || taskContinuityAcceptance) {
+      await test.step(taskContinuityAcceptance ? "KIQ-A01/A02 real delegated task continuity" :
+        "KCON-490 real multi-turn personal context", async () => {
         const active = page.getByTestId("karen-copilot-consumer-chat");
         await expect(active).toHaveAttribute("data-conversation-id", id!);
         const composerForTurn = active.getByTestId("karen-copilot-sdk-chat")
@@ -863,6 +879,35 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
           }
         };
 
+        if (taskContinuityAcceptance) {
+          // Synthetic, inert task. The second prompt contains no subject,
+          // theme or output format, so replaying only that prompt cannot pass.
+          const project = "Kestrel-" + crypto.randomUUID();
+          const clarification = await runPersonalTurn(
+            `Prepare a four-line project card for fictional project ${project}. ` +
+            "Ask me only whether the theme should be forest or ocean before writing it. " +
+            "Once the theme is chosen, give exactly four plain-text lines with labels " +
+            "Project:, Theme:, Goal:, and Next step:. Do not add explanations or questions.",
+          );
+          expect(/forest/i.test(clarification) && /ocean/i.test(clarification) &&
+            clarification.includes("?"), "The first turn must ask the bounded theme question").toBe(true);
+          const clarificationReceipt = await expectVerifiedExecutionReceipt(page, id!, clarification);
+          const answer = await runPersonalTurn("You choose.");
+          const lines = answer.split(/\r?\n/).map(line => line.trim()).filter(Boolean);
+          expect(lines.length === 4 &&
+            lines[0] === `Project: ${project}` &&
+            /^Theme: (forest|ocean)$/i.test(lines[1]) &&
+            /^Goal: \S.+$/i.test(lines[2]) &&
+            /^Next step: \S.+$/i.test(lines[3]) &&
+            !answer.includes("?"),
+            "Delegated choice must complete the original structured deliverable without another question").toBe(true);
+          const receipt = await expectVerifiedExecutionReceipt(page, id!, answer);
+          expect(receipt.assistantId !== clarificationReceipt.assistantId).toBe(true);
+          expect(observedRunRequests.length - initialRunCount).toBe(2);
+          taskContinuationProof = { answer, receipt };
+          return;
+        }
+
         const repeatsOldBiography = (answer: string) =>
           ["valencia", "granada", "bilbao"]
             .every(fact => answer.toLowerCase().includes(fact));
@@ -942,6 +987,16 @@ test.describe("canonical consumer chat cold-load acceptance", () => {
     });
     await expectRealCopilotKitStyles(page);
     const replayedReceipt = await expectVerifiedExecutionReceipt(page, id!, persistedAnswer, approvedSpecialist);
+    if (taskContinuityAcceptance) {
+      if (!taskContinuationProof) throw new Error("Task continuation proof missing");
+      expect(await expectVerifiedExecutionReceipt(page, id!, taskContinuationProof.answer))
+        .toEqual(taskContinuationProof.receipt);
+      await expect(restored.getByTestId("karen-copilot-assistant-message")
+        .filter({ hasText: taskContinuationProof.answer }).last()).toBeVisible({ timeout: 30_000 });
+      expect(observedRunRequests, "Task reload must not resubmit inference").toHaveLength(3);
+      await requireReviewedRevision(page, target);
+      await requireLiveCanonicalBackend(page, target);
+    }
     if (approvedSpecialist) {
       expect(replayedReceipt).toEqual(firstReceipt);
       expect(await readFreshSpecialistEvidence(page, target, id!, specialistTransportIds[0], firstReceipt.runtimeRequestId!, firstReceipt.assistantId, approvedSpecialist)).toEqual(specialistEvidence);

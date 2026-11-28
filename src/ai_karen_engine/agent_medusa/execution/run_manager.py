@@ -20,7 +20,10 @@ from ai_karen_engine.config.agent_medusa import (
 )
 from ai_karen_engine.core.logging import get_logger
 
+from ..telemetry.metrics import record_retention_event
 from .distributed_run_store import (
+    DistributedRunAdmissionCancelled,
+    DistributedRunAdmissionRejected,
     DistributedRunNotCancellable,
     DistributedRunNotFound,
     DistributedRunOwnershipLost,
@@ -212,22 +215,72 @@ class MedusaRunManager:
                 extra={"run_id": run_id, "correlation_id": correlation_id},
             )
 
-        if await self._distributed_available():
-            try:
-                await self._distributed_store.register(
-                    run_id=run_id,
-                    correlation_id=correlation_id,
-                    tenant_id=tenant_id,
-                    user_id=user_id,
-                    worker_id=self._settings.worker_id,
-                    started_at=started_at,
-                )
-            except DistributedRunStoreUnavailable:
+        guarded = (
+            self._settings.distributed_run_control_enabled
+            and self._settings.run_redis_admission_reserve_bytes > 0
+        )
+        # A guarded admission must reach the shared registration boundary.
+        # A failed PING cannot silently bypass the reserve via durable-only mode.
+        registration_attempted = False
+        try:
+            if guarded or await self._distributed_available():
+                try:
+                    registration_attempted = True
+                    await self._distributed_store.register(
+                        run_id=run_id,
+                        correlation_id=correlation_id,
+                        tenant_id=tenant_id,
+                        user_id=user_id,
+                        worker_id=self._settings.worker_id,
+                        started_at=started_at,
+                    )
+                except DistributedRunStoreUnavailable:
+                    if guarded:
+                        raise DistributedRunAdmissionRejected(
+                            "redis_capacity_unverified",
+                        ) from None
+                    logger.warning(
+                        "Medusa distributed coordination unavailable during registration",
+                        extra={"run_id": run_id, "correlation_id": correlation_id},
+                    )
+                else:
+                    run.shared_registered = True
+        except asyncio.CancelledError as exc:
+            # Only the store's pre-write cancellation proves no shared mutation.
+            # An unclassified cancellation during register is also uncertain.
+            uncertain = registration_attempted and not isinstance(
+                exc, DistributedRunAdmissionCancelled
+            )
+            cleanup = asyncio.create_task(
+                self._retire_rejected_registration(
+                    run,
+                    error_type=(
+                        "AdmissionCancelledRegistrationUnconfirmed"
+                        if uncertain
+                        else "AdmissionCancelledBeforeRegistration"
+                    ),
+                ),
+            )
+            while not cleanup.done():
+                try:
+                    await asyncio.shield(cleanup)
+                except asyncio.CancelledError:
+                    continue
+            cleanup.result()
+            raise
+        except Exception as exc:
+            if isinstance(exc, DistributedRunAdmissionRejected):
                 logger.warning(
-                    "Medusa distributed coordination unavailable during registration",
-                    extra={"run_id": run_id, "correlation_id": correlation_id},
+                    "medusa_run_admission_rejected",
+                    extra={
+                        "run_id": run_id,
+                        "correlation_id": correlation_id,
+                        "tenant_id": tenant_id,
+                        "user_id": user_id,
+                        "reason_code": exc.reason_code,
+                    },
                 )
-            except Exception as exc:
+            try:
                 if run.durable_registered:
                     await self._safe_mark_durable_terminal(
                         run=run,
@@ -235,12 +288,25 @@ class MedusaRunManager:
                         completed_at=datetime.now(timezone.utc),
                         error_type=type(exc).__name__,
                     )
+            except Exception as cleanup_error:
+                if not isinstance(exc, DistributedRunAdmissionRejected):
+                    raise
+                # A ledger outage must not replace a terminal admission
+                # denial with a generic error eligible for model fallback.
+                logger.error(
+                    "medusa_admission_failure_persistence_unconfirmed",
+                    extra={
+                        "run_id": run_id,
+                        "correlation_id": correlation_id,
+                        "tenant_id": tenant_id,
+                        "error_type": type(cleanup_error).__name__,
+                    },
+                )
+            finally:
                 async with self._lock:
                     if self._runs.get(run_id) is run:
                         self._runs.pop(run_id, None)
-                raise
-            else:
-                run.shared_registered = True
+            raise
 
         if run.durable_registered:
             try:
@@ -283,6 +349,37 @@ class MedusaRunManager:
                 name=f"medusa-run-heartbeat:{run_id}",
             )
         return run
+
+    async def _retire_rejected_registration(
+        self,
+        run: ExecutionRun,
+        *,
+        error_type: str,
+    ) -> None:
+        """Close an unstarted task without asserting shared registration rollback."""
+        try:
+            if run.durable_registered:
+                await self._safe_mark_durable_terminal(
+                    run=run,
+                    status=ExecutionRunStatus.FAILED,
+                    completed_at=datetime.now(timezone.utc),
+                    error_type=error_type,
+                )
+        except Exception as exc:
+            # Preserve cancellation; durable closure is explicitly unconfirmed.
+            logger.error(
+                "medusa_admission_cancellation_persistence_unconfirmed",
+                extra={
+                    "run_id": run.run_id,
+                    "correlation_id": run.correlation_id,
+                    "tenant_id": run.tenant_id,
+                    "error_type": type(exc).__name__,
+                },
+            )
+        finally:
+            async with self._lock:
+                if self._runs.get(run.run_id) is run:
+                    self._runs.pop(run.run_id, None)
 
     async def mark_response(
         self, run_id: str, outcome_status: str
@@ -1265,16 +1362,34 @@ class MedusaRunManager:
         if acknowledge is None:
             return False
         try:
-            return await asyncio.wait_for(
+            acknowledged = await asyncio.wait_for(
                 acknowledge(tenant_id=tenant_id, receipt=durable),
                 timeout=self._settings.run_heartbeat_interval_seconds,
             )
-        except (DistributedRunStoreUnavailable, TimeoutError, ValueError):
+        except asyncio.CancelledError:
+            record_retention_event("acknowledgement", "cancelled")
+            raise
+        except (DistributedRunStoreUnavailable, TimeoutError, ValueError) as exc:
+            outcome = (
+                "timeout"
+                if isinstance(exc, TimeoutError)
+                else "invalid" if isinstance(exc, ValueError) else "unavailable"
+            )
+            record_retention_event("acknowledgement", outcome)
             logger.warning(
                 "Medusa terminal retention acknowledgement deferred",
-                extra={"run_id": durable.get("run_id"), "tenant_id": tenant_id},
+                extra={
+                    "run_id": durable.get("run_id"),
+                    "tenant_id": tenant_id,
+                    "retention_outcome": outcome,
+                },
             )
             return False
+        record_retention_event(
+            "acknowledgement",
+            "acknowledged" if acknowledged else "not_confirmed",
+        )
+        return acknowledged
 
     async def _retry_local_retention(self, run: ExecutionRun) -> None:
         if (
@@ -1310,14 +1425,20 @@ class MedusaRunManager:
                 # Rotate only the item actually attempted. A time-budget
                 # interruption must not skip the remainder of a whole batch.
                 run_ids = await discover(tenant_id=tenant_id, limit=1)
-                if not run_ids or run_ids[0] in seen:
-                    break
+                if not run_ids:
+                    record_retention_event("repair_batch", "empty")
+                    return
+                if run_ids[0] in seen:
+                    record_retention_event("repair_batch", "cycle")
+                    return
                 run_id = run_ids[0]
                 seen.add(run_id)
                 durable = await self._get_durable(run_id=run_id, tenant_id=tenant_id)
-                if durable is None or (
-                    user_id is not None and durable.get("user_id") != user_id
-                ):
+                if durable is None:
+                    record_retention_event("repair_candidate", "durable_missing")
+                    continue
+                if user_id is not None and durable.get("user_id") != user_id:
+                    record_retention_event("repair_candidate", "scope_skipped")
                     continue
                 if durable.get("status") not in {
                     "completed",
@@ -1325,21 +1446,28 @@ class MedusaRunManager:
                     "cancelled",
                     "orphaned",
                 }:
+                    record_retention_event("repair_candidate", "not_terminal")
                     continue
                 await self._release_terminal_retention(tenant_id, durable)
+            record_retention_event("repair_batch", "batch_limit")
 
         try:
             await asyncio.wait_for(
                 repair(), timeout=self._settings.run_heartbeat_interval_seconds
             )
+        except asyncio.CancelledError:
+            record_retention_event("repair_batch", "cancelled")
+            raise
         except (
             DistributedRunStoreUnavailable,
             DurableRunLedgerUnavailable,
             TimeoutError,
-        ):
+        ) as exc:
+            outcome = "timeout" if isinstance(exc, TimeoutError) else "unavailable"
+            record_retention_event("repair_batch", outcome)
             logger.warning(
                 "Medusa terminal retention batch deferred",
-                extra={"tenant_id": tenant_id},
+                extra={"tenant_id": tenant_id, "retention_outcome": outcome},
             )
 
     async def _recover_local_terminal_view(self, run: ExecutionRun) -> None:

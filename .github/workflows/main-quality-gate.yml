@@ -347,6 +347,7 @@ jobs:
 
       - name: Chat runtime burn contracts
         run: |
+          pytest tests/services/test_runtime_search_citation_validator.py -q
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_contract.py -q
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_burn_contract.py -q
           pytest src/ai_karen_engine/api_routes/chat/tests/test_chat_runtime_concurrency_burn.py -q

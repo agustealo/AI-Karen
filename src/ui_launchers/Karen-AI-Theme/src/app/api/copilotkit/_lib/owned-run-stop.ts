@@ -154,14 +154,15 @@ export async function readKarenOwnedRunStatus(
   verifiedHeaders: Record<string, string>,
   threadId: string,
   runId: string,
+  selector: "runs" | "submissions" = "runs",
 ): Promise<Response> {
-  if (!RUN_ID.test(runId)) {
+  if (!RUN_ID.test(runId) || (selector !== "runs" && selector !== "submissions")) {
     return NextResponse.json({ detail: "Invalid run identity" }, { status: 422 });
   }
   let response: Response;
   try {
     response = await fetch(
-      backendBaseUrl + "/api/chat/ag-ui/runs/" + threadId + "/" + runId + "/status",
+      backendBaseUrl + "/api/chat/ag-ui/" + selector + "/" + threadId + "/" + runId + "/status",
       {
         method: "GET",
         headers: verifiedHeaders,
@@ -190,15 +191,26 @@ export async function readKarenOwnedRunStatus(
     return NextResponse.json({ detail: "Invalid run status receipt" }, { status: 503 });
   }
   const record = data as Record<string, unknown>;
-  if (!["running", "cancelling", "cancelled", "completed", "failed",
-        "orphaned", "interrupted"].includes(String(record.status)) ||
+  if (typeof record.status !== "string" ||
+      !["running", "cancelling", "cancelled", "completed", "failed",
+        "orphaned", "interrupted"].includes(record.status) ||
       typeof record.cancel_requested !== "boolean" ||
       typeof record.cancellation_confirmed !== "boolean" ||
       (record.cancellation_confirmed === true &&
         (record.status !== "cancelled" || record.cancel_requested !== true))) {
     return NextResponse.json({ detail: "Invalid run status receipt" }, { status: 503 });
   }
+  // Submission correlation is not execution authority. Require the exact
+  // requested submission and a valid original transport identity.
+  if (selector === "submissions" &&
+      (record.submissionId !== runId || typeof record.runId !== "string" ||
+       !RUN_ID.test(record.runId))) {
+    return NextResponse.json({ detail: "Invalid run status receipt" }, { status: 503 });
+  }
   return NextResponse.json({
+    ...(selector === "submissions" ? {
+      runId: record.runId, submissionId: runId,
+    } : {}),
     status: record.status,
     cancel_requested: record.cancel_requested,
     cancellation_confirmed: record.cancellation_confirmed,

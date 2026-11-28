@@ -42,6 +42,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+
+def chat_tool_call_limit(tool_requirements: list[str]) -> int:
+    """Preserve the existing chat allowance for declared tools and retries."""
+    return len(tool_requirements) + 5
+
 class RuntimeLevel(str, Enum):
     FULL = "FULL"
     REDUCED = "REDUCED"
@@ -244,6 +249,9 @@ class PolicyDecision:
             budget=ExecutionBudget(
                 max_duration_ms=(resource.max_wall_time_seconds * 1000 if resource else 30000),
                 max_model_calls=int(self.runtime_constraints.get("max_model_calls", 10)),
+                max_tool_calls=self.runtime_constraints.get(
+                    "max_tool_calls", ExecutionBudget().max_tool_calls,
+                ),
                 max_reasoning_steps=int(self.runtime_constraints.get("max_reasoning_steps", 10)),
                 max_output_tokens=(resource.max_output_size_kb * 1024 if resource else 4096),
             ),
@@ -1001,6 +1009,7 @@ class RuntimePolicyEnforcer:
             ):
                 return False
             quota = constraints.get("max_model_calls")
+            tool_quota = constraints.get("max_tool_calls")
             # External requests may be charged without a model call. A
             # serialized standalone plan cannot mint a larger independent
             # external budget than the original issuer-derived plan grants.
@@ -1011,6 +1020,10 @@ class RuntimePolicyEnforcer:
                 and quota >= 0
                 and type(plan.budget.max_model_calls) is int
                 and 0 <= plan.budget.max_model_calls <= quota
+                and type(tool_quota) is int
+                and tool_quota >= 0
+                and type(plan.budget.max_tool_calls) is int
+                and 0 <= plan.budget.max_tool_calls <= tool_quota
                 and type(external_requests) is int
                 and 0 <= external_requests <= external_limit
             )
@@ -1530,6 +1543,13 @@ class RuntimePolicyEnforcer:
                 "reasoning_modes": list(reasoning_policy.allowed_modes),
                 "reasoning_required": bool(reasoning_policy.allowed_modes),
                 "max_model_calls": max(0, int(request.max_model_calls)),
+                # Chat already uses a count-derived allowance; standalone
+                # policy requests retain the canonical ExecutionBudget default.
+                "max_tool_calls": (
+                    chat_tool_call_limit(topology_tools)
+                    if "tool_requirements" in request.execution_topology
+                    else ExecutionBudget().max_tool_calls
+                ),
                 "max_reasoning_steps": max(
                     0, int(request.execution_topology.get("max_steps", 10) or 10)
                 ),
