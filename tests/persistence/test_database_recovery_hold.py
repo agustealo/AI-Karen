@@ -4,8 +4,18 @@ from __future__ import annotations
 
 def test_recovery_hold_denies_app_before_startup_or_router_wiring(monkeypatch) -> None:
     import pytest
-    from ai_karen_engine.app import create_app
+    import builtins
     from ai_karen_engine.config.database import DatabaseRecoveryHold
+
+    real_import = builtins.__import__
+
+    def guarded_import(name, *args, **kwargs):
+        if name == "ai_karen_engine.server.routers":
+            pytest.fail("held application attempted router import")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", guarded_import)
+    from ai_karen_engine.app import create_app
 
     monkeypatch.setenv("KAREN_DATABASE_RECOVERY_MODE", "hold")
     with pytest.raises(DatabaseRecoveryHold):

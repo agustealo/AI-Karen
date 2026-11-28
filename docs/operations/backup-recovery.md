@@ -157,6 +157,10 @@ acceptance; the CI test signs synthetic evidence using disposable keys only.
 
 Set KAREN_DATABASE_RECOVERY_MODE=hold in the actual process environment
 before starting the canonical ASGI application against recovery infrastructure.
+The base Compose API environment explicitly forwards this setting, including
+an invalid empty value, through the production overlay that resets env_file.
+For hosted Render deployments set the process environment explicitly; no
+existing hosted service setting is changed by this repository contract.
 The application factory and lifespan reject startup before router wiring or
 service acquisition. The canonical PostgreSQL engine rejects initialization,
 factory access and new pool checkouts. Invalid mode values also deny.

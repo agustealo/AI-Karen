@@ -76,7 +76,20 @@ def test_recovery_hold_precedes_application_and_database_acquisition() -> None:
     engine = (REPO_ROOT / "src/ai_karen_engine/persistence/postgres/engine.py").read_text(encoding="utf-8")
     factory = app.split("def create_app()", 1)[1]
     assert factory.index("require_database_recovery_not_held()") < factory.index("wire_routers(app, settings)")
+    router_import = "from ai_karen_engine.server.routers import wire_routers"
+    assert router_import not in app.split("def create_app()", 1)[0]
+    assert factory.index("require_database_recovery_not_held()") < factory.index(router_import)
     lifespan = lifecycle.split("async def lifespan(app: FastAPI):", 1)[1]
     assert lifespan.index("require_database_recovery_not_held()") < lifespan.index("await on_startup(settings, app)")
     assert 'event.listen(self._engine, "checkout", _guard_recovery_checkout)' in engine
     assert 'event.listen(self._async_engine.sync_engine, "checkout", _guard_recovery_checkout)' in engine
+
+
+def test_recovery_hold_is_forwarded_through_production_compose_environment() -> None:
+    compose = (REPO_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+    api = compose.split("\n  api:", 1)[1].split("\n  web:", 1)[0]
+    assert 'KAREN_DATABASE_RECOVERY_MODE: "${KAREN_DATABASE_RECOVERY_MODE-normal}"' in api
+    overlay = (REPO_ROOT / "deploy/compose/docker-compose.prod.yml").read_text(encoding="utf-8")
+    api_override = overlay.split("\n  api:", 1)[1].split("\n  web:", 1)[0]
+    assert "env_file: !reset []" in api_override
+    assert "KAREN_DATABASE_RECOVERY_MODE:" not in api_override
