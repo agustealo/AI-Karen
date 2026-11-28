@@ -1116,9 +1116,24 @@ async def test_durable_receipt_retention_acknowledgement_is_exact(result: int) -
         "error_type": None,
         "outcome_status": "success",
     }
+    from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
+    store._now = lambda: datetime(2026, 11, 26, 10, 1, tzinfo=timezone.utc)
+    name = "kari_medusa_terminal_retention_acknowledged_age_seconds"
+
+    def snapshot():
+        return get_metrics_collector().snapshot()["histograms"].get(name, {}).get("values", {}).get(())
+
+    before = snapshot()
     assert await store.acknowledge_durable_terminal(
         tenant_id="tenant-a", receipt=receipt
     ) is bool(result)
+    after = snapshot()
+    if result == 1:
+        assert after.count == (before.count if before else 0) + 1
+        assert after.total == (before.total if before else 0) + 60
+    else:
+        assert after == before
     assert client.calls == [
         (
             _ACK_DURABLE_TERMINAL_SCRIPT,
@@ -1500,3 +1515,58 @@ def test_redis_admission_reserve_configuration_is_validated():
     for invalid in (-1, True, 1.5):
         with pytest.raises(AgentMedusaConfigError, match="nonnegative integer"):
             replace(_settings("owner"), run_redis_admission_reserve_bytes=invalid)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("result", "expected"),
+    [
+        ([0, []], []),
+        ([3, ["first", "second"]], ["first", "second"]),
+        ([3, ["first"]], None),
+        ([True, ["first"]], None),
+        ([-1, []], None),
+        ([1, [None]], None),
+        (["2", ["first", "second"]], None),
+    ],
+)
+async def test_pending_terminal_discovery_observes_index_members(result, expected):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    from ai_karen_engine.platform.observability.metrics import get_metrics_collector
+
+    name = "kari_medusa_terminal_retention_index_entries_observed"
+
+    def snapshot():
+        return get_metrics_collector().snapshot()["histograms"].get(name, {}).get("values", {}).get(())
+
+    before = snapshot()
+    client = SimpleNamespace(
+        ping=AsyncMock(return_value=True), eval=AsyncMock(return_value=result),
+    )
+    store = RedisDistributedRunStore(
+        settings=_settings("observer"),
+        redis_manager=SimpleNamespace(client=client, is_degraded=lambda: False),
+    )
+    if expected is None:
+        with pytest.raises(DistributedRunStoreUnavailable, match="invalid_terminal_discovery_result"):
+            await store.pending_terminal_ids(tenant_id="tenant-private", limit=2)
+        assert snapshot() == before
+    else:
+        assert await store.pending_terminal_ids(tenant_id="tenant-private", limit=2) == expected
+        after = snapshot()
+        assert after.count == (before.count if before else 0) + 1
+        assert after.total == (before.total if before else 0) + result[0]
+    client.eval.assert_awaited_once()
+
+
+@pytest.mark.parametrize("value", [-1, float("inf"), float("nan"), True, "raw"])
+def test_retention_observation_rejects_invalid_age(value, monkeypatch):
+    from ai_karen_engine.agent_medusa.telemetry import metrics
+    from ai_karen_engine.platform.observability.metrics import MetricsCollector
+
+    collector = MetricsCollector()
+    monkeypatch.setattr(metrics, "get_metrics_collector", lambda: collector)
+    metrics.record_retention_observation("acknowledged_age", value)
+    assert collector.snapshot()["histograms"] == {}
