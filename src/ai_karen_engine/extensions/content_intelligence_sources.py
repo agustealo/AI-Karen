@@ -277,20 +277,6 @@ def validate_runtime_content_payload(
     references, documents = _runtime_source_documents(context, plan)
     if not isinstance(payload, dict) or payload.get("documents") != documents:
         raise PermissionError("content_source_evidence_invalid")
-    operation = payload.get("operation")
-    if not isinstance(operation, str):
-        raise ValueError("content_source_operation_invalid")
-    _validate_source_operation(
-        operation, references, query=payload.get("query"),
-        left_id=payload.get("left_id"), right_id=payload.get("right_id"),
-    )
-    fields = {"operation", "documents"}
-    if operation == "search":
-        fields.add("query")
-    elif operation == "compare":
-        fields.update({"left_id", "right_id"})
-    if set(payload) != fields:
-        raise ValueError("content_source_operation_invalid")
     operation_digest = runtime_content_operation_digest(
         references, {key: value for key, value in payload.items() if key != "documents"},
     )
@@ -404,6 +390,7 @@ class ContentSourceHost:
             payload["query"] = query
         elif operation == "compare":
             payload.update({"left_id": left_id, "right_id": right_id})
+        validate_runtime_content_payload(context, plan, payload)
         authorized = _snapshot_source_documents(documents)
         await revalidate_runtime_content_session(context, plan)
         validate_runtime_content_payload(context, plan, payload)
