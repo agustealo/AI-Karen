@@ -40,8 +40,7 @@ pg_dump \
   --dbname="${DATABASE_URL}" \
   --format=custom \
   --no-owner \
-  --no-privileges \
-  --file="${BACKUP_FILE}"
+  --no-privileges > "${BACKUP_FILE}"
 
 if [[ ! -s "${BACKUP_FILE}" ]]; then
   echo "error: backup artifact is empty" >&2

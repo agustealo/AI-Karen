@@ -38,6 +38,7 @@ def test_backup_produces_checksum_and_uses_custom_format() -> None:
     script = _read("scripts/deploy/database-backup.sh")
 
     assert "--format=custom" in script
+    assert ' > "${BACKUP_FILE}"' in script
     assert 'sha256sum "${BACKUP_FILE}"' in script
     assert 'sha256sum --check "${CHECKSUM_FILE}"' in script
     assert "DATABASE_URL is required" in script
@@ -67,6 +68,7 @@ def test_restore_is_explicitly_destructive_and_checksum_guarded() -> None:
     assert "--clean" not in script
     assert "--if-exists" not in script
     assert "--single-transaction" in script
+    assert ' < "${BACKUP_FILE}"' in script
     assert "--exit-on-error" in script
     assert "recovery admission is not verified" in script
 

@@ -66,7 +66,6 @@ pg_restore \
   --no-owner \
   --no-privileges \
   --single-transaction \
-  --exit-on-error \
-  "${BACKUP_FILE}"
+  --exit-on-error < "${BACKUP_FILE}"
 
 echo "restore staged; governed-memory recovery admission is not verified"
