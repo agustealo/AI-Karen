@@ -35,6 +35,7 @@ class EventSource(Protocol):
         tenant_id: str,
         user_id: str,
         event_ids: Any,
+        for_current_recall: bool = False,
     ) -> dict[str, dict[str, Any]]: ...
 
 
@@ -204,6 +205,7 @@ class HybridRetrievalRouter:
                         tenant_id=str(query.tenant_id),
                         user_id=str(query.user_id),
                         event_ids=[event_id],
+                        for_current_recall=True,
                     )
                 except Exception as exc:
                     logger.warning(
@@ -360,6 +362,7 @@ class HybridRetrievalRouter:
             tenant_id=str(query.tenant_id),
             user_id=str(query.user_id),
             event_ids=graph_rows_by_event,
+            for_current_recall=True,
         )
 
         # Raw traversal paths contain intermediate graph IDs that have not

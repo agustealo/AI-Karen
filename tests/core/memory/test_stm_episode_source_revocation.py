@@ -28,7 +28,8 @@ class _EventSource:
         self.current = None
         self.calls = 0
 
-    async def fetch_many(self, *, tenant_id, user_id, event_ids):
+    async def fetch_many(self, *, tenant_id, user_id, event_ids, for_current_recall=False):
+        assert for_current_recall is True
         self.calls += 1
         assert (tenant_id, user_id) == ("tenant-1", "user-1")
         assert event_ids == ["event-1"]
