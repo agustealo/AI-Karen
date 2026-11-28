@@ -385,5 +385,33 @@ async def test_upload_session_migration_rls_and_repository_contract() -> None:
         assert recovered is not None and recovered.state == "committed"
         assert recovered.artifact_id == pending.session_id
         assert await repo.reconcile_verified_text(**recovery_scope, artifact_store=reader()) is None
+        # An already committed upload is retrieved by readback, never replayed.
+        committed_reader = reader()
+        for _ in range(2):
+            receipt = await repo.read_committed_verified_text(
+                **recovery_scope, artifact_store=committed_reader,
+            )
+            assert receipt is not None and receipt.artifact_id == pending.session_id
+            assert receipt.sha256 == content_digest
+        assert committed_reader.read_owner_active_text_bounded.await_count == 2
+        committed_reader.read_owner_active_text_bounded.assert_awaited_with(
+            pending.session_id, tenant, owner, max_bytes=len(body.encode()),
+            expected_sha256=content_digest,
+        )
+        denied = reader()
+        assert await repo.read_committed_verified_text(
+            **{**recovery_scope, "owner_user_id": foreign_owner}, artifact_store=denied,
+        ) is None
+        denied.read_owner_active_text_bounded.assert_not_awaited()
+        async with factory() as db:
+            await db.execute(text(
+                "UPDATE public.files SET deleted_at=now() WHERE file_id=:id"
+            ), {"id": pending.session_id})
+            await db.commit()
+        archived = reader()
+        assert await repo.read_committed_verified_text(
+            **recovery_scope, artifact_store=archived,
+        ) is None
+        archived.read_owner_active_text_bounded.assert_not_awaited()
     finally:
         await engine.dispose()

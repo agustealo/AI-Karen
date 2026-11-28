@@ -281,7 +281,54 @@ async def test_readback_failure_never_rewrites_uncertain_session():
         artifact_store=store,
     ) is None
     store.read_owner_active_text_bounded.assert_awaited_once_with(
-        SESSION, TENANT, OWNER, max_bytes=42,
+        SESSION, TENANT, OWNER, max_bytes=42, expected_sha256=DIGEST,
     )
     assert len(db.statements) == 1
     assert not db.committed
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["match", "missing", "wrong_owner", "wrong_digest", "wrong_bytes"])
+async def test_committed_readback_is_scoped_pinned_and_read_only(case):
+    import hashlib
+    from unittest.mock import AsyncMock
+    from ai_karen_engine.services.database.repositories.artifact_store import VerifiedArtifactText
+
+    body = "verified receipt"
+    digest = hashlib.sha256(body.encode()).hexdigest()
+    db = FakeSession(None if case == "missing" else {
+        **record(), "state": "committed", "artifact_id": SESSION,
+        "expected_bytes": len(body.encode()), "received_bytes": len(body.encode()),
+        "expected_sha256": digest, "storage_key": f"{TENANT}/{SESSION}/content",
+    })
+    repo = UploadSessionRepository(lambda: db)
+    proof = VerifiedArtifactText(
+        artifact_id=SESSION, tenant_id=TENANT,
+        user_id=str(uuid4()) if case == "wrong_owner" else OWNER,
+        filename="receipt.txt", mime_type="text/plain",
+        sha256=DIGEST if case == "wrong_digest" else digest,
+        text="x" * len(body) if case == "wrong_bytes" else body,
+    )
+    store = SimpleNamespace(read_owner_active_text_bounded=AsyncMock(
+        return_value=SimpleNamespace(success=True, data=proof),
+    ))
+    result = await repo.read_committed_verified_text(
+        tenant_id=TENANT, owner_user_id=OWNER, session_id=SESSION, artifact_store=store,
+    )
+    assert result == (proof if case == "match" else None)
+    assert len(db.statements) == 1
+    sql, params = db.statements[0]
+    assert sql.strip().startswith("SELECT")
+    assert "upload.state = 'committed'" in sql
+    assert "upload.artifact_id = :session_id" in sql
+    assert "artifact.deleted_at IS NULL" in sql
+    assert "artifact.sha256 = upload.expected_sha256" in sql
+    assert "artifact.owner_user_id = :owner_user_id" in sql
+    assert params == {"tenant_id": TENANT, "owner_user_id": OWNER,
+                      "session_id": SESSION, "storage_key": f"{TENANT}/{SESSION}/content"}
+    assert not db.committed and not db.rolled_back
+    if case == "missing":
+        store.read_owner_active_text_bounded.assert_not_awaited()
+    else:
+        store.read_owner_active_text_bounded.assert_awaited_once_with(
+            SESSION, TENANT, OWNER, max_bytes=len(body.encode()), expected_sha256=digest,
+        )

@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28: KFILE-UPLOAD-U2B1 committed receipt readback, PR #1383
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** reuse the existing owner-scoped upload ledger and canonical bounded Storage reader for read-only retrieval of an already committed reserved text receipt. Require the exact reserved artifact, active file row, owner, digest, size and Storage key; share the pinned byte-verification helper with uncertain reconciliation. No mutation, replay, client exposure, new store or schema. Unit regressions and disposable PostgreSQL cases cover repeated readback, owner denial, archival and substituted proof.
+- **Proof:** prior consumer head `f4deb16353f323ba4943a8c2da63ee9bc1a440a8` passed 10/10 source workflows. New source requires fresh exact-head CI and review; PostgreSQL test uses a controlled Storage reader, not live TLS. Runtime upload orchestration, UI upload and signed upload-to-model proof remain NOT_RUN. No activation.
+
 ### 2026-11-27: KFILE-UPLOAD-U2A legacy owner-create admission, PR #1383
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** use existing witness-issuing authenticated ingress and canonical artifact owner-create plus DATA_READ RBAC (not broad DATA_WRITE). Audit ingress decisions and revalidate current account/session before body read and immediately before canonical Storage dispatch. Reject legacy conversation/message bindings because their persistence is unsupported; no invented association, new endpoint, upload ledger or privilege grant. Existing bounded-ingress tests extend denial, revocation, scope and positive owner checks.
