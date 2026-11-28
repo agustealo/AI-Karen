@@ -166,3 +166,27 @@ describe("CK-07E3 CopilotKit v2 rich restoration in native message slot", () => 
     expect(() => parseKarenVerifiedHistory([null], messages)).toThrow();
   });
 });
+
+
+it("restores only the verified historical attachment count", () => {
+  const event = {
+    type: "CUSTOM", name: "karen.verified_attachment_history.v1",
+    messageId: "assistant-1", value: { user_message_id: "user-1", attachment_count: 2 },
+  };
+  renderAssistant([event]);
+  expect(screen.getByLabelText("Historical attachments")).toBeTruthy();
+  expect(screen.getByText("2 originally submitted with this turn.")).toBeTruthy();
+  expect(screen.getByText(/Current file access is not verified/)).toBeTruthy();
+  expect(() => parseKarenVerifiedHistory([event, event], messages)).toThrow();
+  for (const value of [
+    { ...event.value, attachment_count: 0 },
+    { ...event.value, attachment_count: 13 },
+    { ...event.value, attachment_count: 1.5 },
+    { ...event.value, user_message_id: "assistant-1" },
+    { ...event.value, user_message_id: "foreign" },
+    { ...event.value, url: "https://example.com/private" },
+  ]) {
+    expect(() => parseKarenVerifiedHistory([{ ...event, value }], messages)).toThrow();
+  }
+  expect(() => parseKarenVerifiedHistory([event], [...messages].reverse())).toThrow();
+});

@@ -33,6 +33,7 @@ import {
 type VerifiedPart =
   | { type: "presentation"; value: KarenPresentationEnvelope }
   | { type: "citations"; value: { urls: string[] } }
+  | { type: "attachment_history"; value: { user_message_id: string; attachment_count: number } }
   | { type: "receipt"; value: Record<string, unknown> }
   | { type: "integrity"; value: Record<string, unknown> }
   | { type: "plugin_management"; value: Record<string, unknown> }
@@ -173,9 +174,12 @@ export function parseKarenVerifiedHistory(
   }
   const assistantIds = new Set(messages.filter(m => m.role === "assistant").map(m => m.id));
   const parts = new Map<string, VerifiedPart[]>();
+  const messageOrder = new Map(messages.map((m, index) => [m.id, index]));
+  const userIds = new Set(messages.filter(m => m.role === "user").map(m => m.id));
+  const attachedUsers = new Set<string>();
   const counters = new Map<string, {
     presentation: number; receipt: number; integrity: number; pluginManagement: number; citations: number;
-    steps: number; lastStepSequence: number; stepRunId: string | null;
+    attachments: number; steps: number; lastStepSequence: number; stepRunId: string | null;
     presentationIds: Set<string>;
   }>();
   for (const candidate of value) {
@@ -189,7 +193,7 @@ export function parseKarenVerifiedHistory(
     const id = candidate.messageId;
     const seen = counters.get(id) || {
       presentation: 0, receipt: 0, integrity: 0, pluginManagement: 0, citations: 0,
-      steps: 0, lastStepSequence: 0, stepRunId: null,
+      attachments: 0, steps: 0, lastStepSequence: 0, stepRunId: null,
       presentationIds: new Set<string>(),
     };
     let part: VerifiedPart;
@@ -209,6 +213,18 @@ export function parseKarenVerifiedHistory(
         throw new Error("Unsupported verified citations");
       }
       part = { type: "citations", value: { urls: [...urls] } };
+    } else if (name === "karen.verified_attachment_history.v1") {
+      const { user_message_id, attachment_count } = candidate.value;
+      if (Object.keys(candidate.value).length !== 2 ||
+          typeof user_message_id !== "string" || !userIds.has(user_message_id) ||
+          (messageOrder.get(user_message_id) ?? Infinity) >= (messageOrder.get(id) ?? -1) ||
+          attachedUsers.has(user_message_id) ||
+          typeof attachment_count !== "number" || !Number.isInteger(attachment_count) ||
+          attachment_count < 1 || attachment_count > 12 || ++seen.attachments > 1) {
+        throw new Error("Unsupported verified attachment history");
+      }
+      attachedUsers.add(user_message_id);
+      part = { type: "attachment_history", value: { user_message_id, attachment_count } };
     } else if (name === "karen.execution_receipt.v1") {
       if (!validReceipt(candidate.value) || ++seen.receipt > 1) {
         throw new Error("Unsupported verified execution receipt");
@@ -391,6 +407,12 @@ export function KarenCopilotAssistantMessage(
                     className="break-all underline text-sm">{url}</a>
                 </li>)}
               </ul>
+            </section>}
+          {part.type === "attachment_history" &&
+            <section aria-label="Historical attachments" className="my-3 rounded-xl border border-border/70 p-3">
+              <h3 className="font-semibold text-sm">Historical attachments</h3>
+              <p className="text-sm">{part.value.attachment_count} originally submitted with this turn.</p>
+              <p className="text-xs text-muted-foreground">Current file access is not verified. Preview and download are unavailable here.</p>
             </section>}
           {part.type === "receipt" &&
             <KarenRestoredExecutionReceipt data={part.value} />}
