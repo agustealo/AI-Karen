@@ -155,12 +155,14 @@ class PluginService:
             raise RuntimeError("Plugin kernel is not initialized")
         return self.kernel
 
-    async def discover_owner_upload_destinations(
-        self, context: ChatExecutionContext,
-    ) -> list[dict[str, Any]]:
-        """Read-only admission projection; no transfer or activation grant."""
+    async def _prepare_owner_upload(
+        self, context: ChatExecutionContext, *, operation: str,
+    ):
+        """Shared principal-derived admission for discovery and transfer."""
         from ai_karen_engine.auth.rbac_middleware import Permission, get_rbac_manager
-        from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+
+        if operation not in {"discover", "transfer"}:
+            raise PermissionError("file_upload_operation_denied")
 
         await context.revalidate_runtime_artifact_write_session()
         principal = context.require_authenticated_user()
@@ -175,12 +177,11 @@ class PluginService:
         permissions = sorted(permission.value for permission in manager.get_user_permissions(principal))
         roles = list(principal.roles or [])
         capabilities = [
-            "file-upload", "file_upload.discover",
+            "file-upload", f"file_upload.{operation}",
             Permission.DATA_READ.value, Permission.ARTIFACT_CREATE_OWN.value,
         ]
         if not set(capabilities[2:]).issubset(permissions):
             raise PermissionError("file_upload_permission_denied")
-        config = ArtifactStorageConfig.from_environment()
         await self._ensure_initialized()
         kernel = self._get_kernel()
         record = kernel.get_record("file-upload")
@@ -188,13 +189,18 @@ class PluginService:
             not isinstance(record, dict) or record.get("status") != "enabled"
             or record.get("dependencies_resolved") is not True
         ):
-            return []
-        decision = await self._policy_enforcer.evaluate(PolicyEvaluationRequest(
-            user_id=owner, tenant_id=tenant, session_id=context.session_id,
-            correlation_id=context.correlation_id, roles=roles,
-            permissions=permissions, action="plugin_execution", plugin_id="file-upload",
-            requested_capabilities=capabilities,
-        ))
+            return None
+        if operation == "transfer":
+            decision = await self._policy_enforcer.authorize_owner_text_transfer(
+                context=context, destination="explorer", recipe="store_only",
+            )
+        else:
+            decision = await self._policy_enforcer.evaluate(PolicyEvaluationRequest(
+                user_id=owner, tenant_id=tenant, session_id=context.session_id,
+                correlation_id=context.correlation_id, roles=roles,
+                permissions=permissions, action="plugin_execution", plugin_id="file-upload",
+                requested_capabilities=capabilities,
+            ))
         if not decision.allowed or decision.requires_human_gate:
             raise PermissionError("file_upload_policy_denied")
         plan = decision.to_authorized_plan()
@@ -208,18 +214,33 @@ class PluginService:
             )
         ):
             raise PermissionError("file_upload_policy_scope_denied")
-        admission = await kernel.admit(ExtensionExecutionRequest(
-            plugin_id="file-upload", capability="execute", payload={"operation": "discover"},
+        request = ExtensionExecutionRequest(
+            plugin_id="file-upload", capability="execute", payload={"operation": operation},
             context=ExtensionExecutionContext(
                 request_id=context.request_id, correlation_id=context.correlation_id,
                 user_id=owner, tenant_id=tenant, session_id=context.session_id,
                 policy_decision_id=decision.decision_id,
                 allowed_capabilities=list(plan.allowed_capabilities),
-                audit_context={"origin": "authenticated_file_upload_discovery",
+                audit_context={"origin": "authenticated_file_upload",
                                "user_roles": roles, "permissions": permissions},
             ),
             authorized_plan=plan,
-        ))
+        )
+        return kernel, request, principal
+
+    async def discover_owner_upload_destinations(
+        self, context: ChatExecutionContext,
+    ) -> list[dict[str, Any]]:
+        """Admission projection only; no public transfer ingress."""
+        from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+
+        config = ArtifactStorageConfig.from_environment()
+        prepared = await self._prepare_owner_upload(context, operation="discover")
+        if prepared is None:
+            return []
+        kernel, request, principal = prepared
+        tenant, owner = request.context.tenant_id, request.context.user_id
+        admission = await kernel.admit(request)
         if admission.status != "admitted":
             raise PermissionError("file_upload_kernel_denied")
         await context.revalidate_runtime_artifact_write_session()
@@ -240,6 +261,53 @@ class PluginService:
             "max_bytes": config.governed_text_upload_max_bytes,
             "transfer_available": False, "unavailable_reason": "transfer_ingress_not_registered",
         }]
+
+    async def transfer_owner_text(
+        self, context: ChatExecutionContext, *, destination: str, recipe: str,
+        filename: str, data: bytes, idempotency_key: str,
+    ):
+        """Internal host transfer; no caller-supplied policy or identity grant."""
+        from ai_karen_engine.database.factory import get_database_service_factory
+        from ai_karen_engine.core.runtime.owner_text_upload import OwnerTextUploadService
+        from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+        from ai_karen_engine.services.database.repositories.artifact_store import validate_reserved_text_payload
+
+        if (destination, recipe) != ("explorer", "store_only"):
+            raise PermissionError("file_upload_destination_denied")
+        config = ArtifactStorageConfig.from_environment()
+        validate_reserved_text_payload(filename, data, max_bytes=config.governed_text_upload_max_bytes)
+        prepared = await self._prepare_owner_upload(context, operation="transfer")
+        if prepared is None:
+            raise PermissionError("file_upload_disabled")
+        kernel, request, principal = prepared
+        scope = (request.context.tenant_id, request.context.user_id, request.context.session_id)
+
+        async def authorize() -> None:
+            await context.revalidate_runtime_artifact_write_session()
+            if (
+                context.require_authenticated_user() is not principal
+                or (context.tenant_id, context.user_id, context.session_id) != scope
+                or kernel.active_executions().get(request.context.request_id) != "file-upload"
+            ):
+                raise PermissionError("file_upload_host_scope_invalid")
+            record = kernel.get_record("file-upload")
+            if (
+                not isinstance(record, dict) or record.get("status") != "enabled"
+                or record.get("dependencies_resolved") is not True
+            ):
+                raise PermissionError("file_upload_disabled")
+
+        async with kernel.admitted_host_operation(request):
+            await authorize()
+            runtime = get_database_service_factory().get_service("owner_text_upload")
+            if not isinstance(runtime, OwnerTextUploadService):
+                raise RuntimeError("file_upload_runtime_unavailable")
+            receipt = await runtime.save(
+                context, filename=filename, data=data, idempotency_key=idempotency_key,
+                authorize_transfer=authorize,
+            )
+            await authorize()
+            return receipt
 
     async def _prepare_file_explorer(
         self, *, user_id: str, tenant_id: str, roles: List[str],

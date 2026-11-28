@@ -3,7 +3,7 @@
   "name": "file-upload",
   "display_name": "File Upload",
   "version": "0.1.0",
-  "description": "Default-disabled admission-only owner-library upload destination discovery. No direct transfer, Storage credentials or UI.",
+  "description": "Default-disabled host-admitted owner-library upload extension. No direct Storage access or public transfer ingress.",
   "purpose": "Discover the bounded owner-library store-only destination through governed host admission.",
   "author": "KAREN Engineering",
   "license": "MIT",
@@ -50,7 +50,8 @@
       "operation": {
         "type": "string",
         "enum": [
-          "discover"
+          "discover",
+          "transfer"
         ]
       }
     },

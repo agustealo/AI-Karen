@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28 UTC: KFILE-UPLOAD-U2D2 authenticated host transfer binding
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** host-only RuntimePolicy transfer admission from fresh session/RBAC; generic requests for file_upload.transfer remain denied. PluginService shares discovery/transfer preparation, pins the existing kernel lifecycle scope and delegates to the owner-text runtime, revalidating identity/lifecycle during state changes. Reserved writer rechecks host admission after claim consumption, before remote dispatch. Denied post-claim write remains reconcile_required; never replay. No public route, UI, new writer or activation. Existing reserved writer callers without a host callback retain internal compatibility.
+- **Proof:** staged regressions for forged generic transfer, unknown destination, active host scope, pre-session denial and post-claim revocation. Tests not executed on staged head. Quota CI preserved; distributed lifecycle fencing, bounded HTTP ingress, exact-head review and live Storage/model proof outstanding.
+
 ### 2026-11-28: KFILE-UPLOAD-U2D1 host-operation lifecycle fence
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** reuse one PluginKernel active-execution scope across execute, probe admission and a new trusted host-operation admission context. Host scope retains the existing lifecycle marker until exit, requires actual payload validation using the canonical executor, rejects denied admission and releases on exception. No new policy grant, plugin handler execution, public endpoint or distributed lease. Unit regressions cover probe compatibility, schema denial, no handler invocation, active marker and refresh/cleanup/duplicate request denial, and failure cleanup.

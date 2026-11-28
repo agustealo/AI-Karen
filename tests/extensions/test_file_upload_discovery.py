@@ -34,6 +34,8 @@ def test_catalog_manifest_is_disabled_admission_only():
     (["file-upload"], ["data:read", "artifact:create_own"]),
     (CAPABILITIES, ["data:read"]),
     (CAPABILITIES + ["file_upload.commit"], ["data:read", "artifact:create_own"]),
+    (["file-upload", "file_upload.transfer", "data:read", "artifact:create_own"],
+     ["data:read", "artifact:create_own"]),
 ])
 async def test_policy_denies_missing_entitlement_or_unregistered_action(caps, permissions):
     decision = await RuntimePolicyEnforcer().evaluate(PolicyEvaluationRequest(
@@ -107,3 +109,56 @@ async def test_lifecycle_changes_during_admission_hide_destination(discovery):
         {"status": "disabled", "dependencies_resolved": True},
     ]
     assert await service.discover_owner_upload_destinations(context) == []
+
+
+@pytest.mark.asyncio
+async def test_transfer_rejects_unknown_destination_before_kernel(discovery):
+    service, context, kernel = discovery
+    with pytest.raises(PermissionError):
+        await service.transfer_owner_text(
+            context, destination="external", recipe="store_only",
+            filename="notes.txt", data=b"hello", idempotency_key=str(uuid4()),
+        )
+    kernel.get_record.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_transfer_delegates_under_active_host_scope(discovery, monkeypatch):
+    from contextlib import asynccontextmanager
+    from ai_karen_engine.database import factory
+    from ai_karen_engine.core.runtime.owner_text_upload import OwnerTextUploadService
+
+    service, context, kernel = discovery
+    active = {}
+    kernel.active_executions = lambda: dict(active)
+
+    @asynccontextmanager
+    async def admitted(request):
+        assert request.payload == {"operation": "transfer"}
+        assert "file_upload.transfer" in request.authorized_plan.allowed_capabilities
+        active[request.context.request_id] = request.plugin_id
+        try:
+            yield SimpleNamespace(status="admitted")
+        finally:
+            active.clear()
+
+    kernel.admitted_host_operation = admitted
+    runtime = OwnerTextUploadService(sessions=Mock(), artifacts=Mock())
+    expected = object()
+
+    async def save(context_arg, **kwargs):
+        assert context_arg is context
+        assert active == {context.request_id: "file-upload"}
+        await kwargs["authorize_transfer"]()
+        assert kwargs["data"] == b"hello"
+        return expected
+
+    runtime.save = AsyncMock(side_effect=save)
+    monkeypatch.setattr(factory, "get_database_service_factory", lambda: SimpleNamespace(
+        get_service=lambda name: runtime if name == "owner_text_upload" else None,
+    ))
+    assert await service.transfer_owner_text(
+        context, destination="explorer", recipe="store_only",
+        filename="notes.txt", data=b"hello", idempotency_key=str(uuid4()),
+    ) is expected
+    assert not active
