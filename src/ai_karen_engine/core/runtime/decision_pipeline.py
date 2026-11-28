@@ -518,6 +518,8 @@ class RuntimeDecisionPipeline:
                     dict(item) for item in
                     (policy.runtime_constraints.get("attachment_references") or [])
                 ],
+                # Only the policy issuer may populate this commitment.
+                "document_operation_digest": policy.runtime_constraints.get("document_operation_digest"),
             },
         )
 
