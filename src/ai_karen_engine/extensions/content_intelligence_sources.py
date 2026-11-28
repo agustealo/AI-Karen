@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import json
 import logging
 import uuid
 from typing import Any, Protocol
@@ -82,6 +83,33 @@ def _validate_source_operation(
     elif left_id is not None or right_id is not None:
         raise ValueError("content_source_unused_selection")
     return selection
+
+
+def runtime_content_operation_digest(
+    references: list[dict[str, str]], operation: dict[str, Any],
+) -> str:
+    """Bind a validated operation and its arguments without publishing private query text."""
+    if not isinstance(operation, dict):
+        raise ValueError("content_source_operation_invalid")
+    name = operation.get("operation")
+    if not isinstance(name, str):
+        raise ValueError("content_source_operation_invalid")
+    fields = {"operation"}
+    if name == "search":
+        fields.add("query")
+    elif name == "compare":
+        fields.update({"left_id", "right_id"})
+    if set(operation) != fields:
+        raise ValueError("content_source_operation_invalid")
+    _validate_source_operation(
+        name, references, query=operation.get("query"),
+        left_id=operation.get("left_id"), right_id=operation.get("right_id"),
+    )
+    encoded = json.dumps(
+        {"references": references, "operation": operation},
+        sort_keys=True, separators=(",", ":"), ensure_ascii=True,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
 
 
 def _snapshot_source_documents(
@@ -263,6 +291,11 @@ def validate_runtime_content_payload(
         fields.update({"left_id", "right_id"})
     if set(payload) != fields:
         raise ValueError("content_source_operation_invalid")
+    operation_digest = runtime_content_operation_digest(
+        references, {key: value for key, value in payload.items() if key != "documents"},
+    )
+    if plan.resource_scope.get("document_operation_digest") != operation_digest:
+        raise PermissionError("content_source_operation_not_authorized")
 
 
 def validate_runtime_content_output(
