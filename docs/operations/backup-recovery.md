@@ -122,6 +122,37 @@ position, then resumes and pauses after the cutoff and checks the committed
 deletion and consent rows. No production database is cloned or promoted.
 Automated runtime admission remains outstanding.
 
+### Authenticated final cutoff manifest
+
+For signed evidence, the independent recovery authority signs the exact UTF-8
+JSON manifest bytes using an externally held Ed25519 signing key. The manifest
+has exactly these fields: schema_version (1), evidence_type
+(karen_final_recovery_cutoff), deployment, recovery_epoch, cutoff_sha256.
+Deployment and epoch are nonempty ASCII identifiers (letters, digits,
+underscore, dot or hyphen; maximum 128 characters, starting with a letter or
+digit). The epoch is unique to a recovery incident. The authority must retain
+the exact signed manifest, detached signature and receipt in independent
+immutable storage and pin the final manifest digest in its trusted inventory.
+An earlier valid signature is not proof of finality.
+
+The existing replay observer accepts six additional environment values:
+RECOVERY_MANIFEST_FILE, RECOVERY_MANIFEST_SIGNATURE_FILE (raw 64-byte signature),
+RECOVERY_TRUSTED_PUBLIC_KEY_FILE (44-byte Ed25519 SPKI DER),
+RECOVERY_EXPECTED_DEPLOYMENT, RECOVERY_EXPECTED_EPOCH and
+RECOVERY_EXPECTED_MANIFEST_SHA256. The public key and expected identifiers/digest
+must come from trusted recovery configuration outside the restored database.
+OpenSSL with Ed25519 support is required. The caller still supplies the
+receipt file and its expected digest. Partial signed configuration fails
+closed; no fallback to digest-only mode is allowed in that case. Digest-only
+mode remains an explicitly unsigned diagnostic, not admission. Successful
+signed verification reports signed_manifest_verified=true, but
+admission_verified=false.
+
+The verifier does not provision immutable storage, manage signing keys,
+discover the final epoch, certify source fencing, or authorize promotion.
+Production inventory and trusted key custody require separate infrastructure
+acceptance; the CI test signs synthetic evidence using disposable keys only.
+
 Required acceptance:
 
 - Restore a pre-revocation backup into an isolated disposable database after

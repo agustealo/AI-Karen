@@ -110,11 +110,12 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
             await asyncio.sleep(0.2)
         pytest.fail("physical standby did not reach required state")
 
-    async def verify_replay(url, receipt_path, expected_digest):
+    async def verify_replay(url, receipt_path, expected_digest, **evidence):
         env = {
             **os.environ, "RECOVERY_DATABASE_URL": url.render_as_string(hide_password=False),
             "RECOVERY_CUTOFF_FILE": str(receipt_path),
             "RECOVERY_CUTOFF_SHA256": expected_digest,
+            **evidence,
         }
         return await asyncio.to_thread(
             subprocess.run, [os.sys.executable, str(root / "scripts/deploy/database-recovery-replay.py")],
@@ -291,6 +292,48 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
             observation = json.loads(verified.stdout)
             assert observation["evidence_type"] == "paused_standby_replay_observation"
             assert observation["admission_verified"] is False
+            assert observation["signed_manifest_verified"] is False
+            # Real Ed25519 signature over externally retained fixture evidence.
+            # The private key is test-only; never part of recovery runtime.
+            private = tmp_path / "fixture-signing.pem"
+            public = tmp_path / "fixture-public.der"
+            manifest = tmp_path / "fixture-manifest.json"
+            signature = tmp_path / "fixture-manifest.sig"
+
+            def sign_command(*args):
+                subprocess.run(
+                    ["openssl", *args], check=True, capture_output=True, timeout=10,
+                )
+
+            await asyncio.to_thread(sign_command, "genpkey", "-algorithm", "ED25519", "-out", str(private))
+            await asyncio.to_thread(
+                sign_command, "pkey", "-in", str(private), "-pubout",
+                "-outform", "DER", "-out", str(public),
+            )
+            manifest.write_text(json.dumps({
+                "schema_version": 1,
+                "evidence_type": "karen_final_recovery_cutoff",
+                "deployment": "disposable-ci",
+                "recovery_epoch": suffix,
+                "cutoff_sha256": receipt_digest,
+            }), encoding="utf-8")
+            await asyncio.to_thread(
+                sign_command, "pkeyutl", "-sign", "-inkey", str(private),
+                "-rawin", "-in", str(manifest), "-out", str(signature),
+            )
+            signed = await verify_replay(
+                standby_url, receipt_path, receipt_digest,
+                RECOVERY_MANIFEST_FILE=str(manifest),
+                RECOVERY_MANIFEST_SIGNATURE_FILE=str(signature),
+                RECOVERY_TRUSTED_PUBLIC_KEY_FILE=str(public),
+                RECOVERY_EXPECTED_DEPLOYMENT="disposable-ci",
+                RECOVERY_EXPECTED_EPOCH=suffix,
+                RECOVERY_EXPECTED_MANIFEST_SHA256=hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            )
+            assert signed.returncode == 0, signed.stderr
+            signed_observation = json.loads(signed.stdout)
+            assert signed_observation["signed_manifest_verified"] is True
+            assert signed_observation["admission_verified"] is False
             assert observation["cutoff_sha256"] == receipt_digest
             assert lsn(observation["replay_lsn"]) >= lsn(after_cutoff["required_lsn"])
             assert await standby_sql(
