@@ -10,6 +10,8 @@ from typing import Any, Dict, List, Optional
 
 from ai_karen_engine.core.cortex.routing_intents import (
     CAPABILITY_ROUTES,
+    ATTACHED_DOCUMENT_INTENT,
+    parse_attached_document_command,
     parse_plugin_inspection_request,
     parse_research_handoff_question,
 )
@@ -1486,6 +1488,98 @@ class DirectCapabilityExecutor:
             latency_ms=(time.perf_counter() - started) * 1000.0,
         )
 
+    async def _execute_attached_document(
+        self, request: ChatExecutionRequest, decision: ExecutionDecision,
+        plan: AuthorizedExecutionPlan, meter: ExecutionBudgetMeter,
+    ) -> DirectCapabilityResult:
+        """Return bounded lexical evidence, never model synthesis or a fresh grant."""
+        import json
+        import math
+
+        started = time.perf_counter()
+        operation = parse_attached_document_command(
+            next((item.get("content") for item in reversed(request.messages)
+                  if item.get("role") == "user"), None),
+            request.attachment_references,
+        )
+        if (
+            operation is None
+            or not self.can_handle(decision)
+            or decision.is_graph_required
+            or plan.budget.max_model_calls != 0
+            or plan.budget.max_tool_calls != 1
+            or not request.context.is_runtime_model_plan_authorized(plan, meter)
+        ):
+            raise PermissionError("content_source_authorization_required")
+        output = await get_plugin_service().execute_chat_content_operation(
+            runtime_context=request.context, plan=plan, meter=meter, operation=operation,
+        )
+
+        def inert(value: str, limit: int) -> str:
+            # Quote untrusted filenames, terms and excerpts inside a code fence.
+            # Escaping backticks prevents a source from terminating that fence.
+            return json.dumps(value[:limit], ensure_ascii=True).replace(
+                chr(96), chr(92) + "u0060",
+            )
+
+        name = operation["operation"]
+        lines: list[str] = []
+        if name == "analyze":
+            documents = output["documents"]
+            heading = f"Lexical analysis of {len(documents)} selected document(s)."
+            for doc in documents:
+                lines.append(f'{inert(doc["name"], 256)}: {doc["characters"]} characters')
+                terms = doc["top_terms"][:12]
+                if terms:
+                    lines.append("  Frequent terms: " + ", ".join(
+                        f'{inert(item["term"], 80)} ({item["count"]})' for item in terms
+                    ))
+        elif name == "search":
+            matches = output["matches"]
+            heading = f"Lexical search returned {len(matches)} excerpt(s), up to 12."
+            for hit in matches:
+                lines.append(
+                    f'{inert(hit["document_name"], 256)} '
+                    f'[{hit["offset"]}:{hit["end_offset"]}]: {inert(hit["excerpt"], 600)}'
+                )
+        else:
+            similarity = output.get("jaccard_similarity")
+            if (
+                type(similarity) not in (int, float)
+                or not math.isfinite(similarity) or not 0 <= similarity <= 1
+            ):
+                raise RuntimeError("content_source_output_invalid")
+            heading = f"Lexical comparison: {similarity:.1%} term-set overlap."
+            for key, label in (
+                ("shared_terms", "Shared"), ("only_left", "First document only"),
+                ("only_right", "Second document only"),
+            ):
+                terms = output.get(key)
+                if not isinstance(terms, list) or any(not isinstance(term, str) for term in terms):
+                    raise RuntimeError("content_source_output_invalid")
+                lines.append(label + ": " + ", ".join(inert(term, 80) for term in terms[:10]))
+        # Keep each quoted record intact. Omitted records are explicitly reported.
+        displayed: list[str] = []
+        used = 0
+        for line in lines:
+            if used + len(line) + 1 > 8000:
+                break
+            displayed.append(line)
+            used += len(line) + 1
+        fence = chr(96) * 3
+        answer = heading
+        if displayed:
+            answer += "\n\n" + fence + "text\n" + "\n".join(displayed) + "\n" + fence
+        if len(displayed) < len(lines):
+            answer += "\n\nAdditional details omitted by the response limit."
+        answer += "\n\nThese are lexical observations, not semantic verification."
+        return DirectCapabilityResult(
+            handled=True, success=True, text=answer,
+            source="plugin", source_id=ATTACHED_DOCUMENT_INTENT,
+            latency_ms=(time.perf_counter() - started) * 1000.0,
+            attempts=[{"type": "plugin", "id": ATTACHED_DOCUMENT_INTENT, "status": "success"}],
+        )
+
     def can_handle(self, decision: ExecutionDecision) -> bool:
         route = CAPABILITY_ROUTES.get(str(decision.intent or ""))
         if not route or not route.get("requires_live_data"):
@@ -1507,6 +1601,9 @@ class DirectCapabilityExecutor:
         route = CAPABILITY_ROUTES.get(str(decision.intent or ""))
         if not route:
             return DirectCapabilityResult(handled=False)
+
+        if decision.intent == ATTACHED_DOCUMENT_INTENT:
+            return await self._execute_attached_document(request, decision, plan, meter)
 
         if decision.intent == "runtime.inspect":
             return await self._inspect_runtime_capabilities(request, plan, meter)
