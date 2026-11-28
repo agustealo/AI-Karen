@@ -9,6 +9,8 @@ on:
       - "src/ai_karen_engine/services/database/repositories/upload_session.py"
       - "src/ai_karen_engine/services/database/repositories/artifact_store.py"
       - "tests/services/test_upload_session_repository.py"
+      - "src/ai_karen_engine/core/runtime/owner_text_upload.py"
+      - "tests/core/runtime/test_owner_text_upload.py"
       - "tests/services/test_artifact_upload_compensation.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "supabase/migrations/*artifact_upload*.sql"
@@ -30,6 +32,8 @@ on:
       - "src/ai_karen_engine/services/database/repositories/upload_session.py"
       - "src/ai_karen_engine/services/database/repositories/artifact_store.py"
       - "tests/services/test_upload_session_repository.py"
+      - "src/ai_karen_engine/core/runtime/owner_text_upload.py"
+      - "tests/core/runtime/test_owner_text_upload.py"
       - "tests/services/test_artifact_upload_compensation.py"
       - "supabase/migrations/*artifact_archive_state.sql"
       - "supabase/migrations/*artifact_upload*.sql"
@@ -278,6 +282,7 @@ jobs:
             tests/unit/test_artifact_owner_search_cursor.py \
             tests/services/test_artifact_storage_platform_client.py \
             tests/services/test_upload_session_repository.py \
+            tests/core/runtime/test_owner_text_upload.py \
             tests/services/test_artifact_upload_compensation.py \
             tests/integration/test_live_code_artifact_revocation_postgres.py \
             tests/integration/test_artifact_rls_actor_postgres.py \
