@@ -100,6 +100,8 @@ async def test_create_or_get_reuses_matching_manifest_and_scopes_queries():
     assert "ON CONFLICT" in db.statements[2][0]
     assert "count(*) < :admission_sessions" in db.statements[2][0]
     assert "sum(expected_bytes)" in db.statements[2][0]
+    assert db.statements[2][0].count("CAST(:expected_bytes AS BIGINT)") == 2
+    assert "CAST(:admission_bytes AS BIGINT)" in db.statements[2][0]
     assert "interval '24 hours'" in db.statements[2][0]
     assert "FOR UPDATE" in db.statements[3][0]
 
