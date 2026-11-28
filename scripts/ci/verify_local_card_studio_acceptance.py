@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import ssl
 import os
 import subprocess
 import tomllib
@@ -116,16 +118,17 @@ def require_local_docker() -> None:
         raise GuardError("Acceptance requires a local Docker daemon")
 
 
-def local_storage_origin(raw: str, *, host_loopback: bool = False) -> str:
+def local_storage_origin(raw: str, *, host_loopback: bool = False, require_https: bool = False) -> str:
     """Require an exact local origin for the intended execution environment."""
     host = "127.0.0.1" if host_loopback else "host.docker.internal"
+    scheme = "https" if require_https else "http"
     try:
         parsed = urlsplit(raw)
         port = parsed.port
         valid = (
-            parsed.scheme == "http" and parsed.hostname == host
+            parsed.scheme == scheme and parsed.hostname == host
             and port is not None and 1 <= port <= 65535
-            and raw == f"http://{host}:{port}"
+            and raw == f"{scheme}://{host}:{port}"
         )
     except (ValueError, TypeError):
         valid = False
@@ -138,7 +141,18 @@ def verify_local_storage_gateway(
     database_container: str, origin: str, *, host_loopback: bool = False,
 ) -> dict:
     """Bind the configured Storage endpoint to the running local Supabase project."""
-    port = str(urlsplit(local_storage_origin(origin, host_loopback=host_loopback)).port)
+    tls = origin.startswith("https://") and not host_loopback
+    port = str(urlsplit(local_storage_origin(
+        origin, host_loopback=host_loopback, require_https=tls,
+    )).port)
+    if tls:
+        try:
+            with (Path(__file__).resolve().parents[2] / "supabase/config.toml").open("rb") as stream:
+                configured = tomllib.load(stream)["api"]["port"]
+        except (OSError, ValueError, KeyError, TypeError):
+            raise GuardError("Canonical local API port unavailable") from None
+        if type(configured) is not int or str(configured) != port:
+            raise GuardError("Local TLS gateway port differs from canonical configuration")
     databases = docker_json(["docker", "inspect", database_container])
     if len(databases) != 1:
         raise GuardError("Local Storage database identity is ambiguous")
@@ -152,7 +166,7 @@ def verify_local_storage_gateway(
     if len(gateways) != 1:
         raise GuardError("Local Storage gateway is ambiguous")
     gateway = gateways[0]
-    bindings = gateway.get("NetworkSettings", {}).get("Ports", {}).get("8000/tcp")
+    bindings = gateway.get("NetworkSettings", {}).get("Ports", {}).get("8443/tcp" if tls else "8000/tcp")
     gateway_id = gateway.get("Id")
     if (
         gateway.get("Name") != "/" + gateway_name
@@ -165,7 +179,92 @@ def verify_local_storage_gateway(
         or any(ch not in "0123456789abcdef" for ch in gateway_id)
     ):
         raise GuardError("Configured local Storage gateway does not match the running project")
-    return {"authority": "local_supabase_gateway", "container_id": gateway_id, "port": port}
+    evidence = {"authority": "local_supabase_gateway", "container_id": gateway_id, "port": port}
+    if tls:
+        # Read only the public leaf certificate from the identified Kong.
+        # Compare it to the peer actually seen by the isolated API namespace.
+        result = subprocess.run(
+            ["docker", "exec", gateway_id, "cat", "/home/kong/localhost.crt"],
+            check=False, capture_output=True, text=True, timeout=30,
+        )
+        try:
+            pem = result.stdout.split("-----END CERTIFICATE-----", 1)[0]
+            der = ssl.PEM_cert_to_DER_cert(pem.strip() + "\n-----END CERTIFICATE-----")
+            if result.returncode != 0 or not der or "PRIVATE KEY" in result.stdout:
+                raise ValueError
+        except (ValueError, TypeError):
+            raise GuardError("Local Kong public TLS certificate unavailable") from None
+        evidence["transport"] = "https"
+        evidence["peer_sha256"] = hashlib.sha256(der).hexdigest()
+    return evidence
+
+
+STORAGE_CA_MOUNT = "/run/karen-local-storage-tls"
+STORAGE_CA_FILE = STORAGE_CA_MOUNT + "/ca.pem"
+
+
+def validate_storage_ca(path: Path) -> bytes:
+    """Read and validate the exact public CA bundle before copying it."""
+    try:
+        if not path.is_absolute() or path.is_symlink() or not path.is_file():
+            raise ValueError
+        with path.open("rb") as stream:
+            data = stream.read(256 * 1024 + 1)
+        if not data or len(data) > 256 * 1024 or b"PRIVATE KEY" in data:
+            raise ValueError
+        context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+        context.load_verify_locations(cadata=data.decode("ascii"))
+    except (OSError, ValueError, UnicodeError):
+        raise GuardError("Invalid local Storage CA bundle") from None
+    return data
+
+
+def verify_storage_tls_runtime(container: dict, container_id: str, env_path: Path, origin: str) -> dict:
+    """Prove CA mount identity and a verified TLS handshake from the API namespace."""
+    directory = env_path.resolve().parent / "storage-tls"
+    ca = validate_storage_ca(directory / "ca.pem")
+    mounts = container.get("Mounts", [])
+    if not isinstance(mounts, list):
+        raise GuardError("Local Storage CA mount is unavailable")
+    matches = [mount for mount in mounts if isinstance(mount, dict)
+               and mount.get("Destination") == STORAGE_CA_MOUNT]
+    if (len(matches) != 1 or matches[0].get("Type") != "bind"
+            or matches[0].get("RW") is not False
+            or matches[0].get("Source") != str(directory)):
+        raise GuardError("Local Storage CA mount identity differs")
+    probe = """import hashlib, json, os, socket
+from pathlib import Path
+from urllib.parse import urlsplit
+from ai_karen_engine.config.artifact_storage import StorageTLSPolicy
+origin = os.environ["SUPABASE_PROJECT_URL"]
+policy = StorageTLSPolicy.from_environment(origin)
+if policy is None:
+    raise RuntimeError("TLS policy unavailable")
+parts = urlsplit(origin)
+with socket.create_connection((parts.hostname, parts.port), timeout=5) as raw:
+    with policy.verify_for_origin(origin).wrap_socket(raw, server_hostname=parts.hostname) as conn:
+        peer = conn.getpeercert(binary_form=True)
+print(json.dumps({"origin": origin, "ca_sha256": hashlib.sha256(
+    Path(os.environ["KAREN_SUPABASE_STORAGE_TLS_CA_FILE"]).read_bytes()).hexdigest(),
+    "peer_sha256": hashlib.sha256(peer).hexdigest()}))
+"""
+    result = subprocess.run(
+        ["docker", "exec", container_id, "python", "-c", probe],
+        check=False, capture_output=True, text=True, timeout=30,
+    )
+    try:
+        evidence = json.loads(result.stdout)
+    except (ValueError, TypeError):
+        raise GuardError("Local Storage TLS handshake unavailable") from None
+    peer = evidence.get("peer_sha256") if isinstance(evidence, dict) else None
+    if (result.returncode != 0 or not isinstance(evidence, dict)
+            or set(evidence) != {"origin", "ca_sha256", "peer_sha256"}
+            or evidence["origin"] != origin
+            or evidence["ca_sha256"] != hashlib.sha256(ca).hexdigest()
+            or not isinstance(peer, str) or len(peer) != 64
+            or any(ch not in "0123456789abcdef" for ch in peer)):
+        raise GuardError("Local Storage TLS identity could not be verified")
+    return evidence
 
 
 def verify_explorer_runtime(
@@ -222,7 +321,10 @@ def verify_explorer_runtime(
         if not valid:
             raise GuardError("API connection URL does not target the disposable database")
     if require_local_storage:
-        origin = local_storage_origin(values.get("SUPABASE_PROJECT_URL", ""))
+        origin = local_storage_origin(values.get("SUPABASE_PROJECT_URL", ""), require_https=True)
+        if (values.get("KAREN_SUPABASE_STORAGE_TLS_ORIGIN") != origin
+                or values.get("KAREN_SUPABASE_STORAGE_TLS_CA_FILE") != STORAGE_CA_FILE):
+            raise GuardError("Local Storage TLS policy differs from the approved origin or CA")
         if values.get("SUPABASE_URL") not in (None, "", origin):
             raise GuardError("Conflicting local Storage origins")
         if not values.get("SUPABASE_SECRET_KEY", "").strip():
@@ -296,6 +398,9 @@ def inspect_container(
     evidence = {"service": service, "container_id": ids[0], "image_id": image_id}
     if storage_origin is not None:
         evidence["storage_origin"] = storage_origin
+        if env_path is None:
+            raise GuardError("Private local Storage environment is missing")
+        evidence["storage_tls"] = verify_storage_tls_runtime(container, ids[0], env_path, storage_origin)
     return evidence
 
 
@@ -404,6 +509,11 @@ def main() -> int:
             evidence["supabase_storage"] = verify_local_storage_gateway(
                 supabase_database["container_id"], api["storage_origin"],
             )
+            if (evidence["supabase_storage"].get("transport") != "https"
+                    or not api.get("storage_tls")
+                    or evidence["supabase_storage"].get("peer_sha256")
+                    != api["storage_tls"].get("peer_sha256")):
+                raise GuardError("API Storage peer differs from the verified local Kong certificate")
         evidence_path = Path(args.evidence)
         evidence_path.parent.mkdir(parents=True, exist_ok=True)
         evidence_path.write_text(json.dumps(evidence, indent=2) + "\n", encoding="utf-8")

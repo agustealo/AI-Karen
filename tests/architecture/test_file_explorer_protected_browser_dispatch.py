@@ -278,8 +278,10 @@ def test_explorer_provenance_rejects_foreign_database_and_web_binding():
         return [f"{key}={value}" for key, value in data.items()]
 
     verify_explorer_runtime("api", api, environment(values), project, database)
-    local_storage = {**values, "SUPABASE_PROJECT_URL": "http://host.docker.internal:54341",
-                     "SUPABASE_SECRET_KEY": "local-fixture-only"}
+    local_storage = {**values, "SUPABASE_PROJECT_URL": "https://host.docker.internal:54341",
+                     "SUPABASE_SECRET_KEY": "local-fixture-only",
+                     "KAREN_SUPABASE_STORAGE_TLS_ORIGIN": "https://host.docker.internal:54341",
+                     "KAREN_SUPABASE_STORAGE_TLS_CA_FILE": "/run/karen-local-storage-tls/ca.pem"}
     assert verify_explorer_runtime(
         "api", api, environment(local_storage), project, database, require_local_storage=True,
     ) == local_storage["SUPABASE_PROJECT_URL"]
@@ -287,6 +289,9 @@ def test_explorer_provenance_rejects_foreign_database_and_web_binding():
         ("SUPABASE_PROJECT_URL", "https://remote.supabase.co"),
         ("SUPABASE_URL", "https://remote.supabase.co"),
         ("SUPABASE_SECRET_KEY", ""),
+        ("SUPABASE_PROJECT_URL", "http://host.docker.internal:54341"),
+        ("KAREN_SUPABASE_STORAGE_TLS_ORIGIN", ""),
+        ("KAREN_SUPABASE_STORAGE_TLS_CA_FILE", "/tmp/other.pem"),
     ):
         with pytest.raises(GuardError):
             verify_explorer_runtime(
@@ -668,7 +673,7 @@ def test_owner_text_mode_requires_real_local_storage_provenance(tmp_path, monkey
     env_file = tmp_path / "local.env"
     env_file.write_text("")
     env_file.chmod(0o600)
-    storage_origin = "http://host.docker.internal:54341"
+    storage_origin = "https://host.docker.internal:54341"
     calls = []
 
     def inspect(project_arg, sha_arg, service, **kwargs):
@@ -678,12 +683,14 @@ def test_owner_text_mode_requires_real_local_storage_provenance(tmp_path, monkey
         result = {"service": service}
         if service == "api" and kwargs.get("require_local_storage"):
             result["storage_origin"] = storage_origin
+            result["storage_tls"] = {"peer_sha256": "a" * 64}
         return result
 
     def storage(container, origin):
         assert container == "db-id" and origin == storage_origin
         calls.append(("storage", True))
-        return {"container_id": "gateway-id", "origin": origin}
+        return {"container_id": "gateway-id", "origin": origin,
+                "transport": "https", "peer_sha256": "a" * 64}
 
     monkeypatch.setattr(verifier, "require_local_docker", lambda: None)
     monkeypatch.setattr(verifier, "inspect_container", inspect)
@@ -718,6 +725,13 @@ def test_owner_text_mode_requires_real_local_storage_provenance(tmp_path, monkey
             [("storage", True)] if required else []
         )
 
+    def wrong_peer(*_):
+        return {"transport": "https", "peer_sha256": "b" * 64}
+
+    monkeypatch.setattr(verifier, "verify_local_storage_gateway", wrong_peer)
+    status, output = invoke("--owner-text", "wrong-peer.json")
+    assert status == 1 and not output.exists()
+
     def unavailable(*_):
         raise verifier.GuardError("Local Storage gateway unavailable")
 
@@ -728,3 +742,180 @@ def test_owner_text_mode_requires_real_local_storage_provenance(tmp_path, monkey
     runner = (ROOT / "scripts/ci/kui-local-acceptance.sh").read_text()
     assert "PROVENANCE[2]='--owner-text'" in runner
     assert "REPORT+=(--owner-text)" in runner
+
+def test_native_local_tls_gateway_requires_https_listener(monkeypatch):
+    import pytest
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    origin = "https://host.docker.internal:54341"
+    assert verifier.local_storage_origin(origin, require_https=True) == origin
+    with pytest.raises(verifier.GuardError):
+        verifier.local_storage_origin(origin.replace("https:", "http:"), require_https=True)
+    database = {"Name": "/supabase_db_fixture", "State": {"Running": True}}
+    gateway = {"Name": "/supabase_kong_fixture", "Id": "b" * 64,
+               "State": {"Running": True}, "NetworkSettings": {
+                   "Ports": {"8000/tcp": [{"HostIp": "0.0.0.0", "HostPort": "54341"}]},
+               }}
+    monkeypatch.setattr(verifier, "docker_json",
+                        lambda args: [database if args[-1] == "db-id" else gateway])
+    with pytest.raises(verifier.GuardError):
+        verifier.verify_local_storage_gateway("db-id", origin)
+    gateway["NetworkSettings"]["Ports"]["8443/tcp"] = [
+        {"HostIp": "0.0.0.0", "HostPort": "54341"}
+    ]
+    import certifi
+    import hashlib
+    import ssl
+    import subprocess
+    from pathlib import Path
+
+    pem = Path(certifi.where()).read_text().split("-----BEGIN CERTIFICATE-----", 1)[1]
+    pem = "-----BEGIN CERTIFICATE-----" + pem.split("-----END CERTIFICATE-----", 1)[0]
+    pem += "-----END CERTIFICATE-----"
+    def read_public_cert(args, **kwargs):
+        assert args == ["docker", "exec", "b" * 64, "cat", "/home/kong/localhost.crt"]
+        return subprocess.CompletedProcess(args, 0, pem, "")
+
+    monkeypatch.setattr(verifier.subprocess, "run", read_public_cert)
+    evidence = verifier.verify_local_storage_gateway("db-id", origin)
+    assert evidence["transport"] == "https"
+    assert evidence["peer_sha256"] == hashlib.sha256(ssl.PEM_cert_to_DER_cert(pem)).hexdigest()
+
+
+def test_storage_tls_provenance_binds_mount_ca_and_peer(tmp_path, monkeypatch):
+    import certifi
+    import hashlib
+    import json
+    import pytest
+    import subprocess
+    from pathlib import Path
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    directory = tmp_path / "storage-tls"
+    directory.mkdir()
+    data = Path(certifi.where()).read_bytes()
+    # Use one certificate to remain within the bounded CA fixture limit.
+    data = data.split(b"-----END CERTIFICATE-----", 1)[0] + b"-----END CERTIFICATE-----\n"
+    (directory / "ca.pem").write_bytes(data)
+    env = tmp_path / "local.env"
+    env.touch()
+    mount = {"Type": "bind", "Source": str(directory),
+             "Destination": verifier.STORAGE_CA_MOUNT, "RW": False}
+    container = {"Mounts": [mount]}
+    origin = "https://host.docker.internal:54341"
+    payload = {"origin": origin, "ca_sha256": hashlib.sha256(data).hexdigest(),
+               "peer_sha256": "a" * 64}
+    calls = []
+
+    def run(args, **kwargs):
+        calls.append(args)
+        assert args[:5] == ["docker", "exec", "api-id", "python", "-c"]
+        return subprocess.CompletedProcess(args, 0, json.dumps(payload), "")
+
+    monkeypatch.setattr(verifier.subprocess, "run", run)
+    assert verifier.verify_storage_tls_runtime(container, "api-id", env, origin) == payload
+    mount["RW"] = True
+    with pytest.raises(verifier.GuardError):
+        verifier.verify_storage_tls_runtime(container, "api-id", env, origin)
+    assert len(calls) == 1
+    mount["RW"] = False
+    payload["ca_sha256"] = "b" * 64
+    with pytest.raises(verifier.GuardError):
+        verifier.verify_storage_tls_runtime(container, "api-id", env, origin)
+    payload["ca_sha256"] = hashlib.sha256(data).hexdigest()
+    payload["peer_sha256"] = "invalid"
+    with pytest.raises(verifier.GuardError):
+        verifier.verify_storage_tls_runtime(container, "api-id", env, origin)
+
+
+def test_storage_tls_probe_executes_real_policy_and_hostname_verified_socket(tmp_path, monkeypatch):
+    """Execute the embedded API probe, not a fabricated docker exec result."""
+    import ast
+    import hashlib
+    import inspect
+    import ipaddress
+    import json
+    import socket
+    import ssl
+    import textwrap
+    from concurrent.futures import ThreadPoolExecutor
+    from datetime import datetime, timedelta, timezone
+
+    import pytest
+    from cryptography import x509
+    from cryptography.hazmat.primitives import hashes, serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.x509.oid import NameOID
+
+    from scripts.ci import verify_local_card_studio_acceptance as verifier
+
+    tree = ast.parse(textwrap.dedent(inspect.getsource(verifier.verify_storage_tls_runtime)))
+    probes = [
+        ast.literal_eval(node.value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Assign)
+        and any(isinstance(target, ast.Name) and target.id == "probe" for target in node.targets)
+    ]
+    assert len(probes) == 1
+    program = compile(probes[0], "<storage-tls-probe>", "exec")
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    subject = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, "Storage test CA")])
+    now = datetime.now(timezone.utc)
+    cert = (
+        x509.CertificateBuilder()
+        .subject_name(subject)
+        .issuer_name(subject)
+        .public_key(key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now - timedelta(minutes=1))
+        .not_valid_after(now + timedelta(hours=1))
+        .add_extension(x509.BasicConstraints(ca=True, path_length=None), critical=True)
+        .add_extension(
+            x509.SubjectAlternativeName([x509.IPAddress(ipaddress.ip_address("127.0.0.1"))]),
+            critical=False,
+        )
+        .sign(key, hashes.SHA256())
+    )
+    cert_file = tmp_path / "ca.pem"
+    cert_file.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+    key_file = tmp_path / "key.pem"
+    key_file.write_bytes(key.private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ))
+    server_context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    server_context.load_cert_chain(cert_file, key_file)
+    with socket.socket() as listener:
+        listener.bind(("127.0.0.1", 0))
+        listener.listen(1)
+        listener.settimeout(5)
+        origin = f"https://127.0.0.1:{listener.getsockname()[1]}"
+        monkeypatch.setenv("SUPABASE_PROJECT_URL", origin)
+        monkeypatch.delenv("KAREN_SUPABASE_STORAGE_TLS_ORIGIN", raising=False)
+        monkeypatch.delenv("KAREN_SUPABASE_STORAGE_TLS_CA_FILE", raising=False)
+        with pytest.raises(RuntimeError, match="TLS policy unavailable"):
+            exec(program, {})
+        monkeypatch.setenv("KAREN_SUPABASE_STORAGE_TLS_ORIGIN", origin)
+        monkeypatch.setenv("KAREN_SUPABASE_STORAGE_TLS_CA_FILE", str(cert_file))
+
+        def serve():
+            raw, _ = listener.accept()
+            with raw:
+                raw.settimeout(5)
+                with server_context.wrap_socket(raw, server_side=True):
+                    pass
+
+        from io import StringIO
+        from contextlib import redirect_stdout
+
+        captured = StringIO()
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(serve)
+            with redirect_stdout(captured):
+                exec(program, {})
+            future.result(timeout=6)
+        assert json.loads(captured.getvalue()) == {
+            "origin": origin,
+            "ca_sha256": hashlib.sha256(cert_file.read_bytes()).hexdigest(),
+            "peer_sha256": cert.fingerprint(hashes.SHA256()).hex(),
+        }
