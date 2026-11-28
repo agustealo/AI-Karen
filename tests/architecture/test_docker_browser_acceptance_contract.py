@@ -45,7 +45,7 @@ def test_docker_scenario_reuses_existing_protected_acceptance_workflow() -> None
     before = _job(workflow, "docker-provenance-before")
     browser = _job(workflow, "authenticated-docker-search-replay")
     after = _job(workflow, "docker-provenance-after")
-    guard = "(inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat') && github.ref == 'refs/heads/main'"
+    guard = "(inputs.scenario == 'docker-search' || inputs.scenario == 'docker-specialist-participation' || inputs.scenario == 'docker-specialist-ordinary-chat' || inputs.scenario == 'docker-kexp-retry' || inputs.scenario == 'docker-kexp-content') && github.ref == 'refs/heads/main'"
     for job in (before, browser, after):
         assert guard in job
         assert "ref: " + chr(36) + "{{ inputs.target_sha }}" in job
@@ -112,7 +112,7 @@ def test_browser_is_hosted_and_credentials_are_only_available_to_proof_step() ->
     for secret in ("KAREN_UX_EMAIL", "KAREN_UX_PASSWORD"):
         binding = secret + ": " + chr(36) + "{{ secrets." + secret + " }}"
         assert binding not in job_scope
-        assert browser.count(binding) == 3
+        assert browser.count(binding) == 4
         assert binding in proof
 
     for step in (
@@ -228,3 +228,34 @@ def test_signed_docker_ordinary_specialist_is_explicit_and_step_scoped() -> None
     assert browser.count("python -m scripts.ci.verify_backend_target") == 2
     assert "upload-artifact" not in browser
     assert "VERCEL_AUTOMATION_BYPASS_SECRET" not in browser
+
+def test_signed_docker_kexp_reuses_exact_host_chain_and_scoped_approval() -> None:
+    workflow = WORKFLOW.read_text()
+    for scenario in ("docker-kexp-retry", "docker-kexp-content"):
+        assert f"          - {scenario}\n" in workflow
+        for name in ("docker-provenance-before", "authenticated-docker-search-replay", "docker-provenance-after"):
+            assert f"inputs.scenario == '{scenario}'" in _job(workflow, name)
+    browser = _job(workflow, "authenticated-docker-search-replay")
+    proof = browser.split(
+        "      - name: Prove signed Docker KEXP recovery or attached content", 1
+    )[1].split("\n      - ", 1)[0]
+    for flag in (
+        "KAREN_KEXP_BROWSER_APPROVED", "KAREN_SANITIZED_ACCOUNT",
+        "KAREN_KEXP_RETRY_ACCEPTANCE_REQUIRED", "KAREN_KEXP_CONTENT_ACCEPTANCE_REQUIRED",
+        "KAREN_CHAT_BOOT_REVISION",
+    ):
+        assert flag in proof
+    for variant in ("v1-normal", "v1-lost", "v2-normal", "v2-lost"):
+        assert variant in proof
+    assert 'test "$KAREN_KEXP_BROWSER_APPROVED" = true' in proof
+    assert 'test "$KAREN_SANITIZED_ACCOUNT" = true' in proof
+    assert "KEXP-A7-ATTACHED-CONTENT:" in proof
+    assert "CK-07F3 operator-approved real native stop" in proof
+    assert "--workers=1 --reporter=list --retries=0 --forbid-only" in proof
+    for name in (
+        "KAREN_KEXP_CONTENT_ANSWER_SHA256", "KAREN_KEXP_RETRY_SOURCE_ID",
+        "KAREN_KEXP_CONTENT_CONVERSATION_ID",
+    ):
+        assert name in proof
+        assert name not in _job(workflow, "docker-provenance-before")
+        assert name not in _job(workflow, "docker-provenance-after")
