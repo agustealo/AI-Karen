@@ -283,7 +283,7 @@ class ProviderHealthMonitor:
             )
             if cache_age < self._cache_ttl:
                 return cached
-            logger.debug("Health cache expired for %s", provider_id)
+            logger.debug("Health cache expired for %s", provider_key)
 
         return ProviderHealthInfo(
             provider_id=provider_key,
