@@ -1307,6 +1307,25 @@ async def read_owned_history_evidence(
     )
 
 
+async def read_owned_historical_attachment_reference(
+    context: ChatExecutionContext, *, assistant_message_id: str, ordinal: int,
+) -> dict[str, str]:
+    """Resolve provenance using the existing coherent owned history authority."""
+    from ai_karen_engine.config.runtime import get_runtime_settings
+    from ai_karen_engine.core.runtime.owned_history_projection import resolve_owned_historical_attachment
+    from ai_karen_engine.persistence.repositories.chat_run_repository import SqlChatRunRepository
+
+    await context.revalidate_runtime_attachment_session()
+    evidence = await read_owned_history_evidence(
+        context, gateway=get_conversation_runtime_gateway(),
+        ledger_factory=SqlChatRunRepository, text_mode=False,
+        include_activity=getattr(get_runtime_settings().features, "enable_ag_ui_event_journal", False),
+    )
+    return resolve_owned_historical_attachment(
+        evidence, assistant_message_id=assistant_message_id, ordinal=ordinal,
+    )
+
+
 _gateway: Optional[ConversationRuntimeGateway] = None
 
 
