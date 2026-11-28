@@ -13,7 +13,8 @@ import json
 import sys
 import subprocess
 from collections.abc import Awaitable, Callable
-from datetime import datetime, timezone
+from dataclasses import replace
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -27,7 +28,6 @@ from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
     RedisDistributedRunStore,
 )
 from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
-    DurableRunLedgerConflict,
     DurableRunLedgerUnavailable,
     PostgresDurableRunLedger,
 )
@@ -37,6 +37,7 @@ from ai_karen_engine.agent_medusa.execution.run_manager import (
     RunTenantMismatchError,
 )
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
+from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
 from ai_karen_engine.persistence.postgres import get_postgres_engine
 from ai_karen_engine.platform.memory.redis import RedisConnectionManager
 
@@ -249,7 +250,7 @@ async def _run_acceptance() -> None:
         try:
             rows = await connection.fetch(
                 """
-                SELECT from_status, to_status, source, audit_event_ref
+                SELECT from_status, to_status, source, audit_event_ref, metadata
                 FROM agent_medusa_run_transitions
                 WHERE run_id = $1 ORDER BY transition_id
                 """,
@@ -258,11 +259,43 @@ async def _run_acceptance() -> None:
             assert [row["to_status"] for row in rows] == [
                 "created", "running", "cancellation_requested", "cancelled"
             ]
+            assert json.loads(rows[0]["metadata"]) == {
+                "admission_phase": "durable_registration",
+                "shared_registration": "unobserved",
+            }
+            assert json.loads(rows[1]["metadata"]) == {
+                "admission_phase": "durable_running_transition",
+                "shared_registration": "acknowledged",
+            }
             assert rows[2]["audit_event_ref"] == audit_ref
             assert rows[2]["source"] == "admin_cancel"
             assert rows[3]["source"] == "runtime"
         finally:
             await connection.close()
+        provenance_scope = dict(
+            run_id=run_id,
+            tenant_id=tenant_a,
+            user_id="user-1",
+            correlation_id=f"corr-{run_id}",
+            worker_id=owner_settings.worker_id,
+        )
+        durable_identity = await ledger.get(run_id=run_id, tenant_id=tenant_a)
+        assert durable_identity is not None
+        provenance_scope["user_id"] = durable_identity["user_id"]
+        provenance_scope["correlation_id"] = durable_identity["correlation_id"]
+        provenance = await ledger.read_admission_provenance(**provenance_scope)
+        assert provenance is not None
+        assert provenance.phase == "running"
+        assert provenance.shared_registration == "acknowledged"
+        for mismatch in (
+            {"tenant_id": tenant_b},
+            {"user_id": "foreign"},
+            {"correlation_id": "foreign"},
+            {"worker_id": "foreign"},
+        ):
+            assert await ledger.read_admission_provenance(
+                **(provenance_scope | mismatch)
+            ) is None
         await _cross_process_acceptance(
             redis=redis, ledger=ledger, prefix=prefix, tenant_id=tenant_a,
             foreign_tenant_id=tenant_b, marker=marker
@@ -274,6 +307,12 @@ async def _run_acceptance() -> None:
         await _registration_cancel_after_mutation_acceptance(
             redis=redis, ledger=ledger, prefix=prefix, tenant_id=tenant_a,
             marker=marker,
+        )
+        await _durable_admission_ack_loss_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix, marker=marker
+        )
+        await _postgres_admission_disconnect_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix, marker=marker
         )
         await _postgres_lock_stall_acceptance(
             redis=redis, ledger=ledger, prefix=prefix,
@@ -290,6 +329,9 @@ async def _run_acceptance() -> None:
         await _retention_retry_acceptance(
             redis=redis, ledger=ledger, prefix=prefix,
             tenant_id=tenant_a, marker=marker,
+        )
+        await _expiry_reconciliation_acceptance(
+            redis=redis, ledger=ledger, prefix=prefix, marker=marker
         )
         if os.getenv("KAREN_MEDUSA_REDIS_RESTART_ACCEPTANCE") == "1":
             await _redis_server_failure_acceptance(ledger=ledger, tenant_id=str(uuid4()))
@@ -630,7 +672,9 @@ async def _retirement_replay_acceptance(
         await redis.client.delete(
             f"{prefix}:claim:{run_id}", f"{prefix}:run:{run_id}"
         )
-        with pytest.raises(DurableRunLedgerConflict):
+        with pytest.raises(
+            ExecutionAdmissionRejected, match="medusa_durable_registration_conflict"
+        ):
             await other.register(**args)
         after = await ledger.get(run_id=run_id, tenant_id=tenant_id)
         assert after == before
@@ -712,7 +756,9 @@ async def _registration_cancel_after_mutation_acceptance(
             ),
             durable_ledger=ledger,
         )
-        with pytest.raises(DurableRunLedgerConflict):
+        with pytest.raises(
+            ExecutionAdmissionRejected, match="medusa_durable_registration_conflict"
+        ):
             await other.register(
                 run_id=run_id,
                 correlation_id=f"corr-{run_id}",
@@ -725,6 +771,327 @@ async def _registration_cancel_after_mutation_acceptance(
         if not task.done():
             task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+async def _durable_admission_ack_loss_acceptance(
+    *,
+    redis: RedisConnectionManager,
+    ledger: PostgresDurableRunLedger,
+    prefix: str,
+    marker: str,
+) -> None:
+    """Commit actual SQL admission, then withhold the caller's acknowledgement.
+
+    The fault is injected above the real transaction boundary. This proves
+    committed-but-unacknowledged state handling, not TCP packet loss.
+    """
+    client = redis.client
+    assert client is not None
+    for phase in ("register", "mark_running"):
+        for failure in ("lost_ack", "cancel"):
+            tenant_id = str(uuid4())
+            run_id = f"{marker}-sql-{phase}-{failure}-required"
+            settings = replace(
+                _settings(worker=f"sql-owner-{marker}", prefix=prefix),
+                run_lease_ttl_seconds=30,
+                run_orphan_grace_seconds=60,
+            )
+            assert settings.durable_run_ledger_enabled is True
+            assert settings.durable_run_ledger_required is True
+            scope = {"run_id": run_id, "tenant_id": tenant_id}
+            identity = {
+                **scope,
+                "correlation_id": f"corr-{run_id}",
+                "user_id": "sql-admission-owner",
+            }
+            key = f"{prefix}:run:{run_id}"
+            claim = f"{prefix}:claim:{run_id}"
+            index = f"{prefix}:tenant:{tenant_id}"
+            committed = asyncio.Event()
+            sql_before = None
+            shared_before = None
+            claim_before = None
+
+            class LostReplyLedger(PostgresDurableRunLedger):
+                async def _lose_reply(self):
+                    nonlocal sql_before, shared_before, claim_before
+                    sql_before = await ledger.get(**scope)
+                    shared_before = await client.hgetall(key)
+                    claim_before = await client.get(claim)
+                    committed.set()
+                    if failure == "cancel":
+                        await asyncio.Future()
+                    raise DurableRunLedgerUnavailable("private injected reply loss")
+
+                async def register(self, **kwargs):
+                    await super().register(**kwargs)
+                    if phase == "register":
+                        await self._lose_reply()
+
+                async def mark_running(self, **kwargs):
+                    await super().mark_running(**kwargs)
+                    if phase == "mark_running":
+                        await self._lose_reply()
+
+            store = RedisDistributedRunStore(
+                settings=settings, redis_manager=redis
+            )
+            manager = MedusaRunManager(
+                settings=settings,
+                distributed_store=store,
+                durable_ledger=LostReplyLedger(postgres=get_postgres_engine()),
+            )
+            execution_started = asyncio.Event()
+
+            async def attempt(admitter):
+                await admitter.register(
+                    **identity, task=asyncio.current_task()
+                )
+                execution_started.set()
+                pytest.fail("Unacknowledged admission granted execution")
+
+            task = asyncio.create_task(attempt(manager))
+            try:
+                await asyncio.wait_for(committed.wait(), timeout=5)
+                if failure == "cancel":
+                    task.cancel()
+                    with pytest.raises(asyncio.CancelledError):
+                        await asyncio.wait_for(task, timeout=5)
+                else:
+                    stage = "registration" if phase == "register" else "running"
+                    with pytest.raises(
+                        ExecutionAdmissionRejected,
+                        match=f"medusa_durable_{stage}_unconfirmed",
+                    ) as exc:
+                        await asyncio.wait_for(task, timeout=5)
+                    assert "private" not in str(exc.value)
+                assert not execution_started.is_set()
+                assert run_id not in manager._runs
+                assert sql_before is not None
+                expected = "created" if phase == "register" else "running"
+                assert sql_before["status"] == expected
+                assert sql_before["completed_at"] is None
+                assert await ledger.get(**scope) == sql_before
+                assert await client.hgetall(key) == shared_before
+                assert await client.get(claim) == claim_before
+                if phase == "register":
+                    assert shared_before == {}
+                    assert claim_before is None
+                else:
+                    assert shared_before["status"] == "running"
+                    assert claim_before == settings.worker_id
+                history = await ledger.read_transitions(
+                    **scope, user_id=identity["user_id"]
+                )
+                assert history is not None
+                assert [t["to_status"] for t in history["transitions"]] == (
+                    ["created"] if phase == "register" else ["created", "running"]
+                )
+                provenance = await ledger.read_admission_provenance(
+                    **identity, worker_id=settings.worker_id
+                )
+                assert provenance is not None
+                assert provenance.phase == expected
+                assert provenance.shared_registration == (
+                    "unobserved" if phase == "register" else "acknowledged"
+                )
+
+                # Both the original manager and a fresh worker must reject
+                # replay without changing the committed evidence.
+                fresh_settings = replace(
+                    settings, worker_id=f"sql-replay-{marker}"
+                )
+                fresh = MedusaRunManager(
+                    settings=fresh_settings,
+                    distributed_store=RedisDistributedRunStore(
+                        settings=fresh_settings, redis_manager=redis
+                    ),
+                    durable_ledger=ledger,
+                )
+                for admitter in (manager, fresh):
+                    admitter._durable_ledger = ledger
+                    with pytest.raises(
+                        ExecutionAdmissionRejected,
+                        match="medusa_durable_registration_conflict",
+                    ):
+                        await attempt(admitter)
+                    assert run_id not in admitter._runs
+                    assert not execution_started.is_set()
+                    assert await ledger.get(**scope) == sql_before
+                    assert await client.hgetall(key) == shared_before
+                    assert await client.get(claim) == claim_before
+                    assert await ledger.read_transitions(
+                        **scope, user_id=identity["user_id"]
+                    ) == history
+                # Remove shared evidence entirely. SQL identity still
+                # fences replay; reconciliation must not invent a result.
+                await client.delete(claim, key)
+                await fresh._reconcile_tenant_from_redis(tenant_id)
+                assert await ledger.get(**scope) == sql_before
+                with pytest.raises(
+                    ExecutionAdmissionRejected,
+                    match="medusa_durable_registration_conflict",
+                ):
+                    await attempt(fresh)
+                assert not execution_started.is_set()
+                assert not await client.exists(key, claim)
+                assert await ledger.read_transitions(
+                    **scope, user_id=identity["user_id"]
+                ) == history
+            finally:
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                await client.delete(claim, key, index)
+
+
+async def _postgres_admission_disconnect_acceptance(
+    *,
+    redis: RedisConnectionManager,
+    ledger: PostgresDurableRunLedger,
+    prefix: str,
+    marker: str,
+) -> None:
+    """Terminate only the disposable test transaction's actual SQL backend.
+
+    Unlike post-commit reply-loss injection, these faults interrupt an
+    uncommitted transaction after both lifecycle writes have executed.
+    """
+    from sqlalchemy import text
+
+    client = redis.client
+    assert client is not None
+    postgres = get_postgres_engine()
+    for phase in ("created", "running"):
+        tenant_id = str(uuid4())
+        run_id = f"{marker}-sql-disconnect-{phase}"
+        settings = replace(
+            _settings(worker=f"disconnect-{marker}", prefix=prefix),
+            run_lease_ttl_seconds=30,
+            run_orphan_grace_seconds=60,
+        )
+        scope = {"run_id": run_id, "tenant_id": tenant_id}
+        identity = {
+            **scope,
+            "correlation_id": f"corr-{run_id}",
+            "user_id": "disconnect-owner",
+        }
+        key = f"{prefix}:run:{run_id}"
+        claim = f"{prefix}:claim:{run_id}"
+        index = f"{prefix}:tenant:{tenant_id}"
+        killed_pids: list[int] = []
+        baseline = postgres.async_engine.pool.checkedout()
+
+        class DisconnectLedger(PostgresDurableRunLedger):
+            async def _append_transition(self, session, **kwargs):
+                await super()._append_transition(session, **kwargs)
+                if kwargs["to_status"] != phase:
+                    return
+                pid = (await session.execute(text("SELECT pg_backend_pid()"))).scalar_one()
+                # Independent connection, same isolated database and role.
+                killer = await asyncpg.connect(os.environ["DATABASE_URL"])
+                try:
+                    assert pid != await killer.fetchval("SELECT pg_backend_pid()")
+                    assert await killer.fetchval(
+                        "SELECT pg_terminate_backend($1)", pid
+                    )
+                    killed_pids.append(pid)
+                finally:
+                    await killer.close()
+                # Force observation of the severed connection before commit.
+                await session.execute(text("SELECT 1"))
+                pytest.fail("Terminated transaction remained usable")
+
+        store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
+        manager = MedusaRunManager(
+            settings=settings,
+            distributed_store=store,
+            durable_ledger=DisconnectLedger(postgres=postgres),
+        )
+        try:
+            stage = "registration" if phase == "created" else "running"
+            with pytest.raises(
+                ExecutionAdmissionRejected,
+                match=f"medusa_durable_{stage}_unconfirmed",
+            ):
+                await asyncio.wait_for(
+                    manager.register(**identity, task=asyncio.current_task()),
+                    timeout=10,
+                )
+            assert len(killed_pids) == 1
+            assert not manager._runs
+            # Use the same canonical engine; do not dispose or replace its pool.
+            async with postgres.get_async_session() as recovered:
+                result = await recovered.execute(text("SELECT pg_backend_pid()"))
+                assert result.scalar_one() != killed_pids[0]
+            durable = await ledger.get(**scope)
+            history = await ledger.read_transitions(
+                **scope, user_id=identity["user_id"]
+            )
+            if phase == "created":
+                assert durable is None
+                assert history is None
+                assert not await client.exists(key, claim)
+            else:
+                assert durable is not None and durable["status"] == "created"
+                assert durable["completed_at"] is None
+                assert history is not None
+                assert [t["to_status"] for t in history["transitions"]] == ["created"]
+                assert (await client.hgetall(key))["status"] == "running"
+                assert await client.get(claim) == settings.worker_id
+                provenance = await ledger.read_admission_provenance(
+                    **identity, worker_id=settings.worker_id
+                )
+                assert provenance is not None and provenance.phase == "created"
+                assert provenance.shared_registration == "unobserved"
+                shared = await client.hgetall(key)
+                fresh = MedusaRunManager(
+                    settings=settings, distributed_store=store, durable_ledger=ledger
+                )
+                with pytest.raises(
+                    ExecutionAdmissionRejected,
+                    match="medusa_durable_registration_conflict",
+                ):
+                    await fresh.register(**identity, task=asyncio.current_task())
+                assert not fresh._runs
+                assert await client.hgetall(key) == shared
+                assert await ledger.get(**scope) == durable
+                assert await ledger.read_transitions(
+                    **scope, user_id=identity["user_id"]
+                ) == history
+            assert postgres.async_engine.pool.checkedout() == baseline
+
+            # A distinct, explicitly admitted execution can use the recovered
+            # pool. Never automatically retry the uncertain original identity.
+            control = MedusaRunManager(
+                settings=settings, distributed_store=store, durable_ledger=ledger
+            )
+            control_id = f"{run_id}-new"
+            control_run = None
+            task = asyncio.create_task(asyncio.sleep(0))
+            try:
+                control_run = await control.register(
+                    **(identity | {"run_id": control_id, "correlation_id": control_id}),
+                    task=task,
+                )
+                await task
+                assert control_run.durable_registered and control_run.shared_registered
+                assert (await control.mark_response(control_id, "success")).value == "completed"
+            finally:
+                if control_run is not None and control_run.heartbeat_task is not None:
+                    control_run.heartbeat_task.cancel()
+                    await asyncio.gather(
+                        control_run.heartbeat_task, return_exceptions=True
+                    )
+                if not task.done():
+                    task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                await client.delete(
+                    store._claim_key(control_id), store._run_key(control_id)
+                )
+            assert postgres.async_engine.pool.checkedout() == baseline
+        finally:
+            await client.delete(claim, key, index)
 
 
 async def _terminal_arbitration_acceptance(
@@ -962,6 +1329,186 @@ async def _terminal_rollback_recovery_acceptance(
         if not task.done():
             task.cancel()
             await asyncio.gather(task, return_exceptions=True)
+
+
+async def _expiry_reconciliation_acceptance(
+    *,
+    redis: RedisConnectionManager,
+    ledger: PostgresDurableRunLedger,
+    prefix: str,
+    marker: str,
+) -> None:
+    """Exercise real SQL repair and Redis readback without starting a workload.
+
+    Isolated fault fixtures backdate lease timestamps to avoid expiry sleeps.
+    """
+    client = redis.client
+    assert client is not None
+    for mode in (
+        "verified",
+        "batch_starvation",
+        "heartbeat_race",
+        "cancellation_race",
+        "claim_reappears",
+        "expiry_changes",
+        "status_changes",
+        "hash_disappears",
+        "interrupted_admission",
+        "rollback",
+    ):
+        tenant_id = str(uuid4())
+        run_id = f"{marker}-expiry-{mode}"
+        settings = _settings(worker=f"expiry-owner-{marker}", prefix=prefix)
+        if mode == "batch_starvation":
+            settings = replace(settings, run_reconciliation_batch_size=1)
+        scope = {"run_id": run_id, "tenant_id": tenant_id}
+        identity = {
+            **scope,
+            "correlation_id": f"corr-{run_id}",
+            "user_id": "expiry-test-owner",
+            "worker_id": settings.worker_id,
+        }
+        stamp = datetime.now(timezone.utc) - timedelta(minutes=2)
+        key = f"{prefix}:run:{run_id}"
+        claim = f"{prefix}:claim:{run_id}"
+        index = f"{prefix}:tenant:{tenant_id}"
+
+        class RacingLedger(PostgresDurableRunLedger):
+            repairs = 0
+
+            async def reconcile_from_shared(self, **kwargs):
+                self.repairs += 1
+                if self.repairs == 1:
+                    if mode == "heartbeat_race":
+                        await ledger.heartbeat(
+                            **scope,
+                            worker_id=settings.worker_id,
+                            heartbeat_at=datetime.now(timezone.utc),
+                        )
+                    elif mode == "cancellation_race":
+                        await ledger.mark_cancelling(
+                            **scope,
+                            requested_at=datetime.now(timezone.utc),
+                            audit_event_ref=f"audit-{run_id}",
+                            source="admin_cancel",
+                        )
+                return await super().reconcile_from_shared(**kwargs)
+
+            async def _append_transition(self, session, **kwargs):
+                await super()._append_transition(session, **kwargs)
+                if mode == "rollback" and kwargs["source"] == "redis_reconciliation":
+                    raise DurableRunLedgerUnavailable("injected repair rollback")
+
+        class RacingStore(RedisDistributedRunStore):
+            observations = 0
+
+            async def observe_reconciliation(self, **kwargs):
+                self.observations += 1
+                if self.observations == 2:
+                    if mode == "claim_reappears":
+                        await client.set(claim, "foreign-worker", ex=60)
+                    elif mode == "expiry_changes":
+                        await client.hset(
+                            key,
+                            "lease_expires_at",
+                            (stamp - timedelta(seconds=1)).isoformat(),
+                        )
+                    elif mode == "status_changes":
+                        await client.hset(key, "status", "cancelling")
+                    elif mode == "hash_disappears":
+                        await client.delete(key)
+                return await super().observe_reconciliation(**kwargs)
+
+        racing_ledger = RacingLedger(postgres=get_postgres_engine())
+        store = RacingStore(settings=settings, redis_manager=redis)
+        manager = MedusaRunManager(
+            settings=settings, distributed_store=store, durable_ledger=racing_ledger
+        )
+        try:
+            await ledger.register(
+                **identity,
+                request_id=f"request-{run_id}",
+                session_id=None,
+                policy_decision_id=None,
+                created_at=stamp,
+            )
+            if mode == "batch_starvation":
+                unresolved_id = f"{run_id}-unresolved"
+                await ledger.register(
+                    **(identity | {"run_id": unresolved_id}),
+                    request_id=f"request-{unresolved_id}",
+                    session_id=None,
+                    policy_decision_id=None,
+                    created_at=stamp - timedelta(minutes=1),
+                )
+            await store.register(**identity, started_at=stamp)
+            if mode != "interrupted_admission":
+                await ledger.mark_running(
+                    **scope,
+                    worker_id=settings.worker_id,
+                    started_at=stamp,
+                    shared_registration="acknowledged",
+                )
+            await client.delete(claim)
+            await client.hset(key, "lease_expires_at", stamp.isoformat())
+            before = await ledger.get(**scope)
+            assert before is not None
+            if mode == "rollback":
+                with pytest.raises(DurableRunLedgerUnavailable):
+                    await manager._reconcile_tenant_from_redis(tenant_id)
+                assert await ledger.get(**scope) == before
+                history = await ledger.read_transitions(
+                    **scope, user_id=identity["user_id"]
+                )
+                assert history is not None
+                assert [t["to_status"] for t in history["transitions"]] == [
+                    "created",
+                    "running",
+                ]
+                manager._durable_ledger = ledger
+                await manager._reconcile_tenant_from_redis(tenant_id)
+            else:
+                await manager._reconcile_tenant_from_redis(tenant_id)
+                if mode == "batch_starvation":
+                    assert await ledger.get(**scope) == before
+                    await manager._reconcile_tenant_from_redis(tenant_id)
+                    unresolved = await ledger.get(
+                        run_id=unresolved_id, tenant_id=tenant_id
+                    )
+                    assert unresolved is not None and unresolved["status"] == "created"
+            final = await ledger.get(**scope)
+            assert final is not None
+            expected = {
+                "verified": "orphaned",
+                "batch_starvation": "orphaned",
+                "rollback": "orphaned",
+                "cancellation_race": "cancellation_requested",
+                "interrupted_admission": "created",
+            }.get(mode, "running")
+            assert final["status"] == expected, mode
+            assert final["outcome_status"] is None
+            if expected != "orphaned":
+                assert final["completed_at"] is None
+            if mode == "cancellation_race":
+                assert final["audit_event_ref"] == f"audit-{run_id}"
+            history = await ledger.read_transitions(
+                **scope, user_id=identity["user_id"]
+            )
+            assert history is not None
+            repairs = [
+                t for t in history["transitions"]
+                if t["source"] == "redis_reconciliation"
+            ]
+            assert len(repairs) == int(expected == "orphaned")
+            assert manager._runs == {}
+            if expected == "orphaned":
+                await manager._reconcile_tenant_from_redis(tenant_id)
+                assert await ledger.get(**scope) == final
+                assert await ledger.read_transitions(
+                    **scope, user_id=identity["user_id"]
+                ) == history
+        finally:
+            await client.delete(claim, key, index)
 
 
 async def _retention_retry_acceptance(
@@ -1586,6 +2133,39 @@ async def _redis_server_failure_acceptance(
                 assert await client.config_set("maxmemory", 0)
             await observed_policy(policy, 0)
 
+        async def assert_replay_denied(
+            *, run_id: str, tenant_id: str, expected: dict[str, Any]
+        ) -> None:
+            """Use a fresh canonical manager; no workload can follow denial."""
+            settings = _settings(worker=f"replay-{marker}", prefix=prefix)
+            observer = MedusaRunManager(
+                settings=settings,
+                distributed_store=RedisDistributedRunStore(
+                    settings=settings, redis_manager=redis
+                ),
+                durable_ledger=ledger,
+            )
+            scope = {"run_id": run_id, "tenant_id": tenant_id}
+            history = await ledger.read_transitions(
+                **scope, user_id=expected["user_id"]
+            )
+            assert history is not None
+            with pytest.raises(
+                ExecutionAdmissionRejected,
+                match="medusa_durable_registration_conflict",
+            ):
+                await observer.register(
+                    **scope,
+                    correlation_id=expected["correlation_id"],
+                    user_id=expected["user_id"],
+                    task=asyncio.current_task(),
+                )
+            assert not observer._runs
+            assert await ledger.get(**scope) == expected
+            assert await ledger.read_transitions(
+                **scope, user_id=expected["user_id"]
+            ) == history
+
         async def restart_and_pressure() -> None:
             assert redis.client is not None
             run_key = f"{prefix}:run:{marker}-terminal-rollback"
@@ -1621,6 +2201,17 @@ async def _redis_server_failure_acceptance(
             await pressure(
                 policy="volatile-lru", run_key=run_key, pending_key=pending_key
             )
+            durable = await ledger.get(
+                run_id=f"{marker}-terminal-rollback", tenant_id=tenant_id
+            )
+            assert durable is not None and durable["status"] == "running"
+            await assert_replay_denied(
+                run_id=f"{marker}-terminal-rollback",
+                tenant_id=tenant_id,
+                expected=durable,
+            )
+            assert await redis.client.hgetall(run_key) == before
+            assert await redis.client.zrange(pending_key, 0, -1) == pending
 
         # Reuse the real SQL rollback and independent-process recovery proof.
         await _terminal_rollback_recovery_acceptance(
@@ -1632,36 +2223,83 @@ async def _redis_server_failure_acceptance(
             before_recovery=restart_and_pressure,
         )
 
-        # Negative store-level control: PERSIST is not an allkeys eviction fence.
+        # Negative control: a real durable run with SQL terminal rollback,
+        # followed by loss of its retained receipt under allkeys eviction.
+        class RollbackLedger(PostgresDurableRunLedger):
+            async def _append_transition(self, session, **kwargs):
+                await super()._append_transition(session, **kwargs)
+                if kwargs["to_status"] == "completed":
+                    raise DurableRunLedgerUnavailable("injected terminal SQL rollback")
+
+        negative_tenant = str(uuid4())
         settings = _settings(worker=f"negative-{marker}", prefix=prefix)
         store = RedisDistributedRunStore(settings=settings, redis_manager=redis)
         run_id = f"{marker}-negative"
-        await store.register(
-            run_id=run_id,
-            correlation_id=f"corr-{marker}",
-            tenant_id=tenant_id,
-            user_id="ci-owner",
-            worker_id=settings.worker_id,
-            started_at=datetime.now(timezone.utc),
+        scope = {"run_id": run_id, "tenant_id": negative_tenant}
+        owner = MedusaRunManager(
+            settings=settings,
+            distributed_store=store,
+            durable_ledger=RollbackLedger(postgres=get_postgres_engine()),
         )
-        assert await store.mark_terminal(
-            run_id=run_id,
-            tenant_id=tenant_id,
-            worker_id=settings.worker_id,
-            status="completed",
-            completed_at=datetime.now(timezone.utc),
-            error_type=None,
-            outcome_status="success",
-            durable_arbitrated=True,
-        ) == "completed"
-        await pressure(
-            policy="allkeys-lru",
-            run_key=store._run_key(run_id),
-            pending_key=store._pending_terminal_index(tenant_id),
-        )
-        with pytest.raises(DistributedRunNotFound):
-            await store.get(run_id=run_id, tenant_id=tenant_id)
-        assert await store.pending_terminal_ids(tenant_id=tenant_id, limit=1) == []
+        task = asyncio.create_task(asyncio.sleep(0))
+        run = None
+        try:
+            run = await owner.register(
+                **scope,
+                correlation_id=f"corr-negative-{marker}",
+                user_id="ci-owner",
+                task=task,
+            )
+            await task
+            assert (await owner.mark_response(run_id, "success")).value == "orphaned"
+            retained = await store.get(**scope)
+            assert retained["status"] == "completed"
+            assert retained["terminal_authority"] == "durable_arbitrated"
+            durable = await ledger.get(**scope)
+            assert durable is not None and durable["status"] == "running"
+            assert durable["completed_at"] is None
+            history = await ledger.read_transitions(**scope, user_id="ci-owner")
+            assert history is not None
+            assert [t["to_status"] for t in history["transitions"]] == [
+                "created",
+                "running",
+            ]
+            await pressure(
+                policy="allkeys-lru",
+                run_key=store._run_key(run_id),
+                pending_key=store._pending_terminal_index(negative_tenant),
+            )
+            with pytest.raises(DistributedRunNotFound):
+                await store.get(**scope)
+            assert await store.pending_terminal_ids(
+                tenant_id=negative_tenant, limit=1
+            ) == []
+            assert redis.client is not None
+            assert not await redis.client.exists(store._claim_key(run_id))
+            # Restore the safe policy but not the lost receipt.
+            assert await redis.client.config_set("maxmemory-policy", "noeviction")
+            observer = MedusaRunManager(
+                settings=settings, distributed_store=store, durable_ledger=ledger
+            )
+            await observer._reconcile_tenant_from_redis(negative_tenant)
+            assert await ledger.get(**scope) == durable
+            await assert_replay_denied(
+                run_id=run_id, tenant_id=negative_tenant, expected=durable
+            )
+            assert await ledger.read_transitions(
+                **scope, user_id="ci-owner"
+            ) == history
+            assert not await redis.client.exists(
+                store._claim_key(run_id), store._run_key(run_id)
+            )
+        finally:
+            if run is not None and run.heartbeat_task is not None:
+                run.heartbeat_task.cancel()
+                await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+            if not task.done():
+                task.cancel()
+            await asyncio.gather(task, return_exceptions=True)
+
     finally:
         try:
             if redis is not None:

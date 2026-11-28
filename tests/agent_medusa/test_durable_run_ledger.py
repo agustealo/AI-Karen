@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
@@ -19,11 +20,13 @@ from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
     DurableRunLedgerConflict,
     DurableRunLedgerUnavailable,
     PostgresDurableRunLedger,
+    SharedRegistrationObservation,
     TerminalAuthorizer,
     _canonical_tenant_id,
 )
 from ai_karen_engine.agent_medusa.execution.run_manager import MedusaRunManager
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
+from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
 
 
 class InMemoryDurableLedger:
@@ -78,6 +81,7 @@ class InMemoryDurableLedger:
         tenant_id: str,
         worker_id: str,
         started_at: datetime,
+        shared_registration: SharedRegistrationObservation = "unobserved",
     ) -> None:
         record = self._owned(run_id, tenant_id, worker_id)
         if record["status"] != "created":
@@ -85,6 +89,10 @@ class InMemoryDurableLedger:
         record["status"] = "running"
         record["started_at"] = started_at
         self._transition(run_id, "created", "running", worker_id, "runtime", started_at)
+        self.transitions[-1]["metadata"] = {
+            "admission_phase": "durable_running_transition",
+            "shared_registration": shared_registration,
+        }
 
     async def heartbeat(
         self,
@@ -216,6 +224,9 @@ class InMemoryDurableLedger:
         expected_correlation_id: str | None = None,
         expected_user_id: str | None = None,
         terminal_authority: str | None = None,
+        expected_status: str | None = None,
+        expected_heartbeat_at: datetime | None = None,
+        confirm_expiry: Callable[[], Awaitable[bool]] | None = None,
     ) -> bool:
         record = self.records[run_id]
         assert record["tenant_id"] == tenant_id
@@ -246,6 +257,14 @@ class InMemoryDurableLedger:
             return False
         if record["status"] == normalized:
             return False
+        if normalized == "orphaned" and completed_at is None:
+            if (
+                expected_status != record["status"]
+                or expected_heartbeat_at != record["heartbeat_at"]
+                or confirm_expiry is None
+                or await confirm_expiry() is not True
+            ):
+                return False
         previous = record["status"]
         record["status"] = normalized
         record["reconciled_at"] = reconciled_at
@@ -510,7 +529,7 @@ def test_stale_postgres_observation_does_not_orphan_healthy_redis_owner() -> Non
     asyncio.run(scenario())
 
 
-def test_missing_redis_lease_reconciles_durable_active_run_to_orphaned() -> None:
+def test_missing_redis_evidence_preserves_durable_active_run() -> None:
     async def scenario() -> None:
         tenant_id = "11111111-1111-1111-1111-111111111111"
         ledger = InMemoryDurableLedger()
@@ -524,9 +543,9 @@ def test_missing_redis_lease_reconciles_durable_active_run_to_orphaned() -> None
 
         await manager.list_runs(tenant_id=tenant_id)
 
-        assert ledger.records["orphan-1"]["status"] == "orphaned"
-        assert ledger.records["orphan-1"]["error_type"] == "WorkerLeaseExpired"
-        assert ledger.transitions[-1]["source"] == "redis_reconciliation"
+        assert ledger.records["orphan-1"]["status"] == "running"
+        assert ledger.records["orphan-1"]["error_type"] is None
+        assert ledger.records["orphan-1"]["reconciled_at"] is None
 
     asyncio.run(scenario())
 
@@ -651,7 +670,9 @@ def test_required_durable_registration_fails_closed() -> None:
         manager = MedusaRunManager(settings=_settings(), durable_ledger=ledger)
         task = asyncio.create_task(asyncio.sleep(60))
 
-        with pytest.raises(DurableRunLedgerUnavailable):
+        with pytest.raises(
+            ExecutionAdmissionRejected, match="medusa_durable_registration_unconfirmed"
+        ):
             await manager.register(
                 run_id="durable-fail",
                 correlation_id="corr-fail",
@@ -1254,3 +1275,614 @@ def test_retention_metric_ignores_unbounded_labels_and_collector_failure(monkeyp
         metrics, "get_metrics_collector", MagicMock(side_effect=RuntimeError)
     )
     metrics.record_retention_event("acknowledgement", "acknowledged")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("phase", ["register", "mark_running"])
+@pytest.mark.parametrize(
+    "failure", ["conflict", "unavailable", "unexpected", "lost_ack", "cancel"]
+)
+async def test_durable_admission_failure_cannot_authorize_execution(phase, failure):
+    ledger = InMemoryDurableLedger()
+    store = SharedTruthStore()
+    store.register = AsyncMock()
+    store.mark_terminal = AsyncMock()
+    store.heartbeat = AsyncMock()
+    original = getattr(ledger, phase)
+    committed = asyncio.Event()
+
+    async def fail(**kwargs):
+        if failure in {"lost_ack", "cancel"}:
+            await original(**kwargs)
+            committed.set()
+        if failure == "cancel":
+            await asyncio.Future()
+        if failure == "conflict":
+            raise DurableRunLedgerConflict("private conflict")
+        if failure in {"unavailable", "lost_ack"}:
+            raise DurableRunLedgerUnavailable("private database detail")
+        raise RuntimeError("private unexpected detail")
+
+    setattr(ledger, phase, AsyncMock(side_effect=fail))
+    ledger.mark_terminal = AsyncMock()
+    manager = MedusaRunManager(
+        settings=_settings(distributed=True),
+        distributed_store=store,
+        durable_ledger=ledger,
+    )
+    run_id = "durable-admission"
+    tenant_id = "11111111-1111-1111-1111-111111111111"
+
+    async def register():
+        return await manager.register(
+            run_id=run_id,
+            correlation_id="corr",
+            tenant_id=tenant_id,
+            user_id="user-1",
+            task=asyncio.current_task(),
+        )
+
+    task = asyncio.create_task(register())
+    try:
+        if failure == "cancel":
+            await asyncio.wait_for(committed.wait(), timeout=2)
+            task.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await asyncio.wait_for(task, timeout=2)
+        else:
+            stage = "registration" if phase == "register" else "running"
+            suffix = "conflict" if failure == "conflict" else "unconfirmed"
+            with pytest.raises(
+                ExecutionAdmissionRejected, match=f"medusa_durable_{stage}_{suffix}"
+            ) as exc:
+                await asyncio.wait_for(task, timeout=2)
+            assert "private" not in str(exc.value)
+        assert run_id not in manager._runs
+        if phase == "register":
+            store.register.assert_not_awaited()
+        else:
+            store.register.assert_awaited_once()
+        store.mark_terminal.assert_not_awaited()
+        store.heartbeat.assert_not_awaited()
+        ledger.mark_terminal.assert_not_awaited()
+        if phase == "register":
+            if failure in {"lost_ack", "cancel"}:
+                assert ledger.records[run_id]["status"] == "created"
+            else:
+                assert run_id not in ledger.records
+        else:
+            expected = "running" if failure in {"lost_ack", "cancel"} else "created"
+            assert ledger.records[run_id]["status"] == expected
+    finally:
+        if not task.done():
+            task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("distributed", "available", "expected"),
+    [
+        (False, False, "not_configured"),
+        (True, False, "unavailable"),
+        (True, True, "acknowledged"),
+    ],
+)
+async def test_running_transition_records_shared_admission_observation(
+    distributed, available, expected
+):
+    ledger = InMemoryDurableLedger()
+    store = SharedTruthStore()
+    store.available_state = available
+    store.register = AsyncMock()
+    manager = MedusaRunManager(
+        settings=_settings(distributed=distributed),
+        distributed_store=store,
+        durable_ledger=ledger,
+    )
+    task = asyncio.create_task(asyncio.sleep(0))
+    run = None
+    try:
+        run = await manager.register(
+            run_id="provenance",
+            correlation_id="corr",
+            tenant_id="11111111-1111-1111-1111-111111111111",
+            user_id="owner",
+            task=task,
+        )
+        assert ledger.transitions[-1]["metadata"] == {
+            "admission_phase": "durable_running_transition",
+            "shared_registration": expected,
+        }
+        assert run.shared_registered is (expected == "acknowledged")
+        if expected == "acknowledged":
+            store.register.assert_awaited_once()
+        else:
+            store.register.assert_not_awaited()
+    finally:
+        if run is not None and run.heartbeat_task is not None:
+            run.heartbeat_task.cancel()
+            await asyncio.gather(run.heartbeat_task, return_exceptions=True)
+        await task
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rowcount", [0, 1])
+async def test_running_transition_provenance_requires_owned_update(rowcount):
+    import json
+
+    postgres = MagicMock()
+    session = AsyncMock()
+    postgres.get_async_session.return_value.__aenter__.return_value = session
+    locked = MagicMock()
+    locked.mappings.return_value.first.return_value = {
+        "status": "created",
+        "owner_worker_id": "owner",
+    }
+    updated = MagicMock(rowcount=rowcount)
+    session.execute.side_effect = [MagicMock(), locked, updated, MagicMock()]
+    ledger = PostgresDurableRunLedger(postgres=postgres)
+    args = dict(
+        run_id="provenance",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        worker_id="owner",
+        started_at=datetime.now(timezone.utc),
+        shared_registration="acknowledged",
+    )
+    if rowcount == 0:
+        with pytest.raises(DurableRunLedgerUnavailable):
+            await ledger.mark_running(**args)
+        assert session.execute.await_count == 3
+    else:
+        await ledger.mark_running(**args)
+        assert session.execute.await_count == 4
+        params = session.execute.await_args.args[1]
+        assert json.loads(params["metadata"]) == {
+            "admission_phase": "durable_running_transition",
+            "shared_registration": "acknowledged",
+        }
+
+
+def _admission_rows():
+    return [
+        {
+            "run_status": "running",
+            "transition_id": 10,
+            "from_status": None,
+            "to_status": "created",
+            "worker_id": "owner-worker",
+            "metadata": {
+                "admission_phase": "durable_registration",
+                "shared_registration": "unobserved",
+            },
+        },
+        {
+            "run_status": "running",
+            "transition_id": 11,
+            "from_status": "created",
+            "to_status": "running",
+            "worker_id": "owner-worker",
+            "metadata": {
+                "admission_phase": "durable_running_transition",
+                "shared_registration": "acknowledged",
+            },
+        },
+    ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "absent",
+        "empty",
+        "created",
+        "running",
+        "legacy",
+        "duplicate",
+        "wrong_worker",
+        "wrong_order",
+        "wrong_phase",
+        "unknown_observation",
+        "extra_metadata",
+        "contradictory_status",
+        "missing_start",
+        "malformed_metadata",
+        "database_failure",
+        "blank_scope",
+    ],
+)
+async def test_admission_provenance_readback_is_bounded_and_fail_closed(case):
+    rows = _admission_rows()
+    expected = ("running", "acknowledged")
+    invalid = False
+    if case == "absent":
+        rows, expected = [], None
+    elif case == "empty":
+        rows = [{"run_status": "running", "transition_id": None}]
+        expected = ("unobserved", "unobserved")
+    elif case == "created":
+        rows = [dict(rows[0], run_status="created")]
+        expected = ("created", "unobserved")
+    elif case == "legacy":
+        rows[0]["metadata"] = {}
+        expected = ("unobserved", "unobserved")
+    elif case == "duplicate":
+        rows.append(dict(rows[1], transition_id=12))
+        invalid = True
+    elif case == "wrong_worker":
+        rows[1]["worker_id"] = "foreign"
+        invalid = True
+    elif case == "wrong_order":
+        rows.reverse()
+        invalid = True
+    elif case == "wrong_phase":
+        rows[1]["metadata"]["admission_phase"] = "durable_registration"
+        invalid = True
+    elif case == "unknown_observation":
+        rows[1]["metadata"]["shared_registration"] = "private-unknown"
+        invalid = True
+    elif case == "extra_metadata":
+        rows[1]["metadata"]["secret"] = "private"
+        invalid = True
+    elif case == "contradictory_status":
+        for row in rows:
+            row["run_status"] = "created"
+        invalid = True
+    elif case == "missing_start":
+        rows = rows[:1]
+        invalid = True
+    elif case == "malformed_metadata":
+        rows[1]["metadata"] = None
+        invalid = True
+    ledger, session = _transition_reader(rows)
+    scope = dict(
+        run_id="run-1",
+        tenant_id="11111111-1111-4111-8111-111111111111",
+        user_id="owner",
+        correlation_id="corr-1",
+        worker_id="owner-worker",
+    )
+    if case == "blank_scope":
+        with pytest.raises(ValueError):
+            await ledger.read_admission_provenance(**(scope | {"worker_id": " "}))
+        session.execute.assert_not_awaited()
+        return
+    if case == "database_failure":
+        session.execute.side_effect = [MagicMock(), SQLAlchemyError("private")]
+        invalid = True
+    if invalid:
+        with pytest.raises(DurableRunLedgerUnavailable) as exc:
+            await ledger.read_admission_provenance(**scope)
+        assert "private" not in str(exc.value)
+    else:
+        receipt = await ledger.read_admission_provenance(**scope)
+        if expected is None:
+            assert receipt is None
+        else:
+            assert receipt is not None
+            assert (receipt.phase, receipt.shared_registration) == expected
+    assert session.execute.await_count == 2
+    query = session.execute.await_args_list[-1]
+    assert query.args[1] == scope
+    sql = " ".join(str(query.args[0]).split())
+    for condition in (
+        "r.tenant_id = CAST(:tenant_id AS uuid)",
+        "t.tenant_id = r.tenant_id",
+        "r.user_id = :user_id",
+        "r.correlation_id = :correlation_id",
+        "r.owner_worker_id = :worker_id",
+        "ORDER BY t.transition_id ASC",
+        "LIMIT 3",
+    ):
+        assert condition in sql
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "kind",
+    [
+        "absent",
+        "claim_without_hash",
+        "claim_missing",
+        "claim_mismatch",
+        "invalid_identity",
+        "invalid_lease",
+    ],
+)
+async def test_reconciliation_does_not_write_unresolved_evidence(kind):
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        SharedRunEvidence,
+    )
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+        AdmissionProvenance,
+    )
+
+    tenant_id = "11111111-1111-1111-1111-111111111111"
+    ledger = InMemoryDurableLedger()
+    ledger.seed_active(run_id="uncertain", tenant_id=tenant_id, status="created")
+    ledger.read_admission_provenance = AsyncMock(
+        return_value=AdmissionProvenance("created", "unobserved")
+    )
+    ledger.reconcile_from_shared = AsyncMock()
+    store = SharedTruthStore()
+    store.observe_reconciliation = AsyncMock(return_value=SharedRunEvidence(kind))
+    manager = MedusaRunManager(
+        settings=_settings(distributed=True),
+        distributed_store=store,
+        durable_ledger=ledger,
+    )
+    await manager._reconcile_tenant_from_redis(tenant_id)
+    ledger.read_admission_provenance.assert_awaited_once_with(
+        run_id="uncertain",
+        tenant_id=tenant_id,
+        user_id="user-1",
+        correlation_id="corr-uncertain",
+        worker_id="dead-worker",
+    )
+    ledger.reconcile_from_shared.assert_not_awaited()
+    assert ledger.records["uncertain"]["status"] == "created"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "case",
+    [
+        "verified",
+        "changed_status",
+        "changed_heartbeat",
+        "missing_fence",
+        "revoked",
+        "zero_update",
+        "incomplete_identity",
+    ],
+)
+async def test_inferred_expiry_reconciliation_requires_stable_owned_row(case):
+    stamp = datetime(2026, 11, 25, tzinfo=timezone.utc)
+    postgres = MagicMock()
+    session = AsyncMock()
+    postgres.get_async_session.return_value.__aenter__.return_value = session
+    locked = MagicMock()
+    row = {
+        "status": "running",
+        "owner_worker_id": "worker",
+        "correlation_id": "corr",
+        "user_id": "owner",
+        "heartbeat_at": stamp,
+    }
+    locked.mappings.return_value.first.return_value = row
+    updated = MagicMock(rowcount=0 if case == "zero_update" else 1)
+    session.execute.side_effect = [MagicMock(), locked, updated, MagicMock()]
+    ledger = PostgresDurableRunLedger(postgres=postgres)
+    confirm = AsyncMock(return_value=case != "revoked")
+    args = dict(
+        run_id="expired",
+        tenant_id="11111111-1111-1111-1111-111111111111",
+        status="orphaned",
+        reconciled_at=stamp + timedelta(minutes=2),
+        expected_worker_id="worker",
+        expected_correlation_id="corr",
+        expected_user_id="owner",
+        expected_status="running",
+        expected_heartbeat_at=stamp,
+        confirm_expiry=confirm,
+    )
+    if case == "changed_status":
+        row["status"] = "cancellation_requested"
+    elif case == "changed_heartbeat":
+        row["heartbeat_at"] = stamp + timedelta(seconds=1)
+    elif case == "missing_fence":
+        args["confirm_expiry"] = None
+    elif case == "incomplete_identity":
+        args["expected_user_id"] = None
+    if case == "zero_update":
+        with pytest.raises(DurableRunLedgerUnavailable):
+            await ledger.reconcile_from_shared(**args)
+        assert session.execute.await_count == 3
+    elif case == "incomplete_identity":
+        with pytest.raises(ValueError):
+            await ledger.reconcile_from_shared(**args)
+        session.execute.assert_not_awaited()
+    else:
+        assert await ledger.reconcile_from_shared(**args) is (case == "verified")
+        if case == "verified":
+            assert session.execute.await_count == 4
+        else:
+            assert session.execute.await_count <= 2
+    if case in {"verified", "revoked", "zero_update"}:
+        confirm.assert_awaited_once()
+    else:
+        confirm.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("verified", "orphaned"),
+        ("fresh_heartbeat", "running"),
+        ("unknown_provenance", "running"),
+        ("redis_changed", "running"),
+        ("redis_unavailable", "running"),
+        ("expiry_timestamp_changed", "running"),
+        ("expiry_status_changed", "running"),
+        ("missing_expiry_fence", "running"),
+        ("expiry_with_terminal_timestamp", "running"),
+    ],
+)
+async def test_manager_expiry_repair_requires_readback_and_reobservation(
+    case, expected
+):
+    from ai_karen_engine.agent_medusa.execution.distributed_run_store import (
+        SharedRunEvidence,
+    )
+    from ai_karen_engine.agent_medusa.execution.durable_run_ledger import (
+        AdmissionProvenance,
+    )
+
+    tenant = "11111111-1111-1111-1111-111111111111"
+    ledger = InMemoryDurableLedger()
+    ledger.seed_active(
+        run_id="expired",
+        tenant_id=tenant,
+        age_seconds=0 if case == "fresh_heartbeat" else 60,
+    )
+    ledger.read_admission_provenance = AsyncMock(
+        return_value=AdmissionProvenance(
+            "running", "unobserved" if case == "unknown_provenance" else "acknowledged"
+        )
+    )
+    store = SharedTruthStore()
+    store.seed(run_id="expired", tenant_id=tenant, status="orphaned")
+    lease_stamp = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    fence = ("running", lease_stamp)
+    snapshot = dict(store.records["expired"])
+    if case == "expiry_with_terminal_timestamp":
+        snapshot["completed_at"] = lease_stamp
+    observed = SharedRunEvidence(
+        "lease_expired",
+        snapshot,
+        expiry_fence=None if case == "missing_expiry_fence" else fence,
+    )
+    second = observed
+    if case == "redis_changed":
+        second = SharedRunEvidence("claim_missing")
+    elif case == "redis_unavailable":
+        second = DistributedRunStoreUnavailable("unavailable")
+    elif case == "expiry_timestamp_changed":
+        second = SharedRunEvidence(
+            "lease_expired",
+            snapshot,
+            expiry_fence=(
+                "running",
+                (datetime.now(timezone.utc) - timedelta(seconds=30)).isoformat(),
+            ),
+        )
+    elif case == "expiry_status_changed":
+        second = SharedRunEvidence(
+            "lease_expired",
+            snapshot,
+            expiry_fence=("cancelling", lease_stamp),
+        )
+    store.observe_reconciliation = AsyncMock(side_effect=[observed, second])
+    manager = MedusaRunManager(
+        settings=_settings(distributed=True),
+        distributed_store=store,
+        durable_ledger=ledger,
+    )
+    await manager._reconcile_tenant_from_redis(tenant)
+    assert ledger.records["expired"]["status"] == expected
+    assert store.observe_reconciliation.await_count == (
+        1
+        if case
+        in {
+            "fresh_heartbeat",
+            "unknown_provenance",
+            "missing_expiry_fence",
+            "expiry_with_terminal_timestamp",
+        }
+        else 2
+    )
+
+
+@pytest.mark.asyncio
+async def test_reconciliation_keyset_rotates_without_exposing_cursor_or_writing():
+    stamp = datetime(2026, 11, 25, tzinfo=timezone.utc)
+    tenant = "11111111-1111-4111-8111-111111111111"
+    foreign = "22222222-2222-4222-8222-222222222222"
+    postgres = MagicMock()
+    session = AsyncMock()
+    postgres.get_async_session.return_value.__aenter__.return_value = session
+    ledger = PostgresDurableRunLedger(postgres=postgres)
+    ledger._snapshot = MagicMock(side_effect=lambda row: {"run_id": row["run_id"]})
+
+    async def page(scope, ids):
+        result = MagicMock()
+        result.mappings.return_value.all.return_value = [
+            {"run_id": run_id, "updated_at": stamp} for run_id in ids
+        ]
+        session.execute.side_effect = [MagicMock(), result]
+        session.execute.reset_mock()
+        rows = await ledger.list_reconcilable(tenant_id=scope, limit=1)
+        assert rows == [{"run_id": run_id} for run_id in ids]
+        assert session.execute.await_count == 2
+        query = session.execute.await_args_list[-1]
+        sql = " ".join(str(query.args[0]).split())
+        assert "ORDER BY updated_at ASC, run_id ASC LIMIT :limit" in sql
+        assert "tenant_id = CAST(:tenant_id AS uuid)" in sql
+        assert "UPDATE agent_medusa_runs" not in sql
+        return query.args[1]
+
+    assert await page(tenant, ["a"]) == {"tenant_id": tenant, "limit": 1}
+    assert await page(foreign, ["foreign-a"]) == {"tenant_id": foreign, "limit": 1}
+    assert await page(tenant, ["b"]) == {
+        "tenant_id": tenant,
+        "limit": 1,
+        "after_time": stamp,
+        "after_id": "a",
+    }
+    assert (await page(tenant, []))["after_id"] == "b"
+    assert await page(tenant, ["a"]) == {"tenant_id": tenant, "limit": 1}
+    assert (await page(foreign, []))["after_id"] == "foreign-a"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("interruption", ["wrap", "eviction"])
+async def test_stale_reconciliation_read_cannot_republish_cursor(
+    monkeypatch, interruption
+):
+    from ai_karen_engine.agent_medusa.execution import durable_run_ledger
+
+    stamp = datetime(2026, 11, 25, tzinfo=timezone.utc)
+    tenant = "11111111-1111-4111-8111-111111111111"
+    foreign = "22222222-2222-4222-8222-222222222222"
+    if interruption == "eviction":
+        monkeypatch.setattr(durable_run_ledger, "_RECONCILIATION_CURSOR_LIMIT", 1)
+    postgres = MagicMock()
+    session = AsyncMock()
+    postgres.get_async_session.return_value.__aenter__.return_value = session
+    ledger = PostgresDurableRunLedger(postgres=postgres)
+    ledger._snapshot = MagicMock(side_effect=lambda row: {"run_id": row["run_id"]})
+    ledger._set_tenant_scope = AsyncMock(side_effect=lambda _, scope: scope)
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    queries = []
+
+    async def query(statement, params):
+        queries.append(dict(params))
+        index = len(queries)
+        if index == 1:
+            entered.set()
+            await release.wait()
+            ids = ["stale"]
+        elif index == 2:
+            ids = ["first"]
+        else:
+            ids = []
+        result = MagicMock()
+        result.mappings.return_value.all.return_value = [
+            {"run_id": run_id, "updated_at": stamp} for run_id in ids
+        ]
+        return result
+
+    session.execute.side_effect = query
+    stale = asyncio.create_task(ledger.list_reconcilable(tenant_id=tenant, limit=1))
+    try:
+        await asyncio.wait_for(entered.wait(), timeout=2)
+        if interruption == "wrap":
+            await ledger.list_reconcilable(tenant_id=tenant, limit=1)
+            await ledger.list_reconcilable(tenant_id=tenant, limit=1)
+            assert queries[-1]["after_id"] == "first"
+        else:
+            await ledger.list_reconcilable(tenant_id=foreign, limit=1)
+            assert tenant not in ledger._reconciliation_cursors
+            assert len(ledger._reconciliation_cursors) == 1
+        release.set()
+        assert await asyncio.wait_for(stale, timeout=2) == [{"run_id": "stale"}]
+        await ledger.list_reconcilable(tenant_id=tenant, limit=1)
+        assert queries[-1] == {"tenant_id": tenant, "limit": 1}
+    finally:
+        release.set()
+        if not stale.done():
+            stale.cancel()
+            await asyncio.gather(stale, return_exceptions=True)

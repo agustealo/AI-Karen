@@ -302,6 +302,15 @@ def create_application_lifespan(settings: Any):
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        from ai_karen_engine.core.runtime.operational_health import (
+            OperationalHealthService,
+        )
+
+        # The explicit application environment must also validate cached Medusa
+        # configuration before any startup side effects or request admission.
+        OperationalHealthService.redis_durability_required(
+            environment=str(getattr(settings, "environment", "development")),
+        )
         try:
             await on_startup(settings, app)
             # One Redis singleton, initialized before memory or session users

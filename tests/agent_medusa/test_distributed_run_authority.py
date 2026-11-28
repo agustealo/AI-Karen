@@ -21,6 +21,7 @@ from ai_karen_engine.agent_medusa.execution.run_manager import (
     RunTenantMismatchError,
 )
 from ai_karen_engine.config.agent_medusa import AgentMedusaRuntimeSettings
+from ai_karen_engine.core.expression.errors import ExecutionAdmissionRejected
 
 
 class SharedFakeRunStore:
@@ -908,7 +909,9 @@ async def test_observed_lease_loss_fences_local_terminal_results(
             await manager.cancel(run_id=scope["run_id"], tenant_id="foreign")
         with pytest.raises(RunNotCancellableError):
             await manager.cancel(**scope)
-        with pytest.raises(RuntimeError, match="already active or unresolved"):
+        with pytest.raises(
+            ExecutionAdmissionRejected, match="medusa_local_registration_conflict"
+        ):
             await manager.register(
                 **scope, correlation_id="new", user_id="owner", task=task
             )
@@ -1517,6 +1520,87 @@ def test_redis_admission_reserve_configuration_is_validated():
             replace(_settings("owner"), run_redis_admission_reserve_bytes=invalid)
 
 
+@pytest.mark.parametrize(
+    ("runtime_env", "server_env", "shared", "raw", "expected"),
+    [
+        ("local", "development", True, None, 0),
+        ("local", "development", True, "0", 0),
+        ("production", "production", True, None, 16 * 1024 * 1024),
+        ("production", "production", True, "0", None),
+        ("production", "production", True, "1", 1),
+        ("production", "production", True, "", None),
+        ("production", "production", True, "-1", None),
+        ("production", "production", True, "invalid", None),
+        ("production", "production", False, "0", 0),
+        ("local", "production", True, "0", None),
+        ("production", "development", True, "0", None),
+        ("prod", "prod", True, None, 16 * 1024 * 1024),
+        ("prod", "prod", True, "0", None),
+        ("prod", "local", True, "0", None),
+        ("local", "prod", True, "0", None),
+        ("local", "prod", True, "1", 1),
+        ("local", "development", True, "-1", None),
+    ],
+)
+def test_process_reserve_policy(
+    monkeypatch, runtime_env, server_env, shared, raw, expected
+):
+    from ai_karen_engine.config import agent_medusa, runtime
+
+    monkeypatch.setattr(agent_medusa, "_SETTINGS", None)
+    monkeypatch.setattr(runtime, "_settings", None)
+    for name in ("KARI_ENV", "ENV"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("KARI_ENVIRONMENT", runtime_env)
+    monkeypatch.setenv("ENVIRONMENT", server_env)
+    monkeypatch.setenv(
+        "KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", str(shared).lower()
+    )
+    monkeypatch.setenv("KAREN_MEDUSA_DURABLE_RUN_LEDGER_ENABLED", "true")
+    monkeypatch.setenv("KAREN_MEDUSA_DURABLE_RUN_LEDGER_REQUIRED", "true")
+    monkeypatch.setenv("KAREN_MEDUSA_DEEPAGENTS_CHECKPOINT_ENABLED", "false")
+    key = "KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES"
+    if raw is None:
+        monkeypatch.delenv(key, raising=False)
+    else:
+        monkeypatch.setenv(key, raw)
+
+    if expected is None:
+        with pytest.raises(agent_medusa.AgentMedusaConfigError):
+            agent_medusa.get_agent_medusa_runtime_settings()
+        assert agent_medusa._SETTINGS is None
+        monkeypatch.setenv(key, "16777216")
+        recovered = agent_medusa.get_agent_medusa_runtime_settings()
+        assert recovered.run_redis_admission_reserve_bytes == 16777216
+    else:
+        settings = agent_medusa.get_agent_medusa_runtime_settings()
+        assert settings.run_redis_admission_reserve_bytes == expected
+        assert settings is agent_medusa.get_agent_medusa_runtime_settings()
+
+
+@pytest.mark.parametrize("alias", ["KARI_ENVIRONMENT", "ENVIRONMENT", "KARI_ENV", "ENV"])
+@pytest.mark.parametrize("declared", ["production", "prod", " PROD "])
+def test_production_alias_cannot_be_masked_by_local_settings(monkeypatch, alias, declared):
+    from ai_karen_engine.config import agent_medusa, runtime
+
+    for name in ("KARI_ENVIRONMENT", "ENVIRONMENT", "KARI_ENV", "ENV"):
+        monkeypatch.setenv(name, "local")
+    monkeypatch.setenv(alias, declared)
+    monkeypatch.setattr(runtime, "_settings", runtime.RuntimeSettings())
+    monkeypatch.setattr(agent_medusa, "_SETTINGS", None)
+    monkeypatch.setenv("KAREN_MEDUSA_DISTRIBUTED_RUN_CONTROL_ENABLED", "true")
+    monkeypatch.setenv("KAREN_MEDUSA_DURABLE_RUN_LEDGER_ENABLED", "true")
+    monkeypatch.setenv("KAREN_MEDUSA_DURABLE_RUN_LEDGER_REQUIRED", "true")
+    monkeypatch.setenv("KAREN_MEDUSA_DEEPAGENTS_CHECKPOINT_ENABLED", "false")
+    key = "KAREN_MEDUSA_RUN_REDIS_ADMISSION_RESERVE_BYTES"
+    monkeypatch.setenv(key, "0")
+    with pytest.raises(agent_medusa.AgentMedusaConfigError, match="must be positive"):
+        agent_medusa.get_agent_medusa_runtime_settings()
+    assert agent_medusa._SETTINGS is None
+    monkeypatch.delenv(key)
+    assert agent_medusa.get_agent_medusa_runtime_settings().run_redis_admission_reserve_bytes == 16777216
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("result", "expected"),
@@ -1570,3 +1654,89 @@ def test_retention_observation_rejects_invalid_age(value, monkeypatch):
     monkeypatch.setattr(metrics, "get_metrics_collector", lambda: collector)
     metrics.record_retention_observation("acknowledged_age", value)
     assert collector.snapshot()["histograms"] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("mode", "expected"),
+    [
+        ("absent", "absent"),
+        ("claim_only", "claim_without_hash"),
+        ("invalid_identity", "invalid_identity"),
+        ("missing_claim", "claim_missing"),
+        ("foreign_claim", "claim_mismatch"),
+        ("invalid_lease", "invalid_lease"),
+        ("expired_with_claim", "invalid_lease"),
+        ("expired", "lease_expired"),
+        ("expired_cancelling", "lease_expired"),
+        ("expired_with_terminal_timestamp", "invalid_identity"),
+        ("expired_with_terminal_outcome", "invalid_identity"),
+        ("expired_with_terminal_authority", "invalid_identity"),
+        ("active", "active"),
+        ("terminal", "terminal"),
+        ("terminal_with_claim", "claim_mismatch"),
+    ],
+)
+async def test_reconciliation_observes_distinct_hash_and_claim_evidence(mode, expected):
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    now = datetime.now(timezone.utc)
+    record = {
+        "run_id": "observed",
+        "tenant_id": "tenant-a",
+        "correlation_id": "corr",
+        "user_id": "user",
+        "owner_worker_id": "owner",
+        "status": "running",
+        "lease_expires_at": (now + timedelta(minutes=5)).isoformat(),
+    }
+    claim = "owner"
+    if mode == "absent":
+        record, claim = {}, None
+    elif mode == "claim_only":
+        record = {}
+    elif mode == "invalid_identity":
+        record["run_id"] = "different"
+    elif mode == "missing_claim":
+        claim = None
+    elif mode == "foreign_claim":
+        claim = "foreign"
+    elif mode == "invalid_lease":
+        record["lease_expires_at"] = "invalid"
+    elif mode.startswith("expired"):
+        record["lease_expires_at"] = (now - timedelta(minutes=5)).isoformat()
+        if mode != "expired_with_claim":
+            claim = None
+        if mode == "expired_cancelling":
+            record["status"] = "cancelling"
+        elif mode == "expired_with_terminal_timestamp":
+            record["completed_at"] = now.isoformat()
+        elif mode == "expired_with_terminal_outcome":
+            record["outcome_status"] = "success"
+        elif mode == "expired_with_terminal_authority":
+            record["terminal_authority"] = "durable_arbitrated"
+    elif mode in {"terminal", "terminal_with_claim"}:
+        record["status"] = "completed"
+        if mode == "terminal":
+            claim = None
+    client = SimpleNamespace(ping=AsyncMock(return_value=True))
+    store = RedisDistributedRunStore(
+        settings=_settings("owner"),
+        redis_manager=SimpleNamespace(client=client, is_degraded=lambda: False),
+    )
+    store._read_run_authority = AsyncMock(return_value=(record, claim))
+    evidence = await store.observe_reconciliation(
+        run_id="observed", tenant_id="tenant-a"
+    )
+    assert evidence.kind == expected
+    if expected in {"active", "lease_expired", "terminal"}:
+        assert evidence.snapshot is not None
+        assert evidence.snapshot["run_id"] == "observed"
+    else:
+        assert evidence.snapshot is None
+    if expected == "lease_expired":
+        assert evidence.expiry_fence == (record["status"], record["lease_expires_at"])
+    else:
+        assert evidence.expiry_fence is None
+    store._read_run_authority.assert_awaited_once_with(client, "observed")

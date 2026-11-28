@@ -300,7 +300,9 @@ class OperationalHealthService:
             return False
         from ai_karen_engine.config.agent_medusa import get_agent_medusa_runtime_settings
 
-        return get_agent_medusa_runtime_settings().distributed_run_control_enabled is True
+        settings = get_agent_medusa_runtime_settings()
+        settings.validate_production_redis_admission()
+        return settings.distributed_run_control_enabled is True
 
     @classmethod
     def redis_lifecycle_enabled(cls, *, environment: str = "development") -> bool:

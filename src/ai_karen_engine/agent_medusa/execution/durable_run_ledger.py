@@ -7,9 +7,11 @@ PostgreSQL engine, performs no runtime DDL, and never cancels asyncio tasks.
 
 from __future__ import annotations
 
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol, cast, get_args
 from uuid import NAMESPACE_URL, UUID, uuid5
 
 from sqlalchemy import text
@@ -22,8 +24,28 @@ logger = get_logger(__name__)
 
 _ACTIVE_STATUSES = {"created", "running", "cancellation_requested"}
 _TERMINAL_STATUSES = {"completed", "failed", "cancelled", "orphaned"}
+# Best-effort paging hints only, never durable lifecycle authority.
+_RECONCILIATION_CURSOR_LIMIT = 1024
 
 TerminalAuthorizer = Callable[[str, str | None, str | None], Awaitable[str]]
+SharedRegistrationObservation = Literal[
+    "acknowledged", "not_configured", "unavailable", "unobserved"
+]
+
+
+@dataclass(frozen=True, slots=True)
+class AdmissionProvenance:
+    """Historical observations only; never a lease or execution grant."""
+
+    phase: Literal["unobserved", "created", "running"]
+    shared_registration: SharedRegistrationObservation
+
+
+@dataclass(frozen=True, slots=True)
+class _ReconciliationCursor:
+    """Identity of one paging generation, including an empty position."""
+
+    after: tuple[datetime, str] | None = None
 
 
 class DurableRunLedgerUnavailable(RuntimeError):
@@ -62,6 +84,7 @@ class DurableRunLedger(Protocol):
         tenant_id: str,
         worker_id: str,
         started_at: datetime,
+        shared_registration: SharedRegistrationObservation = "unobserved",
     ) -> None: ...
 
     async def heartbeat(
@@ -106,6 +129,16 @@ class DurableRunLedger(Protocol):
 
     async def get(self, *, run_id: str, tenant_id: str) -> dict[str, Any] | None: ...
 
+    async def read_admission_provenance(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
+        correlation_id: str,
+        worker_id: str,
+    ) -> AdmissionProvenance | None: ...
+
     async def read_transitions(
         self,
         *,
@@ -145,6 +178,9 @@ class DurableRunLedger(Protocol):
         expected_correlation_id: str | None = None,
         expected_user_id: str | None = None,
         terminal_authority: str | None = None,
+        expected_status: str | None = None,
+        expected_heartbeat_at: datetime | None = None,
+        confirm_expiry: Callable[[], Awaitable[bool]] | None = None,
     ) -> bool: ...
 
     async def link_audit_event(
@@ -188,6 +224,9 @@ class PostgresDurableRunLedger:
 
     def __init__(self, *, postgres: PostgresEngine | None = None) -> None:
         self._postgres = postgres or get_postgres_engine()
+        self._reconciliation_cursors: OrderedDict[str, _ReconciliationCursor] = (
+            OrderedDict()
+        )
 
     async def _set_tenant_scope(self, session: Any, tenant_id: str) -> str:
         canonical_tenant_id = _canonical_tenant_id(tenant_id)
@@ -256,6 +295,10 @@ class PostgresDurableRunLedger:
                     worker_id=worker_id,
                     source="runtime",
                     event_at=created_at,
+                    metadata={
+                        "admission_phase": "durable_registration",
+                        "shared_registration": "unobserved",
+                    },
                 )
         except DurableRunLedgerConflict:
             raise
@@ -271,7 +314,10 @@ class PostgresDurableRunLedger:
         tenant_id: str,
         worker_id: str,
         started_at: datetime,
+        shared_registration: SharedRegistrationObservation = "unobserved",
     ) -> None:
+        if shared_registration not in get_args(SharedRegistrationObservation):
+            raise ValueError("Invalid shared registration observation")
         await self._owned_transition(
             run_id=run_id,
             tenant_id=tenant_id,
@@ -281,6 +327,10 @@ class PostgresDurableRunLedger:
             event_at=started_at,
             source="runtime",
             transition_kind="start",
+            transition_metadata={
+                "admission_phase": "durable_running_transition",
+                "shared_registration": shared_registration,
+            },
         )
 
     async def heartbeat(
@@ -523,6 +573,119 @@ class PostgresDurableRunLedger:
                 "medusa_durable_ledger_unavailable"
             ) from exc
 
+    async def read_admission_provenance(
+        self,
+        *,
+        run_id: str,
+        tenant_id: str,
+        user_id: str,
+        correlation_id: str,
+        worker_id: str,
+    ) -> AdmissionProvenance | None:
+        """Read bounded, internal admission evidence under the original identity.
+
+        Missing scoped run is None. Legacy evidence is unobserved, not authority.
+        Malformed or contradictory records fail closed. No lifecycle mutation.
+        """
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (run_id, tenant_id, user_id, correlation_id, worker_id)
+        ):
+            raise ValueError("Admission provenance requires complete identity")
+        try:
+            async with self._postgres.get_async_session() as session:
+                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
+                result = await session.execute(
+                    text("""
+                        SELECT r.status AS run_status, t.transition_id,
+                               t.from_status, t.to_status, t.worker_id, t.metadata
+                        FROM agent_medusa_runs AS r
+                        LEFT JOIN agent_medusa_run_transitions AS t
+                          ON t.run_id = r.run_id AND t.tenant_id = r.tenant_id
+                         AND t.source = 'runtime'
+                         AND t.to_status IN ('created', 'running')
+                        WHERE r.run_id = :run_id
+                          AND r.tenant_id = CAST(:tenant_id AS uuid)
+                          AND r.user_id = :user_id
+                          AND r.correlation_id = :correlation_id
+                          AND r.owner_worker_id = :worker_id
+                        ORDER BY t.transition_id ASC
+                        LIMIT 3
+                    """),
+                    {
+                        "run_id": run_id,
+                        "tenant_id": canonical_tenant_id,
+                        "user_id": user_id,
+                        "correlation_id": correlation_id,
+                        "worker_id": worker_id,
+                    },
+                )
+                rows = result.mappings().all()
+                if not rows:
+                    return None
+                invalid = "medusa_admission_provenance_invalid"
+                status = rows[0]["run_status"]
+                if status not in _ACTIVE_STATUSES | _TERMINAL_STATUSES:
+                    raise DurableRunLedgerUnavailable(invalid)
+                if len(rows) == 1 and rows[0]["transition_id"] is None:
+                    return AdmissionProvenance("unobserved", "unobserved")
+                if len(rows) > 2:
+                    raise DurableRunLedgerUnavailable(invalid)
+                legacy = False
+                previous_id = 0
+                observation: SharedRegistrationObservation = "unobserved"
+                for index, row in enumerate(rows):
+                    expected_from = None if index == 0 else "created"
+                    expected_to = "created" if index == 0 else "running"
+                    transition_id = row["transition_id"]
+                    if (
+                        type(transition_id) is not int
+                        or transition_id <= previous_id
+                        or row["run_status"] != status
+                        or row["worker_id"] != worker_id
+                        or row["from_status"] != expected_from
+                        or row["to_status"] != expected_to
+                    ):
+                        raise DurableRunLedgerUnavailable(invalid)
+                    previous_id = transition_id
+                    metadata = row["metadata"]
+                    if metadata == {}:
+                        legacy = True
+                        continue
+                    expected_phase = (
+                        "durable_registration"
+                        if index == 0
+                        else "durable_running_transition"
+                    )
+                    if (
+                        not isinstance(metadata, dict)
+                        or set(metadata) != {"admission_phase", "shared_registration"}
+                        or metadata["admission_phase"] != expected_phase
+                        or metadata["shared_registration"]
+                        not in get_args(SharedRegistrationObservation)
+                        or (
+                            index == 0
+                            and metadata["shared_registration"] != "unobserved"
+                        )
+                    ):
+                        raise DurableRunLedgerUnavailable(invalid)
+                    observation = cast(
+                        SharedRegistrationObservation, metadata["shared_registration"]
+                    )
+                if (status == "created" and len(rows) == 2) or (
+                    status == "running" and len(rows) == 1
+                ):
+                    raise DurableRunLedgerUnavailable(invalid)
+                if legacy:
+                    return AdmissionProvenance("unobserved", "unobserved")
+                return AdmissionProvenance(
+                    "created" if len(rows) == 1 else "running", observation
+                )
+        except SQLAlchemyError as exc:
+            raise DurableRunLedgerUnavailable(
+                "medusa_durable_ledger_unavailable"
+            ) from exc
+
     async def read_transitions(
         self,
         *,
@@ -631,22 +794,59 @@ class PostgresDurableRunLedger:
         tenant_id: str,
         limit: int,
     ) -> list[dict[str, Any]]:
-        """Return a bounded tenant batch of nonterminal durable rows."""
+        """Rotate bounded tenant batches without modifying lifecycle history.
 
+        Keyset hints are process-local and bounded. A restart or eviction
+        begins another sweep; no hint constitutes evidence or skips a row
+        permanently within a continuing sweep.
+        """
         safe_limit = max(1, min(limit, 1000))
+        canonical_tenant_id = _canonical_tenant_id(tenant_id)
+        # Retain a distinct generation even at the beginning of a sweep.
+        # Absence alone cannot distinguish a reset/eviction from an old read.
+        cursor = self._reconciliation_cursors.setdefault(
+            canonical_tenant_id, _ReconciliationCursor()
+        )
+        self._reconciliation_cursors.move_to_end(canonical_tenant_id)
+        while len(self._reconciliation_cursors) > _RECONCILIATION_CURSOR_LIMIT:
+            self._reconciliation_cursors.popitem(last=False)
+        params: dict[str, Any] = {
+            "tenant_id": canonical_tenant_id,
+            "limit": safe_limit,
+        }
+        after_clause = ""
+        if cursor.after is not None:
+            after_clause = " AND (updated_at, run_id) > (:after_time, :after_id)"
+            params.update(after_time=cursor.after[0], after_id=cursor.after[1])
         try:
             async with self._postgres.get_async_session() as session:
-                canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
+                await self._set_tenant_scope(session, tenant_id)
                 result = await session.execute(
                     text(
                         self._select_sql()
                         + " WHERE tenant_id = CAST(:tenant_id AS uuid)"
                         + " AND status IN ('created', 'running', 'cancellation_requested')"
+                        + after_clause
                         + " ORDER BY updated_at ASC, run_id ASC LIMIT :limit"
                     ),
-                    {"tenant_id": canonical_tenant_id, "limit": safe_limit},
+                    params,
                 )
-                return [self._snapshot(dict(row)) for row in result.mappings().all()]
+                rows = result.mappings().all()
+                snapshots = [self._snapshot(dict(row)) for row in rows]
+            # No await between comparison and publication: a slower overlapping
+            # read must not rewind a newer cursor in this event loop.
+            if self._reconciliation_cursors.get(canonical_tenant_id) is cursor:
+                if len(rows) == safe_limit:
+                    last = rows[-1]
+                    next_cursor = _ReconciliationCursor(
+                        after=(last["updated_at"], str(last["run_id"]))
+                    )
+                else:
+                    # Wrap to a new generation, not the old absent state.
+                    next_cursor = _ReconciliationCursor()
+                self._reconciliation_cursors[canonical_tenant_id] = next_cursor
+                self._reconciliation_cursors.move_to_end(canonical_tenant_id)
+            return snapshots
         except SQLAlchemyError as exc:
             raise DurableRunLedgerUnavailable(
                 "medusa_durable_ledger_unavailable"
@@ -666,6 +866,9 @@ class PostgresDurableRunLedger:
         expected_correlation_id: str | None = None,
         expected_user_id: str | None = None,
         terminal_authority: str | None = None,
+        expected_status: str | None = None,
+        expected_heartbeat_at: datetime | None = None,
+        confirm_expiry: Callable[[], Awaitable[bool]] | None = None,
     ) -> bool:
         """Repair durable state only from an authoritative Redis observation."""
 
@@ -681,10 +884,20 @@ class PostgresDurableRunLedger:
         }
         if outcome_status not in valid_outcomes[normalized]:
             raise ValueError("Invalid shared terminal outcome")
-        if normalized in {"completed", "failed", "cancelled"} and (
-            completed_at is None or not expected_worker_id
+        if not all(
+            isinstance(value, str) and value.strip()
+            for value in (expected_worker_id, expected_correlation_id, expected_user_id)
         ):
-            raise ValueError("Shared terminal receipt lacks identity or timestamp")
+            raise ValueError("Shared reconciliation requires complete identity")
+        if normalized in {"completed", "failed", "cancelled"} and completed_at is None:
+            raise ValueError("Shared terminal receipt lacks timestamp")
+        inferred_expiry = normalized == "orphaned" and completed_at is None
+        if inferred_expiry and (
+            expected_status not in {"running", "cancellation_requested"}
+            or expected_heartbeat_at is None
+            or confirm_expiry is None
+        ):
+            return False
         try:
             async with self._postgres.get_async_session() as session:
                 canonical_tenant_id = await self._set_tenant_scope(session, tenant_id)
@@ -719,6 +932,17 @@ class PostgresDurableRunLedger:
                     return False
                 if current not in _ACTIVE_STATUSES or current == normalized:
                     return False
+                if inferred_expiry:
+                    if (
+                        current != expected_status
+                        or row.get("heartbeat_at") != expected_heartbeat_at
+                        or confirm_expiry is None
+                    ):
+                        return False
+                    # The callback re-observes Redis while this durable row
+                    # is locked. It must be bounded and read-only.
+                    if await confirm_expiry() is not True:
+                        return False
                 terminal_at = completed_at or reconciled_at
                 params = {
                     "run_id": run_id,
@@ -730,7 +954,7 @@ class PostgresDurableRunLedger:
                     "outcome_status": outcome_status,
                 }
                 if normalized in _TERMINAL_STATUSES:
-                    await session.execute(
+                    result = await session.execute(
                         text("""
                             UPDATE agent_medusa_runs
                             SET status = :status,
@@ -755,7 +979,7 @@ class PostgresDurableRunLedger:
                         params,
                     )
                 else:
-                    await session.execute(
+                    result = await session.execute(
                         text("""
                             UPDATE agent_medusa_runs
                             SET status = :status,
@@ -768,6 +992,7 @@ class PostgresDurableRunLedger:
                         """),
                         params,
                     )
+                _require_transition(result, run_id=run_id, transition="reconciliation")
                 await self._append_transition(
                     session,
                     run_id=run_id,
@@ -837,6 +1062,7 @@ class PostgresDurableRunLedger:
         event_at: datetime,
         source: str,
         transition_kind: str,
+        transition_metadata: dict[str, Any] | None = None,
         error_type: str | None = None,
         outcome_status: str | None = None,
         authorize_terminal: TerminalAuthorizer | None = None,
@@ -896,7 +1122,7 @@ class PostgresDurableRunLedger:
                     "outcome_status": outcome_status,
                 }
                 if transition_kind == "start":
-                    await session.execute(
+                    result = await session.execute(
                         text("""
                             UPDATE agent_medusa_runs
                             SET status = :to_status,
@@ -910,6 +1136,7 @@ class PostgresDurableRunLedger:
                         """),
                         params,
                     )
+                    _require_transition(result, run_id=run_id, transition="running")
                 elif transition_kind == "terminal":
                     await session.execute(
                         text("""
@@ -948,6 +1175,7 @@ class PostgresDurableRunLedger:
                     worker_id=worker_id,
                     source=source,
                     event_at=event_at,
+                    metadata=transition_metadata,
                 )
             return to_status
         except DurableRunLedgerConflict:
@@ -960,7 +1188,8 @@ class PostgresDurableRunLedger:
     async def _lock_row(self, session: Any, run_id: str, tenant_id: str) -> Any | None:
         result = await session.execute(
             text("""
-                SELECT run_id, status, owner_worker_id, correlation_id, user_id
+                SELECT run_id, status, owner_worker_id, correlation_id, user_id,
+                       heartbeat_at
                 FROM agent_medusa_runs
                 WHERE run_id = :run_id AND tenant_id = CAST(:tenant_id AS uuid)
                 FOR UPDATE
@@ -1021,6 +1250,7 @@ class PostgresDurableRunLedger:
                    created_at,
                    started_at,
                    heartbeat_at,
+                   updated_at,
                    completed_at,
                    cancel_requested_at,
                    reconciled_at,
@@ -1070,6 +1300,7 @@ class PostgresDurableRunLedger:
 
 
 __all__ = [
+    "AdmissionProvenance",
     "DurableRunLedger",
     "DurableRunLedgerConflict",
     "DurableRunLedgerTransitionConflict",
