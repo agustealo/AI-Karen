@@ -467,6 +467,11 @@ Merge / rollout / rollback:
 
 ## 8. Progress change log (append only concise evidence entries, not duplicate plans)
 
+### 2026-11-28: KFILE-UPLOAD-U2C1 durable admission budget
+
+- **KCON-530 / KCON-770, SOURCE_CANDIDATE:** serialize per-tenant/owner upload-session creation under a PostgreSQL transaction advisory lock and fresh READ COMMITTED snapshot. Count all admitted manifests over the preceding 24 hours (including failed/cancelled), with validated KAREN_UPLOAD_ADMISSION_DAILY_SESSIONS (128, range 1–100000) and KAREN_UPLOAD_ADMISSION_DAILY_BYTES (8388608, range 1–1099511627776) settings. Existing matching unexpired keys remain free; expired keys never restart. This is a ledger admission budget, not a total Storage capacity quota, tenant-wide budget, or plugin authorization. No new store, table, API or grant. File Upload extension is not installed; no substitute File Explorer grant.
+- **Proof:** unit SQL/config assertions and disposable PostgreSQL concurrent different-key admission, replay and cancellation regression added. Staged while prior exact-head Medusa CI runs; fresh tests and independent review required. Live Storage and consumer activation NOT_RUN.
+
 ### 2026-11-28: KFILE-UPLOAD-U2B2 internal bounded text transfer
 
 - **KCON-530 / KCON-770, SOURCE_CANDIDATE:** stage owner-library store-only runtime orchestration on the existing canonical ArtifactStore and UploadSessionRepository factory. Shared inert text profile, principal-derived manifest and idempotency, fresh durable permission checks, CAS staging, one-time writer and verified committed readback. No API, UI, plugin activation, new database or general binary upload. Config: KAREN_GOVERNED_TEXT_UPLOAD_MAX_BYTES (65536, 1–65536), KAREN_GOVERNED_TEXT_UPLOAD_TTL_SECONDS (3600, 1–86400), KAREN_GOVERNED_TEXT_UPLOAD_DEADLINE_SECONDS (60, 1–300 and strictly less than TTL); invalid values fail closed. Expired session keys remain unavailable via create_or_get; no automatic new write.

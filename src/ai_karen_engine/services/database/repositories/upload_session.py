@@ -15,6 +15,8 @@ from uuid import UUID, uuid4
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from ai_karen_engine.config.artifact_storage import ArtifactStorageConfig
+
 if TYPE_CHECKING:
     from .artifact_store import ArtifactStore, VerifiedArtifactText
 
@@ -93,7 +95,7 @@ class UploadSessionRepository:
         expected_sha256: str | None = None,
     ) -> UploadSession:
         identity = self._identity(tenant_id, owner_user_id)
-        if not destination_id or not recipe or expected_bytes < 0:
+        if not destination_id or not recipe or type(expected_bytes) is not int or expected_bytes < 0:
             raise ValueError("Invalid upload session manifest")
         for digest in (idempotency_key_hash, manifest_sha256):
             if len(digest) != 64 or any(c not in "0123456789abcdef" for c in digest):
@@ -106,8 +108,12 @@ class UploadSessionRepository:
             raise ValueError("Expected lowercase content SHA-256 digest")
         if expires_at <= datetime.utcnow():
             raise ValueError("Upload session must expire in the future")
+        config = ArtifactStorageConfig.from_environment()
         params = {
             **identity,
+            "admission_sessions": config.upload_admission_daily_sessions,
+            "admission_bytes": config.upload_admission_daily_bytes,
+            "quota_lock": f"artifact-upload-admission:{identity['tenant_id']}:{identity['owner_user_id']}",
             "destination_id": destination_id,
             "recipe": recipe,
             "idempotency_key_hash": idempotency_key_hash,
@@ -117,17 +123,31 @@ class UploadSessionRepository:
             "expires_at": expires_at,
         }
         async with self._session_factory() as session:
-            # Unique constraint serializes concurrent requests for the same
-            # authenticated principal and idempotency key.
+            # Serialize all new reservations for this owner, not just one key.
+            # READ COMMITTED gives the post-lock statement a fresh snapshot
+            # even if another worker committed while this worker waited.
+            await session.execute(text("SET TRANSACTION ISOLATION LEVEL READ COMMITTED"))
+            await session.execute(text("""
+                SELECT pg_advisory_xact_lock(hashtextextended(CAST(:quota_lock AS text), 0))
+            """), {"quota_lock": params["quota_lock"]})
+            # Count admitted manifests (including failed/cancelled sessions)
+            # over a rolling day. Retrying an existing key remains free:
+            # the following scoped lookup returns it even when the cap is full.
             await session.execute(text("""
                 INSERT INTO public.artifact_upload_sessions
                     (tenant_id, owner_user_id, destination_id, recipe,
                      idempotency_key_hash, manifest_sha256, expected_bytes,
                      expected_sha256, expires_at)
-                VALUES
-                    (:tenant_id, :owner_user_id, :destination_id, :recipe,
-                     :idempotency_key_hash, :manifest_sha256, :expected_bytes,
-                     :expected_sha256, :expires_at)
+                SELECT :tenant_id, :owner_user_id, :destination_id, :recipe,
+                       :idempotency_key_hash, :manifest_sha256, :expected_bytes,
+                       :expected_sha256, :expires_at
+                WHERE (
+                    SELECT count(*) < :admission_sessions
+                       AND COALESCE(sum(expected_bytes), 0) + :expected_bytes <= :admission_bytes
+                    FROM public.artifact_upload_sessions
+                    WHERE tenant_id = :tenant_id AND owner_user_id = :owner_user_id
+                      AND created_at > clock_timestamp() - interval '24 hours'
+                )
                 ON CONFLICT (tenant_id, owner_user_id, idempotency_key_hash)
                 DO NOTHING
             """), params)
@@ -143,7 +163,9 @@ class UploadSessionRepository:
             """), params)
             row = result.first()
             if row is None:
-                raise RuntimeError("Upload session creation unavailable")
+                # No new admission (budget exhausted), or an existing key
+                # has expired. Neither case may start a replacement write.
+                raise RuntimeError("Upload session admission unavailable")
             record = self._record(row)
             if (
                 record.manifest_sha256 != manifest_sha256

@@ -28,8 +28,17 @@ class ArtifactStorageConfig:
     governed_text_upload_max_bytes: int = 65536
     governed_text_upload_ttl_seconds: int = 3600
     governed_text_upload_deadline_seconds: int = 60
+    upload_admission_daily_sessions: int = 128
+    upload_admission_daily_bytes: int = 8 * 1024 * 1024
 
     def __post_init__(self) -> None:
+        if (
+            type(self.upload_admission_daily_sessions) is not int
+            or not 1 <= self.upload_admission_daily_sessions <= 100000
+            or type(self.upload_admission_daily_bytes) is not int
+            or not 1 <= self.upload_admission_daily_bytes <= 1024 ** 4
+        ):
+            raise ValueError("Invalid upload admission budget")
         if (
             type(self.governed_text_upload_max_bytes) is not int
             or not 1 <= self.governed_text_upload_max_bytes <= 65536
@@ -114,9 +123,13 @@ class ArtifactStorageConfig:
             upload_max = int(os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_MAX_BYTES", "65536"))
             upload_ttl = int(os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_TTL_SECONDS", "3600"))
             upload_deadline = int(os.getenv("KAREN_GOVERNED_TEXT_UPLOAD_DEADLINE_SECONDS", "60"))
+            admission_sessions = int(os.getenv("KAREN_UPLOAD_ADMISSION_DAILY_SESSIONS", "128"))
+            admission_bytes = int(os.getenv("KAREN_UPLOAD_ADMISSION_DAILY_BYTES", str(8 * 1024 * 1024)))
         except (ValueError, TypeError, OverflowError) as exc:
             raise ValueError("Invalid governed text upload configuration") from exc
         return cls(
+            upload_admission_daily_sessions=admission_sessions,
+            upload_admission_daily_bytes=admission_bytes,
             governed_text_upload_max_bytes=upload_max,
             governed_text_upload_ttl_seconds=upload_ttl,
             governed_text_upload_deadline_seconds=upload_deadline,

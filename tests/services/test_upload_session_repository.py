@@ -40,8 +40,9 @@ class FakeSession:
     async def __aexit__(self, *args):
         return False
 
-    async def execute(self, statement, params):
+    async def execute(self, statement, params=None):
         sql = str(statement)
+        params = params or {}
         self.statements.append((sql, params))
         if sql.strip().startswith("INSERT"):
             return Result()
@@ -91,10 +92,16 @@ async def test_create_or_get_reuses_matching_manifest_and_scopes_queries():
     )
     assert result.session_id == SESSION
     assert db.committed
-    assert all(params["tenant_id"] == TENANT for _, params in db.statements)
-    assert all(params["owner_user_id"] == OWNER for _, params in db.statements)
-    assert "ON CONFLICT" in db.statements[0][0]
-    assert "FOR UPDATE" in db.statements[1][0]
+    assert "READ COMMITTED" in db.statements[0][0]
+    assert "pg_advisory_xact_lock" in db.statements[1][0]
+    assert db.statements[1][1]["quota_lock"] == f"artifact-upload-admission:{TENANT}:{OWNER}"
+    assert all(params["tenant_id"] == TENANT for _, params in db.statements[2:])
+    assert all(params["owner_user_id"] == OWNER for _, params in db.statements[2:])
+    assert "ON CONFLICT" in db.statements[2][0]
+    assert "count(*) < :admission_sessions" in db.statements[2][0]
+    assert "sum(expected_bytes)" in db.statements[2][0]
+    assert "interval '24 hours'" in db.statements[2][0]
+    assert "FOR UPDATE" in db.statements[3][0]
 
 
 @pytest.mark.asyncio
@@ -190,7 +197,7 @@ async def test_create_or_get_requires_unexpired_existing_session():
         idempotency_key_hash=KEY, manifest_sha256=DIGEST,
         expected_bytes=42, expires_at=datetime.utcnow() + timedelta(hours=1),
     )
-    select_sql = db.statements[1][0]
+    select_sql = db.statements[3][0]
     assert "expires_at > now()" in select_sql
     assert "FOR UPDATE" in select_sql
 
@@ -208,7 +215,7 @@ async def test_creation_pins_content_digest_to_idempotency_manifest():
     )
     result = await repo.create_or_get(**params, expected_sha256=DIGEST)
     assert result.expected_sha256 == DIGEST
-    assert db.statements[0][1]["expected_sha256"] == DIGEST
+    assert db.statements[2][1]["expected_sha256"] == DIGEST
     for changed in (None, "c" * 64):
         with pytest.raises(UploadSessionConflict):
             await repo.create_or_get(**params, expected_sha256=changed)
@@ -333,3 +340,35 @@ async def test_committed_readback_is_scoped_pinned_and_read_only(case):
         store.read_owner_active_text_bounded.assert_awaited_once_with(
             SESSION, TENANT, OWNER, max_bytes=len(body.encode()), expected_sha256=digest,
         )
+
+@pytest.mark.asyncio
+async def test_admission_budget_uses_validated_runtime_limits(monkeypatch):
+    monkeypatch.setenv("KAREN_UPLOAD_ADMISSION_DAILY_SESSIONS", "3")
+    monkeypatch.setenv("KAREN_UPLOAD_ADMISSION_DAILY_BYTES", "100")
+    db = FakeSession(record())
+    await UploadSessionRepository(lambda: db).create_or_get(
+        tenant_id=TENANT, owner_user_id=OWNER,
+        destination_id="explorer", recipe="store_only",
+        idempotency_key_hash=KEY, manifest_sha256=DIGEST,
+        expected_bytes=42, expires_at=datetime.utcnow() + timedelta(hours=1),
+    )
+    assert db.statements[2][1]["admission_sessions"] == 3
+    assert db.statements[2][1]["admission_bytes"] == 100
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("setting,value", [
+    ("KAREN_UPLOAD_ADMISSION_DAILY_SESSIONS", "0"),
+    ("KAREN_UPLOAD_ADMISSION_DAILY_BYTES", "invalid"),
+])
+async def test_invalid_admission_budget_fails_before_sql(monkeypatch, setting, value):
+    monkeypatch.setenv(setting, value)
+    db = FakeSession(record())
+    with pytest.raises(ValueError):
+        await UploadSessionRepository(lambda: db).create_or_get(
+            tenant_id=TENANT, owner_user_id=OWNER,
+            destination_id="explorer", recipe="store_only",
+            idempotency_key_hash=KEY, manifest_sha256=DIGEST,
+            expected_bytes=42, expires_at=datetime.utcnow() + timedelta(hours=1),
+        )
+    assert db.statements == []
