@@ -459,12 +459,13 @@ def test_incomplete_saved_recall_attributes_recent_statement_without_certifying_
 
     ctx = context()
     ctx.authorized_sources.append("conversation")
+    ctx.requirements = SimpleNamespace(conversation_id="conversation")
     ctx.metadata = {"memory_recall_status": "failed", "memory_degraded": True}
     ctx.unresolved_sources = ["memory"]
     ctx.evidence.append(ContextEvidence(
         evidence_id="recent-name", source=EvidenceSource.CONVERSATION,
         content="My name is Alice.",
-        scope=EvidenceScope(tenant_id="tenant", user_id="user"),
+        scope=EvidenceScope(tenant_id="tenant", user_id="user", conversation_id="conversation"),
         metadata={"role": "user"},
     ))
     decision = ExecutionDecision(
@@ -477,7 +478,6 @@ def test_incomplete_saved_recall_attributes_recent_statement_without_certifying_
     )
     assert "couldn't complete saved-memory retrieval" in answer
     assert meta["evidence_sufficiency"] == "ambiguous"
-    # Regardless of conversation availability, no saved value is certified.
-    if "Alice" in answer:
-        assert "You told me in this conversation" in answer
-        assert meta["response_source"] == "authorized_conversation_evidence"
+    assert "Alice" in answer
+    assert "You told me in this conversation" in answer
+    assert meta["response_source"] == "authorized_conversation_evidence"
