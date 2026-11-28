@@ -30,7 +30,6 @@ from ai_karen_engine.server.config import Settings
 from ai_karen_engine.server.exception_handlers import setup_exception_handlers
 from ai_karen_engine.server.middleware import configure_middleware
 from ai_karen_engine.server.performance import load_performance_settings
-from ai_karen_engine.server.security import validate_environment_security
 
 logger = logging.getLogger("kari")
 
@@ -42,6 +41,8 @@ _UNAVAILABLE_MODEL_CAPABILITIES_REGISTERED_STATE_KEY = (
 
 
 def _validate_environment() -> None:
+    from ai_karen_engine.server.security import validate_environment_security
+
     validation = validate_environment_security()
     if validation["overall_status"] == "secure":
         return
@@ -88,15 +89,14 @@ def create_app() -> FastAPI:
     from ai_karen_engine.config.database import require_database_recovery_not_held
 
     require_database_recovery_not_held()
-    # Router imports can load optional training/model dependencies. A held
-    # application must deny execution before those imports or side effects.
-    from ai_karen_engine.server.routers import wire_routers
-
     # Uvicorn configures access logging before loading the application factory.
     # Install the existing privacy boundary on this canonical entrypoint,
     # independently of optional or legacy logging configuration.
     install_request_target_privacy_filter()
     _validate_environment()
+
+    # Load router dependencies only after recovery and security validation.
+    from ai_karen_engine.server.routers import wire_routers
 
     settings = Settings()
     load_performance_settings(settings)

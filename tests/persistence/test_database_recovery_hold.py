@@ -10,8 +10,8 @@ def test_recovery_hold_denies_app_before_startup_or_router_wiring(monkeypatch) -
     real_import = builtins.__import__
 
     def guarded_import(name, *args, **kwargs):
-        if name == "ai_karen_engine.server.routers":
-            pytest.fail("held application attempted router import")
+        if name in {"ai_karen_engine.server.routers", "ai_karen_engine.server.security"}:
+            pytest.fail("held application attempted router or security import")
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", guarded_import)

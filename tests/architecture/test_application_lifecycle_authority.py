@@ -78,7 +78,10 @@ def test_recovery_hold_precedes_application_and_database_acquisition() -> None:
     assert factory.index("require_database_recovery_not_held()") < factory.index("wire_routers(app, settings)")
     router_import = "from ai_karen_engine.server.routers import wire_routers"
     assert router_import not in app.split("def create_app()", 1)[0]
-    assert factory.index("require_database_recovery_not_held()") < factory.index(router_import)
+    assert factory.index("require_database_recovery_not_held()") < factory.index("_validate_environment()") < factory.index(router_import)
+    security_import = "from ai_karen_engine.server.security import validate_environment_security"
+    assert security_import not in app.split("def _validate_environment()", 1)[0]
+    assert security_import in app.split("def _validate_environment()", 1)[1].split("def _register_canonical_routes", 1)[0]
     lifespan = lifecycle.split("async def lifespan(app: FastAPI):", 1)[1]
     assert lifespan.index("require_database_recovery_not_held()") < lifespan.index("await on_startup(settings, app)")
     assert 'event.listen(self._engine, "checkout", _guard_recovery_checkout)' in engine
