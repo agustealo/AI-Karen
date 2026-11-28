@@ -21,6 +21,21 @@ from ai_karen_engine.core.model_runtime.provider_health_monitor import (
 )
 
 
+def _publish_fixture(registry, name, *, success, response_time=None):
+    from ai_karen_engine.core.model_runtime.provider_execution import _resolve_base_url
+
+    endpoint = registry.get_provider_endpoint(name)
+    if endpoint is None:
+        endpoint = registry.get_provider_endpoint(registry.canonicalize_provider_id(name))
+    assert endpoint is not None
+    wire_url = _resolve_base_url(endpoint)
+    token = registry.capture_endpoint_health_registration(endpoint, wire_base_url=wire_url)
+    return registry.publish_endpoint_health(
+        endpoint, token, is_healthy=success, response_time=response_time,
+        wire_base_url=wire_url, error_code=None if success else "http_server_error",
+    )
+
+
 def test_unknown_provider_is_unchecked_not_healthy() -> None:
     monitor = ProviderHealthMonitor(
         registry=SimpleNamespace(get_all_provider_names=lambda: ["local-test"])
@@ -76,7 +91,7 @@ def test_legacy_provider_alias_and_canonical_id_share_one_health_record(
     monkeypatch.setattr(
         provider_registry_service, "_provider_registry_service", registry
     )
-    record_provider_success("ollama")
+    assert _publish_fixture(registry, "ollama", success=True)
     assert (
         registry.health_monitor.get_provider_health("ollama-local").health_status
         is HealthStatus.HEALTHY
@@ -131,9 +146,9 @@ def test_observed_health_transitions_emit_distinct_canonical_events(monkeypatch)
     registry = provider_registry_service.ProviderRegistryService()
     monitor = registry.health_monitor
     for _ in range(5):
-        monitor.record_provider_interaction("ollama", success=False)
-    monitor.record_provider_interaction("ollama-local", success=True)
-    monitor.record_provider_interaction("ollama", success=True)
+        _publish_fixture(registry, "ollama", success=False)
+    _publish_fixture(registry, "ollama-local", success=True)
+    _publish_fixture(registry, "ollama", success=True)
 
     assert [event.event_type for event in sink.events] == [
         EventType.PROVIDER_HEALTH_CHANGED,
@@ -173,14 +188,14 @@ def test_registry_projection_observes_failure_recovery_and_expiry_without_cache_
     assert first is not None and first.health_status is HealthStatus.UNKNOWN
     assert first.is_available
     for _ in range(5):
-        registry.health_monitor.record_provider_interaction(provider, success=False)
+        _publish_fixture(registry, provider, success=False)
     unhealthy = registry.get_provider_status(provider)
     assert unhealthy.health_status is HealthStatus.UNHEALTHY
     assert not unhealthy.is_available
     assert unhealthy.last_check == first.last_check  # credential cache retained
     assert first.health_status is HealthStatus.UNKNOWN  # prior projection unchanged
 
-    registry.health_monitor.record_provider_interaction(provider, success=True)
+    _publish_fixture(registry, provider, success=True)
     recovered = registry.get_provider_status(provider)
     assert recovered.health_status is HealthStatus.HEALTHY and recovered.is_available
     assert recovered.last_check == first.last_check
@@ -199,7 +214,7 @@ def test_disabled_endpoint_cannot_be_made_available_by_observation():
         "provider_id": "disabled_health_projection", "enabled": False,
         "base_url": "http://127.0.0.1:1234/v1", "capabilities": ["chat"],
     })
-    registry.health_monitor.record_provider_interaction(endpoint.provider_id, success=True)
+    _publish_fixture(registry, endpoint.provider_id, success=True)
     status = registry.get_provider_status(endpoint.provider_id)
     assert status.health_status is HealthStatus.UNAVAILABLE
     assert not status.is_available
@@ -237,17 +252,17 @@ def test_system_status_remote_outages_require_observed_shared_cloud_failure(monk
         registry.register_provider_endpoint(endpoint)
         if failed:
             for _ in range(5):
-                registry.health_monitor.record_provider_interaction(name, success=False)
+                _publish_fixture(registry, name, success=False)
 
     assert registry.get_system_status()["remote_provider_outages"] == ["cloud-observed-failure"]
-    registry.health_monitor.record_provider_interaction("cloud-observed-failure", success=True)
+    _publish_fixture(registry, "cloud-observed-failure", success=True)
     assert registry.get_system_status()["remote_provider_outages"] == []
 
 
 def test_diagnostic_snapshot_distinguishes_eligibility_inventory_and_observation():
     registry = provider_registry_service.ProviderRegistryService()
     endpoint = registry.register_configured_endpoint({
-        "provider_id": "diagnostic_test", "enabled": True,
+        "provider_id": "diagnostic_test", "enabled": True, "tenant_scoped": False,
         "base_url": "http://127.0.0.1:1234/v1",
         "default_model": "registered-model", "capabilities": ["chat"],
     })
@@ -260,13 +275,12 @@ def test_diagnostic_snapshot_distinguishes_eligibility_inventory_and_observation
     registry.health_monitor.record_provider_interaction(
         endpoint.provider_id, success=False, error_message="private upstream text",
     )
+    assert _publish_fixture(registry, endpoint.provider_id, success=False)
     failed = registry.get_provider_health_snapshot(endpoint.provider_id)
     assert failed["status"] == "degraded"
     assert failed["last_check"] is not None
     assert "private upstream text" not in repr(failed)
-    registry.health_monitor.record_provider_interaction(
-        endpoint.provider_id, success=True, response_time=0.125,
-    )
+    assert _publish_fixture(registry, endpoint.provider_id, success=True, response_time=0.125)
     recovered = registry.get_provider_health_snapshot(endpoint.provider_id)
     assert recovered["status"] == "healthy"
     assert recovered["response_time"] == 0.125
@@ -278,7 +292,7 @@ def test_aggregate_health_preserves_all_five_states_and_observation_time(monkeyp
     names = ["agg_healthy", "agg_degraded", "agg_unhealthy", "agg_unknown", "agg_disabled"]
     for name in names:
         registry.register_configured_endpoint({
-            "provider_id": name, "enabled": name != "agg_disabled",
+            "provider_id": name, "enabled": name != "agg_disabled", "tenant_scoped": False,
             "base_url": "http://localhost:1234/v1", "capabilities": ["chat"],
             "default_model": name + "_model",
         })
@@ -288,11 +302,11 @@ def test_aggregate_health_preserves_all_five_states_and_observation_time(monkeyp
     assert unchecked["last_health_check"] is None
     assert not unchecked["degraded_mode"]
     assert unchecked["groups"]["healthy"] == []
-    registry.health_monitor.record_provider_interaction("agg_healthy", success=True)
-    registry.health_monitor.record_provider_interaction("agg_degraded", success=False)
+    _publish_fixture(registry, "agg_healthy", success=True)
+    _publish_fixture(registry, "agg_degraded", success=False)
     for _ in range(5):
-        registry.health_monitor.record_provider_interaction("agg_unhealthy", success=False)
-    registry.health_monitor.record_provider_interaction("agg_disabled", success=True)
+        _publish_fixture(registry, "agg_unhealthy", success=False)
+    _publish_fixture(registry, "agg_disabled", success=True)
     summary = registry.get_provider_health_summary(llm_only=True)
     assert summary["groups"] == {
         "healthy": ["agg_healthy"], "degraded": ["agg_degraded"],
@@ -324,7 +338,7 @@ def test_endpoint_replacement_discards_old_health_and_keeps_registration_eligibl
         endpoint, transport="text", outcome="success", response_time=0.1,
         registration=registration, wire_base_url=_resolve_base_url(endpoint),
     )
-    monitor.record_provider_interaction("lmstudio-desktop", success=True)
+    _publish_fixture(registry, "lmstudio-desktop", success=True)
     replacement = replace(endpoint, base_url="http://127.0.0.1:11435/v1")
     registry.register_provider_endpoint(replacement)
 
@@ -356,7 +370,7 @@ def test_identical_endpoint_registration_preserves_health_observation():
     endpoint = registry.get_provider_endpoint("ollama-local")
     assert endpoint is not None
     monitor = registry.health_monitor
-    monitor.record_provider_interaction(endpoint.provider_id, success=True)
+    _publish_fixture(registry, endpoint.provider_id, success=True)
     before = monitor.get_provider_health(endpoint.provider_id)
     registry.register_provider_endpoint(replace(endpoint))
     assert monitor.get_provider_health(endpoint.provider_id) is before
@@ -369,7 +383,7 @@ def test_replacing_failed_endpoint_does_not_inherit_old_failure():
     endpoint = registry.get_provider_endpoint("ollama-local")
     assert endpoint is not None
     for _ in range(5):
-        registry.health_monitor.record_provider_interaction(endpoint.provider_id, success=False)
+        _publish_fixture(registry, endpoint.provider_id, success=False)
     assert not registry.get_provider_status(endpoint.provider_id).is_available
     registry.register_provider_endpoint(replace(endpoint, default_model="new-model"))
     status = registry.get_provider_status(endpoint.provider_id)
@@ -384,7 +398,7 @@ def test_disable_and_reenable_endpoint_does_not_restore_prior_health():
     registry = provider_registry_service.ProviderRegistryService()
     endpoint = registry.get_provider_endpoint("ollama-local")
     assert endpoint is not None
-    registry.health_monitor.record_provider_interaction(endpoint.provider_id, success=True)
+    _publish_fixture(registry, endpoint.provider_id, success=True)
     registry.register_provider_endpoint(replace(endpoint, enabled=False))
     assert registry.get_provider_status(endpoint.provider_id).health_status is HealthStatus.UNAVAILABLE
     registry.register_provider_endpoint(endpoint)
@@ -402,7 +416,7 @@ def test_withdrawn_configured_endpoint_discards_observed_health(monkeypatch):
     )
     monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: configured)
     registry.register_provider_endpoint(configured)
-    registry.health_monitor.record_provider_interaction(configured.provider_id, success=True)
+    _publish_fixture(registry, configured.provider_id, success=True)
     monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: None)
     assert registry.get_provider_endpoint(configured.provider_id) is None
     assert registry.health_monitor.get_provider_health(configured.provider_id).health_status is HealthStatus.UNKNOWN
@@ -582,7 +596,7 @@ def test_observed_destination_drift_retires_cached_health_and_registration(monke
     assert monitor.get_provider_health(endpoint.provider_id).health_status is (
         HealthStatus.HEALTHY if success else HealthStatus.UNHEALTHY
     )
-    monitor.record_provider_interaction("lmstudio-desktop", success=True)
+    _publish_fixture(registry, "lmstudio-desktop", success=True)
     other = monitor.get_provider_health("lmstudio-desktop")
     monkeypatch.setenv("OLLAMA_BASE_URL", new_url)
     if reader == "monitor":
@@ -668,3 +682,53 @@ def test_registry_publication_requires_http_wire_destination(monkeypatch, wire_u
     assert monitor.get_provider_health(endpoint.provider_id).health_status is (
         HealthStatus.HEALTHY if success else HealthStatus.DEGRADED
     )
+
+
+
+@pytest.mark.parametrize("scoped", [False, True])
+@pytest.mark.parametrize("success", [False, True])
+def test_name_only_writers_cannot_certify_registered_endpoint(monkeypatch, scoped, success):
+    from dataclasses import replace
+
+    registry = provider_registry_service.ProviderRegistryService()
+    monkeypatch.setattr(provider_registry_service, "_provider_registry_service", registry)
+    endpoint = registry.get_provider_endpoint("ollama-local")
+    assert endpoint is not None
+    registry.register_provider_endpoint(replace(endpoint, tenant_scoped=scoped))
+    monitor = registry.health_monitor
+    monitor.update_provider_health("ollama", is_healthy=success)
+    monitor.record_provider_interaction("ollama-local", success=success)
+    if success:
+        record_provider_success("ollama")
+    else:
+        record_provider_failure("ollama", "private error")
+    info = monitor.get_provider_health("ollama-local")
+    assert info.health_status is HealthStatus.UNKNOWN
+    assert info.last_checked_at is None
+    assert info.consecutive_failures == 0
+    if not scoped:
+        assert _publish_fixture(registry, "ollama", success=True)
+        before = monitor.get_provider_health("ollama")
+        monitor.update_provider_health("ollama", is_healthy=False)
+        assert monitor.get_provider_health("ollama") is before
+        assert before.health_status is HealthStatus.HEALTHY
+
+
+@pytest.mark.parametrize("provider_id", ["openai", "gmi-cloud", "gmi_cloud", "GMI-CLOUD"])
+def test_unconfigured_governed_vendor_rejects_name_only_health(monkeypatch, provider_id):
+    registry = provider_registry_service.ProviderRegistryService()
+    monkeypatch.setattr(registry, "_configured_external_endpoint", lambda _: None)
+    registry.health_monitor.record_provider_interaction(provider_id, success=True)
+    assert registry.health_monitor.get_provider_health(provider_id).health_status is HealthStatus.UNKNOWN
+
+
+
+def test_name_only_writer_rejects_normalized_custom_id():
+    registry = provider_registry_service.ProviderRegistryService()
+    endpoint = registry.register_configured_endpoint({
+        "provider_id": "custom-shared-test", "base_url": "http://localhost:1234/v1",
+        "tenant_scoped": False,
+    })
+    registry.health_monitor.update_provider_health("custom_shared_test", is_healthy=True)
+    assert registry.health_monitor.get_provider_health(endpoint.provider_id).health_status is HealthStatus.UNKNOWN
+    assert _publish_fixture(registry, endpoint.provider_id, success=True)

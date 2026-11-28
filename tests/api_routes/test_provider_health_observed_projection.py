@@ -7,13 +7,22 @@ from httpx import ASGITransport, AsyncClient
 
 from ai_karen_engine.api_routes.models import providers
 from ai_karen_engine.core.model_runtime.provider_registry_service import ProviderRegistryService
+from ai_karen_engine.core.model_runtime.provider_execution import _resolve_base_url
+
+
+def _publish_fixture(registry, endpoint):
+    url = _resolve_base_url(endpoint)
+    token = registry.capture_endpoint_health_registration(endpoint, wire_base_url=url)
+    assert registry.publish_endpoint_health(
+        endpoint, token, is_healthy=True, response_time=0.1, wire_base_url=url,
+    )
 
 
 @pytest.mark.asyncio
 async def test_health_routes_read_observations_without_legacy_provider_callbacks(monkeypatch):
     registry = ProviderRegistryService()
     endpoint = registry.register_configured_endpoint({
-        "provider_id": "diagnostic_test", "enabled": True,
+        "provider_id": "diagnostic_test", "enabled": True, "tenant_scoped": False,
         "base_url": "http://127.0.0.1:1234/v1",
         "default_model": "registered-model", "capabilities": ["chat"],
     })
@@ -39,7 +48,7 @@ async def test_health_routes_read_observations_without_legacy_provider_callbacks
         all_health = await client.post("/health-check-all")
         assert all_health.json()["diagnostic_test"]["status"] == "unknown"
         assert (await client.get("/health/not_registered_test")).status_code == 404
-        registry.health_monitor.record_provider_interaction(endpoint.provider_id, success=True)
+        _publish_fixture(registry, endpoint)
         recovered = await client.get("/health/diagnostic_test")
         assert recovered.json()["status"] == "healthy"
         assert recovered.json()["last_check"] is not None
@@ -52,8 +61,8 @@ async def test_aggregate_routes_use_canonical_health_and_static_summary_path(mon
     )
 
     registry = ProviderRegistryService()
-    registry.register_configured_endpoint({
-        "provider_id": "aggregate_test", "enabled": True,
+    endpoint = registry.register_configured_endpoint({
+        "provider_id": "aggregate_test", "enabled": True, "tenant_scoped": False,
         "base_url": "http://localhost:1234/v1", "default_model": "registered-model",
         "capabilities": ["chat"],
     })
@@ -91,5 +100,5 @@ async def test_aggregate_routes_use_canonical_health_and_static_summary_path(mon
         assert row["has_compatible_models"] is None
         assert row["total_compatible"] is None
         assert "private diagnostic error" not in integration_response.text
-        registry.health_monitor.record_provider_interaction("aggregate_test", success=True)
+        _publish_fixture(registry, endpoint)
         assert (await client.get("/health/llms")).json()["healthy_providers"] == ["aggregate_test"]

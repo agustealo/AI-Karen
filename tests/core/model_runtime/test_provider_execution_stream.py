@@ -487,13 +487,13 @@ async def test_sse_transport_owns_terminal_health_not_delta_delivery(monkeypatch
     registry.register_provider_endpoint(endpoint)
     monitor = registry.health_monitor
     observations = []
-    original = monitor.update_provider_health
+    original = monitor._apply_provider_health
 
     def observe(*args, **kwargs):
         observations.append((args, kwargs))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(monitor, "update_provider_health", observe)
+    monkeypatch.setattr(monitor, "_apply_provider_health", observe)
     monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
     code = {"server_error": 503, "rate_limit": 429}.get(case, 200)
     body = _chunk("Verified text") + _chunk(None, finish="stop")

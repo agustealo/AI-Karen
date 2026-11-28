@@ -386,13 +386,13 @@ async def test_canonical_json_transport_owns_shared_health_once(
     registry.register_provider_endpoint(registered)
     monitor = registry.health_monitor
     observations = []
-    original = monitor.update_provider_health
+    original = monitor._apply_provider_health
 
     def observe(*args, **kwargs):
         observations.append((args, kwargs))
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(monitor, "update_provider_health", observe)
+    monkeypatch.setattr(monitor, "_apply_provider_health", observe)
     monkeypatch.setattr(provider_health_monitor, "get_health_monitor", lambda: monitor)
     from ai_karen_engine.platform.observability.metrics import MetricsCollector
     from ai_karen_engine.platform.observability import metrics

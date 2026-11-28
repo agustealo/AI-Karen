@@ -301,7 +301,29 @@ class ProviderHealthMonitor:
         error_type: Optional[str] = None,
         error_message: Optional[str] = None,
     ) -> None:
-        """Update observed health state for a provider."""
+        """Compatibility ingress; canonical endpoints require fenced publication."""
+        publish = getattr(self._registry, "publish_legacy_provider_health", None)
+        if callable(publish):
+            publish(
+                provider_id, is_healthy=is_healthy, response_time=response_time,
+                error_code=error_code, error_type=error_type, error_message=error_message,
+            )
+            return
+        self._apply_provider_health(
+            provider_id, is_healthy=is_healthy, response_time=response_time,
+            error_code=error_code, error_type=error_type, error_message=error_message,
+        )
+
+    def _apply_provider_health(
+        self,
+        provider_id: str,
+        is_healthy: bool,
+        response_time: Optional[float] = None,
+        error_code: Optional[str] = None,
+        error_type: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        """Apply an observation admitted by the canonical registry."""
         provider_key = self._provider_key(provider_id)
         now = datetime.utcnow()
 

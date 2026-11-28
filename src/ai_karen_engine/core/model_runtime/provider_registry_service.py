@@ -480,9 +480,38 @@ class ProviderRegistryService:
                 endpoint, wire_base_url=wire_base_url,
             ) is not registration:
                 return False
-            self.health_monitor.update_provider_health(
+            self.health_monitor._apply_provider_health(
                 endpoint.provider_id, is_healthy=is_healthy,
                 response_time=response_time, error_code=error_code,
+            )
+            return True
+
+    def publish_legacy_provider_health(
+        self, provider_id: str, *, is_healthy: bool,
+        response_time: Optional[float] = None, error_code: Optional[str] = None,
+        error_type: Optional[str] = None, error_message: Optional[str] = None,
+    ) -> bool:
+        """Compatibility observations must never certify a canonical endpoint."""
+        from ai_karen_engine.config.llm_provider_config import OPENAI_COMPATIBLE_PROVIDER_DEFAULTS
+
+        with self._lock:
+            canonical = self.canonicalize_provider_id(provider_id)
+            if (
+                not canonical
+                or any(
+                    self.canonicalize_provider_id(name) == canonical
+                    for name in OPENAI_COMPATIBLE_PROVIDER_DEFAULTS
+                )
+                or any(
+                    self.canonicalize_provider_id(name) == canonical
+                    for name in self._provider_endpoints
+                )
+                or self.get_provider_endpoint(canonical) is not None
+            ):
+                return False
+            self.health_monitor._apply_provider_health(
+                canonical, is_healthy=is_healthy, response_time=response_time,
+                error_code=error_code, error_type=error_type, error_message=error_message,
             )
             return True
 
