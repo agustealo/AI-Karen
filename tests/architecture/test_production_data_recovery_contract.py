@@ -121,3 +121,29 @@ def test_recovery_client_rejects_cross_major_binary(tmp_path, tool, major, expec
     assert result.returncode == expected, result.stderr
     if expected:
         assert "does not match PostgreSQL server major 16" in result.stderr
+
+
+def test_recovery_cutoff_requires_explicit_source_fence_before_database_access():
+    script = REPO_ROOT / "scripts/deploy/database-recovery-cutoff.sh"
+    result = subprocess.run(
+        ["bash", str(script)],
+        env={**os.environ, "CONFIRM_SOURCE_FENCED": "", "DATABASE_URL": ""},
+        capture_output=True, text=True, timeout=5, check=False,
+    )
+    assert result.returncode == 2
+    assert "I_HAVE_FENCED_SOURCE_WRITERS" in result.stderr
+    assert result.stdout == ""
+
+
+def test_recovery_cutoff_is_physical_evidence_not_admission():
+    script = _read("scripts/deploy/database-recovery-cutoff.sh")
+    assert "select_postgres_recovery_client" in script
+    assert "pg_current_wal_insert_lsn()" in script
+    assert "pg_current_wal_flush_lsn()" in script
+    assert "flushed_lsn >= required_lsn" in script
+    assert "NOT pg_is_in_recovery()" in script
+    assert "pg_control_system()" in script
+    assert "database_oid" in script
+    assert "timeline_hex" in script
+    assert "postgres_physical_wal_cutoff" in script
+    assert "recovery hold remains" in script

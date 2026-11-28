@@ -61,6 +61,37 @@ Trusted cutoff reconciliation and automated admission remain outstanding.
 Operators must treat missing or unverifiable reconciliation evidence as a
 recovery hold, not as permission to serve governed memory.
 
+### Physical WAL cutoff evidence
+
+While the original authoritative primary is still accessible, externally fence
+and drain **all** writers (including background jobs and administrative mutation
+paths), then collect a minimum replay-position receipt:
+
+```bash
+DATABASE_URL='postgresql://authoritative-primary...' \\
+CONFIRM_SOURCE_FENCED='I_HAVE_FENCED_SOURCE_WRITERS' \\
+  bash scripts/deploy/database-recovery-cutoff.sh
+```
+
+Retain the emitted JSON in a trusted recovery inventory outside the cluster
+and backup rollback domain, using an authenticated, append-only or immutable
+storage policy. The command does not implement that storage policy or fence
+writers itself. The confirmation token is an operator assertion, not proof.
+Capture must happen after the last accepted mutation and before source loss;
+if later writes are permitted, the receipt is no longer the final cutoff.
+Missing permissions, unavailable primary or unflushed WAL leave recovery held.
+
+The receipt binds the observed system identifier, database name and OID,
+server major, WAL timeline, required insertion LSN and covering flush LSN.
+A timestamp is descriptive, not a freshness authority. A logical restore can
+have the same cluster identity and a greater LSN while containing older rows.
+Do not use a receipt captured from a restored database, compare LSN alone,
+or treat this command's exit status as admission. Independently authenticated
+receipt retrieval, timeline/physical replay proof, source fencing, complete
+WAL availability and service admission enforcement remain separate requirements.
+Managed-service PITR must supply equivalent trusted lineage evidence; support
+and privileges are not assumed.
+
 Required acceptance:
 
 - Restore a pre-revocation backup into an isolated disposable database after

@@ -7,6 +7,7 @@ the pre-reconciliation resurrection risk; it does not certify safe admission.
 from __future__ import annotations
 
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -73,6 +74,29 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
             CONFIRM_RESTORE="I_UNDERSTAND_THIS_IS_DESTRUCTIVE",
         )
 
+    async def cutoff(url):
+        result = await command(
+            "database-recovery-cutoff.sh",
+            DATABASE_URL=url.render_as_string(hide_password=False),
+            CONFIRM_SOURCE_FENCED="I_HAVE_FENCED_SOURCE_WRITERS",
+        )
+        assert result.returncode == 0, result.stderr
+        receipt = json.loads(result.stdout)
+        assert receipt["schema_version"] == 1
+        assert receipt["evidence_type"] == "postgres_physical_wal_cutoff"
+        assert receipt["database_name"] == url.database
+        assert int(receipt["system_identifier"]) > 0
+        assert int(receipt["database_oid"]) > 0
+        assert int(receipt["timeline_hex"], 16) > 0
+        assert datetime.fromisoformat(receipt["captured_at"]).tzinfo is not None
+        assert receipt["server_major"] == admin.get_server_version().major
+        assert lsn(receipt["observed_flush_lsn"]) >= lsn(receipt["required_lsn"])
+        return receipt
+
+    def lsn(value):
+        high, low = value.split("/")
+        return (int(high, 16) << 32) + int(low, 16)
+
     try:
         for name in (source_name, target_name):
             await admin.execute(f'CREATE DATABASE "{name}"')
@@ -124,6 +148,13 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
         ids = [item.id for item in (retired, revoked, unrelated)]
         assert {item.id for item in await live.export(ids, context=context)} == set(ids)
 
+        missing_confirmation = await command(
+            "database-recovery-cutoff.sh",
+            DATABASE_URL=source_url.render_as_string(hide_password=False),
+            CONFIRM_SOURCE_FENCED="",
+        )
+        assert missing_confirmation.returncode == 2
+        before_cutoff = await cutoff(source_url)
         backup = await command(
             "database-backup.sh",
             DATABASE_URL=source_url.render_as_string(hide_password=False),
@@ -160,9 +191,26 @@ async def test_live_backup_restore_rewinds_revocation_and_refuses_populated_targ
         with pytest.raises(NeuroVaultAuthorizationError, match="memory consent scope is revoked"):
             await live.persist(revoked, context=context)
 
+        after_cutoff = await cutoff(source_url)
+        assert after_cutoff["system_identifier"] == before_cutoff["system_identifier"]
+        assert after_cutoff["database_oid"] == before_cutoff["database_oid"]
+        assert after_cutoff["timeline_hex"] == before_cutoff["timeline_hex"]
+        assert lsn(after_cutoff["required_lsn"]) > lsn(before_cutoff["required_lsn"])
+        # Retain the receipt outside either database. The logical restore
+        # cannot overwrite it. This is test-local retention, not production WORM.
+        receipt_path = tmp_path / "independent-cutoff.json"
+        receipt_path.write_text(json.dumps(after_cutoff), encoding="utf-8")
+
         restored = await restore(target_url, archive)
         assert restored.returncode == 0, restored.stderr
         assert "recovery admission is not verified" in restored.stdout
+        assert json.loads(receipt_path.read_text(encoding="utf-8")) == after_cutoff
+        target_cutoff = await cutoff(target_url)
+        # A logical restore in the same cluster can have a NEWER WAL position.
+        # Therefore LSN alone is not evidence of physical recovery lineage.
+        assert target_cutoff["system_identifier"] == after_cutoff["system_identifier"]
+        assert target_cutoff["database_oid"] != after_cutoff["database_oid"]
+        assert lsn(target_cutoff["required_lsn"]) >= lsn(after_cutoff["required_lsn"])
 
         # This is the known unsafe pre-reconciliation state, not authorization
         # to expose recovered records. Keep both databases isolated.
