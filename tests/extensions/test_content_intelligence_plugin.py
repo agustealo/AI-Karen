@@ -1,9 +1,13 @@
 """Content Intelligence is a standalone, stateless and bounded extension."""
 from __future__ import annotations
 
+import asyncio
+import importlib
 import importlib.util
 import json
 from pathlib import Path
+from threading import Event
+from types import SimpleNamespace
 
 import pytest
 
@@ -111,3 +115,114 @@ def test_operation_specific_extra_fields_fail_closed():
             "documents": _documents(),
             "query": "should not be accepted",
         })
+
+def _handler_fixture():
+    # Use the actual plugin entrypoint and typed extension execution context.
+    from ai_karen_engine.extensions.contracts import ExtensionExecutionContext
+
+    module = importlib.import_module(
+        "ai_karen_engine.extensions.plugins.content-intelligence.handler"
+    )
+    manifest = SimpleNamespace(
+        name="content-intelligence", version="0.2.0",
+        rbac=SimpleNamespace(default_enabled=False),
+    )
+    instance = module.MainExtension(manifest, SimpleNamespace())
+    context = ExtensionExecutionContext(
+        request_id="worker-test", correlation_id="worker-corr",
+        tenant_id="11111111-1111-4111-8111-111111111111",
+        user_id="22222222-2222-4222-8222-222222222222",
+    )
+    return module, instance, context
+
+
+@pytest.mark.asyncio
+async def test_cancelled_invocation_retains_worker_slot_until_thread_finishes(monkeypatch):
+    module, instance, context = _handler_fixture()
+    started, release = Event(), Event()
+    calls = []
+
+    def blocked(params):
+        calls.append(params["operation"])
+        started.set()
+        if not release.wait(5):
+            raise RuntimeError("test_worker_release_timeout")
+        return {"operation": params["operation"]}
+
+    monkeypatch.setattr(module, "execute", blocked)
+    await instance.initialize()
+    invocation = asyncio.create_task(instance.run({"operation": "analyze"}, context))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        invocation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await invocation
+        with pytest.raises(RuntimeError, match="content_intelligence_busy"):
+            await instance.run({"operation": "search"}, context)
+        assert calls == ["analyze"]
+    finally:
+        release.set()
+        await asyncio.wait_for(instance.shutdown(), 3)
+    await instance.initialize()
+    assert await instance.run({"operation": "search"}, context) == {"operation": "search"}
+    assert calls == ["analyze", "search"]
+    await instance.shutdown()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drains_worker_and_suppresses_result(monkeypatch):
+    module, instance, context = _handler_fixture()
+    started, release = Event(), Event()
+
+    def blocked(params):
+        started.set()
+        if not release.wait(5):
+            raise RuntimeError("test_worker_release_timeout")
+        return {"operation": params["operation"]}
+
+    monkeypatch.setattr(module, "execute", blocked)
+    await instance.initialize()
+    invocation = asyncio.create_task(instance.run({"operation": "analyze"}, context))
+    shutdown = None
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        shutdown = asyncio.create_task(instance.shutdown())
+        await asyncio.sleep(0)
+        assert not shutdown.done()
+        assert instance.get_status()["status"] == "unavailable"
+    finally:
+        release.set()
+        if shutdown is not None:
+            await asyncio.wait_for(shutdown, 3)
+        else:
+            await asyncio.wait_for(instance.shutdown(), 3)
+    with pytest.raises(RuntimeError, match="content_intelligence_disabled"):
+        await invocation
+
+
+@pytest.mark.asyncio
+async def test_cancelled_worker_error_does_not_poison_lifecycle(monkeypatch):
+    module, instance, context = _handler_fixture()
+    started, release = Event(), Event()
+
+    def failing(params):
+        started.set()
+        if not release.wait(5):
+            raise RuntimeError("test_worker_release_timeout")
+        raise ValueError("synthetic private diagnostic")
+
+    monkeypatch.setattr(module, "execute", failing)
+    await instance.initialize()
+    invocation = asyncio.create_task(instance.run({"operation": "analyze"}, context))
+    try:
+        assert await asyncio.to_thread(started.wait, 2)
+        invocation.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await invocation
+    finally:
+        release.set()
+        await asyncio.wait_for(instance.shutdown(), 3)
+    monkeypatch.setattr(module, "execute", lambda params: {"operation": params["operation"]})
+    await instance.initialize()
+    assert await instance.run({"operation": "analyze"}, context) == {"operation": "analyze"}
+    await instance.shutdown()
